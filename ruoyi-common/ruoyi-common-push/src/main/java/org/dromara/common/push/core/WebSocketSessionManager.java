@@ -49,6 +49,12 @@ public class WebSocketSessionManager implements PushSessionManager {
             messageProperties.getHeartbeatInterval(),
             TimeUnit.SECONDS
         );
+        scheduledExecutorService.scheduleWithFixedDelay(
+            this::sendHeartbeat,
+            messageProperties.getWebSocketHeartbeatInterval(),
+            messageProperties.getWebSocketHeartbeatInterval(),
+            TimeUnit.SECONDS
+        );
     }
 
     /**
@@ -129,6 +135,20 @@ public class WebSocketSessionManager implements PushSessionManager {
         });
         // 批量清理无会话用户
         toRemoveUsers.forEach(USER_TOKEN_SESSIONS::remove);
+    }
+
+    /**
+     * 向所有在线 WebSocket 会话发送协议级 Ping，避免容器将无业务消息的连接判定为空闲。
+     */
+    public void sendHeartbeat() {
+        USER_TOKEN_SESSIONS.forEach((userId, sessionMap) -> sessionMap.entrySet().removeIf(entry -> {
+            WebSocketSession session = entry.getValue();
+            if (session == null || !session.isOpen() || !sendMessage(session, new PingMessage())) {
+                closeSession(session, CloseStatus.NORMAL);
+                return true;
+            }
+            return false;
+        }));
     }
 
     /**

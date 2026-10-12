@@ -117,6 +117,9 @@
 <!--        </encoder>-->
 <!--    </appender>-->
 
+    <!-- 抑制币安 SDK ConnectionWrapper 的 websocket close 噪音日志 -->
+    <logger name="com.binance.connector.client.common.websocket.adapter.ConnectionWrapper" level="WARN" />
+
     <!--系统操作日志-->
     <root level="info">
         <appender-ref ref="console" />

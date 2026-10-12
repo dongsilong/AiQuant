@@ -3,7 +3,7 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>ruoyi-vue-plus</artifactId>
+        <artifactId>AiQuant</artifactId>
         <groupId>org.dromara</groupId>
         <version>${revision}</version>
     </parent>
@@ -92,10 +92,9 @@
             <artifactId>ruoyi-ai</artifactId>
         </dependency>
 
-        <!--  demo模块  -->
         <dependency>
             <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-demo</artifactId>
+            <artifactId>ruoyi-quant</artifactId>
         </dependency>
 
         <!--  工作流模块  -->
@@ -108,6 +107,13 @@
         <dependency>
             <groupId>de.codecentric</groupId>
             <artifactId>spring-boot-admin-starter-client</artifactId>
+        </dependency>
+
+        <!-- 单元测试 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <!-- skywalking 整合 logback -->

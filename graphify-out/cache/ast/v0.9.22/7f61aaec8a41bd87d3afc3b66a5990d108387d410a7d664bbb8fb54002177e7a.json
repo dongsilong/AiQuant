@@ -1,0 +1,1 @@
+{"nodes": [{"id": "pkg_ruoyi_modules", "label": "ruoyi-modules", "file_type": "code", "type": "package", "ecosystem": "maven", "source_file": "ruoyi-modules/pom.xml", "source_location": "L1"}], "edges": []}

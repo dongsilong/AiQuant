@@ -1,0 +1,1009 @@
+package org.dromara.quant.runtime;
+
+import org.dromara.quant.config.QuantProperties;
+import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.quant.market.domain.QuantSymbol;
+import org.dromara.quant.position.domain.QuantPosition;
+import org.dromara.quant.protection.ProtectionOrderService;
+import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
+import org.dromara.quant.strategy.*;
+import org.dromara.quant.strategy.domain.*;
+import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@org.junit.jupiter.api.Tag("dev")
+class StrategyRuntimeSafetyTest {
+    @Test
+    void persistedStepIsRestoredAndExtremaAdvanceItWithoutRegression() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "plugin", new KlineSlopeRateStrategy());
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setHighestStep(7);
+            state.setHighestPriceSinceEntry(new BigDecimal("100"));
+            var event = new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("100"), null, Instant.now());
+            StrategyContext restored = ReflectionTestUtils.invokeMethod(f.service, "buildContext", f.runtime, new BigDecimal("100"), event);
+            assertEquals(7, restored.highestStep());
+            ReflectionTestUtils.invokeMethod(f.service, "updateRuntimeExtrema", f.runtime, new BigDecimal("110"));
+            assertTrue(state.getHighestStep() > 7);
+            int peak = state.getHighestStep();
+            ReflectionTestUtils.invokeMethod(f.service, "updateRuntimeExtrema", f.runtime, new BigDecimal("100"));
+            assertEquals(peak, state.getHighestStep());
+            verify((org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService"), atLeastOnce()).save(state);
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void confirmedStepOnlyAdvancesAfterSuccessfulCurrentCycleProtection() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setHighestStep(5); state.setConfirmedProtectionStep(2);
+            when(f.protection.ensureMarginHardStop(any(), any(), any(), anyBoolean())).thenReturn(new org.dromara.quant.protection.domain.QuantProtectionOrder());
+            when(f.protection.confirmedStep(any(), any())).thenReturn(5);
+            ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime);
+            for (int i = 0; i < 100 && ((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "protectionSyncing")).get(); i++) { Thread.sleep(20); }
+            assertEquals(5, state.getConfirmedProtectionStep());
+            assertEquals(5, state.getHighestStep());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void failedStepPersistenceIsRetriedAfterPriceRetraces() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "plugin", new KlineSlopeRateStrategy());
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            var states = (org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService");
+            doThrow(new IllegalStateException("database unavailable")).doNothing().when(states).save(state);
+            assertThrows(IllegalStateException.class, () -> ReflectionTestUtils.invokeMethod(f.service, "updateRuntimeExtrema", f.runtime, new BigDecimal("110")));
+            int peak = state.getHighestStep();
+            assertTrue(peak > 0);
+            ReflectionTestUtils.invokeMethod(f.service, "updateRuntimeExtrema", f.runtime, new BigDecimal("100"));
+            verify(states, times(2)).save(state);
+            assertEquals(peak, state.getHighestStep());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void failedProtectionCannotAdvanceConfirmedStep() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setHighestStep(5); state.setConfirmedProtectionStep(2);
+            doThrow(new IllegalStateException("query timeout")).when(f.protection).syncStrategyProtections(any(), any(), any(), anyList(), any(), anyBoolean());
+            when(f.protection.confirmedStep(any(), any())).thenReturn(5);
+            ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime);
+            for (int i = 0; i < 100 && ((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "protectionSyncing")).get(); i++) { Thread.sleep(20); }
+            assertEquals(2, state.getConfirmedProtectionStep());
+            assertEquals(5, state.getHighestStep());
+            verify(f.protection, never()).confirmedStep(any(), any());
+        } finally { f.service.destroy(); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void slowPendingOrderRecoveryMustNotBlockMarketOrOverwriteChangedPending(boolean fullReconciliation) throws Exception {
+        Fixture f = fixture();
+        var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+        state.setPendingAction("OPEN"); state.setPendingOrderId(55L); state.setPendingOrderTime(System.currentTimeMillis());
+        var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        when(gateway.queryOrder(any(), any(), any(), any())).thenAnswer(invocation -> {
+            entered.countDown(); release.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            return new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "old", "BUY", "MARKET", "CANCELED",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, Instant.now());
+        });
+        try {
+            var recovery = executor.submit(() -> ReflectionTestUtils.invokeMethod(f.service, fullReconciliation ? "reconcilePosition" : "reconcilePendingExecution", f.runtime));
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var update = executor.submit(() -> {
+                synchronized (f.runtime) {
+                    state.setPendingOrderId(66L);
+                    ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                        new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("110"), null, Instant.now()));
+                }
+            });
+            assertDoesNotThrow(() -> update.get(300, java.util.concurrent.TimeUnit.MILLISECONDS));
+            release.countDown();
+            recovery.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(66L, state.getPendingOrderId());
+            assertEquals("OPEN", state.getPendingAction());
+        } finally { release.countDown(); executor.shutdownNow(); f.service.destroy(); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void missingOrderOnlyClearsConfirmedFailedFlatOpen(boolean failed) throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingAction("OPEN"); state.setPendingOrderTime(System.currentTimeMillis());
+            state.setPendingOrderId(55L); state.setPendingNotFoundConfirmations(2);
+            var record = new org.dromara.quant.execution.domain.QuantExecutionRecord();
+            record.setExecutionStatus(failed ? "FAILED" : "UNKNOWN");
+            var states = (org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService");
+            ReflectionTestUtils.invokeMethod(f.service, "applyPendingExecution", f.runtime, record, null, List.of());
+            if (failed) { verify(states).markClosed(state); }
+            else {
+                verify(states, never()).markClosed(any());
+                assertEquals("OPEN", state.getPendingAction());
+                assertTrue(Boolean.TRUE.equals(state.getRecoveryRequired()));
+            }
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void missingOrderRetainsAndRefreshesConfirmedExposure() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingAction("OPEN"); state.setPendingOrderTime(System.currentTimeMillis());
+            state.setPendingOrderId(55L); state.setPendingNotFoundConfirmations(2);
+            var record = new org.dromara.quant.execution.domain.QuantExecutionRecord(); record.setExecutionStatus("FAILED");
+            var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+            com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(
+                new org.apache.ibatis.session.Configuration(), "test"), QuantPosition.class);
+            when(mapper.selectOne(any())).thenReturn((QuantPosition) ReflectionTestUtils.getField(f.runtime, "position"));
+            var snapshots = List.of(new ExchangeGateway.PositionSnapshot("BTCUSDT", "LONG", new BigDecimal("0.5"),
+                new BigDecimal("100"), new BigDecimal("101"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.TEN, 10, null, null));
+            ReflectionTestUtils.invokeMethod(f.service, "applyPendingExecution", f.runtime, record, null, snapshots);
+            assertEquals(new BigDecimal("0.5"), ((QuantPosition) ReflectionTestUtils.getField(f.runtime, "position")).getQuantity());
+            assertEquals("OPEN", state.getPendingAction());
+            verify((org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService"), never()).markClosed(any());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void slopeWarmupRejectsMissingAndDiscontinuousReferenceCandles() throws Exception {
+        Fixture f = fixture();
+        try {
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            when(gateway.queryKlines(any(), any(), anyInt())).thenReturn(List.of());
+            assertThrows(IllegalStateException.class, () -> ReflectionTestUtils.invokeMethod(f.service, "loadInitialMarket", "LIVE", "BTCUSDT", "1m", Map.of(), true));
+            var now = Instant.now();
+            var older = new ExchangeGateway.Kline(now.minusSeconds(120), now.minusSeconds(60).minusMillis(1), BigDecimal.TEN, BigDecimal.TEN,
+                BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ONE, true);
+            var current = new ExchangeGateway.Kline(now, now.plusSeconds(60).minusMillis(1), BigDecimal.TEN, BigDecimal.TEN,
+                BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ONE, false);
+            when(gateway.queryKlines(any(), any(), anyInt())).thenReturn(List.of(older, current));
+            assertThrows(IllegalStateException.class, () -> ReflectionTestUtils.invokeMethod(f.service, "loadInitialMarket", "LIVE", "BTCUSDT", "1m", Map.of(), true));
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void identicalProtectionTargetsAreMergedButChangesAndPeriodicChecksRemain() throws Exception {
+        Fixture f = fixture();
+        try {
+            ((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "protectionSyncing")).set(true);
+            var requested = (java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "protectionRequested");
+            StrategyContext context = ReflectionTestUtils.invokeMethod(f.service, "buildContext", f.runtime, new BigDecimal("100"),
+                new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("100"), null, Instant.now()));
+            when(f.plugin.evaluateProtection(any(), anyMap())).thenReturn(List.of(new ProtectionSignal("STEP_TP", "STOP_MARKET", BigDecimal.ONE,
+                ProtectionSignal.QuantityBase.CURRENT, new BigDecimal("99"), "test")));
+            ReflectionTestUtils.invokeMethod(f.service, "syncPluginProtections", f.runtime, context);
+            assertTrue(requested.getAndSet(false));
+            ReflectionTestUtils.invokeMethod(f.service, "syncPluginProtections", f.runtime, context);
+            assertFalse(requested.get());
+            ReflectionTestUtils.setField(f.runtime, "lastProtectionRequestNanos", System.nanoTime() - java.util.concurrent.TimeUnit.SECONDS.toNanos(16));
+            ReflectionTestUtils.invokeMethod(f.service, "syncPluginProtections", f.runtime, context);
+            assertTrue(requested.getAndSet(false));
+            when(f.plugin.evaluateProtection(any(), anyMap())).thenReturn(List.of(new ProtectionSignal("STEP_TP", "STOP_MARKET", BigDecimal.ONE,
+                ProtectionSignal.QuantityBase.CURRENT, new BigDecimal("100"), "test")));
+            ReflectionTestUtils.invokeMethod(f.service, "syncPluginProtections", f.runtime, context);
+            assertTrue(requested.get());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void protectionFailureKeepsLocalExitAndSupervisionAlive() throws Exception {
+        Fixture f = fixture();
+        when(f.protection.ensureMarginHardStop(any(), any(), any(), anyBoolean())).thenThrow(new IllegalStateException("timeout"));
+        ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime);
+        assertEquals("RUNNING", f.instance.getStatus(), "must retain protection supervision");
+        ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now()));
+        ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("90"), null, Instant.now()));
+        verify(f.plugin).evaluateExit(any(), anyMap());
+    }
+
+    @Test
+    void historicalReplayOnlyUpdatesMarketAndMustNotTrade() throws Exception {
+        Fixture f = fixture();
+        ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now()));
+        var candle = new ExchangeGateway.Kline(Instant.now().minusSeconds(60), Instant.now(), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, true);
+        var replay = new ExchangeGateway.MarketEvent("KLINE", "BTCUSDT", "1m", null, candle, Instant.now(), null, Instant.now(), true);
+        ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, replay);
+        verify(f.plugin, never()).evaluateExit(any(), anyMap());
+        verify(f.plugin, never()).evaluateEntry(any(), anyMap());
+    }
+
+    @Test
+    void filledExitWithStalePositionMustRemainPending() throws Exception {
+        Fixture f = fixture();
+        var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+        state.setStatus("EXIT_PENDING"); state.setPendingAction("FIRST_TAKE_PROFIT"); state.setPendingOrderId(55L); state.setPendingOrderTime(System.currentTimeMillis()); state.setDirection("LONG");
+        var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+        var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(new org.apache.ibatis.session.Configuration(), "test"), QuantPosition.class);
+        when(mapper.selectOne(any())).thenReturn((QuantPosition) ReflectionTestUtils.getField(f.runtime, "position"));
+        when(gateway.queryOrder(any(), any(), any(), any())).thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close", "SELL", "MARKET", "FILLED", BigDecimal.ZERO, new BigDecimal("0.5"), new BigDecimal("0.5"), Instant.now()));
+        when(gateway.queryPositions(any(), any())).thenReturn(List.of(new ExchangeGateway.PositionSnapshot("BTCUSDT", "LONG", BigDecimal.ONE, new BigDecimal("100"), new BigDecimal("101"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.TEN, 10, null, null)));
+        ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+        assertEquals("EXIT_PENDING", state.getStatus());
+        assertEquals(55L, state.getPendingOrderId());
+        assertFalse(Boolean.TRUE.equals(state.getFirstTakeProfitTriggered()));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void partiallyFilledExitRetainsPendingEvenWhenPositionIsEmpty(boolean emptyPosition) throws Exception {
+        Fixture f = fixture();
+        var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+        var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+        var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+        var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(new org.apache.ibatis.session.Configuration(), "test"), QuantPosition.class);
+        when(mapper.selectOne(any())).thenReturn((QuantPosition) ReflectionTestUtils.getField(f.runtime, "position"));
+        when(gateway.queryPositions(any(), any())).thenReturn(emptyPosition ? List.of() : List.of(new ExchangeGateway.PositionSnapshot("BTCUSDT", "LONG", new BigDecimal("0.9"), new BigDecimal("100"), new BigDecimal("101"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.TEN, 10, null, null)));
+        when(execution.closeByRuntime(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(new org.dromara.quant.execution.ExecutionResult(true, "PARTIALLY_FILLED", 55L, "close"));
+        when(f.plugin.evaluateExit(any(), anyMap())).thenReturn(List.of(new ExitSignal("FIRST_TAKE_PROFIT", new BigDecimal("0.5"), "test", true)));
+        ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now()));
+        ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("101"), null, Instant.now()));
+        ((java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "exitTask")).get(3, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals("EXIT_PENDING", state.getStatus()); assertEquals(55L, state.getPendingOrderId());
+        assertFalse(Boolean.TRUE.equals(state.getFirstTakeProfitTriggered()));
+        f.service.destroy();
+    }
+
+    @Test
+    void delayedTradeRestoresExtremaWithoutTradingOnStalePrice() throws Exception {
+        Fixture f = fixture();
+        var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+        try {
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now()));
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("110"), null, Instant.now().minusSeconds(4), 42L, Instant.now().minusSeconds(4), false));
+            assertEquals(new BigDecimal("110"), state.getHighestPriceSinceEntry());
+            verify(f.plugin, never()).evaluateExit(any(), anyMap());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void slowProtectionMustNotBlockMarketUpdates() throws Exception {
+        Fixture f = fixture();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        when(f.protection.ensureMarginHardStop(any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
+            entered.countDown(); release.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            return new org.dromara.quant.protection.domain.QuantProtectionOrder();
+        });
+        try {
+            executor.submit(() -> { synchronized (f.runtime) { ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime); } });
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var update = executor.submit(() -> {
+                ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("110"), null, Instant.now()));
+            });
+            assertDoesNotThrow(() -> update.get(300, java.util.concurrent.TimeUnit.MILLISECONDS));
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            assertEquals(new BigDecimal("110"), state.getHighestPriceSinceEntry());
+        } finally { release.countDown(); executor.shutdownNow(); f.service.destroy(); }
+    }
+
+    @Test
+    void lateProtectionForClosedPositionIsCleanedWithoutConfirmingCurrentPosition() throws Exception {
+        Fixture f = fixture();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        when(f.protection.ensureMarginHardStop(any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
+            entered.countDown(); release.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            return new org.dromara.quant.protection.domain.QuantProtectionOrder();
+        });
+        try {
+            var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+            executor.submit(() -> ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime));
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            synchronized (f.runtime) { ReflectionTestUtils.setField(f.runtime, "position", null); }
+            release.countDown();
+            verify(f.protection, timeout(1000).atLeastOnce()).cancelActiveProtectionOrders(eq(3L), eq(4L), eq(true));
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "hardStopConfirmed"));
+            executor.shutdownNow();
+        } finally { release.countDown(); f.service.destroy(); }
+    }
+
+    @Test
+    void slowPositionReconciliationMustNotBlockMarketUpdates() throws Exception {
+        Fixture f = fixture();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+        var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+        when(lease.acquireOrRenew(any(), any(), any())).thenReturn(true);
+        when(gateway.queryPositions(any(), any())).thenAnswer(invocation -> { entered.countDown(); release.await(3, java.util.concurrent.TimeUnit.SECONDS); return List.of(); });
+        try {
+            executor.submit(() -> ReflectionTestUtils.invokeMethod(f.service, "reconcilePosition", f.runtime));
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var update = executor.submit(() -> ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("110"), null, Instant.now())));
+            assertDoesNotThrow(() -> update.get(300, java.util.concurrent.TimeUnit.MILLISECONDS));
+        } finally { release.countDown(); executor.shutdownNow(); f.service.destroy(); }
+    }
+
+    @Test
+    void partialExitCannotRaceWithInFlightProtectionPlacement() throws Exception {
+        Fixture f = fixture();
+        ((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "protectionSyncing")).set(true);
+        when(f.plugin.evaluateExit(any(), anyMap())).thenReturn(List.of(new ExitSignal("FIRST_TAKE_PROFIT", new BigDecimal("0.5"), "test", true)));
+        var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+        ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now()));
+        ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("110"), null, Instant.now()));
+        verify(execution, never()).closeByRuntime(any(), any(), any(), any(), any(), any(), any(), any());
+        f.service.destroy();
+    }
+
+    @Test
+    void pendingOpenUsesLaterPositionInsteadOfEarlierEmptySnapshot() throws Exception {
+        Fixture f = fixture();
+        var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+        state.setStatus("OPEN_PENDING"); state.setPendingAction("OPEN"); state.setPendingOrderId(55L); state.setPendingOrderTime(System.currentTimeMillis());
+        var position = (QuantPosition) ReflectionTestUtils.getField(f.runtime, "position");
+        ReflectionTestUtils.setField(f.runtime, "position", null);
+        var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+        var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(new org.apache.ibatis.session.Configuration(), "test"), QuantPosition.class);
+        when(mapper.selectOne(any())).thenReturn(position);
+        when(gateway.queryPositions(any(), any())).thenReturn(List.of(new ExchangeGateway.PositionSnapshot("BTCUSDT", "LONG", BigDecimal.ONE, new BigDecimal("100"), new BigDecimal("101"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.TEN, 10, null, null)));
+        when(gateway.queryOrder(any(), any(), any(), any())).thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "open", "BUY", "MARKET", "FILLED", BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, Instant.now()));
+        try {
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePosition", f.runtime);
+            assertNotNull(ReflectionTestUtils.getField(f.runtime, "position"));
+            var reads = inOrder(gateway);
+            reads.verify(gateway).queryOrder(any(), any(), any(), any());
+            reads.verify(gateway).queryPositions(any(), any());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void closingRuntimeCannotReleaseLeaseBeforeProtectionRestFinishes() throws Exception {
+        Fixture f = fixture();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+        when(f.protection.ensureMarginHardStop(any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
+            entered.countDown(); release.await(3, java.util.concurrent.TimeUnit.SECONDS); return new org.dromara.quant.protection.domain.QuantProtectionOrder();
+        });
+        try {
+            ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime);
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var closing = executor.submit(() -> ReflectionTestUtils.invokeMethod(f.service, "closeRuntime", f.runtime));
+            Thread.sleep(100);
+            verify(lease, never()).release(any(), any(), any());
+            assertFalse(closing.isDone());
+            release.countDown(); closing.get(1, java.util.concurrent.TimeUnit.SECONDS);
+            verify(lease).release(eq(1L), eq(3L), eq("BTCUSDT"));
+        } finally { release.countDown(); executor.shutdownNow(); f.service.destroy(); }
+    }
+
+    @Test
+    void delayedExchangeEventMustNotTradeEvenWhenJustReceived() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now()));
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("110"), null,
+                Instant.now().minusSeconds(10), 42L, Instant.now(), false));
+            verify(f.plugin, never()).evaluateExit(any(), anyMap());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void staleTradePriceCannotOverrideFreshKline() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now()));
+            // 只设置旧价格缓存，避免过期事件触发异步持仓对账干扰本测试。
+            ReflectionTestUtils.setField(f.runtime, "latestTradePrice", new BigDecimal("90"));
+            ReflectionTestUtils.setField(f.runtime, "latestTradeEventAt", Instant.now().minusSeconds(10));
+            var now = Instant.now();
+            var candle = new ExchangeGateway.Kline(now.minusSeconds(30), now.plusSeconds(30), new BigDecimal("100"), new BigDecimal("111"), new BigDecimal("100"), new BigDecimal("110"), BigDecimal.ONE, false);
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("KLINE", "BTCUSDT", "1m", null, candle, now));
+            verify(f.plugin).evaluateExit(argThat(context -> new BigDecimal("110").compareTo(context.currentPrice()) == 0), anyMap());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void externalHealthGateStopsDecisionsBeforeQueuedDisconnectArrives() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now()));
+            ReflectionTestUtils.setField(f.runtime, "marketStreamReady", false);
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("110"), null, Instant.now()));
+            verify(f.plugin, never()).evaluateExit(any(), anyMap());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void disconnectDuringBalanceAdmissionCannotClaimAnEntry() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            var strategy = (QuantStrategy) ReflectionTestUtils.getField(f.runtime, "strategy");
+            strategy.setDefaultOpenRatio(new BigDecimal("0.1"));
+            when(f.plugin.evaluateEntry(any(), anyMap())).thenReturn(Optional.of(new EntrySignal(EntrySignal.Direction.LONG, "test")));
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            var capacity = (org.dromara.quant.risk.OpenCapacityService) ReflectionTestUtils.getField(f.service, "openCapacityService");
+            when(capacity.availableBalance(any(), any())).thenAnswer(i -> {
+                ReflectionTestUtils.setField(f.runtime, "marketStreamReady", false);
+                return BigDecimal.TEN;
+            });
+            var context = new StrategyContext("BTCUSDT", "LONG", BigDecimal.ZERO, new BigDecimal("100"), BigDecimal.ONE,
+                Instant.now(), false, Instant.now(), BigDecimal.ZERO, BigDecimal.ZERO);
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, context);
+            var guard = (org.dromara.quant.runtime.coordination.StrategyEntryGuardService) ReflectionTestUtils.getField(f.service, "entryGuardService");
+            verify(guard, never()).tryClaim(any(), any(), any(), any());
+        } finally { f.service.destroy(); }
+    }
+
+
+    @Test
+    void rejectedOpenReleasesClaimAndDoesNotFailMarketConsumer() throws Exception {
+        verifyOpenFailure(false);
+    }
+
+    @Test
+    void unknownOpenRetainsClaimAndCannotRepeatOrder() throws Exception {
+        verifyOpenFailure(true);
+    }
+
+    @Test
+    void capacityFailureWaitsForReleasedSlotBeforeRetrying() throws Exception {
+        verifyOpenFailure(false, true);
+    }
+
+    private void verifyOpenFailure(boolean unknown) throws Exception { verifyOpenFailure(unknown, false); }
+
+    private void verifyOpenFailure(boolean unknown, boolean capacityBlocked) throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("CLOSED"); state.setPositionQty(BigDecimal.ZERO);
+            var symbolConfig = (QuantStrategySymbol) ReflectionTestUtils.getField(f.runtime, "strategySymbol");
+            symbolConfig.setOpenRatio(new BigDecimal("0.1"));
+            ((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "reconciling")).set(true);
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            var capacity = (org.dromara.quant.risk.OpenCapacityService) ReflectionTestUtils.getField(f.service, "openCapacityService");
+            when(capacity.availableBalance(any(), any())).thenReturn(new BigDecimal("100"));
+            when(f.plugin.evaluateEntry(any(), anyMap())).thenReturn(Optional.of(new EntrySignal(EntrySignal.Direction.LONG, "test")));
+            var guard = (org.dromara.quant.runtime.coordination.StrategyEntryGuardService) ReflectionTestUtils.getField(f.service, "entryGuardService");
+            when(guard.tryClaim(any(), any(), any(), any())).thenReturn(true);
+            var records = (org.dromara.quant.execution.ExecutionRecordService) ReflectionTestUtils.getField(f.service, "executionRecordService");
+            var attempted = new java.util.concurrent.atomic.AtomicBoolean();
+            var record = new org.dromara.quant.execution.domain.QuantExecutionRecord(); record.setExecutionStatus(unknown ? "UNKNOWN" : "FAILED");
+            when(records.find(any(), any())).thenAnswer(i -> attempted.get() ? record : null);
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+            doAnswer(i -> {
+                assertEquals("CLOSED",state.getStatus(),"cleanup must run before pending overwrites close evidence");
+                assertNull(state.getPendingAction());
+                return null;
+            }).when(execution).releaseClosedOpenReservationsForRuntime(any(),any(),any(),any());
+            var capacityState = new java.util.concurrent.atomic.AtomicReference<>("occupied");
+            doAnswer(i -> {
+                if ("occupied".equals(capacityState.get())) throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("账户最大持仓数已达到", true);
+                return null;
+            }).when(execution).requireOpenCapacityForRuntime(any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any());
+            when(execution.openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any())).thenAnswer(i -> {
+                attempted.set(true);
+                if (unknown) throw new IllegalStateException("timeout", new java.net.SocketTimeoutException());
+                if (capacityBlocked) throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("账户最大持仓数已达到", true);
+                throw new org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException(-4023, "step size");
+            });
+            var states=(org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service,"stateService");
+            doAnswer(i -> {
+                state.setStatus("CLOSED"); state.setPositionQty(BigDecimal.ZERO); state.setPendingAction(null);
+                return null;
+            }).when(states).markClosed(state);
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now()));
+            var context = new StrategyContext("BTCUSDT", "LONG", BigDecimal.ZERO, new BigDecimal("100"), BigDecimal.ONE,
+                Instant.now(), false, Instant.now(), BigDecimal.ZERO, BigDecimal.ZERO);
+            assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, context));
+            assertTrue(attempted.get(), "test must actually attempt execution");
+            var order=inOrder(execution);
+            order.verify(execution).releaseClosedOpenReservationsForRuntime(any(),any(),any(),any());
+            order.verify(execution).openByRuntime(any(),any(),any(),any(),any(),any(),any(),any(),anyInt(),any(),any(),any());
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "marketHealthy"));
+            assertEquals(unknown ? "OPEN_PENDING" : "CLOSED", state.getStatus());
+            if (unknown) {
+                assertTrue(Boolean.TRUE.equals(state.getRecoveryRequired()));
+                verify(guard, never()).release(any(), any(), any(), any());
+            } else {
+                verify(guard).release(any(), any(), any(), any());
+                assertNull(state.getPendingAction());
+                assertEquals(0,state.getPositionQty().signum());
+                verify((org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service,"stateService")).markClosed(state);
+            }
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, context);
+            verify(execution, times(1)).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any());
+            // 价格或行情时间变化不能绕过执行退避，策略仍会评估信号。
+            var changedPrice = new StrategyContext("BTCUSDT", "LONG", BigDecimal.ZERO, new BigDecimal("101"), BigDecimal.ONE,
+                context.klineOpenTime(), false, context.eventTime(), BigDecimal.ZERO, BigDecimal.ZERO);
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, changedPrice);
+            verify(execution, times(1)).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any());
+            var fresh = new StrategyContext("BTCUSDT", "LONG", BigDecimal.ZERO, new BigDecimal("102"), BigDecimal.ONE,
+                context.klineOpenTime(), false, context.eventTime().plusMillis(1), BigDecimal.ZERO, BigDecimal.ZERO);
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, fresh);
+            verify(execution, times(1)).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any());
+            if (!unknown) {
+                var retryGate = ReflectionTestUtils.getField(f.runtime, "entryRetryGate");
+                ReflectionTestUtils.setField(retryGate, "nextCheckAt", 0L);
+                if (capacityBlocked) {
+                    ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, fresh);
+                    verify(execution, times(1)).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any());
+                    capacityState.set("released");
+                    ReflectionTestUtils.setField(retryGate, "nextCheckAt", 0L);
+                }
+                ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, fresh);
+                verify(execution, times(2)).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any());
+            }
+            verify(gateway, never()).queryAccount(any());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void failedReconciliationBacksOffInsteadOfImmediatelyQueueingAgain() throws Exception {
+        Fixture f = fixture();
+        try {
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            when(gateway.queryPositions(any(), any())).thenThrow(new IllegalStateException("REST queue timeout"));
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePosition", f.runtime);
+            assertTrue((long) ReflectionTestUtils.getField(f.runtime, "nextReconcileAt") > System.currentTimeMillis());
+            ReflectionTestUtils.invokeMethod(f.service, "requestReconciliation", f.runtime);
+            verify(gateway, times(1)).queryPositions(any(), any());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void pendingOrderStillPublishesChangingSlopeWithoutTrading() throws Exception {
+        Fixture f = fixture();
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(StrategyRuntimeService.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start(); logger.addAppender(appender);
+        try {
+            ReflectionTestUtils.setField(f.runtime, "plugin", mock(KlineSlopeRateStrategy.class));
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingAction("OPEN");
+            state.setPendingOrderTime(System.currentTimeMillis());
+            var hub = (StrategySlopeTelemetryHub) ReflectionTestUtils.getField(f.service, "slopeTelemetryHub");
+            var now = Instant.now();
+            var candle = new ExchangeGateway.Kline(now.minusSeconds(60), now, new BigDecimal("100"), new BigDecimal("100"),
+                new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ONE, true);
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, now));
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("KLINE", "BTCUSDT", "1m", null, candle, now));
+            var market = ReflectionTestUtils.getField(f.runtime, "market");
+            for (String field : List.of("previousKlineOpen", "secondPreviousKlineOpen", "thirdPreviousKlineOpen")) {
+                ReflectionTestUtils.setField(market, field, new BigDecimal("100"));
+            }
+            clearInvocations(hub);
+            for (String price : List.of("101", "102")) {
+                ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                    new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal(price), null, Instant.now()));
+            }
+            var updates = org.mockito.ArgumentCaptor.forClass(StrategySlopeTelemetry.class);
+            verify(hub, times(2)).publish(updates.capture());
+            assertNotEquals(updates.getAllValues().get(0).degrees(), updates.getAllValues().get(1).degrees());
+            var plugin = (StrategyPlugin) ReflectionTestUtils.getField(f.runtime, "plugin");
+            verify(plugin, never()).evaluateEntry(any(), anyMap());
+            verify(plugin, never()).evaluateExit(any(), anyMap());
+            assertEquals("OPEN", state.getPendingAction());
+            assertTrue(appender.list.stream().anyMatch(event -> event.getFormattedMessage().contains("策略实时斜率")
+                && event.getFormattedMessage().contains("pendingAction=OPEN")));
+        } finally { logger.detachAppender(appender); appender.stop(); f.service.destroy(); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void slowPositionReconciliationMustNotHoldMarketMonitor(boolean slowDatabase) throws Exception {
+        Fixture f = fixture();
+        var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+        var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(
+            new org.apache.ibatis.session.Configuration(), "test"), QuantPosition.class);
+        var existing = (QuantPosition) ReflectionTestUtils.getField(f.runtime, "position");
+        existing.setCredentialId(3L);
+        when(mapper.selectList(any())).thenReturn(List.of(existing));
+        when(mapper.update(any(QuantPosition.class), any())).thenReturn(1);
+        when(gateway.queryPositions(any(), any())).thenReturn(List.of(new ExchangeGateway.PositionSnapshot("BTCUSDT", "LONG", BigDecimal.ONE,
+            new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.TEN, 10, null, null)));
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        if (slowDatabase) {
+            doAnswer(i -> { entered.countDown(); release.await(3, java.util.concurrent.TimeUnit.SECONDS); return 1; })
+                .when(mapper).update(any(QuantPosition.class), any());
+        } else {
+            when(f.protection.firstTakeProfitExecutedQuantity(any(), any())).thenAnswer(i -> {
+                entered.countDown(); release.await(3, java.util.concurrent.TimeUnit.SECONDS); return BigDecimal.ZERO;
+            });
+        }
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            var recovery = executor.submit(() -> ReflectionTestUtils.invokeMethod(f.service, "reconcilePosition", f.runtime));
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var update = executor.submit(() -> ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now())));
+            assertDoesNotThrow(() -> update.get(300, java.util.concurrent.TimeUnit.MILLISECONDS));
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            synchronized (f.runtime) { state.setPendingAction("CLOSE"); state.setPendingOrderId(66L); }
+            release.countDown(); recovery.get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals("CLOSE", state.getPendingAction(), "旧对账不能清理新待执行动作");
+            assertEquals(66L, state.getPendingOrderId());
+        } finally { release.countDown(); executor.shutdownNow(); f.service.destroy(); }
+    }
+
+    @Test
+    void changedDatabasePositionRejectsStaleReconciliationBeforeRuntimeCommit() throws Exception {
+        Fixture f = fixture();
+        try {
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+            com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(
+                new org.apache.ibatis.session.Configuration(), "test"), QuantPosition.class);
+            var existing = (QuantPosition) ReflectionTestUtils.getField(f.runtime, "position"); existing.setCredentialId(3L);
+            when(mapper.selectList(any())).thenReturn(List.of(existing));
+            when(mapper.update(any(QuantPosition.class), any())).thenReturn(0);
+            when(gateway.queryPositions(any(), any())).thenReturn(List.of(new ExchangeGateway.PositionSnapshot("BTCUSDT", "LONG", new BigDecimal("0.5"),
+                new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.TEN, 10, null, null)));
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePosition", f.runtime);
+            assertSame(existing, ReflectionTestUtils.getField(f.runtime, "position"));
+            assertEquals(BigDecimal.ONE, existing.getQuantity());
+            verify(f.protection, never()).isFirstTakeProfitFilled(any(), any(), any());
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "positionReconciling"));
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void filledOpenFlatOnlyClosesWithCompleteTradeProof() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingAction("OPEN"); state.setPendingOrderTime(System.currentTimeMillis());
+            state.setPendingOrderId(55L);
+            var order = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "open", "BUY", "MARKET", "FILLED",
+                BigDecimal.TEN, BigDecimal.ONE, BigDecimal.ONE, Instant.now());
+            var states = (org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService");
+            ReflectionTestUtils.invokeMethod(f.service, "applyPendingExecution", f.runtime, null, order, List.of());
+            assertEquals("OPEN", state.getPendingAction());
+            verify(states, never()).markClosed(any());
+            when(f.protection.cancelActiveProtectionOrders(any(), any(), anyBoolean())).thenReturn(false);
+            ReflectionTestUtils.invokeMethod(f.service, "applyPendingExecution", f.runtime, null, order, List.of(), true);
+            verify(states, never()).markClosed(any());
+            assertEquals("OPEN", state.getPendingAction());
+            when(f.protection.cancelActiveProtectionOrders(any(), any(), anyBoolean())).thenReturn(true);
+            when(f.protection.cancelActiveProtectionOrders(any(), any(), any(), anyBoolean())).thenReturn(true);
+            ReflectionTestUtils.invokeMethod(f.service, "applyPendingExecution", f.runtime, null, order, List.of(), true);
+            verify(states).markClosed(state);
+        } finally { f.service.destroy(); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"complete", "partial", "missingOpen", "duplicate", "otherOpen", "missingTime", "truncated"})
+    void closedOpenProofRejectsIncompleteOrAmbiguousTrades(String scenario) throws Exception {
+        Fixture f = fixture();
+        try {
+            Instant time = Instant.now();
+            var order = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "open", "BUY", "MARKET", "FILLED",
+                BigDecimal.TEN, BigDecimal.ONE, BigDecimal.ONE, time);
+            var open = new ExchangeGateway.TradeSnapshot("BTCUSDT", 1L, 55L, "BUY", BigDecimal.ONE,
+                BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, time);
+            var close = new ExchangeGateway.TradeSnapshot("BTCUSDT", 2L, 66L, "SELL",
+                scenario.equals("partial") ? new BigDecimal("0.5") : BigDecimal.ONE,
+                BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, scenario.equals("missingTime") ? null : time.plusSeconds(1));
+            List<ExchangeGateway.TradeSnapshot> trades = new ArrayList<>(List.of(open, close));
+            if (scenario.equals("missingOpen")) trades.remove(0);
+            if (scenario.equals("duplicate")) trades.add(close);
+            if (scenario.equals("otherOpen")) trades.add(new ExchangeGateway.TradeSnapshot("BTCUSDT", 3L, 77L, "BUY",
+                BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, time.plusSeconds(2)));
+            if (scenario.equals("truncated")) trades = Collections.nCopies(1000, open);
+            boolean proof = ReflectionTestUtils.invokeMethod(f.service, "closedPendingOpenProven", order, "LONG", trades);
+            assertEquals(scenario.equals("complete"), proof);
+        } finally { f.service.destroy(); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void pendingRecoveryRequiresSingleDirectionAndRechecksFlatAfterTrades(boolean hedgeMode) throws Exception {
+        Fixture f = fixture();
+        try {
+            Instant time = Instant.now().minusSeconds(2);
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingAction("OPEN"); state.setPendingOrderTime(time.toEpochMilli());
+            state.setPendingOrderId(55L); state.setDirection("LONG");
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            var states = (org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService");
+            var order = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "open", "BUY", "MARKET", "FILLED",
+                BigDecimal.TEN, BigDecimal.ONE, BigDecimal.ONE, time);
+            when(gateway.queryOrder(any(), any(), any(), any())).thenReturn(order);
+            when(gateway.queryPositions(any(), any())).thenReturn(List.of());
+            when(gateway.queryPositionMode(any())).thenReturn(new ExchangeGateway.PositionMode(hedgeMode));
+            when(gateway.queryTrades(any(), any(), any())).thenAnswer(invocation -> {
+                assertFalse(Thread.holdsLock(f.runtime), "REST must remain outside the market lock");
+                return List.of(new ExchangeGateway.TradeSnapshot("BTCUSDT", 1L, 55L, "BUY", BigDecimal.ONE,
+                    BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, time),
+                    new ExchangeGateway.TradeSnapshot("BTCUSDT", 2L, 66L, "SELL", BigDecimal.ONE,
+                    BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, time.plusSeconds(1)));
+            });
+            when(f.protection.cancelActiveProtectionOrders(any(), any(), anyBoolean())).thenReturn(true);
+            when(f.protection.cancelActiveProtectionOrders(any(), any(), any(), anyBoolean())).thenReturn(true);
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+            if (hedgeMode) {
+                verify(states, never()).markClosed(any());
+                verify(gateway, never()).queryTrades(any(), any(), any());
+                assertEquals("OPEN", state.getPendingAction());
+            } else {
+                verify(states).markClosed(state);
+                verify(gateway, times(2)).queryPositions(any(), any());
+            }
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void preparationNoticeMustNotBlockMarketAndMustBeRateLimited() throws Exception {
+        Fixture f = fixture();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            var notifications = (org.dromara.quant.notification.QuantTradeNotificationService) ReflectionTestUtils.getField(f.service, "notificationService");
+            doAnswer(invocation -> { entered.countDown(); release.await(2, java.util.concurrent.TimeUnit.SECONDS); return null; })
+                .when(notifications).notifyLiveBlocked(any(), any(), any());
+            var dispatch = executor.submit(() -> {
+                ReflectionTestUtils.invokeMethod(f.service, "notifyPreparationBlocked", f.runtime, "系统未开启实盘");
+                ReflectionTestUtils.invokeMethod(f.service, "notifyPreparationBlocked", f.runtime, "系统未开启实盘");
+            });
+            dispatch.get(300, java.util.concurrent.TimeUnit.MILLISECONDS);
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            verify(notifications, times(1)).notifyLiveBlocked(any(), eq("BTCUSDT"), eq("系统未开启实盘"));
+        } finally { release.countDown(); executor.shutdownNow(); f.service.destroy(); }
+    }
+
+    @Test
+    void thresholdReachedWhileCapacityFullRecordsReasonAndCanRetryAfterCapacityFrees() throws Exception {
+        Fixture f = fixture();
+        try {
+            var logs = mock(org.dromara.quant.decision.TradeDecisionLogService.class);
+            ReflectionTestUtils.setField(f.service, "decisionLogs", logs);
+            ReflectionTestUtils.setField(f.runtime, "plugin", new KlineSlopeRateStrategy());
+            var strategy = (QuantStrategy) ReflectionTestUtils.getField(f.runtime, "strategy");
+            strategy.setMaxOpenCount(1); strategy.setDefaultOpenRatio(new BigDecimal("0.1")); strategy.setStrategyName("当前策略快照");
+            var jdbc = (org.springframework.jdbc.core.JdbcTemplate) ReflectionTestUtils.getField(f.service, "jdbcTemplate");
+            when(jdbc.queryForObject(anyString(), eq(Long.class), any(), any())).thenReturn(1L, 0L);
+            var context = new StrategyContext("BTCUSDT", null, null, new BigDecimal("102"), null, new BigDecimal("100"),
+                Instant.now(), false, Instant.now(), null, null, null, 10, null, null, false);
+            var balance = (org.dromara.quant.market.AccountBalanceCache) ReflectionTestUtils.getField(f.service, "balanceCache");
+            when(balance.requireSnapshot(any())).thenThrow(new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("账户余额未就绪"));
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, context);
+            var captured = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.decision.DecisionLogEvent.class);
+            verify(logs).record(captured.capture());
+            assertEquals("MAX_POSITIONS", captured.getValue().reasonCode());
+            assertEquals("当前策略快照", captured.getValue().strategyName());
+            verify((org.dromara.quant.runtime.coordination.StrategyEntryGuardService) ReflectionTestUtils.getField(f.service, "entryGuardService"), never()).tryClaim(any(), any(), any(), any());
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, context);
+            verify(logs, times(2)).record(captured.capture());
+            assertEquals("ACCOUNT_NOT_READY", captured.getValue().reasonCode());
+        } finally { f.service.destroy(); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"TESTNET,LONG,10", "LIVE,LONG,10", "TESTNET,SHORT,20", "LIVE,SHORT,20"})
+    void eachStopLayerUsesSameNormalizedBoundary(String mode, String direction, int leverage) throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "plugin", new KlineSlopeRateStrategy());
+            var credential = (QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential"); credential.setRunMode(mode);
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setFrozenLeverage(leverage);
+            var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 3, new BigDecimal("0.01"), new BigDecimal("0.001"),
+                new BigDecimal("0.001"), BigDecimal.ONE, "TRADING");
+            ReflectionTestUtils.setField(f.runtime, "protectionRule", rule);
+            for (String expected : List.of("HARD_STOP", "SYMBOL_STOP", "LOCAL_STOP")) {
+                state.setFrozenStopLossRatio(new BigDecimal(expected.equals("HARD_STOP") ? "0.05" : "0.3"));
+                state.setFrozenSymbolStopLossRatio(new BigDecimal(expected.equals("SYMBOL_STOP") ? "0.05" : "0.3"));
+                ReflectionTestUtils.setField(f.runtime, "params", Map.of("localStopLossRate", expected.equals("LOCAL_STOP") ? "0.05" : "0.3"));
+                BigDecimal trigger = org.dromara.quant.exchange.QuantityNormalizer.price(KlineSlopeRateStrategy.priceForReturn(new BigDecimal("100"), direction,
+                    new BigDecimal("-0.05"), leverage), rule);
+                var context = new StrategyContext("BTCUSDT", direction, new BigDecimal("100"), trigger, null, BigDecimal.TEN,
+                    Instant.now(), false, Instant.now(), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.TEN, leverage, new BigDecimal("100"), new BigDecimal("100"), false);
+                List<ExitSignal> exits = ReflectionTestUtils.invokeMethod(f.service, "protectionExits", f.runtime, context);
+                assertEquals(expected, exits.getFirst().exchangeProtectionType());
+                List<ProtectionSignal> signals = ReflectionTestUtils.invokeMethod(f.service, "protectionSignals", f.runtime, context,
+                    Map.of("localStopLossRate", expected.equals("LOCAL_STOP") ? "0.05" : "0.3"));
+                assertTrue(signals.stream().anyMatch(x -> x.type().equals("LOCAL_STOP")));
+                assertTrue(signals.stream().anyMatch(x -> x.type().equals("SYMBOL_STOP")));
+                assertFalse(signals.stream().anyMatch(x -> x.type().equals("STEP_TP")));
+            }
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void slowProtectionCancellationDoesNotBlockMarketOrSendUnknownExit() throws Exception {
+        Fixture f = fixture();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            var properties = (QuantProperties) ReflectionTestUtils.getField(f.service, "properties"); properties.getProtection().setConfirmationWaitMillis(0);
+            when(f.plugin.evaluateExit(any(), anyMap())).thenReturn(List.of(new ExitSignal("LOCAL_STOP_LOSS", BigDecimal.ONE, "test", false, "LOCAL_STOP", ExitSignal.QuantityBase.CURRENT)));
+            when(f.protection.quiesceCycleProtections(any(), any())).thenAnswer(i -> {
+                assertFalse(Thread.holdsLock(f.runtime)); entered.countDown(); release.await(3, java.util.concurrent.TimeUnit.SECONDS); return false;
+            });
+            var context = new StrategyContext("BTCUSDT", "LONG", new BigDecimal("100"), new BigDecimal("99"), null, null,
+                Instant.now(), false, Instant.now(), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.TEN, 10, null, null, false);
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateExit", f.runtime, context);
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var future = executor.submit(() -> ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("98"), null, Instant.now())));
+            assertDoesNotThrow(() -> future.get(300, java.util.concurrent.TimeUnit.MILLISECONDS));
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateExit", f.runtime, context);
+            verify(f.protection, times(1)).quiesceCycleProtections(any(), any());
+            release.countDown();
+            ((java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "exitTask")).get(2, java.util.concurrent.TimeUnit.SECONDS);
+            verify((org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService"), never())
+                .closeByRuntime(any(), any(), any(), any(), any(), any(), any(), any());
+        } finally { release.countDown(); executor.shutdownNow(); f.service.destroy(); }
+    }
+
+    @Test
+    void exitClaimsCycleWhileProtectionSyncDrainsWithoutBlockingMarket() throws Exception {
+        Fixture f = fixture();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            var properties = (QuantProperties) ReflectionTestUtils.getField(f.service, "properties"); properties.getProtection().setConfirmationWaitMillis(0);
+            when(f.plugin.evaluateExit(any(), anyMap())).thenReturn(List.of(new ExitSignal("LOCAL_STOP_LOSS", BigDecimal.ONE, "test", false, "LOCAL_STOP", ExitSignal.QuantityBase.CURRENT)));
+            var syncing = (java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "protectionSyncing"); syncing.set(true);
+            var protection = executor.submit(() -> { entered.countDown(); release.await(); syncing.set(false); return null; });
+            ReflectionTestUtils.setField(f.runtime, "protectionTask", protection);
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var context = new StrategyContext("BTCUSDT", "LONG", new BigDecimal("100"), new BigDecimal("99"), null, null,
+                Instant.now(), false, Instant.now(), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.TEN, 10, null, null, false);
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateExit", f.runtime, context);
+            assertTrue(((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "exitCoordinating")).get());
+            verify(f.protection, never()).quiesceCycleProtections(any(), any());
+            var event = executor.submit(() -> ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("98"), null, Instant.now())));
+            assertDoesNotThrow(() -> event.get(300, java.util.concurrent.TimeUnit.MILLISECONDS));
+            release.countDown();
+            ((java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "exitTask")).get(2, java.util.concurrent.TimeUnit.SECONDS);
+            verify(f.protection).quiesceCycleProtections(any(), any());
+        } finally { release.countDown(); executor.shutdownNow(); f.service.destroy(); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"TESTNET", "LIVE"})
+    void dynamicProtectionFailureStillConfirmsHardStop(String mode) throws Exception {
+        Fixture f = fixture();
+        try {
+            ((QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential")).setRunMode(mode);
+            when(f.protection.ensureMarginHardStop(any(), any(), any(), anyBoolean()))
+                .thenReturn(new org.dromara.quant.protection.domain.QuantProtectionOrder());
+            doThrow(new IllegalStateException("take profit rejected")).when(f.protection)
+                .syncStrategyProtections(any(), any(), any(), anyList(), any(), anyBoolean());
+            ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime);
+            ((java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "protectionTask"))
+                .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "hardStopConfirmed"));
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "protectionDegraded"));
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void protectionSignalComputationFailureStillConfirmsHardStopAndPreservesOldTargets() throws Exception {
+        Fixture f = fixture();
+        try {
+            ((QuantPosition) ReflectionTestUtils.getField(f.runtime, "position")).setMarkPrice(new BigDecimal("100"));
+            when(f.plugin.evaluateProtection(any(), anyMap())).thenThrow(new IllegalStateException("invalid protection parameter"));
+            when(f.protection.ensureMarginHardStop(any(), any(), any(), anyBoolean()))
+                .thenReturn(new org.dromara.quant.protection.domain.QuantProtectionOrder());
+            ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime);
+            ((java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "protectionTask"))
+                .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "hardStopConfirmed"));
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "protectionDegraded"));
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            assertTrue(state.getRecoveryRequired());
+            verify(f.protection, never()).syncStrategyProtections(any(), any(), any(), anyList(), any(), anyBoolean());
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void hardStopFailureDoesNotSkipOtherProtectionTargets() throws Exception {
+        Fixture f = fixture();
+        try {
+            doThrow(new IllegalStateException("hard stop rejected")).when(f.protection)
+                .ensureMarginHardStop(any(), any(), any(), anyBoolean());
+            ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime);
+            ((java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "protectionTask"))
+                .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            verify(f.protection).syncStrategyProtections(any(), any(), any(), anyList(), any(), eq(true));
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "hardStopConfirmed"));
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "protectionDegraded"));
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
+    void stalledProtectionWaitReleasesExitCoordinatorWithoutSendingDuplicateClose() throws Exception {
+        Fixture f = fixture();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        try {
+            var properties = (QuantProperties) ReflectionTestUtils.getField(f.service, "properties");
+            properties.getProtection().setConfirmationWaitMillis(0);
+            when(f.plugin.evaluateExit(any(), anyMap())).thenReturn(List.of(new ExitSignal("LOCAL_STOP_LOSS", BigDecimal.ONE,
+                "test", false, "LOCAL_STOP", ExitSignal.QuantityBase.CURRENT)));
+            var syncing = (java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "protectionSyncing");
+            syncing.set(true);
+            var protection = executor.submit(() -> { entered.countDown(); release.await(); syncing.set(false); return null; });
+            ReflectionTestUtils.setField(f.runtime, "protectionTask", protection);
+            assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            var context = new StrategyContext("BTCUSDT", "LONG", new BigDecimal("100"), new BigDecimal("99"), null, null,
+                Instant.now(), false, Instant.now(), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.TEN, 10, null, null, false);
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateExit", f.runtime, context);
+            var exit = (java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "exitTask");
+            assertDoesNotThrow(() -> exit.get(7, java.util.concurrent.TimeUnit.SECONDS), "exit coordinator waited indefinitely for protection");
+            assertFalse(((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "exitCoordinating")).get());
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+            assertFalse(protection.isCancelled(), "timeout cannot cancel an uncertain exchange request and assume it was not sent");
+            verify(f.protection, never()).quiesceCycleProtections(any(), any());
+            verify((org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService"), never())
+                .closeByRuntime(any(), any(), any(), any(), any(), any(), any(), any());
+        } finally { release.countDown(); executor.shutdownNow(); f.service.destroy(); }
+    }
+
+    private Fixture fixture() throws Exception {
+        var constructor = StrategyRuntimeService.class.getConstructors()[0];
+        Object[] args = Arrays.stream(constructor.getParameterTypes()).map(type -> type == QuantProperties.class ? new QuantProperties() : mock(type)).toArray();
+        var service = (StrategyRuntimeService) constructor.newInstance(args);
+        var gateway = (ExchangeGateway) ReflectionTestUtils.getField(service, "gateway");
+        var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(service, "leaseService");
+        when(lease.acquireOrRenew(any(), any(), any())).thenReturn(true);
+        when(gateway.queryKlines(any(), any(), anyInt())).thenReturn(List.of());
+        var instance = new QuantStrategyInstance(); instance.setId(1L); instance.setStatus("RUNNING");
+        var strategy = new QuantStrategy(); strategy.setId(2L); strategy.setDefaultLeverage(10); strategy.setStopLossRatio(new BigDecimal("0.1"));
+        var symbolConfig = new QuantStrategySymbol(); symbolConfig.setIntervalCode("1m"); symbolConfig.setLeverage(10);
+        var credential = new QuantCredential(); credential.setId(3L); credential.setRunMode("LIVE");
+        var symbol = new QuantSymbol(); symbol.setSymbol("BTCUSDT");
+        var plugin = mock(StrategyPlugin.class); when(plugin.evaluateExit(any(), anyMap())).thenReturn(List.of()); when(plugin.evaluateProtection(any(), anyMap())).thenReturn(List.of());
+        Class<?> runtimeClass = Arrays.stream(StrategyRuntimeService.class.getDeclaredClasses()).filter(type -> type.getSimpleName().equals("ActiveRuntime")).findFirst().orElseThrow();
+        var runtimeConstructor = runtimeClass.getDeclaredConstructors()[0]; runtimeConstructor.setAccessible(true);
+        Object runtime = runtimeConstructor.newInstance(service, instance, strategy, symbolConfig, credential, symbol, plugin, Map.of());
+        var position = new QuantPosition(); position.setId(4L); position.setEntryPrice(new BigDecimal("100")); position.setQuantity(BigDecimal.ONE); position.setPositionSide("LONG"); position.setSymbol("BTCUSDT"); position.setLeverage(10);
+        var state = new QuantStrategyPositionState(); state.setInstanceId(1L); state.setPositionId(4L); state.setStatus("OPEN"); state.setPositionQty(BigDecimal.ONE); state.setInitialPositionQty(BigDecimal.ONE); state.setUnsafeRecovery(false); state.setRecoveryRequired(false); state.setFirstTakeProfitTriggered(false);
+        state.setPositionCycleKey("cycle"); state.setFrozenLeverage(10); state.setEntryPrice(new BigDecimal("100"));
+        state.setFrozenStopLossRatio(new BigDecimal("0.1")); state.setFirstTakeProfitTargetQty(new BigDecimal("0.5"));
+        state.setFirstTakeProfitExecutedQty(BigDecimal.ZERO); state.setFirstTakeProfitLocalExecutedQty(BigDecimal.ZERO);
+        when(((ProtectionOrderService) ReflectionTestUtils.getField(service, "protectionOrderService")).firstTakeProfitExecutedQuantity(any(), any())).thenReturn(BigDecimal.ZERO);
+        ReflectionTestUtils.setField(runtime, "position", position); ReflectionTestUtils.setField(runtime, "state", state);
+        ReflectionTestUtils.setField(runtime, "nextLeaseRenewAt", Long.MAX_VALUE);
+        ((java.util.Map) ReflectionTestUtils.getField(service, "activeRuntimes")).put(1L, runtime);
+        return new Fixture(service, runtime, plugin, instance, (ProtectionOrderService) ReflectionTestUtils.getField(service, "protectionOrderService"));
+    }
+
+    private record Fixture(StrategyRuntimeService service, Object runtime, StrategyPlugin plugin, QuantStrategyInstance instance, ProtectionOrderService protection) {}
+}

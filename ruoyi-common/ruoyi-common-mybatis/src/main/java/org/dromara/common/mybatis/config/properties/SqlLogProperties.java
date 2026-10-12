@@ -22,4 +22,13 @@ public class SqlLogProperties {
      */
     private String output = "console";
 
+    private Boolean logSuccess = true;
+
+    private Boolean logError = true;
+
+    private Long slowThresholdMs = 0L;
+
+    /** 是否在异常/慢 SQL 日志中包含完整 SQL 和参数。默认关闭，避免敏感信息进入日志。 */
+    private Boolean includeSql = false;
+
 }

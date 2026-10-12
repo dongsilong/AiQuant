@@ -44,6 +44,11 @@ public class MessageProperties {
     private long heartbeatInterval = 60L;
 
     /**
+     * WebSocket 协议心跳间隔，单位秒；必须小于容器空闲超时时间。
+     */
+    private long webSocketHeartbeatInterval = 10L;
+
+    /**
      * WebSocket 单次发送超时时间，单位毫秒。
      */
     private int webSocketSendTimeLimit = 10_000;

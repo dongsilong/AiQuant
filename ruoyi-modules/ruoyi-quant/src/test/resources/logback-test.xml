@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{60} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 打开 Binance 和 Jetty 的日志 -->
+    <logger name="io.github.binance" level="TRACE"/>
+    <!--<logger name="org.eclipse.jetty" level="DEBUG"/>
+    <logger name="org.eclipse.jetty.websocket" level="DEBUG"/>
+    <logger name="org.eclipse.jetty.client" level="DEBUG"/>
+    <logger name="org.eclipse.jetty.io" level="DEBUG"/>-->
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

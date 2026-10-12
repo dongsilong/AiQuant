@@ -1,6 +1,43 @@
 --- # 临时文件存储位置 避免临时文件被系统清理报错
 spring.servlet.multipart.location: /ruoyi/server/temp
 
+quant:
+  live:
+    enabled: true
+  security:
+    # 通过部署环境变量提供，禁止写入源码或提交真实密钥。
+    secret-key: 303815efc2e94ed3b5dadfc487d5ef7c
+  proxy:
+    host:
+    port:
+  market:
+    # 行情无事件后判定断连的秒数
+    idle-timeout-seconds: 15
+    # 行情断连后的首次重连等待秒数
+    reconnect-delay-seconds: 3
+  # 策略运行时调度与分布式租约配置
+  runtime:
+    # 是否启用策略运行时监督；关闭后会停止全部运行中的策略实例
+    enabled: true
+    # 策略实例发现、启动/停止和租约维护的间隔，单位：秒
+    tick-seconds: 5
+    # 策略运行租约有效期，单位：秒；用于避免多个服务实例同时运行同一策略
+    lease-seconds: 30
+    # 未确认开平仓执行记录的恢复扫描间隔，单位：秒
+    recovery-seconds: 5
+  # 交易所事实对账与用户数据流协调配置
+  reconcile:
+    # 是否启用对账、用户数据流监督和执行恢复任务
+    enabled: true
+    # 持仓/订单事实对账间隔，单位：秒
+    interval-seconds: 60
+    # 对账查询历史订单和成交的回溯范围，单位：小时
+    history-hours: 48
+
+#logging:
+#  level:
+#    org.dromara.quant.strategy: debug
+
 --- # 监控中心配置
 spring.boot.admin.client:
   # 增加客户端开关
@@ -19,7 +56,7 @@ snail-job:
   enabled: false
   # 需要在 SnailJob 后台组管理创建对应名称的组,然后创建任务的时候选择对应的组,才能正确分派任务
   group: "ruoyi_group"
-  # SnailJob 接入验证令牌 详见 script/sql/ry_job.sql `sj_group_config`表
+  # SnailJob 接入验证令牌 详见 script/sql/ry_job.sql `sj_group_config` 表
   token: "SJ_cKqBTPzCsWA3VyuCfFoccmuIEGXjr5KT"
   server:
     host: 127.0.0.1
@@ -58,7 +95,7 @@ snail-ai:
     # 嵌入模式下隐藏侧边栏用户信息
     show-sidebar-user: false
     # 嵌入模式下隐藏智能体市场入口
-    show-agent-market: true
+    show-agent-market: false
     # 嵌入模式下使用紧凑输入框
     compact-input: true
     # 是否锁定当前智能体
@@ -66,7 +103,7 @@ snail-ai:
   # ==================== OpenAPI Client 配置 ====================
   open-api:
     # 启用 OpenAPI Client
-    enabled: true
+    enabled: false
     # Server HTTP 端口
     web-port: 8900
     # 是否使用 HTTPS
@@ -81,10 +118,17 @@ snail-ai:
 --- # MyBatis Plus 配置
 mybatis-plus:
   sql-log:
-    # 完整 SQL 输出开关
+    # 生产环境默认关闭 SQL 内容日志
     enabled: false
     # 输出方式，可选 console、log
     output: console
+
+--- # 数据加密
+mybatis-encryptor:
+  enable: true
+  algorithm: AES
+  encode: BASE64
+  password: quant20260725key
 
 --- # 数据源配置
 spring:
@@ -103,9 +147,9 @@ spring:
           driverClassName: com.mysql.cj.jdbc.Driver
           # jdbc 所有参数配置参考 https://lionli.blog.csdn.net/article/details/122018562
           # rewriteBatchedStatements=true 批处理优化 大幅提升批量插入更新删除性能(对数据库有性能损耗 使用批量操作应考虑性能问题)
-          url: jdbc:mysql://localhost:3306/ry-vue?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true
-          username: root
-          password: root
+          url: jdbc:mysql://localhost:3306/quantdb?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true
+          username: quantdb
+          password: quantpw2026
 #        # 从库数据源
 #        slave:
 #          lazy: true
@@ -156,9 +200,9 @@ spring.data:
     # 端口，默认为6379
     port: 6379
     # 数据库索引
-    database: 0
+    database: 3
     # redis 密码必须配置
-    password: ruoyi123
+    password: LUCKLY20218886999LUCKLY2021
     # 连接超时时间
     timeout: 10s
     # 是否开启ssl
@@ -175,7 +219,7 @@ redisson:
   # 单节点配置
   singleServerConfig:
     # 客户端名称 不能用中文
-    clientName: RuoYi-Vue-Plus
+    clientName: AiQuant
     # 最小空闲连接数
     connectionMinimumIdleSize: 32
     # 连接池大小
@@ -189,17 +233,17 @@ redisson:
 
 --- # mail 邮件发送
 mail:
-  enabled: false
-  host: smtp.163.com
+  enabled: true
+  host: smtp.qq.com
   port: 465
   # 是否需要用户名密码验证
   auth: true
   # 发送方，遵循RFC-822标准
-  from: xxx@163.com
+  from: 3402238213@qq.com
   # 用户名（注意：如果使用foxmail邮箱，此处user为qq号）
-  user: xxx@163.com
+  user: 3402238213@qq.com
   # 密码（注意，某些邮箱需要为SMTP服务单独设置密码，详情查看相关帮助）
-  pass: xxxxxxxxxx
+  pass: cgzfxlrypfaschjf
   # 使用 STARTTLS安全连接，STARTTLS是对纯文本通信协议的扩展。
   starttlsEnable: true
   # 使用SSL安全连接

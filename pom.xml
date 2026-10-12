@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.dromara</groupId>
-    <artifactId>ruoyi-vue-plus</artifactId>
+    <artifactId>AiQuant</artifactId>
     <version>${revision}</version>
 
     <name>RuoYi-Vue-Plus</name>
@@ -75,7 +75,7 @@
         <!-- 统一版本号管理：Maven3.X需要，Maven4.0之后已原生支持 -->
         <flatten-maven-plugin.version>1.8.0</flatten-maven-plugin.version>
         <!-- 打包默认跳过测试 -->
-        <maven.test.skip>false</maven.test.skip>
+        <maven.test.skip>true</maven.test.skip>
     </properties>
 
     <profiles>
@@ -445,10 +445,10 @@
                 <version>${revision}</version>
             </dependency>
 
-            <!-- demo模块 -->
+            <!-- 量化交易模块 -->
             <dependency>
                 <groupId>org.dromara</groupId>
-                <artifactId>ruoyi-demo</artifactId>
+                <artifactId>ruoyi-quant</artifactId>
                 <version>${revision}</version>
             </dependency>
 

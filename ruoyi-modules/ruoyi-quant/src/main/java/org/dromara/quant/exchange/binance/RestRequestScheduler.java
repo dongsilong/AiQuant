@@ -1,0 +1,56 @@
+package org.dromara.quant.exchange.binance;
+
+import org.dromara.quant.exchange.ExchangeMarketPort;
+import java.util.ArrayDeque;
+import java.util.concurrent.TimeUnit;
+
+/** 有界轮转队列；交易占两个轮次，账户校准与后台查询各占一个，避免饥饿。 */
+final class RestRequestScheduler {
+    enum Kind { TRADE, ACCOUNT, BACKGROUND }
+    private final ArrayDeque<Object>[] queues;
+    private final int[] rotation = {0, 1, 0, 2};
+    private final long interval;
+    private long nextStart;
+    private int cursor;
+
+    @SuppressWarnings("unchecked")
+    RestRequestScheduler(long intervalMillis) {
+        interval = TimeUnit.MILLISECONDS.toNanos(intervalMillis);
+        queues = new ArrayDeque[] {new ArrayDeque<>(), new ArrayDeque<>(), new ArrayDeque<>()};
+    }
+
+    synchronized void acquire(Kind kind) {
+        var queue = queues[kind.ordinal()];
+        if (queue.size() >= 16) { throw new ExchangeMarketPort.RequestDeferredException(); }
+        Object ticket = new Object();
+        queue.addLast(ticket);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(kind == Kind.TRADE ? 2 : 8);
+        try {
+            for (;;) {
+                if (Thread.currentThread().isInterrupted()) { throw new ExchangeMarketPort.RequestDeferredException(); }
+                long now = System.nanoTime();
+                if (now >= deadline) { throw new ExchangeMarketPort.RequestDeferredException(); }
+                int selected = cursor;
+                for (int i = 0; i < rotation.length; i++) {
+                    selected = (cursor + i) % rotation.length;
+                    if (!queues[rotation[selected]].isEmpty()) { break; }
+                }
+                if (rotation[selected] == kind.ordinal() && queue.peekFirst() == ticket && now >= nextStart) {
+                    queue.removeFirst();
+                    nextStart = now + interval;
+                    cursor = (selected + 1) % rotation.length;
+                    notifyAll();
+                    return;
+                }
+                long delay = nextStart > now ? nextStart - now : TimeUnit.MILLISECONDS.toNanos(10);
+                TimeUnit.NANOSECONDS.timedWait(this, Math.min(delay, deadline - now));
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new ExchangeMarketPort.RequestDeferredException();
+        } finally {
+            queue.remove(ticket);
+            notifyAll();
+        }
+    }
+}
