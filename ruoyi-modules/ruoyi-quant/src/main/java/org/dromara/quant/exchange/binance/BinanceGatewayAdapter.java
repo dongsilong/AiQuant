@@ -1130,7 +1130,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 // 只保留异常的分类与内容，不记录可能含 listenKey 的 WebSocket URL。
                 log.warn("Binance WebSocket传输失败: errorType={}, httpStatus={}, detail={}, proxyEnabled={}, proxyHostPresent={}",
                     failure.getClass().getSimpleName(), response == null ? null : response.code(),
-                    detail == null ? "(无详细错误信息)" : detail.replaceAll("(?i)(listenKey|apiKey|secret|signature)=\\\\S+", "$1=[REDACTED]"),
+                    detail == null ? "(无详细错误信息)" : detail.matches("(?i).*https?://.*|.*wss?://.*") ? "(异常包含地址，已隐藏)" : detail,
                     properties.getProxy() != null && properties.getProxy().getHost() != null && !properties.getProxy().getHost().isBlank(),
                     properties.getProxy() != null && properties.getProxy().getHost() != null);
             }
