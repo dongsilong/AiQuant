@@ -3,6 +3,7 @@ package org.dromara.quant.config.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.dromara.common.core.domain.PageResult;
 import org.dromara.common.core.domain.R;
 import org.dromara.common.mybatis.core.page.PageQuery;
@@ -17,6 +18,7 @@ import java.util.List;
  * 策略接口控制器。
  */
 @RestController
+@Slf4j
 @RequiredArgsConstructor
 @RequestMapping("/quant/strategy")
 public class QuantStrategyController {
@@ -77,7 +79,10 @@ public class QuantStrategyController {
     @SaCheckPermission("quant:strategy:edit")
     @PostMapping("/{id}/start")
     public R<Boolean> start(@PathVariable Long id) {
-        return R.ok(service.start(id));
+        log.info("[策略HTTP启动] strategyId={}", id);
+        boolean started = service.start(id);
+        log.info("[策略HTTP启动结果] strategyId={} started={}", id, started);
+        return R.ok(started);
     }
 
     /**
@@ -86,6 +91,7 @@ public class QuantStrategyController {
     @SaCheckPermission("quant:strategy:edit")
     @PostMapping("/{id}/stop")
     public R<Boolean> stop(@PathVariable Long id) {
+        log.info("[策略HTTP停止] strategyId={}", id);
         return R.ok(service.stop(id));
     }
 
