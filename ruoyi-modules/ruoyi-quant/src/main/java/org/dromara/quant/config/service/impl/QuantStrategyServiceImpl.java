@@ -3,7 +3,6 @@ package org.dromara.quant.config.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.common.core.domain.PageResult;
 import org.dromara.common.core.exception.ServiceException;
@@ -15,7 +14,7 @@ import org.dromara.quant.config.domain.vo.QuantStrategyVo;
 import org.dromara.quant.config.mapper.QuantStrategyMapper;
 import org.dromara.quant.config.service.IQuantStrategyService;
 import org.dromara.quant.exchange.ExchangeGateway;
-import org.dromara.quant.market.MarketStreamHub;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -24,6 +23,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 简单价格监听策略：固定 ETHUSDT / 15m，只读取市场事件，不产生交易信号。
@@ -31,15 +33,22 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class QuantStrategyServiceImpl implements IQuantStrategyService {
     private static final String PLUGIN = "price_logger";
     private static final String SYMBOL = "ETHUSDT";
     private static final String INTERVAL = "15m";
 
     private final QuantStrategyMapper mapper;
-    private final MarketStreamHub streams;
-    private final Map<Long, AutoCloseable> subscriptions = new ConcurrentHashMap<>();
+    private final ExchangeGateway gateway;
+    private final ScheduledExecutorService scheduler;
+    private final Map<Long, ScheduledFuture<?>> subscriptions = new ConcurrentHashMap<>();
+
+    public QuantStrategyServiceImpl(QuantStrategyMapper mapper, ExchangeGateway gateway,
+                                    @Qualifier("quantScheduledExecutorService") ScheduledExecutorService scheduler) {
+        this.mapper = mapper;
+        this.gateway = gateway;
+        this.scheduler = scheduler;
+    }
     private final Map<Long, Boolean> healthySubscriptions = new ConcurrentHashMap<>();
 
     @Override
@@ -96,36 +105,42 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
         if (!PLUGIN.equals(entity.getPluginCode())) throw new ServiceException("当前仅支持价格日志策略");
         if (subscriptions.containsKey(id)) return true;
         healthySubscriptions.put(id, false);
-        AutoCloseable handle = streams.subscribe(SYMBOL, INTERVAL, event -> {
-            if (event.replay()) return;
-            if ("TRADE".equals(event.type()) && event.price() != null) {
+        // 演示策略只读价格与K线，不依赖交易执行所需的严格事件恢复门控。
+        // 每5秒轮询一次公开 REST 行情，网络异常时保留任务并在下一轮重试。
+        ScheduledFuture<?> task = scheduler.scheduleWithFixedDelay(() -> {
+            if (!subscriptions.containsKey(id)) return;
+            try {
+                ExchangeGateway.PriceSnapshot price = gateway.queryPrice(SYMBOL);
+                List<ExchangeGateway.Kline> candles = gateway.queryKlines(SYMBOL, INTERVAL, 1);
+                if (price == null || price.lastTradePrice() == null || candles == null || candles.isEmpty()) {
+                    healthySubscriptions.put(id, false);
+                    log.warn("[策略行情不可用] id={} symbol={} interval={} 公开行情为空", id, SYMBOL, INTERVAL);
+                    return;
+                }
+                ExchangeGateway.Kline candle = candles.getLast();
+                healthySubscriptions.put(id, true);
                 log.info("[策略实时价格] id={} name={} symbol={} interval={} price={} time={}",
-                    id, entity.getStrategyName(), SYMBOL, INTERVAL, event.price(), event.eventTime());
-            } else if ("KLINE".equals(event.type()) && event.kline() != null) {
-                log.info("[策略K线] id={} symbol={} interval={} close={} closed={} time={}",
-                    id, SYMBOL, INTERVAL, event.kline().close(), event.kline().closed(), event.eventTime());
+                    id, entity.getStrategyName(), SYMBOL, INTERVAL, price.lastTradePrice(), price.observedAt());
+                log.info("[策略K线] id={} symbol={} interval={} openTime={} close={} closed={}",
+                    id, SYMBOL, INTERVAL, candle.openTime(), candle.close(), candle.closed());
+            } catch (RuntimeException ex) {
+                healthySubscriptions.put(id, false);
+                log.warn("[策略行情查询失败] id={} symbol={} interval={} reason={}", id, SYMBOL, INTERVAL, ex.toString());
             }
-        }, healthy -> {
-            healthySubscriptions.put(id, healthy);
-            log.info("[策略行情状态] id={} symbol={} interval={} healthy={}", id, SYMBOL, INTERVAL, healthy);
-        });
-        subscriptions.put(id, handle);
-        log.info("[策略启动] id={} symbol={} interval={}，只读行情，不执行交易", id, SYMBOL, INTERVAL);
+        }, 1, 5, TimeUnit.SECONDS);
+        subscriptions.put(id, task);
+        log.info("[策略启动] id={} symbol={} interval={} mode=REST-POLL-5S，不执行交易", id, SYMBOL, INTERVAL);
         return true;
     }
 
     @Override
     public synchronized boolean stop(Long id) {
         if (mapper.selectById(id) == null) throw new ServiceException("策略不存在");
-        AutoCloseable handle = subscriptions.get(id);
+        ScheduledFuture<?> handle = subscriptions.get(id);
         if (handle != null) {
-            try {
-                handle.close();
-                subscriptions.remove(id);
-                healthySubscriptions.remove(id);
-            } catch (Exception ex) {
-                throw new ServiceException("停止策略失败：" + ex.getMessage());
-            }
+            handle.cancel(false);
+            subscriptions.remove(id);
+            healthySubscriptions.remove(id);
         }
         log.info("[策略停止] id={}", id);
         return true;
@@ -133,13 +148,7 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
 
     @PreDestroy
     public synchronized void shutdown() {
-        subscriptions.forEach((id, handle) -> {
-            try {
-                handle.close();
-            } catch (Exception ex) {
-                log.warn("关闭策略订阅失败 id={}", id, ex);
-            }
-        });
+        subscriptions.values().forEach(handle -> handle.cancel(false));
         subscriptions.clear();
         healthySubscriptions.clear();
     }
