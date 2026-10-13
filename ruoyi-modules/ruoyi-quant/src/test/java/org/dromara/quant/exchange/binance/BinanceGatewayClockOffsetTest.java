@@ -29,6 +29,16 @@ class BinanceGatewayClockOffsetTest {
     private long clock(BinanceGatewayAdapter adapter, HttpServer server) {
         return ReflectionTestUtils.invokeMethod(adapter, "clockOffset", "http://127.0.0.1:" + server.getAddress().getPort());
     }
+    @Test void requestBodyDetectionDoesNotRelyOnInternalOkHttpApi() {
+        for (String method : new String[] {"POST", "PUT", "PATCH", "PROPPATCH", "REPORT"}) {
+            assertTrue(BinanceGatewayAdapter.requiresRequestBody(method), method);
+        }
+        for (String method : new String[] {"GET", "DELETE", "HEAD"}) {
+            assertFalse(BinanceGatewayAdapter.requiresRequestBody(method), method);
+        }
+        assertFalse(BinanceGatewayAdapter.requiresRequestBody(null));
+    }
+
     @Test void concurrentRequestsShareOneServerTimeRefresh() throws Exception {
         var calls = new AtomicInteger(); var server = server(calls, new AtomicInteger(200));
         var adapter = new BinanceGatewayAdapter(new QuantProperties());
