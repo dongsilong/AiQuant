@@ -16,7 +16,6 @@ import com.binance.connector.client.derivatives_trading_usds_futures.rest.model.
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
-import okhttp3.internal.http.HttpMethod;
 import org.bouncycastle.crypto.CryptoException;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.exchange.ExchangeGateway;
@@ -1035,6 +1034,19 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
+     * Mirrors the request-body classification used by the official SDK's HTTP
+     * transport without depending on OkHttp's non-public internal classes.
+     * Keep this rule aligned with connector updates to prevent signature drift.
+     */
+    static boolean requiresRequestBody(String method) {
+        if (method == null) { return false; }
+        return switch (method.toUpperCase(java.util.Locale.ROOT)) {
+            case "POST", "PUT", "PATCH", "PROPPATCH", "REPORT" -> true;
+            default -> false;
+        };
+    }
+
+    /**
      * 在 Binance 签名参数中应用服务器时间偏移的鉴权实现。
      */
     private static final class OffsetSignatureAuthentication extends BinanceBaseAuthentication {
@@ -1068,7 +1080,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             headerParams.put("X-MBX-APIKEY", apiKey);
             queryParams.add(new Pair("timestamp", String.valueOf(System.currentTimeMillis() + offset)));
             String input = joinQueryParameters(queryParams);
-            if (HttpMethod.requiresRequestBody(method) && payload != null && !payload.isEmpty()) {
+            if (requiresRequestBody(method) && payload != null && !payload.isEmpty()) {
                 input += payload;
             }
             try {
