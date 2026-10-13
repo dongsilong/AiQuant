@@ -3,10 +3,10 @@ spring.servlet.multipart.location: /ruoyi/server/temp
 
 quant:
   live:
-    enabled: true
+    enabled: ${QUANT_LIVE_ENABLED:false}
   security:
     # 通过部署环境变量提供，禁止写入源码或提交真实密钥。
-    secret-key: 303815efc2e94ed3b5dadfc487d5ef7c
+    secret-key: ${QUANT_SECRET_KEY}
   proxy:
     host:
     port:
@@ -18,8 +18,10 @@ quant:
   # 策略运行时调度与分布式租约配置
   runtime:
     # 是否启用策略运行时监督；关闭后会停止全部运行中的策略实例
-    enabled: true
+    enabled: ${QUANT_RUNTIME_ENABLED:false}
     # 策略实例发现、启动/停止和租约维护的间隔，单位：秒
+  paper:
+    enabled: false
     tick-seconds: 5
     # 策略运行租约有效期，单位：秒；用于避免多个服务实例同时运行同一策略
     lease-seconds: 30
@@ -57,7 +59,7 @@ snail-job:
   # 需要在 SnailJob 后台组管理创建对应名称的组,然后创建任务的时候选择对应的组,才能正确分派任务
   group: "ruoyi_group"
   # SnailJob 接入验证令牌 详见 script/sql/ry_job.sql `sj_group_config` 表
-  token: "SJ_cKqBTPzCsWA3VyuCfFoccmuIEGXjr5KT"
+  token: ${SNAIL_JOB_TOKEN:}
   server:
     host: 127.0.0.1
     port: 17888
@@ -82,7 +84,7 @@ snail-ai:
   # 应用 ID（在 Server「应用管理」页面创建后获取）
   app-id: 1
   # 认证令牌（在 Server「应用管理」页面创建时自动生成）
-  token: SAI_566a6bfbc26e4998b4841cc927d50c5d
+  token: ${SNAIL_AI_TOKEN:}
   port: 3${server.port}
   # Skill 文件临时目录
   skill-temp-dir: /tmp/snail-ai-agent/skills
@@ -128,7 +130,7 @@ mybatis-encryptor:
   enable: true
   algorithm: AES
   encode: BASE64
-  password: quant20260725key
+  password: ${MYBATIS_ENCRYPTOR_PASSWORD}
 
 --- # 数据源配置
 spring:
@@ -147,9 +149,9 @@ spring:
           driverClassName: com.mysql.cj.jdbc.Driver
           # jdbc 所有参数配置参考 https://lionli.blog.csdn.net/article/details/122018562
           # rewriteBatchedStatements=true 批处理优化 大幅提升批量插入更新删除性能(对数据库有性能损耗 使用批量操作应考虑性能问题)
-          url: jdbc:mysql://localhost:3306/quantdb?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true
-          username: quantdb
-          password: quantpw2026
+          url: ${AIQUANT_JDBC_URL}
+          username: ${AIQUANT_DB_USERNAME}
+          password: ${AIQUANT_DB_PASSWORD}
 #        # 从库数据源
 #        slave:
 #          lazy: true
@@ -202,7 +204,7 @@ spring.data:
     # 数据库索引
     database: 3
     # redis 密码必须配置
-    password: LUCKLY20218886999LUCKLY2021
+    password: ${AIQUANT_REDIS_PASSWORD}
     # 连接超时时间
     timeout: 10s
     # 是否开启ssl
@@ -314,12 +316,12 @@ justauth:
       client-secret: 1f7d08**********5b7**********29e
       redirect-uri: ${justauth.address}/social-callback?source=weibo
     gitee:
-      client-id: 91436b7940090d09c72c7daf85b959cfd5f215d67eea73acbf61b6b590751a98
-      client-secret: 02c6fcfd70342980cd8dd2f2c06c1a350645d76c754d7a264c4e125f9ba915ac
+      client-id: ${GITEE_CLIENT_ID:}
+      client-secret: ${GITEE_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=gitee
     dingtalk:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${GITEE_CLIENT_ID:}
+      client-secret: ${GITEE_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=dingtalk
     baidu:
       client-id: 10**********6
