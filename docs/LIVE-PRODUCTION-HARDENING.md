@@ -17,6 +17,7 @@
 - Corrected local signed one-way `BOTH` short positions being excluded by `quantity>0` during capacity checks.
 - Execution recovery no longer drops unresolved records solely because they are older than 24 hours. Query order favors least-recently-checked records; fallback order matches use actual exchange status.
 - Binance SDK authentication adapter no longer imports OkHttp's private/internal `HttpMethod` class.
+- Binance LIVE connectivity now rejects `canWithdraw=true` and missing/unknown withdrawal status (and rejects non-tradable credentials); the previous commented-out security check plus unconditional `withdrawalDisabled=true` success report was unsafe. Added permission regression tests. Account/API-key privileges still require independent operational verification.
 - LIVE defaults to OFF. Production strategy supervisor defaults to OFF. Production PAPER is disabled without deleting the implementation or its tests.
 - Production and development credential values were replaced with environment-variable references. **Existing Git history still contains earlier values: rotate all actual exposed credentials immediately.**
 - Trading terminal sends close quantity as the original decimal string, avoiding browser float rounding.
