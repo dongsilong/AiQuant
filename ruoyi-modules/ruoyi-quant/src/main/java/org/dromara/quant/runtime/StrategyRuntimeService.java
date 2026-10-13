@@ -3,10 +3,15 @@ package org.dromara.quant.runtime;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.extern.slf4j.Slf4j;
+import org.dromara.config.strategy.*;
+import org.dromara.config.strategy.context.StrategyContext;
+import org.dromara.config.strategy.impl.KlineSlopeRateStrategy;
+import org.dromara.config.strategy.signal.EntrySignal;
+import org.dromara.config.strategy.signal.ExitSignal;
+import org.dromara.config.strategy.signal.ProtectionSignal;
 import org.dromara.quant.config.QuantProperties;
-import org.dromara.quant.credential.domain.QuantCredential;
-import org.dromara.quant.credential.mapper.QuantCredentialMapper;
-import org.dromara.quant.decision.DecisionLogCursor;
+import org.dromara.config.domain.QuantCredential;
+import org.dromara.config.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.ExchangeTradingPort;
 import org.dromara.quant.execution.ExecutionRecordService;
@@ -19,8 +24,8 @@ import jakarta.annotation.PreDestroy;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.dromara.quant.market.domain.QuantSymbol;
-import org.dromara.quant.market.mapper.QuantSymbolMapper;
+
+import org.dromara.config.mapper.QuantSymbolMapper;
 import org.dromara.quant.notification.QuantTradeNotificationService;
 import org.dromara.quant.paper.PaperTradingService;
 import org.dromara.quant.position.domain.QuantPosition;
@@ -32,7 +37,6 @@ import org.dromara.quant.runtime.coordination.StrategyEntryGuardService;
 import org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
-import org.dromara.quant.strategy.*;
 import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.strategy.domain.QuantStrategyInstance;
 import org.dromara.quant.strategy.domain.QuantStrategySymbol;
@@ -59,10 +63,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 @Component
 public class StrategyRuntimeService {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
-    /**
+/**
      * 量化模块配置。
      */
     private final QuantProperties properties;
@@ -107,10 +108,6 @@ public class StrategyRuntimeService {
     private final org.dromara.quant.risk.OpenCapacityService openCapacityService;
     private final org.dromara.quant.execution.TradingPreparationService preparationService;
     private final ExecutorService recoveryExecutor = Executors.newVirtualThreadPerTaskExecutor();
-    /**
-     * 策略斜率结果 SSE 事件中心。
-     */
-    private final StrategySlopeTelemetryHub slopeTelemetryHub;
     /**
      * 策略运行租约服务。
      */
@@ -158,7 +155,6 @@ public class StrategyRuntimeService {
     public StrategyRuntimeService(QuantProperties properties, QuantStrategyInstanceMapper instanceMapper, QuantStrategyMapper strategyMapper,
                                   QuantStrategySymbolMapper strategySymbolMapper, QuantCredentialMapper credentialMapper, QuantSymbolMapper symbolMapper,
                                   QuantPositionMapper positionMapper, StrategyPluginRegistry pluginRegistry, ExchangeGateway gateway, MarketStreamHub marketStreamHub, UserDataStreamHub userDataStreamHub,
-                                  StrategySlopeTelemetryHub slopeTelemetryHub,
                                   StrategyRuntimeLeaseService leaseService, StrategyEntryGuardService entryGuardService, StrategyPositionStateService stateService,
                                   TradeExecutionApplicationService executionService, ProtectionOrderService protectionOrderService, PaperTradingService paperTradingService,
                                   ExecutionRecordService executionRecordService, QuantTradeNotificationService notificationService, JdbcTemplate jdbcTemplate,
@@ -174,7 +170,6 @@ public class StrategyRuntimeService {
         this.gateway = gateway;
         this.marketStreamHub = marketStreamHub;
         this.userDataStreamHub = userDataStreamHub;
-        this.slopeTelemetryHub = slopeTelemetryHub;
         this.leaseService = leaseService;
         this.entryGuardService = entryGuardService;
         this.stateService = stateService;
@@ -426,8 +421,6 @@ public class StrategyRuntimeService {
                 if (runtime.position != null) {
                     if (previousPosition != null && previousPosition.getQuantity() != null && runtime.position.getQuantity() != null && runtime.position.getQuantity().compareTo(previousPosition.getQuantity()) < 0) {
                         BigDecimal closedQty = previousPosition.getQuantity().subtract(runtime.position.getQuantity());
-                        recordPositionDecrease(runtime, previousPosition, closedQty,
-                            firstTpFilled ? "交易所首次止盈保护已确认减仓" : "交易所保护单或外部操作导致部分减仓，具体触发原因待确认");
                         BigDecimal closePrice = runtime.currentPrice() != null ? runtime.currentPrice() : runtime.position.getMarkPrice();
                         BigDecimal profitRate = leveragedReturnRate(runtime, previousPosition.getPositionSide(), closePrice, previousPosition.getEntryPrice());
                         BigDecimal profitAmount = calculateProfitAmount(previousPosition.getPositionSide(), closePrice, previousPosition.getEntryPrice(), closedQty);
@@ -443,7 +436,6 @@ public class StrategyRuntimeService {
                     // 清理失败时改用 protectionCleanupPending 独立阻断开新仓，不再锁住 state。
                     boolean protectionCleaned = cancelStaleProtection(runtime);
                     if (previousPosition != null) {
-                        recordPositionDecrease(runtime, previousPosition, previousPosition.getQuantity(), "交易所保护单或外部操作导致持仓关闭，具体触发原因待确认");
                         BigDecimal closePrice = runtime.currentPrice() != null ? runtime.currentPrice() : previousPosition.getMarkPrice();
                         BigDecimal profitRate = leveragedReturnRate(runtime, previousPosition.getPositionSide(), closePrice, previousPosition.getEntryPrice());
                         BigDecimal profitAmount = calculateProfitAmount(previousPosition.getPositionSide(), closePrice, previousPosition.getEntryPrice(),
@@ -502,7 +494,7 @@ public class StrategyRuntimeService {
             stopInactiveRuntime(instance.getId());
             return false;
         }
-        QuantSymbol symbol = symbolMapper.selectById(strategySymbol.getSymbolId());
+        QuantCredential.QuantSymbol symbol = symbolMapper.selectById(strategySymbol.getSymbolId());
         if (symbol == null) {
             stopInactiveRuntime(instance.getId());
             return false;
@@ -514,7 +506,13 @@ public class StrategyRuntimeService {
             || existingState.getPendingAction() != null
             || "PROTECTION_CLEANUP".equals(existingState.getStatus()));
 
-        boolean tradingAllowed = "1".equals(strategy.getStatus())
+        StrategyPlugin registeredPlugin = pluginRegistry.find(strategy.getPluginCode()).orElse(null);
+        StrategyPlugin protectionPlugin = registeredPlugin;
+        if (protectionPlugin == null && hasOpenPosition) {
+            protectionPlugin = pluginRegistry.findForProtection(strategy.getPluginCode()).orElse(null);
+        }
+
+        boolean tradingAllowed = registeredPlugin != null && "1".equals(strategy.getStatus())
             && "0".equals(strategySymbol.getStatus())
             && "0".equals(credential.getStatus())
             && "0".equals(symbol.getStatus())
@@ -537,7 +535,7 @@ public class StrategyRuntimeService {
         if (current != null && current.matches(strategy.getPluginCode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), credential.getId())) {
             synchronized (current) {
                 Map<String, Object> refreshed = mergedParams(strategy, strategySymbol);
-                current.plugin.validateConfig(refreshed);
+                pluginRegistry.validate(current.plugin, refreshed);
                 validateProtectionRatios(strategy, strategySymbol);
                 current.instance = instance;
                 current.strategy = strategy;
@@ -556,9 +554,13 @@ public class StrategyRuntimeService {
             if (!leaseService.acquireOrRenew(instance.getId(), credential.getId(), symbol.getSymbol())) { return false; }
         }
 
-        StrategyPlugin plugin = pluginRegistry.require(strategy.getPluginCode());
+        StrategyPlugin plugin = protectionPlugin;
+        if (plugin == null) {
+            stopInactiveRuntime(instance.getId());
+            return false;
+        }
         Map<String, Object> params = mergedParams(strategy, strategySymbol);
-        plugin.validateConfig(params);
+        pluginRegistry.validate(plugin, params);
         validateProtectionRatios(strategy, strategySymbol);
         ActiveRuntime runtime = new ActiveRuntime(instance, strategy, strategySymbol, credential, symbol, plugin, params);
         runtime.protectionOnly = protectionOnly;
@@ -697,7 +699,6 @@ public class StrategyRuntimeService {
      */
     private void evaluate(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
         if (!runtime.marketHealthy || !runtime.marketStreamReady || event.replay()) {
-            if (!event.replay()) { logUnavailableEntry(runtime, event, "MARKET_UNREADY", "行情尚未就绪，暂停开仓"); }
             // 新增：定位 TESTNET 无遥测
             if (log.isDebugEnabled() && System.currentTimeMillis() >= runtime.nextLatencyLogAt) {
                 log.debug("evaluate 早退[MARKET_UNREADY] instanceId={} symbol={} marketHealthy={} marketStreamReady={} replay={} eventType={}",
@@ -718,7 +719,6 @@ public class StrategyRuntimeService {
         Instant freshnessDeadline = decisionAt.minusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis()));
         if (event.receivedAt().isBefore(freshnessDeadline) || event.eventTime() == null || event.eventTime().isBefore(freshnessDeadline)
             || event.eventTime().isAfter(Instant.now().plusSeconds(1))) {
-            logUnavailableEntry(runtime, event, "STALE_MARKET", "行情事件过期或时间异常，暂停本次决策");
             log.warn("策略行情消费延迟超限，恢复极值并暂停本次决策 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
             requestReconciliation(runtime);
             return;
@@ -735,44 +735,33 @@ public class StrategyRuntimeService {
             updateRuntimeExtrema(runtime, price);
         }
         StrategyContext context = buildContext(runtime, price, event);
-        if (decisionLogs != null && runtime.plugin instanceof KlineSlopeRateStrategy) {
-            var slope = KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
-            if (slope == null || !slope.entryApproved()) { runtime.decisionLogCursor.reset(); }
-        }
         if (log.isDebugEnabled() && System.currentTimeMillis() >= runtime.nextLatencyLogAt) {
             log.debug("evaluate 到达遥测 instanceId={} symbol={} eventType={} price={} prevKlineOpen={} klineOpen={} klineClosed={}",
                 runtime.instance.getId(), runtime.symbol.getSymbol(), event.type(), price,
                 context.previousKlineOpenPrice(), context.klineOpenTime(), context.klineClosed());
         }
-        publishSlopeTelemetry(runtime, context);
         // 待确认订单只暂停交易决策，实时斜率仍随有效行情更新。
         if (runtime.hasPendingAction() || runtime.exitCoordinating.get()) {
-            logEntryDecision(runtime, context, "PENDING_ACTION", "存在待确认交易，等待订单恢复核实");
             return;
         }
         if (runtime.position == null) {
             if (runtime.positionReconciling) {
-                logEntryDecision(runtime, context, "POSITION_RECONCILING", "正在核实交易所持仓");
                 return;
             }
             if (!"RUNNING".equals(runtime.instance.getStatus())) {
-                logEntryDecision(runtime, context, "INSTANCE_NOT_RUNNING", "策略实例未处于 RUNNING 状态");
                 log.warn("计算是否产生开仓信号前判断问题，状态不是RUNNING，交易对：{}", runtime.symbol);
                 return;
             }
             if (runtime.state != null && (Boolean.TRUE.equals(runtime.state.getRecoveryRequired()) || Boolean.TRUE.equals(runtime.state.getUnsafeRecovery()))) {
-                logEntryDecision(runtime, context, "RECOVERY_REQUIRED", "遗留交易状态尚未恢复核实");
                 log.warn("计算是否产生开仓信号前判断问题1，交易对：{}", runtime.symbol);
                 return;
             }
             if (runtime.state != null && !"CLOSED".equals(runtime.state.getStatus()) && runtime.state.getPositionQty() != null && runtime.state.getPositionQty().signum() > 0) {
-                logEntryDecision(runtime, context, "LOCAL_POSITION_PENDING", "本地存在尚未确认关闭的持仓");
                 log.warn("计算是否产生开仓信号前判断问题2，交易对：{}", runtime.symbol);
                 return;
             }
             evaluateEntry(runtime, context);
         } else {
-            logEntryDecision(runtime, context, "POSITION_OPEN", "该策略实例已有持仓，不重复开仓");
             // 先处理已经越过阈值的本地退出，避免先挂已穿价的条件单。
             evaluateExit(runtime, context);
             if (runtime.position != null && !runtime.hasPendingAction() && System.currentTimeMillis() >= runtime.nextProtectionSyncAt) {
@@ -788,7 +777,6 @@ public class StrategyRuntimeService {
     private void evaluateEntry(ActiveRuntime runtime, StrategyContext context) {
         // FIXED: 策略/凭证/交易对被停用后仅保留保护，不再允许开仓。
         if (runtime.protectionOnly) {
-            logEntryDecision(runtime, context, "PROTECTION_ONLY", "策略已停止开仓，仅保留持仓保护");
             return;
         }
         if (runtime.hasPendingAction() || runtime.state != null && (Boolean.TRUE.equals(runtime.state.getRecoveryRequired())
@@ -796,11 +784,9 @@ public class StrategyRuntimeService {
             return;
         }
         if (context.klineOpenTime() == null) {
-            logEntryDecision(runtime, context, "KLINE_TIME_MISSING", "缺少当前 K 线时间");
             return;
         }
         if (runtime.protectionSyncing.get() || runtime.protectionCleanupPending) {
-            logEntryDecision(runtime, context, "PROTECTION_PENDING", "保护单同步或清理尚未完成");
             return;
         }
         Optional<EntrySignal> signal = runtime.plugin.evaluateEntry(context, runtime.params);
@@ -813,7 +799,6 @@ public class StrategyRuntimeService {
         BigDecimal openRatio = runtime.strategySymbol.getOpenRatio() == null ? runtime.strategy.getDefaultOpenRatio() : runtime.strategySymbol.getOpenRatio();
         int leverage = runtime.strategySymbol.getLeverage() == null ? runtime.strategy.getDefaultLeverage() : runtime.strategySymbol.getLeverage();
         if (openRatio == null || openRatio.signum() <= 0 || openRatio.compareTo(BigDecimal.ONE) > 0 || leverage <= 0) {
-            logEntryDecision(runtime, context, "INVALID_OPEN_CONFIG", "开仓比例或杠杆无效");
             log.warn("策略开仓跳过：开仓比例或杠杆无效 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
             return;
         }
@@ -832,12 +817,10 @@ public class StrategyRuntimeService {
                     Long.class, runtime.strategy.getId(), runtime.credential.getId());
             } catch (org.springframework.dao.DataAccessException ex) {
                 // 持仓事实不可读时必须停止本次开仓，不能在数据库连接异常期间放行交易。
-                logEntryDecision(runtime, context, "POSITION_COUNT_UNAVAILABLE", "最大持仓数查询失败，禁止放行");
                 log.warn("策略开仓跳过：最大持仓数查询失败 instanceId={} symbol={} error={}", runtime.instance.getId(), runtime.symbol.getSymbol(), ex.getMessage());
                 return;
             }
             if (openCount != null && openCount >= maxOpenCount) {
-                logEntryDecision(runtime, context, "MAX_POSITIONS", "达到策略最大持仓数");
                 log.warn("策略开仓跳过：达到最大持仓数 instanceId={} symbol={} openCount={} maxOpenCount={}", runtime.instance.getId(), runtime.symbol.getSymbol(), openCount, maxOpenCount);
                 return;
             }
@@ -849,7 +832,6 @@ public class StrategyRuntimeService {
                 executionService.releaseClosedOpenReservationsForRuntime(runtime.credential.getId(), runtime.instance.getId(),
                     runtime.symbol.getSymbol(), runtime.credential.getRunMode());
             } catch (RuntimeException ex) {
-                logEntryDecision(runtime, context, "CLOSED_RESERVATION_UNAVAILABLE", org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex));
                 log.warn("策略开仓等待历史预留核实 instanceId={} symbol={} reason={}",
                     runtime.instance.getId(), runtime.symbol.getSymbol(), ex.getMessage());
                 return;
@@ -868,7 +850,6 @@ public class StrategyRuntimeService {
                 availableBalance = openCapacityService.availableBalance(runtime.credential.getId(), balanceSnapshot);
                 preparationService.requireReady(runtime.credential.getId(), runtime.symbol.getSymbol(), leverage, effectiveMarginMode(runtime));
             } catch (RuntimeException ex) {
-                logEntryDecision(runtime, context, "ACCOUNT_NOT_READY", org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex));
                 log.debug("策略开仓等待账户余额或交易设置校准 instanceId={} symbol={} reason={}",
                     runtime.instance.getId(), runtime.symbol.getSymbol(), ex.getMessage());
                 if (ex instanceof LiveTradingGate.LiveTradingBlockedException) {
@@ -878,7 +859,6 @@ public class StrategyRuntimeService {
             }
         }
         if (availableBalance == null || availableBalance.signum() <= 0) {
-            logEntryDecision(runtime, context, "INSUFFICIENT_BALANCE", "可用余额不足");
             log.debug("策略开仓跳过：可用余额不足 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
             return;
         }
@@ -887,7 +867,6 @@ public class StrategyRuntimeService {
         BigDecimal targetNotional = targetMargin.multiply(BigDecimal.valueOf(leverage));
         BigDecimal quantity = targetNotional.divide(context.currentPrice(), 16, RoundingMode.DOWN);
         if (quantity.signum() <= 0) {
-            logEntryDecision(runtime, context, "ZERO_QUANTITY", "下单数量为零");
             log.debug("策略开仓跳过：下单数量为零 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
             return;
         }
@@ -898,13 +877,11 @@ public class StrategyRuntimeService {
                     org.dromara.quant.exchange.QuantityNormalizer.quantity(quantity.multiply(KlineSlopeRateStrategy.firstClosePositionRate(runtime.params)), runtime.protectionRule, "MARKET");
                 }
             } catch (IllegalArgumentException ex) {
-                logEntryDecision(runtime, context, "PROTECTION_QUANTITY_INVALID", "开仓或首次止盈数量不满足交易步长：" + ex.getMessage());
                 return;
             }
         }
         BigDecimal margin = quantity.multiply(context.currentPrice()).divide(BigDecimal.valueOf(leverage), 16, RoundingMode.HALF_UP);
         if (margin.signum() <= 0) {
-            logEntryDecision(runtime, context, "INVALID_MARGIN", "计算保证金非正数");
             log.warn("策略开仓跳过：计算保证金非正数 instanceId={} symbol={} margin={} quantity={} currentPrice={} leverage={}",
                 runtime.instance.getId(), runtime.symbol.getSymbol(), margin, quantity, context.currentPrice(), leverage);
             return;
@@ -916,14 +893,12 @@ public class StrategyRuntimeService {
                 signal.get().direction() == EntrySignal.Direction.LONG ? "BUY" : "SELL", retryQuantity, context.currentPrice(), leverage,
                 runtime.credential.getRunMode(), balanceSnapshot))) { return; }
         } catch (RuntimeException ex) {
-            logEntryDecision(runtime, context, "RETRY_STATE_UNAVAILABLE", org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex));
             return;
         }
 
         // 资金与风控准入后再次验证原始行情时间，禁止按过期点位追单。
         if (!runtime.marketHealthy || !runtime.marketStreamReady || context.eventTime() == null
             || context.eventTime().isBefore(Instant.now().minusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())))) {
-            logEntryDecision(runtime, context, "STALE_AFTER_ADMISSION", "资金准入后行情不可用或事件已过期");
             log.warn("策略开仓跳过：资金准入后行情不可用或事件已过期 instanceId={} symbol={} marketHealthy={} marketStreamReady={} eventTime={} maxEventAgeMillis={}",
                 runtime.instance.getId(), runtime.symbol.getSymbol(), runtime.marketHealthy, runtime.marketStreamReady,
                 context.eventTime(), Math.max(1, properties.getMarket().getMaxEventAgeMillis()));
@@ -931,7 +906,6 @@ public class StrategyRuntimeService {
         }
         // 仅在开仓前置条件满足后占用本根 K 线；余额或持仓条件暂不满足时允许后续行情重新评估。
         if (!entryGuardService.tryClaim(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.klineOpenTime())) {
-            logEntryDecision(runtime, context, "KLINE_ALREADY_CLAIMED", "本根 K 线已占用开仓保护记录");
             log.error("策略开仓跳过：本根K线已占用开仓保护记录 instanceId={} symbol={} klineOpenTime={}", runtime.instance.getId(), runtime.symbol.getSymbol(), context.klineOpenTime());
             return;
         }
@@ -947,14 +921,10 @@ public class StrategyRuntimeService {
         try {
             state = preparePendingStateForOpen(runtime, direction, quantity, context.currentPrice(), context.klineOpenTime(), idempotencyKey);
         } catch (RuntimeException ex) {
-            recordTradeDecision(runtime, context, "OPEN", signal.get().direction().name(), quantity, margin, idempotencyKey,
-                "FAILED", "PENDING_STATE_FAILED", org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex), null, false);
             entryGuardService.release(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.klineOpenTime());
             throw ex;
         }
         runtime.state = state;
-        recordTradeDecision(runtime, context, "OPEN", direction, quantity, margin, idempotencyKey,
-            "REQUESTED", "SLOPE_ENTRY", signal.get().reason(), null, false);
         runtime.lastEntryAttemptEventTime = context.eventTime();
         runtime.lastEntryAttemptPrice = context.currentPrice();
         boolean marginReserved = false;
@@ -965,9 +935,7 @@ public class StrategyRuntimeService {
                 marginReserved = true;
             }
             executionResult = executionService.openByRuntime(runtime.credential.getId(), runtime.strategy.getId(), runtime.instance.getId(), runtime.symbol.getSymbol(), side,
-                null, quantity, context.currentPrice(), leverage, effectiveMarginMode(runtime), idempotencyKey, context.eventTime());
-            recordTradeDecision(runtime, context, "OPEN", direction, quantity, margin, idempotencyKey,
-                "ACCEPTED", "EXECUTION_RESULT", signal.get().reason(), executionResult, false);
+                null, quantity, context.currentPrice(), leverage, effectiveMarginMode(runtime), idempotencyKey, context.eventTime(), signal.get().reason());
             runtime.entryRetryGate.reset();
             entryGuardService.bindOrder(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.klineOpenTime(), executionResult.orderId());
             state.setPendingOrderId(executionResult.orderId());
@@ -978,8 +946,6 @@ public class StrategyRuntimeService {
             if (paper) {
                 runtime.position = paperTradingService.recordOpenFill(runtime.credential.getId(), idempotencyKey, runtime.symbol.getSymbol(), direction, quantity,
                     context.currentPrice(), leverage);
-                recordTradeDecision(runtime, context, "OPEN", direction, quantity, margin, idempotencyKey,
-                    "FILLED", "EXECUTION_RESULT", signal.get().reason(), executionResult, true);
             } else {
                 runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), executionService.toCredential(runtime.credential));
             }
@@ -1047,71 +1013,12 @@ public class StrategyRuntimeService {
                 || ex instanceof OpenCapacityService.CapacityBlockedException ? ex.getMessage() : ex.getClass().getSimpleName();
             runtime.instance.setLastError(reason);
             instanceMapper.updateById(runtime.instance);
-            recordTradeDecision(runtime, context, "OPEN", direction, quantity, margin, idempotencyKey,
-                "FAILED".equals(status.value()) ? "FAILED" : "UNKNOWN", "EXECUTION_FAILURE",
-                org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex), executionResult, false);
             log.warn("策略开仓执行未完成，保留行情连接 instanceId={} symbol={} executionStatus={} reason={}",
                 runtime.instance.getId(), runtime.symbol.getSymbol(), status.value(), reason);
             if (!"FAILED".equals(status.value())) { requestReconciliation(runtime); }
         }
     }
 
-    private void recordPositionDecrease(ActiveRuntime runtime, QuantPosition before, BigDecimal closedQuantity, String reason) {
-        if (decisionLogs == null || before == null || closedQuantity == null) { return; }
-        try {
-            BigDecimal remaining = runtime.position == null ? BigDecimal.ZERO : runtime.position.getQuantity();
-            decisionLogs.record(org.dromara.quant.decision.DecisionLogEvent.builder()
-                .eventKey("P:" + runtime.credential.getId() + ":" + before.getId() + ":" + remaining)
-                .recordType("POSITION_CHANGE").credentialId(runtime.credential.getId()).accountName(runtime.credential.getAccountName())
-                .runMode(runtime.credential.getRunMode()).strategyName("外部交易／策略未确认").symbol(runtime.symbol.getSymbol()).operation("CLOSE")
-                .direction(before.getPositionSide()).quantity(closedQuantity).status("POSITION_CONFIRMED")
-                .reasonCode("EXCHANGE_POSITION_CHANGE").reason(reason + "；持仓变化已确认，实际成交价格和操作来源以订单成交记录为准")
-                .eventTime(Instant.now()).build());
-        } catch (RuntimeException ignored) { }
-    }
-
-    private void logUnavailableEntry(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, String code, String reason) {
-        if (decisionLogs == null || event.replay() || !("TRADE".equals(event.type()) || "KLINE".equals(event.type()))) { return; }
-        BigDecimal price = event.price() == null ? runtime.currentPrice() : event.price();
-        if (price != null && price.signum() > 0) { logEntryDecision(runtime, buildContext(runtime, price, event), code, reason); }
-    }
-
-    private org.dromara.quant.decision.DecisionLogEvent.DecisionLogEventBuilder decisionSnapshot(ActiveRuntime runtime, StrategyContext context) {
-        var slope = KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
-        return org.dromara.quant.decision.DecisionLogEvent.builder().credentialId(runtime.credential.getId())
-            .accountName(runtime.credential.getAccountName()).runMode(runtime.credential.getRunMode())
-            .strategyId(runtime.strategy.getId()).strategyInstanceId(runtime.instance.getId()).strategyName(runtime.strategy.getStrategyName())
-            .symbol(runtime.symbol.getSymbol()).klineTime(context.klineOpenTime()).eventTime(context.eventTime() == null ? Instant.now() : context.eventTime())
-            .price(context.currentPrice()).angle(slope == null ? null : slope.degrees()).threshold(slope == null ? null : slope.entryThreshold());
-    }
-
-    private void logEntryDecision(ActiveRuntime runtime, StrategyContext context, String code, String reason) {
-        if (decisionLogs == null || !(runtime.plugin instanceof KlineSlopeRateStrategy)) { return; }
-        try {
-            var slope = KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
-            if (slope == null || !slope.entryApproved()) { runtime.decisionLogCursor.reset(); return; }
-            decisionLogs.record(decisionSnapshot(runtime, context).eventKey(runtime.decisionLogCursor.key(context.klineOpenTime(), code + ":" + reason.replaceAll("[+-]?\\d+(?:\\.\\d+)?", "#")))
-                .recordType("EVALUATION").operation("OPEN").direction(slope.rawDegrees() > 0 ? "LONG" : "SHORT")
-                .status("BLOCKED").reasonCode(code).reason(reason).build());
-        } catch (RuntimeException ignored) { /* 日志不能影响策略。 */ }
-    }
-
-    private void recordTradeDecision(ActiveRuntime runtime, StrategyContext context, String operation, String direction,
-                                     BigDecimal quantity, BigDecimal margin, String executionKey, String status, String reasonCode,
-                                     String reason, ExecutionResult result, boolean paperFill) {
-        if (decisionLogs == null) { return; }
-        try {
-            decisionLogs.record(decisionSnapshot(runtime, context)
-                .eventKey(org.dromara.quant.decision.TradeDecisionLogRepository.executionKey(runtime.credential.getId(), executionKey))
-                .recordType("EXECUTION").operation(operation).direction(direction).quantity(quantity).margin(margin)
-                .status(paperFill ? "FILLED" : status).reasonCode(reasonCode).reason(reason).idempotencyKey(executionKey)
-                .orderId(result == null ? null : result.orderId()).clientOrderId(result == null ? null : result.clientOrderId())
-                .tradeTime(paperFill ? Instant.now() : null).build());
-            runtime.decisionLogCursor.reset();
-        } catch (RuntimeException ignored) { /* 日志不能影响交易。 */ }
-    }
-
-    /** 后台发送准备阶段拒绝原因；数据库通知写入不得阻塞行情，按实例限频。 */
     private void notifyPreparationBlocked(ActiveRuntime runtime, String reason) {
         long now = System.currentTimeMillis();
         if (now < runtime.nextPreparationNoticeAt) { return; }
@@ -1123,37 +1030,6 @@ public class StrategyRuntimeService {
     /**
      * 推送策略插件实际使用的斜率结果；交易决策仍由插件原逻辑执行。
      */
-    private void publishSlopeTelemetry(ActiveRuntime runtime, StrategyContext context) {
-        if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
-            return;
-        }
-        KlineSlopeRateStrategy.SlopeEvaluation evaluation = KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
-        if (runtime.hasPendingAction() && System.nanoTime() >= runtime.nextPendingSlopeLogNanos) {
-            runtime.nextPendingSlopeLogNanos = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
-            if (evaluation == null) {
-                log.warn("策略实时斜率无法计算 instanceId={} symbol={} currentPrice={} previousKlineOpenPrice={} pendingAction={}",
-                    runtime.instance.getId(), context.symbol(), context.currentPrice(), context.previousKlineOpenPrice(), runtime.state.getPendingAction());
-            } else {
-                log.info("策略实时斜率 +++ 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}° 开仓暂停 pendingAction={} instanceId={}",
-                    context.eventTime(), context.symbol(), evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(),
-                    evaluation.degrees(), runtime.state.getPendingAction(), runtime.instance.getId());
-            }
-        }
-        if (evaluation == null) {
-            long now = System.currentTimeMillis();
-            if (now - runtime.nextSlopeDiagLogAt >= 30_000L) {
-                runtime.nextSlopeDiagLogAt = now;
-                log.warn("斜率计算返回 null instanceId={} symbol={} currentPrice={} previousKlineOpen={} klineOpen={} klineClosed={}",
-                    runtime.instance.getId(), context.symbol(), context.currentPrice(),
-                    context.previousKlineOpenPrice(), context.klineOpenTime(), context.klineClosed());
-            }
-            return;
-        }
-        slopeTelemetryHub.publish(new StrategySlopeTelemetry(runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(),
-            runtime.symbol.getSymbol(), runtime.strategySymbol.getIntervalCode(), evaluation.currentPrice(), evaluation.referenceOpenPrice(),
-            evaluation.slopePercent(), evaluation.degrees(), evaluation.entryThreshold(), evaluation.entryApproved(), context.eventTime()));
-    }
-
     private static void validateProtectionRatios(QuantStrategy strategy, QuantStrategySymbol symbol) {
         for (BigDecimal ratio : Arrays.asList(strategy.getDefaultStopLossRatio(), symbol.getStopLossRatio())) {
             if (ratio != null && (ratio.signum() <= 0 || ratio.compareTo(BigDecimal.ONE) >= 0)) {
@@ -1360,24 +1236,18 @@ public class StrategyRuntimeService {
         }
         QuantStrategyPositionState state = preparePendingStateForExit(runtime, exit.type(), quantity, klineOpenTime, idempotencyKey);
         runtime.state = state;
-        recordTradeDecision(runtime, context, "CLOSE", direction, quantity, null, idempotencyKey,
-            "REQUESTED", exit.type(), exit.reason(), null, false);
         BigDecimal entryPriceBeforeClose = runtime.position.getEntryPrice();
         String directionBeforeClose = runtime.position.getPositionSide();
         ExecutionResult executionResult = null;
         try {
             executionResult = executionService.closeByRuntime(runtime.credential.getId(), runtime.strategy.getId(), runtime.instance.getId(),
-                runtime.symbol.getSymbol(), side, direction, quantity, idempotencyKey);
-            recordTradeDecision(runtime, context, "CLOSE", direction, quantity, null, idempotencyKey,
-                "ACCEPTED", "EXECUTION_RESULT", exit.reason(), executionResult, false);
+                runtime.symbol.getSymbol(), side, direction, quantity, idempotencyKey, exit.reason());
             state.setPendingOrderId(executionResult.orderId());
             state.setPendingClientOrderId(executionResult.clientOrderId());
             runtime.state = state;
             if ("PAPER".equalsIgnoreCase(runtime.credential.getRunMode())) {
                 PaperTradingService.PaperCloseSettlement settlement = paperTradingService.settlePaperExecution(runtime.credential.getId(), idempotencyKey,
                     runtime.position.getId(), quantity, context.currentPrice());
-                recordTradeDecision(runtime, context, "CLOSE", direction, quantity, null, idempotencyKey,
-                    "FILLED", "EXECUTION_RESULT", exit.reason(), executionResult, true);
                 runtime.position = settlement.position();
                 if (runtime.position == null) {
                     if (!cancelStaleProtection(runtime)) {
@@ -1443,9 +1313,6 @@ public class StrategyRuntimeService {
                 exit.type(), context.currentPrice(), quantity, exit.reason());
         } catch (RuntimeException ex) {
             QuantExecutionRecordStatus status = findExecutionStatus(runtime.credential.getId(), idempotencyKey);
-            recordTradeDecision(runtime, context, "CLOSE", direction, quantity, null, idempotencyKey,
-                "FAILED".equals(status.value()) ? "FAILED" : "UNKNOWN", "EXECUTION_FAILURE",
-                org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex), executionResult, false);
             if (executionResult == null && "FAILED".equals(status.value())) {
                 state.setStatus("OPEN");
                 clearPending(state);
@@ -1491,7 +1358,6 @@ public class StrategyRuntimeService {
         }
         if (refreshed == null) {
             runtime.position = null;
-            recordPositionDecrease(runtime, before, before.getQuantity(), "持仓关闭；本地同时满足退出条件：" + exit.reason());
             if (!cancelStaleProtection(runtime)) { return true; }
             if (runtime.state != null) {
                 stateService.markClosed(runtime.state);
@@ -1515,7 +1381,6 @@ public class StrategyRuntimeService {
         stateService.save(runtime.state);
         if (before.getQuantity() != null && refreshed.getQuantity() != null && refreshed.getQuantity().compareTo(before.getQuantity()) < 0) {
             BigDecimal closedQty = before.getQuantity().subtract(refreshed.getQuantity());
-            recordPositionDecrease(runtime, before, closedQty, "保护条件单已确认成交，按剩余目标补平");
 
             BigDecimal closePrice = context.currentPrice() != null ? context.currentPrice()
                 : (refreshed.getMarkPrice() != null ? refreshed.getMarkPrice() : before.getEntryPrice());
@@ -1677,7 +1542,6 @@ public class StrategyRuntimeService {
                 }
             }
         }
-        if (decisionLogs != null && order != null) { decisionLogs.order(runtime.credential.getId(), order); }
         synchronized (runtime) {
             if (runtime.closed || runtime.state != expectedState || !Objects.equals(expectedPending, pendingIdentity(runtime.state))) {
                 runtime.reconcileRequested.set(true);
@@ -2843,7 +2707,6 @@ public class StrategyRuntimeService {
      * 单个策略实例在当前 JVM 节点上的活动运行上下文。
      */
     private final class ActiveRuntime {
-        private final DecisionLogCursor decisionLogCursor = new DecisionLogCursor();
 
         /**
          * FIXED: 仅保护模式；策略/凭证/交易对停用但仍有未平仓持仓时为 true。
@@ -2869,7 +2732,7 @@ public class StrategyRuntimeService {
         /**
          * 交易对，例如 BTCUSDT。
          */
-        private final QuantSymbol symbol;
+        private final QuantCredential.QuantSymbol symbol;
         /**
          * 当前实例对应的 StrategyPlugin。
          */
@@ -2932,7 +2795,6 @@ public class StrategyRuntimeService {
          * REST 账户余额查询失败后的下一次允许查询时间。
          */
         private long nextLatencyLogAt;
-        private long nextPendingSlopeLogNanos;
         private final EntryRetryGate entryRetryGate = new EntryRetryGate();
         private Instant lastEntryAttemptEventTime;
         private BigDecimal lastEntryAttemptPrice;
@@ -2945,12 +2807,10 @@ public class StrategyRuntimeService {
          */
         private volatile boolean closed;
 
-        private long nextSlopeDiagLogAt;
-
         /**
          * 创建单个策略实例的活动 Runtime 上下文。
          */
-        private ActiveRuntime(QuantStrategyInstance instance, QuantStrategy strategy, QuantStrategySymbol strategySymbol, QuantCredential credential, QuantSymbol symbol,
+        private ActiveRuntime(QuantStrategyInstance instance, QuantStrategy strategy, QuantStrategySymbol strategySymbol, QuantCredential credential, QuantCredential.QuantSymbol symbol,
                               StrategyPlugin plugin, Map<String, Object> params) {
             this.instance = instance;
             this.strategy = strategy;

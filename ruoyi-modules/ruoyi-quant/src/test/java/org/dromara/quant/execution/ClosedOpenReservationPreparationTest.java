@@ -1,10 +1,10 @@
 package org.dromara.quant.execution;
 
 import org.dromara.quant.config.QuantProperties;
-import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.config.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.market.AccountPositionCache;
-import org.dromara.quant.market.mapper.QuantSymbolMapper;
+import org.dromara.config.mapper.QuantSymbolMapper;
 import org.dromara.quant.paper.PaperTradingService;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.risk.OpenCapacityService;

@@ -1,6 +1,6 @@
 package org.dromara.quant.market;
 
-import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.config.domain.QuantCredential;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.junit.jupiter.api.Tag;
@@ -10,7 +10,6 @@ import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
-import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 

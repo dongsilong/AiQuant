@@ -4,11 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.config.QuantProperties;
-import org.dromara.quant.credential.domain.QuantCredential;
-import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.config.domain.QuantCredential;
+import org.dromara.config.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
-import org.dromara.quant.market.domain.QuantSymbol;
-import org.dromara.quant.market.mapper.QuantSymbolMapper;
+import org.dromara.config.mapper.QuantSymbolMapper;
 import org.dromara.quant.paper.PaperTradingService;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
@@ -24,9 +23,6 @@ import java.math.BigDecimal;
  */
 @Service
 public class TradeExecutionApplicationService {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
     @org.springframework.beans.factory.annotation.Autowired
     private org.dromara.quant.market.AccountPositionCache positionCache;
     @org.springframework.beans.factory.annotation.Autowired
@@ -94,20 +90,18 @@ public class TradeExecutionApplicationService {
     public ExecutionResult closeByUser(ClosePositionRequest request) {
         QuantCredential credential = requireCredential(request.getCredentialId());
         assertOwner(credential);
-        recordManualClose(request, credential, "REQUESTED", "手动平仓", null, null, false);
         try {
             return closeByUserAuthorized(request, credential);
         } catch (RuntimeException ex) {
             String logStatus = ex instanceof org.dromara.common.core.exception.ServiceException
                 || ex instanceof IllegalArgumentException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException
                 || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException ? "FAILED" : "UNKNOWN";
-            recordManualClose(request, credential, logStatus, org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex), null, null, false);
             throw ex;
         }
     }
 
     private ExecutionResult closeByUserAuthorized(ClosePositionRequest request, QuantCredential credential) {
-        QuantSymbol symbol = requireSymbol(request.getSymbol());
+        QuantCredential.QuantSymbol symbol = requireSymbol(request.getSymbol());
         ExchangeGateway.Credential exchangeCredential = toCredential(credential);
         if ("PAPER".equalsIgnoreCase(credential.getRunMode())) {
             QuantPosition position =
@@ -124,8 +118,6 @@ public class TradeExecutionApplicationService {
                 request.getQuantity(), null, position.getPositionSide(), request.getIdempotencyKey(), credential.getRunMode(), symbolRule(symbol), safety(credential, null, true)));
             paperTradingService.settlePaperExecution(credential.getId(), request.getIdempotencyKey(), position.getId(), request.getQuantity(), position.getMarkPrice() == null ?
                 position.getEntryPrice() : position.getMarkPrice());
-            recordManualClose(request, credential, "FILLED", "手动平仓", position.getPositionSide(),
-                position.getMarkPrice() == null ? position.getEntryPrice() : position.getMarkPrice(), true);
             return result;
         }
         ExchangeGateway.PositionSnapshot position =
@@ -139,19 +131,6 @@ public class TradeExecutionApplicationService {
         QuantRiskConfig risk = riskMapper.selectOne(new LambdaQueryWrapper<QuantRiskConfig>().eq(QuantRiskConfig::getCredentialId, credential.getId()));
         return executionPort.close(new ClosePositionCommand(credential.getId(), null, null, exchangeCredential, request.getSymbol(), closeSide, "MARKET", request.getQuantity(),
             null, positionSide, request.getIdempotencyKey(), credential.getRunMode(), symbolRule(symbol), safety(credential, risk, true)));
-    }
-
-    private void recordManualClose(ClosePositionRequest request, QuantCredential credential, String status, String reason,
-                                   String direction, BigDecimal price, boolean filled) {
-        if (decisionLogs == null) { return; }
-        decisionLogs.record(org.dromara.quant.decision.DecisionLogEvent.builder()
-            .eventKey(org.dromara.quant.decision.TradeDecisionLogRepository.executionKey(credential.getId(), request.getIdempotencyKey()))
-            .recordType("EXECUTION").credentialId(credential.getId()).accountName(credential.getAccountName())
-            .strategyName("手动操作").runMode(credential.getRunMode()).symbol(request.getSymbol()).operation("CLOSE")
-            .direction(direction == null ? ("BOTH".equalsIgnoreCase(request.getPositionSide()) ? null : request.getPositionSide()) : direction).quantity(request.getQuantity()).price(price)
-            .status(status).reasonCode("REQUESTED".equals(status) || filled ? "MANUAL_CLOSE" : "EXECUTION_FAILURE")
-            .reason(reason).idempotencyKey(request.getIdempotencyKey()).eventTime(java.time.Instant.now())
-            .tradeTime(filled ? java.time.Instant.now() : null).build());
     }
 
     /**
@@ -169,13 +148,18 @@ public class TradeExecutionApplicationService {
      */
     public ExecutionResult closeByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
                                           String idempotencyKey) {
+        return closeByRuntime(credentialId, strategyId, strategyInstanceId, symbol, side, positionSide, quantity, idempotencyKey, null);
+    }
+
+    public ExecutionResult closeByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
+                                          String idempotencyKey, String triggerReason) {
         QuantCredential credential = requireCredential(credentialId);
-        QuantSymbol symbolEntity = requireSymbol(symbol);
+        QuantCredential.QuantSymbol symbolEntity = requireSymbol(symbol);
         ExchangeGateway.Credential exchangeCredential = toCredential(credential);
         String resolvedPositionSide = normalizePositionSide(exchangeCredential, side, positionSide);
         QuantRiskConfig risk = riskMapper.selectOne(new LambdaQueryWrapper<QuantRiskConfig>().eq(QuantRiskConfig::getCredentialId, credentialId));
         return executionPort.close(new ClosePositionCommand(credentialId, strategyId, strategyInstanceId, exchangeCredential, symbol, side, "MARKET", quantity, null,
-            resolvedPositionSide, idempotencyKey, credential.getRunMode(), symbolRule(symbolEntity), safety(credential, risk, true)));
+            resolvedPositionSide, idempotencyKey, credential.getRunMode(), symbolRule(symbolEntity), safety(credential, risk, true), triggerReason));
     }
 
     /**
@@ -189,8 +173,14 @@ public class TradeExecutionApplicationService {
     /** 运行时信号带上截止时间，REST 等待后不得按过期点位追单。 */
     public ExecutionResult openByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
                                         BigDecimal price, int leverage, String marginMode, String idempotencyKey, java.time.Instant eventTime) {
+        return openByRuntime(credentialId, strategyId, strategyInstanceId, symbol, side, positionSide, quantity, price, leverage, marginMode,
+            idempotencyKey, eventTime, null);
+    }
+
+    public ExecutionResult openByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
+                                        BigDecimal price, int leverage, String marginMode, String idempotencyKey, java.time.Instant eventTime, String triggerReason) {
         QuantCredential credential = requireCredential(credentialId);
-        QuantSymbol symbolEntity = requireSymbol(symbol);
+        QuantCredential.QuantSymbol symbolEntity = requireSymbol(symbol);
         ExchangeGateway.Credential exchangeCredential = toCredential(credential);
         if (leverage <= 0) {
             throw new ServiceException("杠杆必须大于 0");
@@ -203,7 +193,7 @@ public class TradeExecutionApplicationService {
             ? normalizePositionSide(exchangeCredential, side, positionSide) : positionSide;
         return executionPort.open(new OpenPositionCommand(credentialId, strategyId, strategyInstanceId, exchangeCredential, symbol, side, "MARKET", quantity, null,
             resolvedPositionSide, idempotencyKey, credential.getRunMode(), symbolRule(symbolEntity), leverage, marginMode, safety(credential, risk, true), notional,
-            eventTime == null ? null : eventTime.plusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())), eventTime));
+            eventTime == null ? null : eventTime.plusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())), eventTime, triggerReason));
     }
 
     /** 只读取可信缓存，在覆盖旧 CLOSED 状态之前清理已确认关闭的开仓预留。 */
@@ -254,8 +244,8 @@ public class TradeExecutionApplicationService {
     /**
      * 读取必需数据，不满足条件时抛出异常。
      */
-    public QuantSymbol requireSymbol(String symbolCode) {
-        QuantSymbol symbol = symbolMapper.selectOne(new LambdaQueryWrapper<QuantSymbol>().eq(QuantSymbol::getSymbol, symbolCode));
+    public QuantCredential.QuantSymbol requireSymbol(String symbolCode) {
+        QuantCredential.QuantSymbol symbol = symbolMapper.selectOne(new LambdaQueryWrapper<QuantCredential.QuantSymbol>().eq(QuantCredential.QuantSymbol::getSymbol, symbolCode));
         if (symbol == null || !"0".equals(symbol.getStatus())) {
             throw new ServiceException("交易对不存在或已停用");
         }
@@ -299,7 +289,7 @@ public class TradeExecutionApplicationService {
     /**
      * 把本地交易对实体转换为统一 SymbolRule。
      */
-    public ExchangeGateway.SymbolRule symbolRule(QuantSymbol s) {
+    public ExchangeGateway.SymbolRule symbolRule(QuantCredential.QuantSymbol s) {
         return new ExchangeGateway.SymbolRule(s.getSymbol(), s.getQuoteAsset(), s.getPricePrecision(), s.getQuantityPrecision(), s.getPriceTickSize(), s.getQuantityStep(),
             s.getMarketQuantityStep(), s.getMinNotional(), s.getExchangeStatus());
     }

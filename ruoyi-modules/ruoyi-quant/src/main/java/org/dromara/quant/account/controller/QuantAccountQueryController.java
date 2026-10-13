@@ -13,8 +13,8 @@ import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.domain.vo.QuantTradeVo;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
-import org.dromara.quant.credential.domain.QuantCredential;
-import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.config.domain.QuantCredential;
+import org.dromara.config.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.springframework.web.bind.annotation.*;
 

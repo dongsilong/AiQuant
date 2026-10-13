@@ -1,5 +1,11 @@
 package org.dromara.quant.strategy;
 
+import org.dromara.config.strategy.*;
+import org.dromara.config.strategy.context.StrategyContext;
+import org.dromara.config.strategy.metadata.StrategyDescriptor;
+import org.dromara.config.strategy.signal.EntrySignal;
+import org.dromara.config.strategy.signal.ExitSignal;
+import org.dromara.config.strategy.signal.ProtectionSignal;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -16,6 +22,7 @@ import java.util.Optional;
  * <p>该策略只计算信号，不直接调用交易所。
  */
 @Component
+@LegacyStrategy
 public final class RealtimeKlineMomentumStrategy implements StrategyPlugin {
     /**
      * 策略插件唯一编码。

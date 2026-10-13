@@ -2,7 +2,7 @@ package org.dromara.quant.market;
 
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
-import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.config.domain.QuantCredential;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -19,10 +19,7 @@ import java.util.function.Consumer;
 @Component
 @Slf4j
 public class UserDataStreamHub {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
-    /**
+/**
      * 交易所统一网关。
      */
     private final ExchangeGateway gateway;
@@ -186,7 +183,7 @@ public class UserDataStreamHub {
         }
 
         private void onEvent(ExchangeGateway.UserDataEvent event) {
-            if (decisionLogs != null) { decisionLogs.privateEvent(credential.getId(), event); }
+
             lastEventAt = Instant.now();
             positionCache.onEvent(credential.getId(), event);
             balanceCache.onEvent(credential.getId(), event);

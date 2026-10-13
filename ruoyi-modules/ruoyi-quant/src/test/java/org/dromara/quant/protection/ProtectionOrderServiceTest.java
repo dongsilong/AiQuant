@@ -1,8 +1,9 @@
 package org.dromara.quant.protection;
 
+import org.dromara.config.strategy.signal.ProtectionSignal;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
-import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.config.domain.QuantCredential;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.protection.domain.QuantProtectionOrder;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
@@ -37,7 +38,7 @@ class ProtectionOrderServiceTest {
         position.setMargin(new BigDecimal("10"));
         position.setLeverage(10);
         credential.setId(1L);
-        var symbol = new org.dromara.quant.market.domain.QuantSymbol();
+        var symbol = new QuantCredential.QuantSymbol();
         when(execution.requireSymbol("BTCUSDT")).thenReturn(symbol);
         when(execution.symbolRule(symbol)).thenReturn(new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 3, new BigDecimal("0.01"), new BigDecimal("0.001"), new BigDecimal("0.001"), BigDecimal.ONE, "TRADING"));
         when(execution.requireCredential(1L)).thenReturn(credential);
@@ -181,8 +182,8 @@ class ProtectionOrderServiceTest {
         QuantProtectionOrder local = order(); local.setPositionSide("LONG"); local.setProtectionType("STEP_TP");
         when(mapper.selectOne(any())).thenReturn(local);
         when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenReturn(snapshot(55L, local.getClientOrderId(), BigDecimal.ONE, "NEW", null));
-        service.syncStrategyProtections(1L, position, BigDecimal.ONE, List.of(new org.dromara.quant.strategy.ProtectionSignal(
-            "STEP_TP", "STOP_MARKET", BigDecimal.ONE, org.dromara.quant.strategy.ProtectionSignal.QuantityBase.CURRENT, new BigDecimal("98"), "test")), true);
+        service.syncStrategyProtections(1L, position, BigDecimal.ONE, List.of(new ProtectionSignal(
+            "STEP_TP", "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, new BigDecimal("98"), "test")), true);
         verify(gateway, never()).placeProtectionOrder(any());
         verify(gateway, never()).cancelProtectionOrder(any());
     }
@@ -194,8 +195,8 @@ class ProtectionOrderServiceTest {
         when(mapper.selectOne(any())).thenReturn(local);
         when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenReturn(new ExchangeGateway.ProtectionOrderSnapshot(
             "BTCUSDT", 55L, local.getClientOrderId(), "NEW", "BUY", "BOTH", "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), null));
-        service.syncStrategyProtections(1L, position, BigDecimal.ONE, List.of(new org.dromara.quant.strategy.ProtectionSignal(
-            "STEP_TP", "STOP_MARKET", BigDecimal.ONE, org.dromara.quant.strategy.ProtectionSignal.QuantityBase.CURRENT, new BigDecimal("100"), "test")), true);
+        service.syncStrategyProtections(1L, position, BigDecimal.ONE, List.of(new ProtectionSignal(
+            "STEP_TP", "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, new BigDecimal("100"), "test")), true);
         verify(gateway, never()).placeProtectionOrder(any());
         verify(gateway, never()).cancelProtectionOrder(any());
     }
@@ -218,8 +219,8 @@ class ProtectionOrderServiceTest {
             i.<ExchangeGateway.ProtectionOrderRequest>getArgument(0).clientOrderId(), "NEW"));
         when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenAnswer(i -> snapshot(55L, i.getArgument(2),
             new BigDecimal("5616"), "NEW", null));
-        service.syncStrategyProtections(1L, position, position.getQuantity(), List.of(new org.dromara.quant.strategy.ProtectionSignal(
-            "FIRST_TP", "STOP_MARKET", new BigDecimal("0.5"), org.dromara.quant.strategy.ProtectionSignal.QuantityBase.INITIAL,
+        service.syncStrategyProtections(1L, position, position.getQuantity(), List.of(new ProtectionSignal(
+            "FIRST_TP", "STOP_MARKET", new BigDecimal("0.5"), ProtectionSignal.QuantityBase.INITIAL,
             new BigDecimal("99"), "test")), true);
         verify(gateway).placeProtectionOrder(argThat(r -> r.quantity().compareTo(new BigDecimal("5616")) == 0));
         verify(execution, never()).requireSymbol(any());
@@ -380,8 +381,8 @@ class ProtectionOrderServiceTest {
             snapshot(55L, old.getClientOrderId(), BigDecimal.ONE, "NEW", BigDecimal.ZERO),
             snapshot(55L, old.getClientOrderId(), BigDecimal.ONE, "CANCELED", new BigDecimal("0.2")));
         assertThrows(ProtectionOrderService.ProtectionExecutionPendingException.class, () -> service.syncStrategyProtections(1L, position, BigDecimal.ONE,
-            List.of(new org.dromara.quant.strategy.ProtectionSignal("FIRST_TP", "STOP_MARKET", new BigDecimal("0.5"),
-                org.dromara.quant.strategy.ProtectionSignal.QuantityBase.INITIAL, new BigDecimal("99"), "test")), true));
+            List.of(new ProtectionSignal("FIRST_TP", "STOP_MARKET", new BigDecimal("0.5"),
+                ProtectionSignal.QuantityBase.INITIAL, new BigDecimal("99"), "test")), true));
         verify(gateway, never()).placeProtectionOrder(any());
         assertEquals(0, new BigDecimal("0.2").compareTo(old.getExecutedQuantity()));
     }

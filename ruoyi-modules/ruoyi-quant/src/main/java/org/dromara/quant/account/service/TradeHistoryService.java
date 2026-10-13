@@ -9,8 +9,8 @@ import org.dromara.quant.account.TradeHistoryAssembler;
 import org.dromara.quant.account.domain.vo.TradeHistoryFill;
 import org.dromara.quant.account.domain.vo.TradeHistoryPageVo;
 import org.dromara.quant.account.mapper.TradeHistoryMapper;
-import org.dromara.quant.credential.domain.QuantCredential;
-import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.config.domain.QuantCredential;
+import org.dromara.config.mapper.QuantCredentialMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 

@@ -1,7 +1,7 @@
 package org.dromara.quant.market.controller;
 
-import org.dromara.quant.credential.domain.QuantCredential;
-import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.config.domain.QuantCredential;
+import org.dromara.config.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.market.UserDataStreamHub;

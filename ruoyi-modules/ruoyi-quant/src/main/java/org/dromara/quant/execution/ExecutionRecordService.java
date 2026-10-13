@@ -38,6 +38,11 @@ public class ExecutionRecordService {
      */
     public QuantExecutionRecord tryCreatePending(Long credentialId, Long strategyId, Long strategyInstanceId, String operationType, String symbol, String idempotencyKey,
                                                  String clientOrderId) {
+        return tryCreatePending(credentialId, strategyId, strategyInstanceId, operationType, symbol, idempotencyKey, clientOrderId, null);
+    }
+
+    public QuantExecutionRecord tryCreatePending(Long credentialId, Long strategyId, Long strategyInstanceId, String operationType, String symbol, String idempotencyKey,
+                                                 String clientOrderId, String triggerReason) {
         QuantExecutionRecord entity = new QuantExecutionRecord();
         entity.setCredentialId(credentialId);
         entity.setStrategyId(strategyId);
@@ -46,6 +51,7 @@ public class ExecutionRecordService {
         entity.setSymbol(symbol);
         entity.setIdempotencyKey(idempotencyKey);
         entity.setClientOrderId(clientOrderId == null || clientOrderId.isBlank() ? idempotencyKey : clientOrderId);
+        entity.setTriggerReason(triggerReason);
         entity.setExecutionStatus("PENDING");
         entity.setCreatedAt(LocalDateTime.now());
         entity.setRecoveryAttempts(0);

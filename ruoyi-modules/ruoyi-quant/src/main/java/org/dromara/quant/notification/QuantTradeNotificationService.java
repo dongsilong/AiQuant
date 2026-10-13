@@ -9,7 +9,7 @@ import org.dromara.common.core.enums.PushTypeEnum;
 import org.dromara.system.api.MessageService;
 import org.dromara.system.api.domain.PushPayloadDTO;
 import org.dromara.quant.config.QuantProperties;
-import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.config.domain.QuantCredential;
 import org.dromara.quant.notification.domain.QuantNotification;
 import org.dromara.quant.notification.mapper.QuantNotificationMapper;
 import org.dromara.quant.risk.domain.QuantRiskConfig;
@@ -59,16 +59,6 @@ public class QuantTradeNotificationService {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /** 日志线程调用；与交易风险消息分开，发布到顶部工作分类。 */
-    public void notifyDecisionLogLoss(long count) {
-        List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur.user_id WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'",
-            (rs, rowNum) -> rs.getLong(1));
-        if (!admins.isEmpty()) {
-            messageService.publishMessage(admins, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW,
-                "开平仓日志写入故障，累计丢失 " + count + " 条，请检查日志队列和数据库。", null, "/trade/trade-decision-log"));
-        }
-    }
-
     private final java.util.concurrent.ConcurrentHashMap<String, Long> blockedNoticeTimes = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
@@ -91,7 +81,7 @@ public class QuantTradeNotificationService {
                     + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'",
                 (rs, rowNum) -> rs.getLong(1));
             if (!adminIds.isEmpty()) {
-                messageService.publishMessage(adminIds, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, content, null, "/quant/notification/index"));
+                messageService.publishMessage(adminIds, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, content, null, "/quant/risk/index"));
             }
             log.warn("实盘开仓已阻止信息：{}", content);
         } catch (RuntimeException ex) {
@@ -226,7 +216,7 @@ public class QuantTradeNotificationService {
             }
             messageService.publishMessage(new java.util.ArrayList<>(recipients),
                 PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW,
-                    subject + "\n" + content, null, "/quant/notification/index"));
+                    subject + "\n" + content, null, "/quant/terminal/index"));
         } catch (RuntimeException ex) {
             log.error("量化交易系统消息推送失败 credentialId={} subject={}", credentialId, subject, ex);
         }

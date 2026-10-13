@@ -1,13 +1,17 @@
 package org.dromara.quant.runtime;
 
+import org.dromara.config.strategy.*;
+import org.dromara.config.strategy.context.StrategyContext;
+import org.dromara.config.strategy.impl.KlineSlopeRateStrategy;
+import org.dromara.config.strategy.signal.EntrySignal;
+import org.dromara.config.strategy.signal.ExitSignal;
+import org.dromara.config.strategy.signal.ProtectionSignal;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.exchange.ExchangeGateway;
-import org.dromara.quant.credential.domain.QuantCredential;
-import org.dromara.quant.market.domain.QuantSymbol;
+import org.dromara.config.domain.QuantCredential;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.protection.ProtectionOrderService;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
-import org.dromara.quant.strategy.*;
 import org.dromara.quant.strategy.domain.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -988,7 +992,7 @@ class StrategyRuntimeSafetyTest {
         var strategy = new QuantStrategy(); strategy.setId(2L); strategy.setDefaultLeverage(10); strategy.setStopLossRatio(new BigDecimal("0.1"));
         var symbolConfig = new QuantStrategySymbol(); symbolConfig.setIntervalCode("1m"); symbolConfig.setLeverage(10);
         var credential = new QuantCredential(); credential.setId(3L); credential.setRunMode("LIVE");
-        var symbol = new QuantSymbol(); symbol.setSymbol("BTCUSDT");
+        var symbol = new QuantCredential.QuantSymbol(); symbol.setSymbol("BTCUSDT");
         var plugin = mock(StrategyPlugin.class); when(plugin.evaluateExit(any(), anyMap())).thenReturn(List.of()); when(plugin.evaluateProtection(any(), anyMap())).thenReturn(List.of());
         Class<?> runtimeClass = Arrays.stream(StrategyRuntimeService.class.getDeclaredClasses()).filter(type -> type.getSimpleName().equals("ActiveRuntime")).findFirst().orElseThrow();
         var runtimeConstructor = runtimeClass.getDeclaredConstructors()[0]; runtimeConstructor.setAccessible(true);

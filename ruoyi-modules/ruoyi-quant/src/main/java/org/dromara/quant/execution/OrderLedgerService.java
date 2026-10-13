@@ -13,10 +13,7 @@ import java.time.LocalDateTime;
  */
 @Service
 public class OrderLedgerService {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
-    /**
+/**
      * 当前领域 Mapper。
      */
     private final QuantOrderMapper mapper;
@@ -35,7 +32,7 @@ public class OrderLedgerService {
         if (snapshot == null) {
             return null;
         }
-        if (decisionLogs != null) { decisionLogs.order(credentialId, snapshot); }
+
         String clientOrderId = snapshot.clientOrderId() == null ? "EXCHANGE:" + snapshot.orderId() : snapshot.clientOrderId();
         QuantOrder entity = snapshot.orderId() == null ? null :
             mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getExchangeOrderId, snapshot.orderId()));

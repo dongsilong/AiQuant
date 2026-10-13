@@ -24,5 +24,11 @@ import java.math.BigDecimal;
  */
 public record ClosePositionCommand(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol, String side, String type,
                                    BigDecimal quantity, BigDecimal price, String positionSide, String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule,
-                                   ExecutionSafetyContext safety) {
+                                   ExecutionSafetyContext safety, String triggerReason) {
+    public ClosePositionCommand(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential,
+                                String symbol, String side, String type, BigDecimal quantity, BigDecimal price, String positionSide,
+                                String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule, ExecutionSafetyContext safety) {
+        this(credentialId, strategyId, strategyInstanceId, credential, symbol, side, type, quantity, price, positionSide,
+            idempotencyKey, runMode, symbolRule, safety, null);
+    }
 }

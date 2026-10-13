@@ -6,7 +6,7 @@ import org.dromara.quant.account.domain.QuantAccountSnapshot;
 import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.mapper.QuantAccountSnapshotMapper;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
-import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.config.domain.QuantCredential;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.finance.domain.QuantFinancialEvent;
 import org.dromara.quant.finance.domain.vo.QuantFinancialEventVo;
@@ -28,7 +28,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /**
@@ -37,10 +36,7 @@ import java.util.Set;
  */
 @Service
 public class TradingReconciliationService {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
-    /**
+/**
      * 交易所统一网关。
      */
     private final ExchangeGateway gateway;
@@ -283,7 +279,7 @@ public class TradingReconciliationService {
      */
     private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
         for (ExchangeGateway.TradeSnapshot s : snapshots) {
-            if (decisionLogs != null) { decisionLogs.trade(credential.getId(), s); }
+
             QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>().eq(QuantTrade::getCredentialId, credential.getId()).eq(QuantTrade::getExchangeTradeId,
                 s.tradeId()));
             if (entity == null) {

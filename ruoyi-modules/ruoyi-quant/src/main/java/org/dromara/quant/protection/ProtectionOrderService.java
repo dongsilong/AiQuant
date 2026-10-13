@@ -1,19 +1,19 @@
 package org.dromara.quant.protection;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import org.dromara.config.strategy.impl.KlineSlopeRateStrategy;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.QuantityNormalizer;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.protection.domain.QuantProtectionOrder;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
-import org.dromara.quant.strategy.ProtectionSignal;
+import org.dromara.config.strategy.signal.ProtectionSignal;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -25,10 +25,7 @@ import java.util.UUID;
  */
 @Service
 public class ProtectionOrderService {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
-    private static final Logger log = LoggerFactory.getLogger(ProtectionOrderService.class);
+private static final Logger log = LoggerFactory.getLogger(ProtectionOrderService.class);
     /**
      * 由策略插件动态维护的保护单类型集合。
      */
@@ -146,7 +143,7 @@ public class ProtectionOrderService {
         if (marginLossRatio == null || marginLossRatio.signum() <= 0 || marginLossRatio.compareTo(BigDecimal.ONE) >= 0) {
             throw new IllegalArgumentException("硬止损回报率必须 > 0 且 < 1");
         }
-        BigDecimal price = org.dromara.quant.strategy.KlineSlopeRateStrategy.priceForReturn(position.getEntryPrice(),
+        BigDecimal price = KlineSlopeRateStrategy.priceForReturn(position.getEntryPrice(),
             position.getPositionSide(), marginLossRatio.negate(), position.getLeverage() == null ? 1 : position.getLeverage());
         if (price.signum() <= 0) {
             throw new IllegalArgumentException("计算出的硬止损价格无效");
@@ -381,7 +378,7 @@ public class ProtectionOrderService {
             if (targetLease.get() != null) { targetLease.get().terminal(local); }
             return false;
         }
-        if (decisionLogs != null) { decisionLogs.protection(credentialId, local, actual); }
+
         local.setExchangeOrderId(actual.algoId());
         if (Set.of("TRIGGERING", "TRIGGERED", "FINISHED").contains(actual.status())
             || actual.executedQuantity() != null && actual.executedQuantity().signum() > 0) {
@@ -580,7 +577,7 @@ public class ProtectionOrderService {
         }
         try {
             ExchangeGateway.ProtectionOrderSnapshot actual = readProtectionSnapshot(credential, local);
-            if (decisionLogs != null) { decisionLogs.protection(credentialId, local, actual); }
+
             if (actual != null && Set.of("CANCELED", "EXPIRED", "REJECTED").contains(actual.status())
                 && actual.executedQuantity() != null && actual.executedQuantity().signum() == 0) {
                 local.setStatus(actual.status()); mapper.updateById(local); return true;
@@ -651,7 +648,7 @@ public class ProtectionOrderService {
             return false;
         }
         if (actual == null) { return false; }
-        if (decisionLogs != null) { decisionLogs.protection(credentialId, local, actual); }
+
         if ("FINISHED".equalsIgnoreCase(actual.status()) && actual.executedQuantity() != null && actual.executedQuantity().signum() > 0
             && local.getQuantity() != null && actual.executedQuantity().compareTo(local.getQuantity()) >= 0
             && initialQuantity != null && position.getQuantity() != null

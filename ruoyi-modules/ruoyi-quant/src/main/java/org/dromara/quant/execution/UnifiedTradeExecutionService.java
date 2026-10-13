@@ -4,7 +4,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.QuantityNormalizer;
 import org.dromara.quant.risk.LiveTradingGate;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -19,9 +18,6 @@ import java.util.function.Supplier;
 @Service
 @Slf4j
 public class UnifiedTradeExecutionService implements TradeExecutionPort {
-    @Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
     /**
      * 交易所统一网关。
      */
@@ -123,7 +119,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             }
             return new ExchangeGateway.OrderRequest(command.credential(), command.symbol(), command.side(), command.type(), quantity, price, false, positionSide,
                 exchangeClientOrderId(command.idempotencyKey()), sendsToExchange(command.runMode()), command.validUntil());
-        }, command);
+        }, command, command.triggerReason());
     }
 
     /**
@@ -148,7 +144,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             BigDecimal price = normalizePrice(command.price(), rule, command.runMode());
             return new ExchangeGateway.OrderRequest(command.credential(), command.symbol(), command.side(), command.type(), quantity, price, true, command.positionSide(),
                 exchangeClientOrderId(command.idempotencyKey()), sendsToExchange(command.runMode()));
-        }, null);
+        }, null, command.triggerReason());
     }
 
     /**
@@ -178,7 +174,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     @Override
     public ExecutionResult cancel(CancelOrderCommand command) {
         requireIdempotency(command.idempotencyKey());
-        QuantExecutionRecordReservation reservation = reserve("CANCEL", command.credentialId(), null, null, command.symbol(), command.idempotencyKey(), command.clientOrderId());
+        QuantExecutionRecordReservation reservation = reserve("CANCEL", command.credentialId(), null, null, command.symbol(), command.idempotencyKey(), command.clientOrderId(), "手动撤单");
         if (!reservation.owner()) {
             if (reservation.result() == null || !reservation.result().accepted()) {
                 throw new IllegalStateException("幂等取消请求仍处于未确认状态：" + command.idempotencyKey());
@@ -201,17 +197,18 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
      */
     private ExecutionResult execute(String operationType, Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol,
                                     String idempotencyKey, String runMode, ExecutionSafetyContext safety, ExchangeGateway.SymbolRule rule, Runnable beforeExchangeAction,
-                                    Supplier<ExchangeGateway.OrderRequest> requestSupplier, OpenPositionCommand openCommand) {
+                                    Supplier<ExchangeGateway.OrderRequest> requestSupplier, OpenPositionCommand openCommand, String triggerReason) {
         requireIdempotency(idempotencyKey);
-        QuantExecutionRecordReservation reservation = reserve(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, exchangeClientOrderId(idempotencyKey));
+        String reason = triggerReason == null || triggerReason.isBlank()
+            ? ("OPEN".equals(operationType) ? "开仓执行请求" : "平仓执行请求") : triggerReason;
+        QuantExecutionRecordReservation reservation = reserve(operationType, credentialId, strategyId, strategyInstanceId, symbol,
+            idempotencyKey, exchangeClientOrderId(idempotencyKey), reason);
         if (!reservation.owner()) {
             if (reservation.result() == null || !reservation.result().accepted()) {
                 throw new IllegalStateException("幂等交易请求仍处于未确认状态：" + idempotencyKey);
             }
             return reservation.result();
         }
-        recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
-            "REQUESTED", "执行请求", null, null, null, null);
         ExchangeGateway.OrderRequest logRequest = null;
         ExchangeGateway.OrderResult exchangeResult = null;
         boolean exchangeAttempted = false;
@@ -233,8 +230,6 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             checkLive(operationType, runMode, safety, credential, rule);
             ExchangeGateway.OrderRequest request = requestSupplier.get();
             logRequest = request;
-            recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
-                "REQUESTED", "执行参数已准备", request, null, null, null);
             beforeExchangeAction.run();
             if (openCommand != null) {
                 requireFresh(openCommand);
@@ -265,8 +260,6 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                     java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - orderStarted));
             }
             executionRecordService.accepted(reservation.record(), exchangeResult.orderId(), exchangeResult.status());
-            recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
-                "PARTIALLY_FILLED".equals(exchangeResult.status()) ? "PARTIALLY_FILLED" : "ACCEPTED", "交易所已受理，等待成交事实", request, exchangeResult, null, null);
             try {
                 orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult);
             } catch (RuntimeException ledgerEx) {
@@ -278,9 +271,6 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             String logStatus = exchangeResult != null ? "ACCEPTED" : exchangeAttempted
                 && !(ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException
                     || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException) ? "UNKNOWN" : "FAILED";
-            recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
-                logStatus, org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex), logRequest, exchangeResult,
-                ex == null ? null : "EXECUTION_FAILURE", null);
             if (exchangeResult == null && (ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException
                 || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException)) {
                 executionRecordService.failed(reservation.record(), ex.getMessage());
@@ -296,21 +286,6 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
         }
     }
 
-    private void recordDecision(String operation, Long credentialId, Long strategyId, Long instanceId, String symbol,
-                                String executionKey, String runMode, String status, String reason,
-                                ExchangeGateway.OrderRequest request, ExchangeGateway.OrderResult result, String reasonCode, java.time.Instant tradeTime) {
-        if (decisionLogs == null) { return; }
-        decisionLogs.record(org.dromara.quant.decision.DecisionLogEvent.builder()
-            .eventKey(org.dromara.quant.decision.TradeDecisionLogRepository.executionKey(credentialId, executionKey))
-            .recordType("EXECUTION").credentialId(credentialId).strategyId(strategyId).strategyInstanceId(instanceId)
-            .symbol(symbol).runMode(runMode).operation(operation).status(status)
-            .direction(request == null ? null : ("OPEN".equals(operation) == "BUY".equals(request.side()) ? "LONG" : "SHORT"))
-            .quantity(request == null ? null : request.quantity()).price(request == null ? null : request.price())
-            .reasonCode(reasonCode == null ? "EXECUTION_RESULT" : reasonCode).reason(reason).idempotencyKey(executionKey)
-            .orderId(result == null ? null : result.orderId()).clientOrderId(result == null ? exchangeClientOrderId(executionKey) : result.clientOrderId())
-            .eventTime(java.time.Instant.now()).tradeTime(tradeTime).build());
-    }
-
     private static void requireFresh(OpenPositionCommand command) {
         if (command.validUntil() != null && !java.time.Instant.now().isBefore(command.validUntil())) {
             throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("开仓信号已过期，禁止按旧点位追单");
@@ -321,7 +296,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
      * 抢占执行幂等记录并判断当前调用是否拥有执行权。
      */
     private QuantExecutionRecordReservation reserve(String operationType, Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String idempotencyKey,
-                                                    String clientOrderId) {
+                                                    String clientOrderId, String triggerReason) {
         if (credentialId == null) {
             throw new IllegalArgumentException("缺少凭证ID");
         }
@@ -329,7 +304,8 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
         if (existing != null) {
             return existingReservation(existing);
         }
-        var record = executionRecordService.tryCreatePending(credentialId, strategyId, strategyInstanceId, operationType, symbol, idempotencyKey, clientOrderId);
+        var record = executionRecordService.tryCreatePending(credentialId, strategyId, strategyInstanceId, operationType, symbol, idempotencyKey,
+            clientOrderId, triggerReason);
         if (record != null) {
             return new QuantExecutionRecordReservation(record, true, null);
         }

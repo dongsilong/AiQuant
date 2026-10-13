@@ -1,5 +1,8 @@
 package org.dromara.quant.strategy;
 
+import org.dromara.config.strategy.signal.EntrySignal;
+import org.dromara.config.strategy.signal.ExitSignal;
+import org.dromara.config.strategy.context.StrategyContext;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;

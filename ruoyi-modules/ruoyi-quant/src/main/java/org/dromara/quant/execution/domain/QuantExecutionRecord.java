@@ -47,6 +47,10 @@ public class QuantExecutionRecord {
      */
     private String clientOrderId;
     /**
+     * 触发本次开平仓的信号原因。
+     */
+    private String triggerReason;
+    /**
      * 交易所订单主键。
      */
     private Long exchangeOrderId;
