@@ -3,7 +3,7 @@ package org.dromara.quant.risk;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.OpenPositionCommand;
 import org.dromara.quant.market.AccountBalanceSnapshot;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -19,13 +19,12 @@ import java.util.*;
  */
 @Service
 public class OpenCapacityService {
-    private final JdbcTemplate jdbc;
+    private final OpenCapacityMapper mapper;
     private final TransactionTemplate transaction;
     private final RiskDecisionService risk;
 
-    public OpenCapacityService(JdbcTemplate jdbc, PlatformTransactionManager manager, RiskDecisionService risk) {
-        this.jdbc = new JdbcTemplate(Objects.requireNonNull(jdbc.getDataSource()));
-        this.jdbc.setQueryTimeout(3);
+    public OpenCapacityService(OpenCapacityMapper mapper, PlatformTransactionManager manager, RiskDecisionService risk) {
+        this.mapper = Objects.requireNonNull(mapper);
         this.transaction = new TransactionTemplate(manager);
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -70,20 +69,18 @@ public class OpenCapacityService {
             throw new CapacityBlockedException("开仓容量检查缺少有效账户、金额或持仓事实");
         }
         transaction.executeWithoutResult(status -> {
-            List<Long> credentials = jdbc.query("SELECT id FROM quant_credential WHERE id=? FOR UPDATE",
-                (rs, row) -> rs.getLong(1), command.credentialId());
+            List<Long> credentials = mapper.lockCredential(command.credentialId());
             if (credentials.isEmpty()) { throw new CapacityBlockedException("开仓账户不存在"); }
             if (!"PAPER".equalsIgnoreCase(command.runMode()) && (balance == null || !balance.fresh()
                 || !command.credentialId().equals(balance.credentialId()))) {
                 throw new CapacityBlockedException("缺少当前账户的可信可用余额快照，暂停新开仓");
             }
-            List<Map<String, Object>> configs = jdbc.queryForList("SELECT max_open_positions FROM quant_risk_config WHERE credential_id=?", command.credentialId());
+            List<Map<String, Object>> configs = mapper.riskConfigs(command.credentialId());
             if (configs.size() != 1) { throw new CapacityBlockedException("账户风控配置缺失或不唯一"); }
             int accountLimit = positiveLimit(configs.get(0).get("max_open_positions"), "账户最大持仓数");
             int strategyLimit = Integer.MAX_VALUE;
             if (command.strategyId() != null) {
-                List<Integer> limits = jdbc.query("SELECT max_open_count FROM quant_strategy WHERE id=?",
-                    (rs, row) -> (Integer) rs.getObject(1), command.strategyId());
+                List<Integer> limits = mapper.strategyLimits(command.strategyId());
                 if (limits.size() != 1) { throw new CapacityBlockedException("策略配置不存在"); }
                 strategyLimit = positiveLimit(limits.get(0), "策略最大持仓数");
             }
@@ -97,22 +94,26 @@ public class OpenCapacityService {
                     }
                 }
             }
-            for (var position : jdbc.queryForList("SELECT symbol, position_side FROM quant_position WHERE credential_id=? AND quantity>0", command.credentialId())) {
-                accountKeys.add(key(position.get("symbol"), position.get("position_side")));
+            for (var position : mapper.activePositions(command.credentialId())) {
+                String side = Objects.toString(position.get("position_side"), "");
+                Object quantity = position.get("quantity");
+                // BOTH 模式的本地空头数量可能为负；不允许被 quantity>0 过滤掉。
+                if ("BOTH".equalsIgnoreCase(side) && quantity instanceof BigDecimal qty && qty.signum() < 0) {
+                    side = "SHORT";
+                } else if ("BOTH".equalsIgnoreCase(side) && quantity instanceof BigDecimal qty && qty.signum() > 0) {
+                    side = "LONG";
+                }
+                accountKeys.add(key(position.get("symbol"), side));
             }
             Set<String> strategyKeys = new HashSet<>();
             // OPEN_PENDING 尚未经过容量准入，只有容量表中已批准的占位参与计数。
             // 升级迁移必须回填旧服务遗留的待确认执行，再整体切换新服务。
-            for (var state : jdbc.queryForList("SELECT i.strategy_id, q.symbol, s.direction FROM quant_strategy_position_state s "
-                + "JOIN quant_strategy_instance i ON i.id=s.instance_id JOIN quant_strategy_symbol b ON b.id=i.strategy_symbol_id "
-                + "JOIN quant_symbol q ON q.id=b.symbol_id WHERE i.credential_id=? AND s.status NOT IN ('CLOSED','OPEN_PENDING') AND s.position_qty>0", command.credentialId())) {
+            for (var state : mapper.activeStrategyStates(command.credentialId())) {
                 String positionKey = key(state.get("symbol"), state.get("direction"));
                 accountKeys.add(positionKey);
                 if (sameId(state.get("strategy_id"), command.strategyId())) { strategyKeys.add(positionKey); }
             }
-            List<Map<String, Object>> slots = jdbc.queryForList("SELECT r.*, e.execution_status, e.exchange_order_status, s.status AS state_status, s.updated_at AS state_updated "
-                + "FROM quant_open_capacity r LEFT JOIN quant_execution_record e ON e.credential_id=r.credential_id AND e.idempotency_key=r.idempotency_key "
-                + "LEFT JOIN quant_strategy_position_state s ON s.instance_id=r.instance_id WHERE r.credential_id=? AND r.status='RESERVED'", command.credentialId());
+            List<Map<String, Object>> slots = mapper.reservedSlots(command.credentialId());
             boolean alreadyReserved = false;
             Set<String> releasable = new HashSet<>();
             for (var slot : slots) {
@@ -129,8 +130,7 @@ public class OpenCapacityService {
                 if (failed || terminal && closed && !accountKeys.contains(positionKey)) {
                     releasable.add(Objects.toString(slot.get("idempotency_key")));
                     if (reserve) {
-                        jdbc.update("UPDATE quant_open_capacity SET status='RELEASED', updated_at=CURRENT_TIMESTAMP WHERE credential_id=? AND idempotency_key=? AND status='RESERVED'",
-                            command.credentialId(), slot.get("idempotency_key"));
+                        mapper.release(command.credentialId(), Objects.toString(slot.get("idempotency_key")));
                     }
                     continue;
                 }
@@ -161,9 +161,8 @@ public class OpenCapacityService {
                 throw new CapacityBlockedException(ex.getMessage());
             }
             if (!reserve) { return; }
-            jdbc.update("INSERT INTO quant_open_capacity (credential_id, idempotency_key, strategy_id, instance_id, symbol, position_side, reserved_margin, status, created_at, updated_at) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, 'RESERVED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", command.credentialId(), command.idempotencyKey(),
-                command.strategyId(), command.strategyInstanceId(), command.symbol().toUpperCase(Locale.ROOT), direction, margin);
+            mapper.insertReservation(command.credentialId(), command.idempotencyKey(), command.strategyId(),
+                command.strategyInstanceId(), command.symbol().toUpperCase(Locale.ROOT), direction, margin);
         });
     }
 
@@ -181,33 +180,20 @@ public class OpenCapacityService {
             return;
         }
         transaction.executeWithoutResult(status -> {
-            List<Long> credentials = jdbc.query("SELECT id FROM quant_credential WHERE id=? FOR UPDATE",
-                (rs, row) -> rs.getLong(1), credentialId);
+            List<Long> credentials = mapper.lockCredential(credentialId);
             if (credentials.isEmpty()) { throw new CapacityBlockedException("开仓账户不存在"); }
-            Long localCount = jdbc.queryForObject("SELECT COUNT(*) FROM quant_position WHERE credential_id=? AND symbol=? "
-                + "AND (quantity<>0 OR quantity IS NULL)", Long.class, credentialId, symbol);
+            Long localCount = mapper.countActiveLocalPositions(credentialId, symbol);
             if (localCount == null || localCount > 0) { return; }
-            List<String> closedKeys = jdbc.query("SELECT r.idempotency_key FROM quant_open_capacity r "
-                + "JOIN quant_execution_record e ON e.credential_id=r.credential_id AND e.idempotency_key=r.idempotency_key "
-                + "JOIN quant_strategy_position_state s ON s.instance_id=r.instance_id "
-                + "WHERE r.credential_id=? AND r.instance_id=? AND r.symbol=? AND r.status='RESERVED' "
-                + "AND e.execution_status IN ('CONFIRMED','RECOVERED') "
-                + "AND e.exchange_order_status IN ('FILLED','CANCELED','EXPIRED','REJECTED') "
-                + "AND s.status='CLOSED' AND s.pending_action IS NULL AND s.updated_at>=r.created_at",
-                (rs, row) -> rs.getString(1), credentialId, instanceId, symbol);
+            List<String> closedKeys = mapper.closedKeys(credentialId, instanceId, symbol);
             for (String closedKey : closedKeys) {
-                jdbc.update("UPDATE quant_open_capacity SET status='RELEASED',updated_at=CURRENT_TIMESTAMP "
-                    + "WHERE credential_id=? AND idempotency_key=? AND status='RESERVED'", credentialId, closedKey);
+                mapper.release(credentialId, closedKey);
             }
         });
     }
 
     /** 仅在余额请求发出前采集；UNKNOWN 和部分成交不得计入已覆盖集合。 */
     public Set<String> balanceCoverage(Long credentialId) {
-        return new HashSet<>(jdbc.query("SELECT r.idempotency_key,r.reserved_margin FROM quant_open_capacity r JOIN quant_execution_record e "
-            + "ON e.credential_id=r.credential_id AND e.idempotency_key=r.idempotency_key WHERE r.credential_id=? "
-            + "AND r.status='RESERVED' AND e.execution_status IN ('CONFIRMED','RECOVERED') AND e.exchange_order_status='FILLED'",
-            (rs, row) -> rs.getString(1), credentialId));
+        return new HashSet<>(mapper.balanceCoverage(credentialId));
     }
 
     /** 运行时用于原有比例计算；最终准入必须在账户行锁内再次读取预留。 */
@@ -220,9 +206,7 @@ public class OpenCapacityService {
             throw new CapacityBlockedException("账户余额快照不可信或已过期");
         }
         BigDecimal reserved = BigDecimal.ZERO;
-        for (var row : jdbc.queryForList("SELECT r.idempotency_key,r.reserved_margin,e.execution_status FROM quant_open_capacity r "
-            + "LEFT JOIN quant_execution_record e ON e.credential_id=r.credential_id AND e.idempotency_key=r.idempotency_key "
-            + "WHERE r.credential_id=? AND r.status='RESERVED'", credentialId)) {
+        for (var row : mapper.marginReservations(credentialId)) {
             String key = Objects.toString(row.get("idempotency_key"));
             if (releasable.contains(key) || snapshot.coveredExecutions().contains(key) || "FAILED".equals(row.get("execution_status"))) { continue; }
             if (!(row.get("reserved_margin") instanceof BigDecimal amount) || amount.signum() <= 0) {
@@ -235,9 +219,7 @@ public class OpenCapacityService {
 
     /** 明确未成交/未发送且执行记录已经标为 FAILED，才允许释放此次占位。 */
     public void releaseFailed(Long credentialId, String idempotencyKey) {
-        jdbc.update("UPDATE quant_open_capacity SET status='RELEASED', updated_at=CURRENT_TIMESTAMP WHERE credential_id=? AND idempotency_key=? "
-            + "AND EXISTS (SELECT 1 FROM quant_execution_record e WHERE e.credential_id=? AND e.idempotency_key=? AND e.execution_status='FAILED')",
-            credentialId, idempotencyKey, credentialId, idempotencyKey);
+        mapper.releaseFailed(credentialId, idempotencyKey);
     }
 
     private static java.time.LocalDateTime localTime(Object value) {
