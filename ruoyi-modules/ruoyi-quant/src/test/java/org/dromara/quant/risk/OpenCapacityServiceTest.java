@@ -345,8 +345,22 @@ class OpenCapacityServiceTest {
         jdbc.update("INSERT INTO quant_risk_config VALUES (1,?),(2,?)", accountLimit, accountLimit);
         jdbc.update("INSERT INTO quant_strategy VALUES (10,?),(20,?),(30,?)", strategyLimit, strategyLimit, strategyLimit);
         var risk = mock(RiskDecisionService.class);
-        return new Fixture(jdbc, new OpenCapacityService(jdbc, new DataSourceTransactionManager(source), risk),
-            new OpenCapacityService(jdbc, new DataSourceTransactionManager(source), risk));
+        // 使用 MyBatis-Spring 的 SqlSessionTemplate 验证 Mapper 与 DataSourceTransactionManager 共享事务。
+        var configuration = new org.apache.ibatis.session.Configuration();
+        configuration.setMapUnderscoreToCamelCase(false);
+        configuration.addMapper(org.dromara.quant.risk.mapper.OpenCapacityMapper.class);
+        var factoryBean = new org.mybatis.spring.SqlSessionFactoryBean();
+        factoryBean.setDataSource(source);
+        factoryBean.setConfiguration(configuration);
+        try {
+            var factory = Objects.requireNonNull(factoryBean.getObject());
+            var session = new org.mybatis.spring.SqlSessionTemplate(factory);
+            var mapper = session.getMapper(org.dromara.quant.risk.mapper.OpenCapacityMapper.class);
+            return new Fixture(jdbc, new OpenCapacityService(mapper, new DataSourceTransactionManager(source), risk),
+                new OpenCapacityService(mapper, new DataSourceTransactionManager(source), risk));
+        } catch (Exception ex) {
+            throw new IllegalStateException("Cannot initialize transactional MyBatis capacity fixture", ex);
+        }
     }
 
     private record Fixture(JdbcTemplate jdbc, OpenCapacityService first, OpenCapacityService second) {}
