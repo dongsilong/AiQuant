@@ -321,8 +321,8 @@ justauth:
       client-secret: ${GITEE_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=gitee
     dingtalk:
-      client-id: ${GITEE_CLIENT_ID:}
-      client-secret: ${GITEE_CLIENT_SECRET:}
+      client-id: ${DINGTALK_CLIENT_ID:}
+      client-secret: ${DINGTALK_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=dingtalk
     baidu:
       client-id: ${BAIDU_CLIENT_ID:}
