@@ -187,18 +187,29 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             if (account.getData() == null || configuration.getData() == null) {
                 return new ConnectivityResult(false, "Binance 凭证校验无响应");
             }
-            boolean canTrade = Boolean.TRUE.equals(configuration.getData().getCanTrade());
-            boolean withdrawalDisabled = !Boolean.TRUE.equals(configuration.getData().getCanWithdraw());
-            if (!canTrade) {
-                return new ConnectivityResult(false, "账户没有 Futures Trade 权限", false, withdrawalDisabled, Instant.now());
-            }
-            /*if (!withdrawalDisabled) {
-                return new ConnectivityResult(false, "账户提现权限未关闭", true, false, Instant.now());
-            }*/
-            return new ConnectivityResult(true, "OK", true, true, Instant.now());
+            return tradingPermissions(configuration.getData().getCanTrade(), configuration.getData().getCanWithdraw());
         } catch (RuntimeException ex) {
             return new ConnectivityResult(false, "Binance 连接失败");
         }
+    }
+
+    /**
+     * 私有账户能力校验。只有交易所明确返回 canWithdraw=false 时，
+     * 才能向 LIVE 闸门报告 withdrawalDisabled=true。
+     * null/缺失值属于未知状态，必须拒绝而不是当作已禁用。
+     *
+     * <p>该字段不是 API Key 权限审计的替代品，运维仍须检查密钥权限。
+     */
+    static ConnectivityResult tradingPermissions(Boolean canTrade, Boolean canWithdraw) {
+        boolean tradeAllowed = Boolean.TRUE.equals(canTrade);
+        boolean withdrawalDisabled = Boolean.FALSE.equals(canWithdraw);
+        if (!tradeAllowed) {
+            return new ConnectivityResult(false, "账户没有 Futures Trade 权限", false, withdrawalDisabled, Instant.now());
+        }
+        if (!withdrawalDisabled) {
+            return new ConnectivityResult(false, "未确认禁用提现能力，拒绝 LIVE 交易", true, false, Instant.now());
+        }
+        return new ConnectivityResult(true, "OK", true, true, Instant.now());
     }
 
     /**
