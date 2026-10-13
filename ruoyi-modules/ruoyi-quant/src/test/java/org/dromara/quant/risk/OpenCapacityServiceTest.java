@@ -102,6 +102,15 @@ class OpenCapacityServiceTest {
     }
 
     @Test
+    void signedOneWayShortPositionIsCountedAndCannotBypassAccountLimit() {
+        Fixture f = fixture(1, 1);
+        // One-way Binance BOTH position amount is signed; a negative local quantity is a live SHORT.
+        f.jdbc.update("INSERT INTO quant_position VALUES (1,'BTCUSDT','BOTH',-1)");
+        assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> reserve(f.first, command(1L, 10L, 100L, "ETHUSDT", "blocked-short"), BigDecimal.TEN, List.of()));
+    }
+
+    @Test
     void absentMigrationOrUnknownAccountFactsFailClosed() {
         Fixture f = fixture(2, 1);
         assertThrows(OpenCapacityService.CapacityBlockedException.class,
