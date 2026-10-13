@@ -97,11 +97,13 @@ public class OpenCapacityService {
             for (var position : mapper.activePositions(command.credentialId())) {
                 String side = Objects.toString(position.get("position_side"), "");
                 Object quantity = position.get("quantity");
+                if (!(quantity instanceof BigDecimal qty) || qty.signum() == 0
+                    || !(side.equalsIgnoreCase("BOTH") || side.equalsIgnoreCase("LONG") || side.equalsIgnoreCase("SHORT"))) {
+                    throw new CapacityBlockedException("本地持仓数量或方向不可信，暂停新开仓");
+                }
                 // BOTH 模式的本地空头数量可能为负；不允许被 quantity>0 过滤掉。
-                if ("BOTH".equalsIgnoreCase(side) && quantity instanceof BigDecimal qty && qty.signum() < 0) {
-                    side = "SHORT";
-                } else if ("BOTH".equalsIgnoreCase(side) && quantity instanceof BigDecimal qty && qty.signum() > 0) {
-                    side = "LONG";
+                if ("BOTH".equalsIgnoreCase(side)) {
+                    side = qty.signum() < 0 ? "SHORT" : "LONG";
                 }
                 accountKeys.add(key(position.get("symbol"), side));
             }
