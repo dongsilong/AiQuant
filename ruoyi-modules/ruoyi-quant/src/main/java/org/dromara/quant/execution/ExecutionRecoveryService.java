@@ -67,6 +67,9 @@ public class ExecutionRecoveryService {
         }
         List<QuantExecutionRecord> pending = recordMapper.selectList(new LambdaQueryWrapper<QuantExecutionRecord>().in(QuantExecutionRecord::getExecutionStatus, "PENDING",
             "UNKNOWN", "CONFIRMED")
+            // Avoid querying the same unresolved order every scheduler tick, while never expiring it.
+            .and(q -> q.isNull(QuantExecutionRecord::getLastRecoveryAt)
+                .or().le(QuantExecutionRecord::getLastRecoveryAt, LocalDateTime.now().minusMinutes(1)))
             // Do not drop unresolved orders after 24h; oldest never-retried records are examined first.
             .orderByAsc(QuantExecutionRecord::getLastRecoveryAt)
             .orderByAsc(QuantExecutionRecord::getCreatedAt).last("LIMIT 100"));
