@@ -20,13 +20,13 @@ quant:
     # 是否启用策略运行时监督；关闭后会停止全部运行中的策略实例
     enabled: ${QUANT_RUNTIME_ENABLED:false}
     # 策略实例发现、启动/停止和租约维护的间隔，单位：秒
-  paper:
-    enabled: false
     tick-seconds: 5
     # 策略运行租约有效期，单位：秒；用于避免多个服务实例同时运行同一策略
     lease-seconds: 30
     # 未确认开平仓执行记录的恢复扫描间隔，单位：秒
     recovery-seconds: 5
+  paper:
+    enabled: false
   # 交易所事实对账与用户数据流协调配置
   reconcile:
     # 是否启用对账、用户数据流监督和执行恢复任务
@@ -320,8 +320,8 @@ justauth:
       client-secret: ${GITEE_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=gitee
     dingtalk:
-      client-id: ${GITEE_CLIENT_ID:}
-      client-secret: ${GITEE_CLIENT_SECRET:}
+      client-id: ${DINGTALK_CLIENT_ID:}
+      client-secret: ${DINGTALK_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=dingtalk
     baidu:
       client-id: 10**********6
