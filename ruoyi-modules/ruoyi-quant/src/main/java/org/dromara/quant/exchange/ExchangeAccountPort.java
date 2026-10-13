@@ -12,7 +12,9 @@ public interface ExchangeAccountPort {
 
     ExchangeGateway.AccountSnapshot queryAccount(ExchangeGateway.Credential credential);
 
-    /** 余额资金覆盖校准必须从本次调用之后发起，不能加入此前的共享请求。 */
+    /**
+     * 余额资金覆盖校准必须从本次调用之后发起，不能加入此前的共享请求。
+     */
     default ExchangeGateway.AccountSnapshot queryAccountFresh(ExchangeGateway.Credential credential) {
         return queryAccount(credential);
     }

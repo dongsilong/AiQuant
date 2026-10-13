@@ -45,14 +45,20 @@ public class QuantProperties {
      * 行情流健康检查和重连配置。
      */
     private Market market = new Market();
-    /** 保护单成交确认等待窗口。 */
+    /**
+     * 保护单成交确认等待窗口。
+     */
     private Protection protection = new Protection();
 
     @Data
     public static class Protection {
-        /** 触发保护后给予交易所的成交确认时间，毫秒；等待不占用行情线程。 */
+        /**
+         * 触发保护后给予交易所的成交确认时间，毫秒；等待不占用行情线程。
+         */
         private long confirmationWaitMillis = 1000L;
-        /** 本地退出等待已在途保护任务的上限；超时保留未知请求并交由恢复，不盲目补平。 */
+        /**
+         * 本地退出等待已在途保护任务的上限；超时保留未知请求并交由恢复，不盲目补平。
+         */
         private long syncWaitMillis = 5000L;
     }
 
@@ -65,15 +71,40 @@ public class QuantProperties {
          * 交易所正式环境 API 基础地址。
          */
         private String baseUrl = "https://fapi.binance.com";
+
+        /**
+         * 正式网常规行情流地址（@aggTrade/@markPrice/@kline）。
+         */
+        private String marketStreamUrl = "wss://fstream.binance.com/market/stream";
+
+        /**
+         * 正式网高频行情流地址（@depth 等）。
+         */
+        private String publicStreamUrl = "wss://fstream.binance.com/public/stream";
+
+        /**
+         * 正式网用户数据流地址前缀，拼接 listenKey 使用：{prefix}/ws/{listenKey}。
+         */
+        private String userDataStreamUrl = "wss://fstream.binance.com/private";
+
         /**
          * 交易所测试网 API 基础地址。
          */
         private String testnetUrl = "https://demo-fapi.binance.com";
-        /** 正式网组合行情流地址。 */
-        private String marketStreamUrl = "wss://fstream.binance.com/market/stream";
-        /** 测试网组合行情流地址，与测试网订单环境一致。 */
+
+        /**
+         * 测试网常规行情流地址。
+         */
         private String testnetMarketStreamUrl = "wss://demo-fstream.binance.com/market/stream";
-        /** 测试网账户事件流前缀，与测试网REST使用同一环境。 */
+
+        /**
+         * 测试网高频行情流地址。
+         */
+        private String testnetPublicStreamUrl = "wss://demo-fstream.binance.com/public/stream";
+
+        /**
+         * 测试网用户数据流地址前缀，拼接 listenKey 使用：{prefix}/ws/{listenKey}。
+         */
         private String testnetUserDataStreamUrl = "wss://demo-fstream.binance.com/private/ws/";
     }
 
@@ -169,13 +200,21 @@ public class QuantProperties {
 
     @Data
     public static class Market {
-        /** 每个订阅的最大排队事件数，溢出时显式断线并补偿。 */
+        /**
+         * 每个订阅的最大排队事件数，溢出时显式断线并补偿。
+         */
         private int queueCapacity = 2048;
-        /** Binance事件产生至策略决策允许的最大年龄（毫秒）。 */
+        /**
+         * Binance事件产生至策略决策允许的最大年龄（毫秒）。
+         */
         private long maxEventAgeMillis = 3000;
-        /** 行情无事件后判定断连的秒数。 */
+        /**
+         * 行情无事件后判定断连的秒数。
+         */
         private int idleTimeoutSeconds = 15;
-        /** 行情断连后的首次重连等待秒数。 */
+        /**
+         * 行情断连后的首次重连等待秒数。
+         */
         private int reconnectDelaySeconds = 3;
     }
 

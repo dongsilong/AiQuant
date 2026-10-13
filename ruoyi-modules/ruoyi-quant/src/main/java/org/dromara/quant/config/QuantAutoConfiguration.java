@@ -32,7 +32,7 @@ public class QuantAutoConfiguration {
      */
     @Bean(destroyMethod = "shutdown")
     public ScheduledExecutorService quantScheduledExecutorService() {
-        return Executors.newScheduledThreadPool(4, runnable -> {
+        return Executors.newScheduledThreadPool(8, runnable -> {
             Thread thread = new Thread(runnable, "quant-scheduler");
             thread.setDaemon(true);
             return thread;
