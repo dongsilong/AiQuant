@@ -65,9 +65,11 @@ public class ExecutionRecoveryService {
         if (!properties.getReconcile().isEnabled()) {
             return;
         }
-        LocalDateTime since = LocalDateTime.now().minusHours(24);
         List<QuantExecutionRecord> pending = recordMapper.selectList(new LambdaQueryWrapper<QuantExecutionRecord>().in(QuantExecutionRecord::getExecutionStatus, "PENDING",
-            "UNKNOWN", "CONFIRMED").ge(QuantExecutionRecord::getUpdatedAt, since).orderByAsc(QuantExecutionRecord::getCreatedAt).last("LIMIT 100"));
+            "UNKNOWN", "CONFIRMED")
+            // Do not drop unresolved orders after 24h; oldest never-retried records are examined first.
+            .orderByAsc(QuantExecutionRecord::getLastRecoveryAt)
+            .orderByAsc(QuantExecutionRecord::getCreatedAt).last("LIMIT 100"));
         for (QuantExecutionRecord record : pending) {
             if (record.getCredentialId() == null || record.getSymbol() == null) {
                 continue;
@@ -103,10 +105,14 @@ public class ExecutionRecoveryService {
                     }
                     continue;
                 }
-                boolean matched =
-                    record.getClientOrderId() != null && gateway.queryOrders(c, record.getSymbol()).stream().anyMatch(o -> record.getClientOrderId().equals(o.clientOrderId()));
-                if (matched && !"CANCEL".equalsIgnoreCase(record.getOperationType())) {
-                    recordService.markRecovered(record, record.getExchangeOrderId(), record.getExchangeOrderStatus());
+                ExchangeGateway.OrderSnapshot matched = record.getClientOrderId() == null ? null
+                    : gateway.queryOrders(c, record.getSymbol()).stream()
+                        .filter(o -> record.getClientOrderId().equals(o.clientOrderId()))
+                        .findFirst().orElse(null);
+                if (matched != null && !"CANCEL".equalsIgnoreCase(record.getOperationType())) {
+                    // A fallback match must use actual exchange facts, not possibly stale local status.
+                    orderLedgerService.syncSnapshot(record.getCredentialId(), matched);
+                    recordService.markRecovered(record, matched.orderId(), matched.status());
                 } else if (record.getCreatedAt() != null && Duration.between(record.getCreatedAt(), LocalDateTime.now()).getSeconds() >= 90) {
                     recordService.markUnknown(record, "超过 90 秒仍无法确认交易所订单状态，保持 UNKNOWN 并等待后续对账");
                 }
