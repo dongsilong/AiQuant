@@ -13,6 +13,8 @@
 ## Changes in this branch
 
 - Atomic candle entry guard SQL migrated from `JdbcTemplate` to `StrategyEntryGuardMapper`, retaining database unique-key and conditional write semantics.
+- `StrategyRuntimeLeaseService`, `OpenCapacityService`, and `PaperTradingService` migrated to MyBatis custom atomic mappers. Lease and capacity use 3-second per-statement timeouts; capacity preserves `TransactionTemplate(REQUIRES_NEW, READ_COMMITTED)` and the account `FOR UPDATE` lock. PAPER balance and execution records retain transaction-scoped row locks and atomic amount updates.
+- Corrected local signed one-way `BOTH` short positions being excluded by `quantity>0` during capacity checks.
 - Execution recovery no longer drops unresolved records solely because they are older than 24 hours. Query order favors least-recently-checked records; fallback order matches use actual exchange status.
 - Binance SDK authentication adapter no longer imports OkHttp's private/internal `HttpMethod` class.
 - LIVE defaults to OFF. Production strategy supervisor defaults to OFF. Production PAPER is disabled without deleting the implementation or its tests.
@@ -35,7 +37,8 @@ For explicit LIVE enablement: `QUANT_LIVE_ENABLED=true` and, in prod, `QUANT_RUN
 - [ ] Run frontend typecheck, unit tests, lint and production build.
 - [ ] Verify that `StrategyEntryGuardMapper` is registered by Spring in the production profile.
 - [ ] Verify credentials/secrets are rotated, database keys migrated, network access restricted, TLS verified, and all production settings externally provisioned.
-- [ ] Verify Binance SDK 12.0.3 method coverage for WebSocket Streams and user-data stream; raw OkHttp socket remains and is NOT yet replaced.
+- [x] Verified SDK 12.x API has `klineCandlestickStreams` and `userData` methods; added the `BinanceSdkContractTest` to enforce method presence on pinned 12.0.3 dependency.
+- [ ] Existing raw OkHttp stream transport is NOT yet migrated. **Do not replace it blindly:** Binance Java Connector 12.x `StreamConnectionWrapper.subscribe()` constructs unbounded `LinkedBlockingDeque<>` queues and forwards messages using `offer`. A blocked consumer can accumulate arbitrary messages, defeating AiQuant's bounded market-stream budget. The SDK typed user-data union also needs real-world payload compatibility testing, and the SDK Jetty dependencies must be checked against the application server. A bounded adapter or upstream fix plus event-replay tests is required before switching LIVE websocket transport. This is an explicitly documented exception to SDK-first because the raw transport currently supplies safety properties the SDK wrapper does not.
 - [ ] Test multi-node lease loss, fencing/stale-worker execution, concurrent strategies against the same account, and duplicate signal deliveries.
 - [ ] Fault-inject order timeout, exchange accepted / local DB failed, unknown order recovery across 24+ hours, cancelled partial fills, and inconsistent order snapshots.
 - [ ] Validate protection-order recovery, manual exchange trading, disconnects and stop/start while a position remains open.
@@ -45,6 +48,7 @@ For explicit LIVE enablement: `QUANT_LIVE_ENABLED=true` and, in prod, `QUANT_RUN
 
 ## Current limits
 
-- MyBatis migration is incremental: capacity and lease JDBC operations remain until equivalence and transaction tests are available.
+- Known `JdbcTemplate` call sites in the four reviewed quant runtime services (entry guard, runtime lease, capacity and PAPER settlement) have been migrated to MyBatis custom SQL. Audit other modules separately rather than assuming every JDBC operation in the whole repository has been removed.
+- Maven GitHub Actions critical tests include capacity/lease/entry-guard recovery and Binance SDK API contract checks. Passing H2/Mockito tests is not a substitute for MySQL multi-node integration tests.
 - Strategy runtime and terminal component decomposition, shared strategy position attribution and full OMS state machine are not yet implemented.
 - The environment executing these edits cannot clone or compile GitHub repositories; source-level inspection and added tests are **not** evidence that tests passed.
