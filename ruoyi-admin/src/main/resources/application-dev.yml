@@ -275,16 +275,16 @@ sms:
       # 框架定义的厂商名称标识，标定此配置是哪个厂商，详细请看厂商标识介绍部分
       supplier: alibaba
       # 有些称为accessKey有些称之为apiKey，也有称为sdkKey或者appId。
-      access-key-id: 您的accessKey
+      access-key-id: ${CONFIG1_ACCESS_KEY_ID:}
       # 称为accessSecret有些称之为apiSecret
-      access-key-secret: 您的accessKeySecret
+      access-key-secret: ${CONFIG1_ACCESS_KEY_SECRET:}
       signature: 您的短信签名
       sdk-app-id: 您的sdkAppId
     config2:
       # 厂商标识，标定此配置是哪个厂商，详细请看厂商标识介绍部分
       supplier: tencent
-      access-key-id: 您的accessKey
-      access-key-secret: 您的accessKeySecret
+      access-key-id: ${CONFIG2_ACCESS_KEY_ID:}
+      access-key-secret: ${CONFIG2_ACCESS_KEY_SECRET:}
       signature: 您的短信签名
       sdk-app-id: 您的sdkAppId
 
@@ -297,24 +297,24 @@ justauth:
       # maxkey 服务器地址
       # 注意 如下均配置均不需要修改 maxkey 已经内置好了数据
       server-url: http://sso.maxkey.top
-      client-id: 876892492581044224
-      client-secret: x1Y5MTMwNzIwMjMxNTM4NDc3Mzche8
+      client-id: ${MAXKEY_CLIENT_ID:}
+      client-secret: ${MAXKEY_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=maxkey
     topiam:
       # topiam 服务器地址
       server-url: http://127.0.0.1:1898/api/v1/authorize/y0q************spq***********8ol
-      client-id: 449c4*********937************759
-      client-secret: ac7***********1e0************28d
+      client-id: ${TOPIAM_CLIENT_ID:}
+      client-secret: ${TOPIAM_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=topiam
       scopes: [openid, email, phone, profile]
     qq:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${QQ_CLIENT_ID:}
+      client-secret: ${QQ_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=qq
       union-id: false
     weibo:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${WEIBO_CLIENT_ID:}
+      client-secret: ${WEIBO_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=weibo
     gitee:
       client-id: ${GITEE_CLIENT_ID:}
@@ -325,48 +325,48 @@ justauth:
       client-secret: ${GITEE_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=dingtalk
     baidu:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${BAIDU_CLIENT_ID:}
+      client-secret: ${BAIDU_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=baidu
     csdn:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${CSDN_CLIENT_ID:}
+      client-secret: ${CSDN_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=csdn
     coding:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${CODING_CLIENT_ID:}
+      client-secret: ${CODING_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=coding
       coding-group-name: xx
     oschina:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${OSCHINA_CLIENT_ID:}
+      client-secret: ${OSCHINA_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=oschina
     alipay_wallet:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${ALIPAY_WALLET_CLIENT_ID:}
+      client-secret: ${ALIPAY_WALLET_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=alipay_wallet
       alipay-public-key: MIIB**************DAQAB
     wechat_open:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${WECHAT_OPEN_CLIENT_ID:}
+      client-secret: ${WECHAT_OPEN_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=wechat_open
     wechat_mp:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${WECHAT_MP_CLIENT_ID:}
+      client-secret: ${WECHAT_MP_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=wechat_mp
     wechat_enterprise:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${WECHAT_ENTERPRISE_CLIENT_ID:}
+      client-secret: ${WECHAT_ENTERPRISE_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=wechat_enterprise
       agent-id: 1000002
     gitlab:
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${GITLAB_CLIENT_ID:}
+      client-secret: ${GITLAB_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=gitlab
     gitea:
       # 前端改动 https://gitee.com/JavaLionLi/plus-ui/pulls/204
       # gitea 服务器地址
       server-url: https://demo.gitea.com
-      client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-id: ${GITEA_CLIENT_ID:}
+      client-secret: ${GITEA_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=gitea
