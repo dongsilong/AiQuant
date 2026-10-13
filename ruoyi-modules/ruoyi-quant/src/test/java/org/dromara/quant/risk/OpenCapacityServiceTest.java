@@ -111,6 +111,14 @@ class OpenCapacityServiceTest {
     }
 
     @Test
+    void unknownLocalPositionQuantityFailsClosedInsteadOfUsingOneAvailableSlot() {
+        Fixture f = fixture(10, 10);
+        f.jdbc.update("INSERT INTO quant_position VALUES (1,'BTCUSDT','BOTH',NULL)");
+        assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> reserve(f.first, command(1L, 10L, 100L, "ETHUSDT", "unknown-position"), BigDecimal.TEN, List.of()));
+    }
+
+    @Test
     void absentMigrationOrUnknownAccountFactsFailClosed() {
         Fixture f = fixture(2, 1);
         assertThrows(OpenCapacityService.CapacityBlockedException.class,
