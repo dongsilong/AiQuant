@@ -20,6 +20,27 @@ import java.util.concurrent.atomic.AtomicReference;
 class BinanceGatewayConnectivityTest {
 
     @Test
+    void liveCredentialFailsClosedWhenWithdrawalIsEnabledOrUnknown() {
+        var enabled = BinanceGatewayAdapter.tradingPermissions(true, true);
+        assertFalse(enabled.success());
+        assertTrue(enabled.canTrade());
+        assertFalse(enabled.withdrawalDisabled());
+
+        var missing = BinanceGatewayAdapter.tradingPermissions(true, null);
+        assertFalse(missing.success());
+        assertFalse(missing.withdrawalDisabled());
+
+        var safe = BinanceGatewayAdapter.tradingPermissions(true, false);
+        assertTrue(safe.success());
+        assertTrue(safe.withdrawalDisabled());
+
+        var denied = BinanceGatewayAdapter.tradingPermissions(false, false);
+        assertFalse(denied.success());
+        assertFalse(denied.canTrade());
+        assertFalse(BinanceGatewayAdapter.tradingPermissions(null, false).success());
+    }
+
+    @Test
     void testsBinanceNetworkWithoutCredentialHeaders() throws IOException {
         AtomicReference<String> requestPath = new AtomicReference<>();
         AtomicReference<String> apiKeyHeader = new AtomicReference<>();
