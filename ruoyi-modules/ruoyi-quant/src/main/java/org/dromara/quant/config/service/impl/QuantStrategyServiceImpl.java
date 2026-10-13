@@ -22,6 +22,7 @@ import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -50,6 +51,7 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
         this.scheduler = scheduler;
     }
     private final Map<Long, Boolean> healthySubscriptions = new ConcurrentHashMap<>();
+    private final Map<Long, AtomicLong> successfulPolls = new ConcurrentHashMap<>();
 
     @Override
     public PageResult<QuantStrategyVo> queryPage(PageQuery query) {
@@ -100,37 +102,73 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
 
     @Override
     public synchronized boolean start(Long id) {
+        log.info("[策略启动请求] strategyId={} symbol={} interval={}", id, SYMBOL, INTERVAL);
         QuantStrategy entity = mapper.selectById(id);
-        if (entity == null) throw new ServiceException("策略不存在");
+        if (entity == null) throw new ServiceException("策略不存在: " + id);
         if (!PLUGIN.equals(entity.getPluginCode())) throw new ServiceException("当前仅支持价格日志策略");
-        if (subscriptions.containsKey(id)) return true;
-        healthySubscriptions.put(id, false);
-        // 演示策略只读价格与K线，不依赖交易执行所需的严格事件恢复门控。
-        // 每5秒轮询一次公开 REST 行情，网络异常时保留任务并在下一轮重试。
-        ScheduledFuture<?> task = scheduler.scheduleWithFixedDelay(() -> {
-            if (!subscriptions.containsKey(id)) return;
-            try {
-                ExchangeGateway.PriceSnapshot price = gateway.queryPrice(SYMBOL);
-                List<ExchangeGateway.Kline> candles = gateway.queryKlines(SYMBOL, INTERVAL, 1);
-                if (price == null || price.lastTradePrice() == null || candles == null || candles.isEmpty()) {
+        if (subscriptions.containsKey(id)) {
+            log.info("[策略重复启动] strategyId={} healthy={} ticks={}", id,
+                healthySubscriptions.get(id), successfulPolls.getOrDefault(id, new AtomicLong()).get());
+            return true;
+        }
+
+        // 先执行一次同步读取：只有真正从交易所取到有效 K 线才能返回启动成功。
+        // 避免仅创建定时任务却没有数据，前端错误显示运行中。
+        log.info("[策略行情预检开始] strategyId={}", id);
+        try {
+            pollMarket(id, entity);
+        } catch (RuntimeException ex) {
+            healthySubscriptions.remove(id);
+            successfulPolls.remove(id);
+            log.error("[策略启动失败] strategyId={} errorType={} reason={}",
+                id, ex.getClass().getSimpleName(), ex.getMessage());
+            throw new ServiceException("策略启动失败，获取 ETHUSDT 15m 行情异常: " +
+                ex.getClass().getSimpleName() + ": " + ex.getMessage());
+        }
+        try {
+            ScheduledFuture<?> future = scheduler.scheduleWithFixedDelay(() -> {
+                if (!subscriptions.containsKey(id)) return;
+                try {
+                    pollMarket(id, entity);
+                } catch (Throwable ex) {
                     healthySubscriptions.put(id, false);
-                    log.warn("[策略行情不可用] id={} symbol={} interval={} 公开行情为空", id, SYMBOL, INTERVAL);
-                    return;
+                    log.error("[策略行情轮询失败] strategyId={} type={} reason={}",
+                        id, ex.getClass().getSimpleName(), ex.getMessage());
                 }
-                ExchangeGateway.Kline candle = candles.getLast();
-                healthySubscriptions.put(id, true);
-                log.info("[策略实时价格] id={} name={} symbol={} interval={} price={} time={}",
-                    id, entity.getStrategyName(), SYMBOL, INTERVAL, price.lastTradePrice(), price.observedAt());
-                log.info("[策略K线] id={} symbol={} interval={} openTime={} close={} closed={}",
-                    id, SYMBOL, INTERVAL, candle.openTime(), candle.close(), candle.closed());
-            } catch (RuntimeException ex) {
-                healthySubscriptions.put(id, false);
-                log.warn("[策略行情查询失败] id={} symbol={} interval={} reason={}", id, SYMBOL, INTERVAL, ex.toString());
-            }
-        }, 1, 5, TimeUnit.SECONDS);
-        subscriptions.put(id, task);
-        log.info("[策略启动] id={} symbol={} interval={} mode=REST-POLL-5S，不执行交易", id, SYMBOL, INTERVAL);
+            }, 5, 5, TimeUnit.SECONDS);
+            subscriptions.put(id, future);
+        } catch (RuntimeException ex) {
+            healthySubscriptions.remove(id);
+            successfulPolls.remove(id);
+            log.error("[策略任务创建失败] strategyId={} type={} reason={}", id,
+                ex.getClass().getSimpleName(), ex.getMessage());
+            throw new ServiceException("策略调度任务创建失败: " + ex.getMessage());
+        }
+        log.info("[策略启动成功] strategyId={} symbol={} interval={} pollSeconds=5 mode=READ_ONLY",
+            id, SYMBOL, INTERVAL);
         return true;
+    }
+
+    private void pollMarket(Long id, QuantStrategy entity) {
+        // 获取一根实时形成中的15分钟K线，另外获取最新成交价；全程只读，绝不调用交易端口。
+        log.debug("[策略行情请求] strategyId={} symbol={} interval={}", id, SYMBOL, INTERVAL);
+        List<ExchangeGateway.Kline> klines = gateway.queryKlines(SYMBOL, INTERVAL, 1);
+        if (klines == null || klines.isEmpty() || klines.getLast() == null
+            || klines.getLast().close() == null) {
+            throw new IllegalStateException("Binance 15m K线为空");
+        }
+        ExchangeGateway.Kline candle = klines.getLast();
+        ExchangeGateway.PriceSnapshot snapshot = gateway.queryPrice(SYMBOL);
+        if (snapshot == null || snapshot.lastTradePrice() == null) {
+            throw new IllegalStateException("Binance 最新价格为空");
+        }
+        successfulPolls.computeIfAbsent(id, unused -> new AtomicLong()).incrementAndGet();
+        healthySubscriptions.put(id, true);
+        log.info("[策略K线] strategyId={} name={} symbol={} interval={} openTime={} open={} high={} low={} close={} volume={} closed={}",
+            id, entity.getStrategyName(), SYMBOL, INTERVAL, candle.openTime(), candle.open(),
+            candle.high(), candle.low(), candle.close(), candle.volume(), candle.closed());
+        log.info("[策略实时价格] strategyId={} symbol={} price={} observedAt={} totalPolls={}",
+            id, SYMBOL, snapshot.lastTradePrice(), snapshot.observedAt(), successfulPolls.get(id).get());
     }
 
     @Override
@@ -141,6 +179,7 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
             handle.cancel(false);
             subscriptions.remove(id);
             healthySubscriptions.remove(id);
+            successfulPolls.remove(id);
         }
         log.info("[策略停止] id={}", id);
         return true;
@@ -151,6 +190,7 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
         subscriptions.values().forEach(handle -> handle.cancel(false));
         subscriptions.clear();
         healthySubscriptions.clear();
+        successfulPolls.clear();
     }
 
     private QuantStrategyVo applyStatus(QuantStrategyVo vo) {
