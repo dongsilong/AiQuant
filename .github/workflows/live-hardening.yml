@@ -23,7 +23,7 @@ jobs:
           cache: maven
       - name: Compile and test critical trade invariants
         run: >-
-          ./mvnw -B -ntp
+          bash mvnw -B -ntp
           -pl ruoyi-modules/ruoyi-quant -am
           -Dtest=StrategyEntryGuardServiceTest,ExecutionRecoveryServiceTest,BinanceGatewayClockOffsetTest
           -Dsurefire.failIfNoSpecifiedTests=false
