@@ -40,6 +40,7 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
     private final QuantStrategyMapper mapper;
     private final MarketStreamHub streams;
     private final Map<Long, AutoCloseable> subscriptions = new ConcurrentHashMap<>();
+    private final Map<Long, Boolean> healthySubscriptions = new ConcurrentHashMap<>();
 
     @Override
     public PageResult<QuantStrategyVo> queryPage(PageQuery query) {
@@ -94,6 +95,7 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
         if (entity == null) throw new ServiceException("策略不存在");
         if (!PLUGIN.equals(entity.getPluginCode())) throw new ServiceException("当前仅支持价格日志策略");
         if (subscriptions.containsKey(id)) return true;
+        healthySubscriptions.put(id, false);
         AutoCloseable handle = streams.subscribe(SYMBOL, INTERVAL, event -> {
             if (event.replay()) return;
             if ("TRADE".equals(event.type()) && event.price() != null) {
@@ -103,7 +105,10 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
                 log.info("[策略K线] id={} symbol={} interval={} close={} closed={} time={}",
                     id, SYMBOL, INTERVAL, event.kline().close(), event.kline().closed(), event.eventTime());
             }
-        }, healthy -> log.info("[策略行情状态] id={} healthy={}", id, healthy));
+        }, healthy -> {
+            healthySubscriptions.put(id, healthy);
+            log.info("[策略行情状态] id={} symbol={} interval={} healthy={}", id, SYMBOL, INTERVAL, healthy);
+        });
         subscriptions.put(id, handle);
         log.info("[策略启动] id={} symbol={} interval={}，只读行情，不执行交易", id, SYMBOL, INTERVAL);
         return true;
@@ -117,6 +122,7 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
             try {
                 handle.close();
                 subscriptions.remove(id);
+                healthySubscriptions.remove(id);
             } catch (Exception ex) {
                 throw new ServiceException("停止策略失败：" + ex.getMessage());
             }
@@ -135,10 +141,12 @@ public class QuantStrategyServiceImpl implements IQuantStrategyService {
             }
         });
         subscriptions.clear();
+        healthySubscriptions.clear();
     }
 
     private QuantStrategyVo applyStatus(QuantStrategyVo vo) {
-        vo.setStatus(subscriptions.containsKey(vo.getId()) ? "RUNNING" : "STOPPED");
+        vo.setStatus(!subscriptions.containsKey(vo.getId()) ? "STOPPED" :
+            Boolean.TRUE.equals(healthySubscriptions.get(vo.getId())) ? "RUNNING" : "CONNECTING");
         return vo;
     }
 
