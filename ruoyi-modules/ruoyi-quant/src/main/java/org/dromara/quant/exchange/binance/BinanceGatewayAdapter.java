@@ -714,6 +714,15 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             throw new IllegalStateException("Binance 未返回可核实的交易对保证金/杠杆配置");
         }
         String expectedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
+        return parseSymbolTradingSettings(expectedSymbol, rows);
+    }
+
+    /** Package-private for SDK DTO/hedge-row contract tests. */
+    static org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings parseSymbolTradingSettings(
+        String expectedSymbol, java.util.List<?> rows) {
+        if (rows == null || rows.isEmpty()) {
+            throw new IllegalStateException("Binance 未返回有效交易对配置");
+        }
         String actualMode = null;
         Integer actualLeverage = null;
         for (var row : rows) {
