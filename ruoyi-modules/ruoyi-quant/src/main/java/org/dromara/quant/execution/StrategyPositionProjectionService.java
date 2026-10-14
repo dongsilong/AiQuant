@@ -58,6 +58,14 @@ public class StrategyPositionProjectionService {
                && !Boolean.TRUE.equals(verifiedOrder.getReduceOnly())) {
             throw new IllegalStateException("Unverified strategy order, position side or OPEN/CLOSE origin");
         }
+        // Commission amounts are not fungible across assets (USDT/BNB/etc).
+        // Refuse unknown fees and mixed-asset positions rather than converting
+        // them at an unverified FX rate or silently aggregating currencies.
+        String feeAsset = trade.commissionAsset() == null ? "" :
+            trade.commissionAsset().toUpperCase(Locale.ROOT);
+        if (!feeAsset.matches("[A-Z0-9]{2,20}")) {
+            throw new IllegalStateException("Missing authenticated Binance commission asset");
+        }
         var fact = new StrategyPositionAccounting.Fill(positionSide, verifiedRole,
             trade.side().toUpperCase(Locale.ROOT), trade.quantity(), trade.price(),
             trade.commission(), trade.realizedPnl());
@@ -94,6 +102,7 @@ public class StrategyPositionProjectionService {
                     || decimal(previous,"quantity").compareTo(trade.quantity()) != 0
                     || decimal(previous,"fill_price").compareTo(trade.price()) != 0
                     || decimal(previous,"commission").compareTo(trade.commission()) != 0
+                    || !feeAsset.equals(previous.get("commission_asset"))
                     || decimal(previous,"realized_pnl").compareTo(trade.realizedPnl()) != 0
                     || !when.equals(time(previous,"trade_time"))) {
                     throw new IllegalStateException("Exchange trade replay conflicts with immutable attribution");
@@ -105,6 +114,10 @@ public class StrategyPositionProjectionService {
             if (previousTime != null && (when.isBefore(previousTime)
                 || when.equals(previousTime) && previousId != null && trade.tradeId() <= previousId)) {
                 throw new IllegalStateException("Unordered historical fill; reconstruct from verified history first");
+            }
+            Object originalAsset=row.get("commission_asset");
+            if (originalAsset != null && !feeAsset.equals(originalAsset)) {
+                throw new IllegalStateException("Mixed commission assets require separate financial ledgers");
             }
             var current = new StrategyPositionAccounting.State(
                 decimal(row,"open_quantity"),decimal(row,"cost_basis"),
@@ -120,7 +133,7 @@ public class StrategyPositionProjectionService {
             if (mapper.insertFill(IdWorker.getId(),credentialId,symbol,strategyId,instanceId,
                 cycleId,trade.tradeId(),trade.orderId(),positionSide.name(),verifiedRole.name(),
                 trade.side().toUpperCase(Locale.ROOT),trade.quantity(),trade.price(),
-                trade.commission(),trade.realizedPnl(),when)!=1) {
+                trade.commission(),feeAsset,trade.realizedPnl(),when)!=1) {
                 throw new IllegalStateException("Cannot persist immutable fill event");
             }
             if (verifiedRole == StrategyPositionAccounting.Role.CLOSE && next.openQuantity().signum()==0) {
@@ -129,7 +142,7 @@ public class StrategyPositionProjectionService {
             }
             if (mapper.update(credentialId,symbol,instanceId,positionSide.name(),strategyId,
                 next.openQuantity(),next.costBasis(),next.realizedPnl(),next.commissions(),
-                next.cycle(),cycleId,when,trade.tradeId())!=1) {
+                feeAsset,next.cycle(),cycleId,when,trade.tradeId())!=1) {
                 throw new IllegalStateException("Inventory CAS failed");
             }
         });
