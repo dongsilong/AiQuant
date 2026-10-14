@@ -107,6 +107,31 @@ jobs:
              'quant_strategy_order_intent','quant_strategy_pre_dispatch_intent',
              'quant_position_sync_fence');" | tr -d '\r')"
           test "$tables" = 9
+      - name: Verify V12 account fence blocks concurrent InnoDB writers
+        run: |
+          set -euo pipefail
+          MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
+          test -n "$MYSQL_CONTAINER"
+          docker exec "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test -e "
+            INSERT IGNORE INTO quant_position_sync_fence(credential_id) VALUES (987654);"
+          docker exec "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test -e "
+            START TRANSACTION;
+            SELECT credential_id FROM quant_position_sync_fence WHERE credential_id=987654 FOR UPDATE;
+            DO SLEEP(5);
+            COMMIT;" >/tmp/position-fence-lock-holder.log 2>&1 &
+          holder=$!
+          trap 'wait "$holder" || true' EXIT
+          sleep 2
+          if docker exec "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test -e "
+            SET innodb_lock_wait_timeout=1;
+            START TRANSACTION;
+            SELECT credential_id FROM quant_position_sync_fence WHERE credential_id=987654 FOR UPDATE;" >/tmp/position-fence-contender.log 2>&1; then
+            echo "ERROR: second node bypassed the account row lock" >&2
+            exit 1
+          fi
+          grep -q '1205' /tmp/position-fence-contender.log
+          wait "$holder"
+          trap - EXIT
       - name: Disaster drill - verify backup, restore and UNKNOWN dispatch protection
         env:
           MYSQL_CI_PASSWORD: only_for_ci
