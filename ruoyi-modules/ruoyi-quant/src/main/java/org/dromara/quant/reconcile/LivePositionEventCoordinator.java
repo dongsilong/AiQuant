@@ -39,8 +39,16 @@ public class LivePositionEventCoordinator {
         if (credentialId == null || event == null || event.eventType() == null) {
             return;
         }
-        if ("ACCOUNT_UPDATE".equalsIgnoreCase(event.eventType())
-            || "ORDER_TRADE_UPDATE".equalsIgnoreCase(event.eventType())) {
+        String type = event.eventType();
+        if ("DISCONNECTED".equalsIgnoreCase(type) || "listenKeyExpired".equalsIgnoreCase(type)) {
+            if (freshness != null) {
+                freshness.invalidate(credentialId);
+            }
+            return;
+        }
+        if ("ACCOUNT_UPDATE".equalsIgnoreCase(type)
+            || "ORDER_TRADE_UPDATE".equalsIgnoreCase(type)
+            || "CONNECTED".equalsIgnoreCase(type)) {
             request(credentialId);
         }
     }
