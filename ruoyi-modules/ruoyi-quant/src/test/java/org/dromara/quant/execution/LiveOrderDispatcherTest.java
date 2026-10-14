@@ -98,6 +98,36 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
+    void ackWithoutBinanceOrderIdCannotFreeDispatchGuard() throws Exception {
+        var f = fixture();
+        var ticket = f.first().begin(1L, "BTCUSDT", "ack-no-id", "OPEN", "cid-ack", 10L, 7L);
+        assertThrows(IllegalStateException.class, () -> f.first().acknowledged(ticket, null));
+        assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "ack-no-id"));
+        assertThrows(IllegalStateException.class,
+            () -> f.other().begin(1L, "BTCUSDT", "next", "OPEN", "cid-next", 11L, 8L));
+        f.first().unknown(ticket);
+        assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "ack-no-id"));
+    }
+
+    @Test
+    void inconsistentPreviouslyRecordedOrderIdCannotBeRewrittenByRecovery() throws Exception {
+        var f = fixture();
+        var ticket = f.first().begin(1L, "BTCUSDT", "unknown-identity", "CANCEL", "cid-original", null, null);
+        f.first().unknown(ticket);
+        f.jdbc().update("""
+            UPDATE quant_order_dispatch_ticket SET exchange_order_id=33
+            WHERE credential_id=1 AND idempotency_key='unknown-identity'
+            """);
+        assertFalse(f.other().recoveredFromExchange(1L, "BTCUSDT", "unknown-identity",
+            "cid-original", 44L));
+        assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "unknown-identity"));
+        assertEquals("unknown-identity", f.jdbc().queryForObject("""
+            SELECT active_dispatch_key FROM quant_live_dispatch_guard
+            WHERE credential_id=1 AND symbol='BTCUSDT'
+            """, String.class));
+    }
+
+    @Test
     void duplicateTicketInsertRollsBackGuardClaim() throws Exception {
         var f = fixture();
         var first = f.first().begin(1L, "BTCUSDT", "same-key", "OPEN", "same-cid", null, null);
