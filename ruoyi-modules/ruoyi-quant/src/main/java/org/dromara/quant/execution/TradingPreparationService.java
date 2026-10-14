@@ -127,9 +127,8 @@ public class TradingPreparationService {
                                     // Hold ONE durable account+symbol slot across BOTH Binance writes.
                                     // An order or another node's preparation cannot enter between them.
                                     String dispatchKey = "CFG:" + java.util.UUID.randomUUID();
-                                    String configurationId = "SETTINGS:" + state.marginMode + ":" + state.leverage;
-                                    configTicket = dispatcher.begin(state.id, state.symbol, dispatchKey,
-                                        "CONFIG_SETTINGS", configurationId, null, null);
+                                    configTicket = dispatcher.beginConfiguration(state.id, state.symbol,
+                                        dispatchKey, state.marginMode, state.leverage);
                                     // Another node may have acquired/released the slot while we waited.
                                     // Revalidate local revision and fresh position facts AFTER claim.
                                     synchronized (state) {
