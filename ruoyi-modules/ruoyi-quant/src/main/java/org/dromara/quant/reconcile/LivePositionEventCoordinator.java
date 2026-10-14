@@ -3,6 +3,7 @@ package org.dromara.quant.reconcile;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -28,6 +29,21 @@ public class LivePositionEventCoordinator {
     private final ConcurrentHashMap<Long, Integer> failures = new ConcurrentHashMap<>();
     private static final long MIN_REFRESH_GAP_MILLIS = 2000L;
     private final ConcurrentHashMap<Long, Long> lastAttempt = new ConcurrentHashMap<>();
+
+    /**
+     * Existing private-stream supervisors should forward decoded events here
+     * instead of opening a second subscription. Event callback is constant-time
+     * and never accesses the database or Binance REST.
+     */
+    public void onUserDataEvent(Long credentialId, ExchangeGateway.UserDataEvent event) {
+        if (credentialId == null || event == null || event.eventType() == null) {
+            return;
+        }
+        if ("ACCOUNT_UPDATE".equalsIgnoreCase(event.eventType())
+            || "ORDER_TRADE_UPDATE".equalsIgnoreCase(event.eventType())) {
+            request(credentialId);
+        }
+    }
 
     public void request(Long credentialId) {
         if (credentialId != null) {
