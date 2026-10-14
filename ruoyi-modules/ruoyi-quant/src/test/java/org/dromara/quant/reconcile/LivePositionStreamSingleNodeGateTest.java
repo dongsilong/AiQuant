@@ -103,6 +103,29 @@ class LivePositionStreamSingleNodeGateTest {
     }
 
     @Test
+    void freshLeaseEnrollmentRevokesPreviouslyVerifiedPositionSnapshot() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var hub = mock(UserDataStreamHub.class);
+        var coordinator = mock(LivePositionEventCoordinator.class);
+        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var freshness = new LivePositionFreshness();
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
+        var account = new QuantCredential();
+        account.setId(96L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        freshness.verified(96L);
+        org.junit.jupiter.api.Assertions.assertTrue(freshness.fresh(96L));
+        when(credentials.selectList(any())).thenReturn(List.of(account));
+        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        when(hub.subscribe(eq(account), any())).thenReturn(mock(AutoCloseable.class));
+        stream.supervise();
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(96L));
+        verify(coordinator).request(96L);
+        stream.close();
+    }
+
+    @Test
     void previouslyLostHubStreamIsResubscribedAfterLeaseReacquisition() throws Exception {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
