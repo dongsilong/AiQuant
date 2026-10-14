@@ -70,6 +70,81 @@ class ExecutionRecoveryServiceTest {
     }
 
     @Test
+    void partiallyFilledCancelKeepsUnknownAndDispatchGuardOccupiedUntilTerminal() {
+        var records = mock(QuantExecutionRecordMapper.class);
+        var credentials = mock(QuantCredentialMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var recovery = mock(ExecutionRecordService.class);
+        var ledger = mock(OrderLedgerService.class);
+        var dispatcher = mock(LiveOrderDispatcher.class);
+
+        var record = new QuantExecutionRecord();
+        record.setCredentialId(1L);
+        record.setIdempotencyKey("cancel-key");
+        record.setSymbol("BTCUSDT");
+        record.setClientOrderId("original-client");
+        record.setExchangeOrderId(99L);
+        record.setOperationType("CANCEL");
+        record.setExecutionStatus("UNKNOWN");
+        when(records.selectList(any())).thenReturn(List.of(record));
+
+        var credential = new QuantCredential();
+        credential.setApiKey("test");
+        credential.setSecretKey("test");
+        credential.setRunMode("LIVE");
+        when(credentials.selectById(1L)).thenReturn(credential);
+        var partial = new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "original-client",
+            "BUY", "LIMIT", "PARTIALLY_FILLED", BigDecimal.ONE, BigDecimal.ONE,
+            new BigDecimal("0.4"), Instant.now());
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("original-client")))
+            .thenReturn(partial);
+        var service = new ExecutionRecoveryService(records, credentials, gateway,
+            recovery, ledger, new QuantProperties());
+        service.setLiveOrderDispatcher(dispatcher);
+        service.recover();
+        verify(ledger).syncSnapshot(1L, partial);
+        verify(recovery).markUnknown(eq(record), contains("部分成交"));
+        verify(recovery, never()).markRecovered(any(), any(), any());
+        verifyNoInteractions(dispatcher);
+    }
+
+    @Test
+    void cancelMayRecoverAndUnlockWhenExactExchangeFactBecomesFilled() {
+        var records = mock(QuantExecutionRecordMapper.class);
+        var credentials = mock(QuantCredentialMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var recovery = mock(ExecutionRecordService.class);
+        var ledger = mock(OrderLedgerService.class);
+        var dispatcher = mock(LiveOrderDispatcher.class);
+
+        var record = new QuantExecutionRecord();
+        record.setCredentialId(1L);
+        record.setIdempotencyKey("cancel-key");
+        record.setSymbol("BTCUSDT");
+        record.setClientOrderId("original-client");
+        record.setExchangeOrderId(99L);
+        record.setOperationType("CANCEL");
+        record.setExecutionStatus("UNKNOWN");
+        when(records.selectList(any())).thenReturn(List.of(record));
+        var credential = new QuantCredential();
+        credential.setApiKey("test");
+        credential.setSecretKey("test");
+        credential.setRunMode("LIVE");
+        when(credentials.selectById(1L)).thenReturn(credential);
+        var finished = new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "original-client",
+            "BUY", "LIMIT", "FILLED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now());
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("original-client"))).thenReturn(finished);
+        doAnswer(i -> { record.setExecutionStatus("RECOVERED"); return null; })
+            .when(recovery).markRecovered(record, 99L, "FILLED");
+        var service = new ExecutionRecoveryService(records, credentials, gateway,
+            recovery, ledger, new QuantProperties());
+        service.setLiveOrderDispatcher(dispatcher);
+        service.recover();
+        verify(recovery).markRecovered(record, 99L, "FILLED");
+        verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "cancel-key", "original-client", 99L);
+    }
+
+    @Test
     void fallbackOrderMatchUsesExchangeStatusRatherThanStaleLocalStatus() {
         var records = mock(QuantExecutionRecordMapper.class);
         var credentials = mock(QuantCredentialMapper.class);
