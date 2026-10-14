@@ -30,6 +30,9 @@ class TradingPreparationServiceTest {
         when(positions.requirePositions(1L)).thenReturn(List.of());
         when(balances.requireSnapshot(1L)).thenReturn(new AccountBalanceSnapshot(1L, BigDecimal.TEN, Set.of(), System.nanoTime() + TimeUnit.SECONDS.toNanos(30)));
         when(gateway.queryPositionMode(any())).thenReturn(new ExchangeGateway.PositionMode(true));
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
+            .thenReturn(new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings(
+                "BTCUSDT", "ISOLATED", 10));
         when(gateway.queryTradingRule(any(), any())).thenReturn(new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 3,
             new BigDecimal("0.01"), new BigDecimal("0.001"), new BigDecimal("0.001"), BigDecimal.ONE, "TRADING"));
     }
@@ -151,6 +154,37 @@ class TradingPreparationServiceTest {
         verify(dispatcher).unknown(any(LiveOrderDispatcher.Ticket.class));
         verify(dispatcher, never()).configurationApplied(any());
         verify(gateway, never()).setLeverage(any(), any(), anyInt());
+    }
+
+    @Test
+    void mismatchedBinanceReadbackCannotMarkConfigurationApplied() throws Exception {
+        ready();
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
+            .thenReturn(new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings(
+                "BTCUSDT", "CROSSED", 20));
+        var dispatcher = liveDispatcher();
+        service.setLiveOrderDispatcher(dispatcher);
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
+            .get(3, TimeUnit.SECONDS);
+        verify(gateway).setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
+        verify(gateway).setLeverage(any(), eq("BTCUSDT"), eq(10));
+        verify(dispatcher).unknown(any(LiveOrderDispatcher.Ticket.class));
+        verify(dispatcher, never()).configurationApplied(any());
+        assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> service.requireReady(1L, "BTCUSDT", 10, "ISOLATED"));
+    }
+
+    @Test
+    void settingsReadbackOutageAlsoRetainsDurableBlock() throws Exception {
+        ready();
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
+            .thenThrow(new IllegalStateException("Binance GET failed"));
+        var dispatcher = liveDispatcher();
+        service.setLiveOrderDispatcher(dispatcher);
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
+            .get(3, TimeUnit.SECONDS);
+        verify(dispatcher).unknown(any(LiveOrderDispatcher.Ticket.class));
+        verify(dispatcher, never()).configurationApplied(any());
     }
 
     @Test
