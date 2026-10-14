@@ -35,6 +35,7 @@ class StrategyFillAllocationServiceTest {
               strategy_id BIGINT NOT NULL, strategy_instance_id BIGINT NOT NULL,
               side VARCHAR(8) NOT NULL, allocated_qty DECIMAL(38,16),
               allocated_price DECIMAL(38,16), allocated_fee DECIMAL(38,16),
+              allocated_fee_asset VARCHAR(20) NOT NULL,
               realized_pnl DECIMAL(38,16), trade_time TIMESTAMP, created_at TIMESTAMP,
               UNIQUE(credential_id,symbol,exchange_trade_id))
             """);
@@ -61,7 +62,7 @@ class StrategyFillAllocationServiceTest {
     private ExchangeGateway.TradeSnapshot fill(String qty) {
         return new ExchangeGateway.TradeSnapshot("BTCUSDT", 9007199254740993L,
             99L, "BUY", new BigDecimal(qty), new BigDecimal("66000.25"),
-            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-14T02:00:00Z"));
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-14T02:00:00Z"), "USDT");
     }
 
     @Test
