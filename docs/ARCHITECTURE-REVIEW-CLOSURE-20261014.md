@@ -122,3 +122,21 @@ intent provenance. An accepted Binance order followed by a local SQL failure
 must remain recoverable and cannot silently be labeled NOT_SENT. The
 projection remains disabled when such immutable provenance is unavailable.
 P0 strategy PnL remains OPEN pending end-to-end wired test and reconciliation.
+
+## Accepted-order local atomicity
+
+LIVE strategy orders now route local accepted-order persistence through
+`StrategyOrderAcceptanceJournal.persist`, a Spring transaction that writes
+`QuantOrder` and the immutable exchange-order intent for explicit LONG/SHORT
+position modes. If the intent insert fails, the local order-ledger write
+rolls back. This method runs **after** the Binance HTTP response; the
+previously reserved dispatch guard continues to block further sends if
+the journal fails. No remote-order rollback is implied. In BOTH mode the
+journal does not fabricate OPEN/CLOSE intent, so those fills cannot project.
+
+IMPORTANT: this does not yet guarantee accepted-order crash recovery fills
+missing intent: a post-HTTP process crash needs order/intent replay based
+on preserved execution command facts. Also required are V07-V09 deployment,
+consistent fee-asset accounting, a correctly ordered exchange fill projector,
+full account position reconciliation and staging failure injection. P0-04
+remains OPEN.
