@@ -26,4 +26,13 @@ public interface LiveSchemaContractMapper {
         GROUP BY table_name,index_name
         """)
     List<String> uniqueContracts();
+    @Options(timeout = 3)
+    @Select("""
+        SELECT CONCAT(table_name,'|',column_name)
+        FROM information_schema.columns
+        WHERE table_schema=DATABASE() AND table_name='quant_strategy_runtime_lease'
+          AND column_name='lease_epoch' AND data_type='bigint' AND is_nullable='NO'
+        """)
+    List<String> leaseEpochColumns();
+
 }
