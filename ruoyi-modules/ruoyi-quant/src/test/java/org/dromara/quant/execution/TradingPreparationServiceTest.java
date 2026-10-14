@@ -95,6 +95,78 @@ class TradingPreparationServiceTest {
         verify(gateway).setMarginType(testnet, "BTCUSDT", "CROSSED");
         verify(gateway).setLeverage(testnet, "BTCUSDT", 20);
     }
+    private LiveOrderDispatcher liveDispatcher() {
+        var dispatcher = mock(LiveOrderDispatcher.class);
+        when(dispatcher.begin(eq(1L), eq("BTCUSDT"), anyString(),
+            eq("CONFIG_SETTINGS"), eq("SETTINGS:ISOLATED:10"), isNull(), isNull()))
+            .thenAnswer(inv -> new LiveOrderDispatcher.Ticket(1L, "BTCUSDT", inv.getArgument(2)));
+        return dispatcher;
+    }
+
+    private ExchangeGateway.Credential liveCredential() {
+        return new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE");
+    }
+
+    private ExecutionSafetyContext approvedLive() {
+        return new ExecutionSafetyContext(true, true, true, true, true, true, true, true);
+    }
+
+    @Test
+    void liveConfigHoldsOneDurableSlotAcrossMarginAndLeverageMutations() throws Exception {
+        ready();
+        var dispatcher = liveDispatcher();
+        service.setLiveOrderDispatcher(dispatcher);
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
+            .get(3, TimeUnit.SECONDS);
+        service.requireReady(1L, "BTCUSDT", 10, "ISOLATED");
+        var sequence = inOrder(dispatcher, gateway);
+        sequence.verify(dispatcher).begin(eq(1L), eq("BTCUSDT"), anyString(),
+            eq("CONFIG_SETTINGS"), eq("SETTINGS:ISOLATED:10"), isNull(), isNull());
+        sequence.verify(gateway).setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
+        sequence.verify(gateway).setLeverage(any(), eq("BTCUSDT"), eq(10));
+        sequence.verify(dispatcher).configurationApplied(any(LiveOrderDispatcher.Ticket.class));
+        verify(dispatcher, never()).unknown(any());
+    }
+
+    @Test
+    void missingLiveDispatcherBlocksAllAccountConfigurationWrites() throws Exception {
+        ready();
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
+            .get(3, TimeUnit.SECONDS);
+        assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> service.requireReady(1L, "BTCUSDT", 10, "ISOLATED"));
+        verify(gateway, never()).setMarginType(any(), any(), any());
+        verify(gateway, never()).setLeverage(any(), any(), anyInt());
+    }
+
+    @Test
+    void timedOutMarginMutationQuarantinesDurableSlotAndNeverChangesLeverage() throws Exception {
+        ready();
+        var dispatcher = liveDispatcher();
+        service.setLiveOrderDispatcher(dispatcher);
+        doThrow(new IllegalStateException("Binance timeout")).when(gateway)
+            .setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
+            .get(3, TimeUnit.SECONDS);
+        verify(dispatcher).unknown(any(LiveOrderDispatcher.Ticket.class));
+        verify(dispatcher, never()).configurationApplied(any());
+        verify(gateway, never()).setLeverage(any(), any(), anyInt());
+    }
+
+    @Test
+    void existingOrderDispatchSlotBlocksMarginAndLeverageWritesOnThisNode() throws Exception {
+        ready();
+        var dispatcher = liveDispatcher();
+        service.setLiveOrderDispatcher(dispatcher);
+        when(dispatcher.begin(eq(1L), eq("BTCUSDT"), anyString(), eq("CONFIG_SETTINGS"),
+            eq("SETTINGS:ISOLATED:10"), isNull(), isNull()))
+            .thenThrow(new IllegalStateException("Unknown remote order holds account-symbol"));
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
+            .get(3, TimeUnit.SECONDS);
+        verify(gateway, never()).setMarginType(any(), any(), any());
+        verify(gateway, never()).setLeverage(any(), any(), anyInt());
+    }
+
     @Test
     void slowWarmupDoesNotBlockEntryReadsAndStopPreventsSettingsChanges() throws Exception {
         ready();
