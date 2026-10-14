@@ -65,7 +65,10 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
             throw new IllegalStateException(
                 "LIVE schema preflight rejected startup; missing InnoDB tables=" + missingTables
                 + ", missing unique-index contracts=" + missingUnique
-                + ", leaseEpochMissing=" + missingEpoch);
+                + ", leaseEpochMissing=" + missingEpoch
+                + ". Apply the missing schema migrations to the application's configured MySQL database "
+                + "(for quant_live_user_stream_lease: script/sql/quant/V20261014_13__live_user_stream_lease.sql), "
+                + "then restart; LIVE schema preflight does not auto-create trading tables.");
         }
     }
 }
