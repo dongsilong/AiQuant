@@ -31,3 +31,23 @@ against the intended MySQL 8.x database. Inspect every result row.
 5. Repeat the read-only preflight as a release gate.
 
 **The presence of this preflight script does not mean the canonical DDL is finished.**
+
+## Lease epoch additive migration (must precede new LIVE runtime)
+
+The first reviewed additive change is
+[`V20261014_01__runtime_lease_epoch.sql`](V20261014_01__runtime_lease_epoch.sql).
+This is **NOT an automatic Flyway migration**; the existing application has no
+verified quant schema-history baseline. Run it only after checking the current
+`SHOW CREATE TABLE` output and confirming the column is missing.
+
+1. Switch LIVE and the strategy supervisor off on **all** nodes; wait for all
+   in-flight outbound Binance requests to resolve or be recorded as UNKNOWN.
+2. Back up the InnoDB database; inspect unique `(credential_id,symbol)` lease key.
+3. Apply the additive migration exactly once, then run `production-preflight.sql`.
+4. Upgrade **every** application node before permitting another strategy session.
+   Old code deletes released lease rows and can break epoch monotonicity.
+5. Test MySQL cross-node takeover and verify epoch 1→2→3 across releases.
+6. Only after the full release checklist and Binance fault drills may LIVE be considered.
+
+The runtime checks an identical epoch before and after order preparation. This
+does **not** make an already-in-flight remote HTTP request atomic with the database.
