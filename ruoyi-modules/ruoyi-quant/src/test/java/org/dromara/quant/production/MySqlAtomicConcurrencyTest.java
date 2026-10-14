@@ -266,6 +266,18 @@ class MySqlAtomicConcurrencyTest {
             assertTrue(second.recoveredFromExchange(1L, "BTCUSDT", winning.key(), expectedClient, 990L));
             var resumed = first.begin(1L, "BTCUSDT", "new-key", "OPEN", "cid-new", 10L, 6L);
             first.notSent(resumed);
+            var config = first.begin(1L, "BTCUSDT", "config-first",
+                "CONFIG_SETTINGS", "SETTINGS:ISOLATED:10", null, null);
+            assertThrows(IllegalStateException.class, () ->
+                second.begin(1L, "BTCUSDT", "during-config", "OPEN", "cid-during", 20L, 6L));
+            first.configurationApplied(config);
+            assertEquals("CONFIG_APPLIED", mapper.ticketStatus(1L, "config-first"),
+                "Both account settings ACKs must atomically clear the dispatch slot");
+            var badConfig = second.begin(1L, "BTCUSDT", "config-unknown",
+                "CONFIG_SETTINGS", "SETTINGS:CROSSED:20", null, null);
+            second.unknown(badConfig);
+            assertThrows(IllegalStateException.class, () ->
+                first.begin(1L, "BTCUSDT", "after-unknown-config", "CLOSE", "cid-after", 10L, 6L));
         }
     }
 
