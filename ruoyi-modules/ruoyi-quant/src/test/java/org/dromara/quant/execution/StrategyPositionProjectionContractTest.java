@@ -15,6 +15,11 @@ class StrategyPositionProjectionContractTest {
             "lock", long.class, String.class, long.class, String.class);
         String sql = String.join(" ", lock.getAnnotation(Select.class).value());
         assertTrue(sql.contains("FOR UPDATE"));
+        var intent = StrategyPositionProjectionMapper.class.getMethod(
+            "verifiedIntent", long.class, String.class, long.class);
+        String intentSql = String.join(" ", intent.getAnnotation(Select.class).value());
+        assertTrue(intentSql.contains("quant_strategy_order_intent"));
+        assertTrue(intentSql.contains("exchange_order_id=#{orderId}"));
         var existing = StrategyPositionProjectionMapper.class.getMethod(
             "existing", long.class, String.class, long.class);
         assertTrue(String.join(" ", existing.getAnnotation(Select.class).value())
