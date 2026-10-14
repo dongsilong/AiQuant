@@ -68,4 +68,21 @@ class LivePositionEventCoordinatorTest {
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(99L));
     }
 
+    @Test
+    void existingPrivateStreamCanForwardEventsWithoutOpeningAnotherSubscription() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        var freshness = new LivePositionFreshness();
+        freshness.verified(71L);
+        org.springframework.test.util.ReflectionTestUtils.setField(coordinator, "freshness", freshness);
+        coordinator.onUserDataEvent(71L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent(
+            "MARGIN_CALL", java.time.Instant.now(), "{}"));
+        org.junit.jupiter.api.Assertions.assertTrue(freshness.fresh(71L));
+        coordinator.onUserDataEvent(71L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent(
+            "ACCOUNT_UPDATE", java.time.Instant.now(), "{}"));
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(71L));
+        verifyNoInteractions(credentials, reconciliation);
+    }
+
 }
