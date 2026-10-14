@@ -57,6 +57,18 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void wrongBinanceAlgoIdMustNotConfirmOrReleaseAnUncertainProtection() {
+        QuantProtectionOrder local = order();
+        local.setStatus("UNKNOWN");
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(gateway.queryProtectionOrder(any(), any(), any(), any()))
+            .thenReturn(snapshot(56L, local.getClientOrderId(), BigDecimal.ONE, "NEW", null));
+        assertFalse(service.isStrategyProtectionWorking(1L, position, "FIRST_TP", true));
+        verify(dispatcher, never()).recoverVerifiedProtection(any(), any(), any(), any(), any());
+        verify(gateway, never()).placeProtectionOrder(any());
+    }
+
+    @Test
     void uncertainExchangeStateMustNotBeReportedAsWorking() {
         QuantProtectionOrder local = order();
         when(mapper.selectOne(any())).thenReturn(local);
