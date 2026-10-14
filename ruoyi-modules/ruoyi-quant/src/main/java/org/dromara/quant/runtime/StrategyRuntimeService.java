@@ -150,6 +150,8 @@ public class StrategyRuntimeService {
      * 当前 JVM 节点正在运行的策略实例上下文。
      */
     private final Map<Long, ActiveRuntime> activeRuntimes = new ConcurrentHashMap<>();
+    /** Limit repeated blocked LIVE startup diagnostics to one per strategy per minute. */
+    private final Map<Long, Long> nextLiveStreamOwnershipLogAt = new ConcurrentHashMap<>();
 
     /**
      * 创建 StrategyRuntimeService 实例并初始化其依赖。
@@ -528,8 +530,16 @@ public class StrategyRuntimeService {
         // During startup the owner may not exist yet; retry at the next supervision tick.
         if ("LIVE".equalsIgnoreCase(credential.getRunMode())
             && !userDataStreamHub.hasLiveStreamOwnership(credential.getId())) {
+            long now = System.currentTimeMillis();
+            Long nextLogAt = nextLiveStreamOwnershipLogAt.get(instance.getId());
+            if (nextLogAt == null || now >= nextLogAt) {
+                nextLiveStreamOwnershipLogAt.put(instance.getId(), now + 60_000L);
+                log.warn("LIVE策略尚未建立本节点私有数据流租约，暂不启动行情订阅 instanceId={} credentialId={} symbol={}：请检查LivePositionStreamTriggers租约与私有WS连接",
+                    instance.getId(), credential.getId(), symbol.getSymbol());
+            }
             return false;
         }
+        nextLiveStreamOwnershipLogAt.remove(instance.getId());
 
         if (!leaseService.acquireOrRenew(instance.getId(), credential.getId(), symbol.getSymbol())) {
             // 无法确认物理仓位独占权时保守停止本地运行时，避免两个实例同时操作同一交易所仓位。
