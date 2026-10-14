@@ -124,12 +124,12 @@ mybatis-plus:
     # SQL 异常/慢查询日志开关
     enabled: true
     # 输出方式，可选 console、log
-    output: console
+    output: log
     log-success: false
     log-error: true
-    slow-threshold-ms: 1000
+    slow-threshold-ms: 0
     # 默认隐藏 SQL 和参数，避免敏感信息进入日志
-    include-sql: true
+    include-sql: false
 
 --- # 数据加密
 mybatis-encryptor:
