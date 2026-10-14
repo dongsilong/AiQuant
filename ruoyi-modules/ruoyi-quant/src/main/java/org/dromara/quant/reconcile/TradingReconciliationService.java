@@ -85,6 +85,41 @@ public class TradingReconciliationService {
     private volatile org.dromara.quant.execution.StrategyFillAllocationService fillAllocations;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LivePositionFreshness positionFreshness;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper snapshotFence;
+    /**
+     * Commit an account's verified REST snapshot under a database row lock.
+     * Earlier-started requests cannot overwrite later-started snapshots.
+     */
+    private void commitPositionSnapshot(QuantCredential credential,
+                                        ExchangeGateway.AccountSnapshot account,
+                                        List<ExchangeGateway.PositionSnapshot> positions,
+                                        LocalDateTime fetchStartedAt, long eventGeneration) {
+        if (positionFreshness != null
+            && positionFreshness.generation(credential.getId()) != eventGeneration) {
+            throw new IllegalStateException("Binance position snapshot superseded by newer account event");
+        }
+        transaction.executeWithoutResult(status -> {
+            if (snapshotFence != null) {
+                snapshotFence.ensure(credential.getId());
+                LocalDateTime previous = snapshotFence.lockAndRead(credential.getId());
+                if (previous != null && previous.isAfter(fetchStartedAt)) {
+                    throw new IllegalStateException("Binance position snapshot superseded by another node");
+                }
+            }
+            if (positionFreshness != null
+                && positionFreshness.generation(credential.getId()) != eventGeneration) {
+                throw new IllegalStateException("Binance position snapshot superseded by newer account event");
+            }
+            syncAccount(credential, account);
+            syncPositions(credential, positions);
+            if (snapshotFence != null && snapshotFence.advance(credential.getId(), fetchStartedAt) != 1) {
+                throw new IllegalStateException("Position snapshot fence advance failed");
+            }
+        });
+        markPositionVerified(credential.getId(), eventGeneration);
+    }
+
     private long positionGeneration(Long credentialId) {
         return positionFreshness == null ? 0L : positionFreshness.generation(credentialId);
     }
@@ -174,6 +209,7 @@ public class TradingReconciliationService {
         try {
             try {
                 long positionGeneration = positionGeneration(credential.getId());
+                LocalDateTime fetchStartedAt = LocalDateTime.now();
                 ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
                     credential.getApiKey(), credential.getSecretKey(),
                     credential.getSignatureType(), credential.getRunMode());
@@ -182,17 +218,7 @@ public class TradingReconciliationService {
                 var positions = List.copyOf(java.util.Objects.requireNonNull(
                     gateway.queryPositions(exchangeCredential, null),
                     "Binance full position snapshot missing"));
-                // Reject a snapshot that was already superseded by a user-data
-                // event during REST collection. Do not overwrite local facts.
-                if (positionFreshness != null
-                    && positionFreshness.generation(credential.getId()) != positionGeneration) {
-                    throw new IllegalStateException("Binance position snapshot superseded by a newer account event");
-                }
-                transaction.executeWithoutResult(status -> {
-                    syncAccount(credential, account);
-                    syncPositions(credential, positions);
-                });
-                markPositionVerified(credential.getId(), positionGeneration);
+                commitPositionSnapshot(credential, account, positions, fetchStartedAt, positionGeneration);
             } catch (RuntimeException ex) {
                 failureRecorder.record(credential.getId(), ex.getMessage());
                 throw ex;
@@ -215,6 +241,7 @@ public class TradingReconciliationService {
         try {
             try {
                 long positionGeneration = positionGeneration(credential.getId());
+                LocalDateTime fetchStartedAt = LocalDateTime.now();
                 ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
                     credential.getApiKey(), credential.getSecretKey(),
                     credential.getSignatureType(), credential.getRunMode());
@@ -226,17 +253,7 @@ public class TradingReconciliationService {
                     gateway.queryAccount(exchangeCredential), "Binance account snapshot missing");
                 var positions = List.copyOf(java.util.Objects.requireNonNull(
                     gateway.queryPositions(exchangeCredential, null), "Binance full position snapshot missing"));
-                // Reject a snapshot that was already superseded by a user-data
-                // event during REST collection. Do not overwrite local facts.
-                if (positionFreshness != null
-                    && positionFreshness.generation(credential.getId()) != positionGeneration) {
-                    throw new IllegalStateException("Binance position snapshot superseded by a newer account event");
-                }
-                transaction.executeWithoutResult(status -> {
-                    syncAccount(credential, account);
-                    syncPositions(credential, positions);
-                });
-                markPositionVerified(credential.getId(), positionGeneration);
+                commitPositionSnapshot(credential, account, positions, fetchStartedAt, positionGeneration);
                 ExchangeFacts facts = collectExchangeFacts(credential, historyHours,
                     exchangeCredential, account, positions);
                 transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
