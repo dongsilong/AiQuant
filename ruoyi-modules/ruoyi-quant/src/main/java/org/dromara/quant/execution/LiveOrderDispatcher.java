@@ -63,6 +63,9 @@ public class LiveOrderDispatcher {
 
     /** Acknowledge only after the exchange acceptance AND local order ledger are durable. */
     public void acknowledged(Ticket ticket, Long exchangeOrderId) {
+        if (ticket == null || exchangeOrderId == null || exchangeOrderId <= 0) {
+            throw new IllegalStateException("LIVE 订单没有可信交易所订单 ID，必须保持发送票据占用");
+        }
         transaction.executeWithoutResult(status -> {
             if (mapper.acknowledge(ticket.credentialId(), ticket.key(), exchangeOrderId) != 1
                 || mapper.release(ticket.credentialId(), ticket.symbol(), ticket.key()) != 1) {
