@@ -94,3 +94,15 @@ unchanged between renewal and order submission, and does not permit automatic
 restart recovery. Audited operator recovery, cross-node fault injection and
 staging acceptance remain production release blockers.
 
+
+### Next round: require the current dispatch slot during verified recovery
+
+The MyBatis `recoverVerified` transition now additionally checks that the
+exact ticket still holds `quant_live_dispatch_guard.active_dispatch_key`
+for the same credential and symbol. This is checked in the UPDATE itself,
+not only in a preceding application read. A regression test covers both a
+mismatching guard (zero affected rows, UNKNOWN preserved) and a matching
+guard (RECOVERED). The surrounding dispatch service keeps the ticket update
+and guard release in one transaction. This is defense in depth, **not**
+permission to auto-recover UNKNOWN requests or force-unlock tickets.
+Operator-approved exact-fact remediation and live chaos evidence remain open.
