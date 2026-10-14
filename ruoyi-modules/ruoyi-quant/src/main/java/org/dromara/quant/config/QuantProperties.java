@@ -119,7 +119,7 @@ public class QuantProperties {
         /**
          * 是否启用。
          */
-        private boolean enabled;
+        private boolean enabled = true;
     }
 
     /**
