@@ -82,6 +82,7 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setUserId(LoginHelper.getUserId());
         }
         entity.setSecretKey(bo.getSecretKey());
+        validateSingleBoundUser(bo.getUserIds(), entity.getUserId());
         applyDefaults(entity);
         validateCredential(entity);
         credentialMapper.insert(entity);
@@ -119,6 +120,7 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         if (StringUtils.isBlank(entity.getSignatureType())) {
             entity.setSignatureType(current.getSignatureType());
         }
+        validateSingleBoundUser(bo.getUserIds(), entity.getUserId());
         boolean modeChanged = !java.util.Objects.equals(current.getRunMode(), entity.getRunMode());
         boolean credentialChanged = StringUtils.isNotBlank(bo.getApiKey()) || StringUtils.isNotBlank(bo.getSecretKey());
         if (modeChanged || credentialChanged || "PAPER".equalsIgnoreCase(entity.getRunMode())) {
@@ -257,14 +259,18 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         }
     }
 
-    private void saveUsers(Long credentialId, List<Long> userIds, Long fallbackUserId) {
-        if (fallbackUserId == null || fallbackUserId <= 0) {
+    static void validateSingleBoundUser(List<Long> userIds, Long ownerUserId) {
+        if (ownerUserId == null || ownerUserId <= 0) {
             throw new ServiceException("交易凭证必须指定唯一所属用户");
         }
         if (userIds != null && (userIds.size() != 1
-            || userIds.get(0) == null || !fallbackUserId.equals(userIds.get(0)))) {
+            || userIds.get(0) == null || !ownerUserId.equals(userIds.get(0)))) {
             throw new ServiceException("一个交易凭证只能绑定一个用户，且必须与所属用户一致");
         }
+    }
+
+    private void saveUsers(Long credentialId, List<Long> userIds, Long fallbackUserId) {
+        validateSingleBoundUser(userIds, fallbackUserId);
         QuantCredentialUser relation = new QuantCredentialUser();
         relation.setCredentialId(credentialId);
         relation.setUserId(fallbackUserId);
