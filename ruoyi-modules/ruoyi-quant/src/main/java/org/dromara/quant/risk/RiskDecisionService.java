@@ -45,6 +45,9 @@ public class RiskDecisionService {
      * 财务事件 Mapper。
      */
     private final QuantFinancialEventMapper financialEventMapper;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.dromara.quant.reconcile.LivePositionFreshness positionFreshness;
+
 
     /**
      * 创建 RiskDecisionService 实例并初始化其依赖。
@@ -97,6 +100,13 @@ public class RiskDecisionService {
             log.warn("交易前风控未通过[单笔名义价值超限] credentialId={} symbol={} runMode={} notional={} maxOrderNotional={}",
                 credentialId, symbol, runMode, notional, risk.getMaxOrderNotional());
             return "单笔订单名义金额超限";
+        }
+        // Stale or absent full Binance snapshot MUST NOT permit new LIVE exposure.
+        // Closing/reducing exposure does not use requireOpenApproved.
+        if ("LIVE".equalsIgnoreCase(runMode)
+            && (positionFreshness == null || !positionFreshness.fresh(credentialId))) {
+            log.warn("交易前风控未通过[交易所持仓快照缺失或过期] credentialId={} symbol={}", credentialId, symbol);
+            return "交易所持仓快照缺失或过期";
         }
         if (risk.getMaxOpenPositions() != null && risk.getMaxOpenPositions() > 0) {
             Long count = positionMapper.selectCount(new LambdaQueryWrapper<QuantPosition>().eq(QuantPosition::getCredentialId, credentialId).ne(QuantPosition::getQuantity,
