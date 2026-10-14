@@ -420,6 +420,8 @@ public class ProtectionOrderService {
             dispatcher.acknowledged(ticket, terminalAlgoId);
             finished = true;
             return true;
+        } catch (ProtectionExecutionPendingException pending) {
+            throw pending;
         } catch (RuntimeException ex) {
             log.warn("保护撤单终态仍无法确认: accountId={}, symbol={}, clientAlgoId={}, errorType={}",
                 credentialId, local.getSymbol(), local.getClientOrderId(), ex.getClass().getSimpleName());
