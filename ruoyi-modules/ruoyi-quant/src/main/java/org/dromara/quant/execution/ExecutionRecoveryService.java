@@ -44,6 +44,12 @@ public class ExecutionRecoveryService {
      */
     private final QuantProperties properties;
     private volatile LiveOrderDispatcher liveOrderDispatcher;
+    private volatile StrategyOrderCrashRecoveryService crashRecovery;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setCrashRecovery(StrategyOrderCrashRecoveryService recovery) {
+        this.crashRecovery = java.util.Objects.requireNonNull(recovery);
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public void setLiveOrderDispatcher(LiveOrderDispatcher dispatcher) {
@@ -117,7 +123,7 @@ public class ExecutionRecoveryService {
                             || exact.executedQuantity().compareTo(exact.originalQuantity()) > 0)) {
                         throw new IllegalStateException("取消恢复缺少可信的累计成交数量，不得解除调度占用");
                     }
-                    orderLedgerService.syncSnapshot(record.getCredentialId(), exact);
+                    syncExchangeWithProvenance(credential, record, exact);
                     if ("CANCEL".equalsIgnoreCase(record.getOperationType())) {
                         String status = exact.status();
                         if ("CANCELED".equalsIgnoreCase(status) || "EXPIRED".equalsIgnoreCase(status)
@@ -153,6 +159,11 @@ public class ExecutionRecoveryService {
                                 || record.getExchangeOrderId().equals(o.orderId())))
                         .findFirst().orElse(null);
                 if (matched != null && !"CANCEL".equalsIgnoreCase(record.getOperationType())) {
+                    if ("LIVE".equalsIgnoreCase(credential.getRunMode())
+                        && record.getStrategyInstanceId() != null) {
+                        throw new IllegalStateException(
+                            "LIVE strategy ownership recovery requires an exact Binance query");
+                    }
                     // A fallback match must use actual exchange facts, not possibly stale local status.
                     orderLedgerService.syncSnapshot(record.getCredentialId(), matched);
                     recordService.markRecovered(record, matched.orderId(), matched.status());
@@ -201,7 +212,7 @@ public class ExecutionRecoveryService {
                         record.getSymbol(), record.getExchangeOrderId(), record.getClientOrderId())) {
                     continue;
                 }
-                var persisted = orderLedgerService.syncSnapshot(record.getCredentialId(), exact);
+                var persisted = syncExchangeWithProvenance(credential, record, exact);
                 if (persisted == null || persisted.getId() == null) {
                     continue;
                 }
@@ -211,6 +222,23 @@ public class ExecutionRecoveryService {
                 // records may still be independently recoverable on this tick.
             }
         }
+    }
+
+    /**
+     * Exact order fact and immutable pre-send provenance must both commit
+     * before an interrupted LIVE strategy ticket can be released.
+     */
+    private org.dromara.quant.order.domain.QuantOrder syncExchangeWithProvenance(
+        QuantCredential credential, QuantExecutionRecord record,
+        ExchangeGateway.OrderSnapshot snapshot) {
+        if ("LIVE".equalsIgnoreCase(credential.getRunMode())
+            && record.getStrategyInstanceId()!=null && record.getStrategyId()!=null) {
+            if (crashRecovery == null) {
+                throw new IllegalStateException("Missing LIVE strategy crash recovery journal");
+            }
+            return crashRecovery.restore(record, snapshot);
+        }
+        return orderLedgerService.syncSnapshot(record.getCredentialId(),snapshot);
     }
 
     /**
