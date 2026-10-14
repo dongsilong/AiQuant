@@ -123,7 +123,9 @@ The LIVE setup path now claims the **same** persistent
 margin-mode + leverage sequence is protected by this single ticket.
 Before starting the remote writes it rechecks the local preparation revision,
 fresh account balance and position absence *after* database claim. On success
-of **both** SDK calls, `configurationApplied()` atomically changes the
+of **both** SDK calls plus a fresh `positionInformationV2` readback of
+all symbol hedge rows proving the exact margin mode and leverage,
+`configurationApplied()` atomically changes the
 ticket to `CONFIG_APPLIED` and releases the guard. The config ACK path is
 separate from ordinary order ACK because Binance account settings have no
 exchange order ID; no synthetic exchange ID is ever stored.
@@ -134,10 +136,11 @@ dies before the acknowledgement transaction, the ticket remains
 dispatch across all nodes. There is deliberately **no automatic retry,
 TTL takeover or timeout-based force unlock**. A read-only operator queue
 shows these blocked config tickets and their requested settings identifier.
-A future independently verified Binance configuration snapshot and audited
-operator recovery procedure are still necessary before safe automated
-unblocking; HTTP 200 from an SDK setter is not equivalent to independently
-verifying the final account configuration.
+The normal success path now performs an independent Binance `positionInformationV2`
+readback, including zero-quantity risk rows. Missing or contradictory data
+leaves the ticket blocked. However a separate authenticated, audited recovery
+workflow for settings that remained UNKNOWN after process death is **still
+not implemented**. Do not manually erase an unresolved config ticket.
 
 This prevents configuration writes from overlapping order dispatch only for
 code paths using the new persistent guard; old application versions must
@@ -170,7 +173,7 @@ startup check now requires this table and its primary key.
 revised through a separately audited maintenance procedure with no live
 positions, working orders, UNKNOWN/CONFIG tickets, or active strategies.
 The current public API intentionally offers no automatic update/force
-release. This contract prevents conflicting AiQuant nodes but does not
-prove that external users have not modified exchange-side settings; private
-WebSocket invalidation, regular preflight checks and testnet verification
-remain mandatory.
+release. This contract prevents conflicting AiQuant nodes. A fresh post-write readback
+is mandatory before ACK, but it cannot prevent external users from changing
+exchange settings later; private WebSocket invalidation, periodic independent
+checks and Binance testnet fault injection remain mandatory.
