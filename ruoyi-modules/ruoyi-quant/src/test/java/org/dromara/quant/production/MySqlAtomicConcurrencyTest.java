@@ -93,15 +93,27 @@ class MySqlAtomicConcurrencyTest {
             boolean secondWon = b.get(15, TimeUnit.SECONDS);
             assertNotEquals(firstWon, secondWon, "Exactly one owner is required");
             if (firstWon) {
+                first.requireCurrentOwner(10L, 1L, "BTCUSDT");
+                assertThrows(IllegalStateException.class,
+                    () -> second.requireCurrentOwner(20L, 1L, "BTCUSDT"));
                 second.release(20L, 1L, "BTCUSDT");
                 assertFalse(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
                 first.release(10L, 1L, "BTCUSDT");
                 assertTrue(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
+                assertThrows(IllegalStateException.class,
+                    () -> first.requireCurrentOwner(10L, 1L, "BTCUSDT"));
+                second.requireCurrentOwner(20L, 1L, "BTCUSDT");
             } else {
+                second.requireCurrentOwner(20L, 1L, "BTCUSDT");
+                assertThrows(IllegalStateException.class,
+                    () -> first.requireCurrentOwner(10L, 1L, "BTCUSDT"));
                 first.release(10L, 1L, "BTCUSDT");
                 assertFalse(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
                 second.release(20L, 1L, "BTCUSDT");
                 assertTrue(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
+                assertThrows(IllegalStateException.class,
+                    () -> second.requireCurrentOwner(20L, 1L, "BTCUSDT"));
+                first.requireCurrentOwner(10L, 1L, "BTCUSDT");
             }
         }
         var entry = session.getMapper(StrategyEntryGuardMapper.class);
