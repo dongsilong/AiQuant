@@ -421,6 +421,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     public synchronized int switchWebsocketTransport(String target) {
         String normalized = validateWebsocketTransport(target);
+        // Reject an unsupported SDK/proxy combination BEFORE switching the node
+        // transport or notifying existing sockets. Otherwise all LIVE market and
+        // private streams disconnect and enter a permanent reconnect failure loop.
+        if ("BINANCE_SDK".equals(normalized)) {
+            requireSdkStreamsCanConnect();
+        }
         if (normalized.equals(currentWebsocketTransport.get())) { return 0; }
         currentWebsocketTransport.set(normalized);
         int count = 0;
