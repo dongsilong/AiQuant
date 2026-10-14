@@ -39,8 +39,30 @@ public class LivePositionStreamTriggers {
     @Scheduled(fixedDelay = 30000, initialDelay = 10000)
     public synchronized void supervise() {
         Set<Long> liveIds = new HashSet<>();
-        for (QuantCredential credential : credentials.selectList(
-            new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"))) {
+        final java.util.List<QuantCredential> enabledCredentials;
+        try {
+            enabledCredentials = credentials.selectList(
+                new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"));
+            if (enabledCredentials == null) {
+                throw new IllegalStateException("LIVE credential discovery returned null");
+            }
+        } catch (RuntimeException ex) {
+            // On discovery failure we cannot establish which accounts are still
+            // enabled. Stop owned LIVE streams rather than continuing with a
+            // previously authorized account and a renewable stale lease.
+            for (Long id : Set.copyOf(subscriptions.keySet())) {
+                closeSubscription(id);
+                freshness.invalidate(id);
+                try {
+                    lease.release(id, ownerToken);
+                } catch (RuntimeException releaseError) {
+                    log.warn("LIVE stream discovery failure lease cleanup failed credentialId={}", id, releaseError);
+                }
+            }
+            log.error("LIVE user-stream credential discovery failed; subscriptions revoked", ex);
+            return;
+        }
+        for (QuantCredential credential : enabledCredentials) {
             if (!"LIVE".equalsIgnoreCase(credential.getRunMode())) {
                 continue;
             }
