@@ -73,15 +73,15 @@ class TradingReconciliationTransactionTest {
         doAnswer(invocation -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive(), "DB write not inside short transaction");
             return 1;
-        }).when(accounts).insert(any());
+        }).when(accounts).insert(any(org.dromara.quant.account.domain.QuantAccountSnapshot.class));
     }
 
     @Test
     void collectsAllExchangeFactsBeforeOpeningDatabaseWriteTransaction() {
         stubCommonFacts();
         service().reconcileCredential(credential(), 48);
-        verify(accounts).insert(any());
-        verify(records).insert(any());
+        verify(accounts).insert(any(org.dromara.quant.account.domain.QuantAccountSnapshot.class));
+        verify(records).insert(any(org.dromara.quant.reconcile.domain.QuantReconcileRecord.class));
         verify(gateway, never()).cancelProtectionOrder(any());
     }
 
@@ -107,7 +107,7 @@ class TradingReconciliationTransactionTest {
                 "SELL", "LONG", "STOP_MARKET", BigDecimal.ONE, BigDecimal.ONE, Instant.EPOCH)));
         service().reconcileCredential(credential(), 48);
         verify(gateway, never()).cancelProtectionOrder(any());
-        verify(protection).insert(any());
+        verify(protection).insert(any(org.dromara.quant.protection.domain.QuantProtectionOrder.class));
         var record = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.reconcile.domain.QuantReconcileRecord.class);
         verify(records).insert(record.capture());
         assertEquals("DEGRADED", record.getValue().getResult());
