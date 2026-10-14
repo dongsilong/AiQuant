@@ -272,7 +272,23 @@ public class UserDataStreamHub {
                 keepaliveTask = scheduler.scheduleAtFixedRate(this::keepAlive, 30, 30, TimeUnit.MINUTES);
             } catch (RuntimeException ex) {
                 log.error("用户数据流启动失败 credentialId={}: {}", credential.getId(), ex.getMessage(), ex);
+                // The socket may already have been created when initial event
+                // processing or keepalive scheduling fails. Never discard the
+                // reference without closing the underlying private connection.
+                ExchangeGateway.UserDataStreamSession failedSession = session;
                 session = null;
+                ++generation;
+                if (keepaliveTask != null) {
+                    keepaliveTask.cancel(false);
+                    keepaliveTask = null;
+                }
+                if (failedSession != null) {
+                    try {
+                        failedSession.close();
+                    } catch (RuntimeException closeError) {
+                        log.warn("用户数据流启动失败后的连接关闭异常 credentialId={}", credential.getId(), closeError);
+                    }
+                }
                 positionCache.disconnect(credential.getId());
                 balanceCache.disconnect(credential.getId());
                 preparationService.invalidate(credential.getId());
