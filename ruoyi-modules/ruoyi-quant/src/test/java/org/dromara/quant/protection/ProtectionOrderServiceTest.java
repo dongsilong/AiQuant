@@ -65,6 +65,55 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void liveAlgoOrderClaimsDispatchBeforeCallingBinanceAndAcksAfterPersistence() {
+        when(gateway.placeProtectionOrder(any())).thenAnswer(call -> {
+            verify(dispatcher).begin(eq(1L), eq("BTCUSDT"), anyString(), eq("PROTECT_CREATE"),
+                anyString(), isNull(), isNull());
+            verify(mapper).insert(any(QuantProtectionOrder.class));
+            return new ExchangeGateway.ProtectionOrderResult(55L,
+                call.<ExchangeGateway.ProtectionOrderRequest>getArgument(0).clientOrderId(), "NEW");
+        });
+        when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenAnswer(call ->
+            snapshot(55L, call.getArgument(2), BigDecimal.ONE, "NEW", null));
+        assertEquals("WORKING", service.placeMarginHardStop(1L, position, new BigDecimal("0.1"), true).getStatus());
+        verify(dispatcher).acknowledged(any(LiveOrderDispatcher.Ticket.class), eq(55L));
+        verify(dispatcher, never()).unknown(any());
+    }
+
+    @Test
+    void unknownLiveAlgoPlacementKeepsDispatchGuardOccupied() {
+        when(gateway.placeProtectionOrder(any())).thenThrow(new IllegalStateException("Binance timeout"));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenThrow(new IllegalStateException("query unavailable"));
+        assertThrows(IllegalStateException.class, () ->
+            service.placeMarginHardStop(1L, position, new BigDecimal("0.1"), true));
+        verify(dispatcher).unknown(any(LiveOrderDispatcher.Ticket.class));
+        verify(dispatcher, never()).acknowledged(any(), any());
+    }
+
+    @Test
+    void missingDispatcherBlocksLiveAlgoOrderBeforeRemoteCall() {
+        var unsafe = new ProtectionOrderService(gateway, mapper, execution);
+        assertThrows(IllegalStateException.class, () ->
+            unsafe.placeMarginHardStop(1L, position, new BigDecimal("0.1"), true));
+        verify(gateway, never()).placeProtectionOrder(any());
+    }
+
+    @Test
+    void unresolvedLiveCancelChecksExactBinanceFactWithoutResending() {
+        var local = order();
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(dispatcher.activeProtectionTicket(1L, "BTCUSDT", "QFTP_test", "PROTECT_CANCEL"))
+            .thenReturn("pending-protection-cancel");
+        when(gateway.queryProtectionOrder(any(), any(), any(), any()))
+            .thenReturn(snapshot(55L, "QFTP_test", BigDecimal.ONE, "CANCELED", BigDecimal.ZERO));
+        when(dispatcher.recoveredFromExchange(1L, "BTCUSDT", "pending-protection-cancel", "QFTP_test", 55L))
+            .thenReturn(true);
+        assertTrue(service.cancelStrategyProtection(1L, position, "FIRST_TP"));
+        verify(gateway, never()).cancelProtectionOrder(any());
+        verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "pending-protection-cancel", "QFTP_test", 55L);
+    }
+
+    @Test
     void intentIsDurableBeforeSendingProtectionOrder() {
         when(gateway.placeProtectionOrder(any())).thenAnswer(invocation -> {
             verify(mapper).insert(any(QuantProtectionOrder.class));
@@ -354,7 +403,7 @@ class ProtectionOrderServiceTest {
         position.setProtectionCycleKey("cycle");
         QuantProtectionOrder one = order();
         when(mapper.selectList(any())).thenReturn(List.of(one));
-        when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenReturn(snapshot(55L, "one", BigDecimal.ONE, "CANCELED", new BigDecimal("0.2")));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenReturn(snapshot(55L, "QFTP_test", BigDecimal.ONE, "CANCELED", new BigDecimal("0.2")));
         assertTrue(service.quiesceCycleProtections(1L, position));
         assertEquals(0, new BigDecimal("0.2").compareTo(one.getExecutedQuantity()));
     }
