@@ -66,6 +66,18 @@ public class StrategyPositionProjectionService {
         long instanceId = verifiedOrder.getStrategyInstanceId();
         LocalDateTime when = LocalDateTime.ofInstant(trade.time(), ZoneOffset.UTC);
         tx.executeWithoutResult(status -> {
+            // Never trust a requested role or mutable QuantOrder alone. Intent
+            // must originate from a separately persisted exact-order record.
+            Map<String,Object> intent = mapper.verifiedIntent(credentialId,symbol,trade.orderId());
+            if (intent == null || asLong(intent,"strategy_id") != strategyId
+                || asLong(intent,"strategy_instance_id") != instanceId
+                || !positionSide.name().equals(intent.get("position_side"))
+                || !verifiedRole.name().equals(intent.get("fill_role"))
+                || !trade.side().equalsIgnoreCase(String.valueOf(intent.get("exchange_side")))
+                || verifiedOrder.getClientOrderId() == null
+                || !verifiedOrder.getClientOrderId().equals(intent.get("client_order_id"))) {
+                throw new IllegalStateException("No immutable, matching strategy execution intent");
+            }
             mapper.ensure(credentialId,symbol,instanceId,positionSide.name(),strategyId);
             Map<String,Object> row = mapper.lock(credentialId,symbol,instanceId,positionSide.name());
             if (row == null || asLong(row,"strategy_id") != strategyId) {
