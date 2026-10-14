@@ -48,9 +48,17 @@ public interface LiveRecoveryApprovalMapper {
           AND evidence_sha256=#{evidenceHash}
           AND EXISTS (
               SELECT 1 FROM quant_live_dispatch_guard g
+              JOIN quant_order_dispatch_ticket t
+                ON t.credential_id=g.credential_id
+               AND t.symbol=g.symbol
+               AND t.idempotency_key=g.active_dispatch_key
               WHERE g.credential_id=quant_live_recovery_case.credential_id
                 AND g.symbol=quant_live_recovery_case.symbol
                 AND g.active_dispatch_key=quant_live_recovery_case.dispatch_key
+                AND t.operation_type=quant_live_recovery_case.operation_type
+                AND t.client_order_id=quant_live_recovery_case.expected_client_order_id
+                AND (t.exchange_order_id <=> quant_live_recovery_case.expected_exchange_order_id)
+                AND t.dispatch_status IN ('UNKNOWN','DISPATCHING')
           )
         """)
     int approve(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId,
