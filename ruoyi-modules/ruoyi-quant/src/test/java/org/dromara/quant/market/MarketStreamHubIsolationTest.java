@@ -30,6 +30,8 @@ class MarketStreamHubIsolationTest {
         var ready = new CountDownLatch(4);
         var liveTicks = new CountDownLatch(1);
         var testTicks = new CountDownLatch(1);
+        var liveConnected = new CountDownLatch(1);
+        var testConnected = new CountDownLatch(1);
         var liveCallback = new java.util.concurrent.atomic.AtomicReference<Consumer<ExchangeGateway.MarketEvent>>();
         var testCallback = new java.util.concurrent.atomic.AtomicReference<Consumer<ExchangeGateway.MarketEvent>>();
         Instant open = Instant.now().minusSeconds(5);
@@ -53,10 +55,12 @@ class MarketStreamHubIsolationTest {
             hub.subscribe("LIVE", "BTCUSDT", "1m", event -> {
                 if (event.replay() && event.kline() != null) { liveReplay.add(event.kline().open()); ready.countDown(); }
                 if ("TRADE".equals(event.type()) && !event.replay()) { liveTicks.countDown(); }
+                if ("CONNECTED".equals(event.type())) { liveConnected.countDown(); }
             }, ignored -> {});
             hub.subscribe("TESTNET", "BTCUSDT", "1m", event -> {
                 if (event.replay() && event.kline() != null) { testReplay.add(event.kline().open()); ready.countDown(); }
                 if ("TRADE".equals(event.type()) && !event.replay()) { testTicks.countDown(); }
+                if ("CONNECTED".equals(event.type())) { testConnected.countDown(); }
             }, ignored -> {});
             org.junit.jupiter.api.Assertions.assertTrue(ready.await(2, TimeUnit.SECONDS));
             assertEquals(java.util.List.of(BigDecimal.ONE, BigDecimal.ONE), liveReplay);
@@ -70,6 +74,8 @@ class MarketStreamHubIsolationTest {
             }
             org.junit.jupiter.api.Assertions.assertTrue(liveTicks.await(2, TimeUnit.SECONDS), "LIVE realtime tick missing");
             org.junit.jupiter.api.Assertions.assertTrue(testTicks.await(2, TimeUnit.SECONDS), "TESTNET realtime tick missing");
+            org.junit.jupiter.api.Assertions.assertTrue(liveConnected.await(2, TimeUnit.SECONDS), "LIVE trading readiness missing after fresh MARK");
+            org.junit.jupiter.api.Assertions.assertTrue(testConnected.await(2, TimeUnit.SECONDS), "TESTNET trading readiness missing after fresh MARK");
             verify(gateway, times(1)).subscribeMarket(eq("BTCUSDT"), eq("1m"), any());
             verify(gateway, times(1)).subscribeMarket(eq("TESTNET"), eq("BTCUSDT"), eq("1m"), any());
         } finally { hub.close(); scheduler.shutdownNow(); }
