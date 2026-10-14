@@ -86,7 +86,7 @@ jobs:
           set -euo pipefail
           MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
           test -n "$MYSQL_CONTAINER"
-          for ddl in \\
+          for ddl in \
             script/sql/quant/V20261014_03__strategy_fill_allocation.sql \
             script/sql/quant/V20261014_07__strategy_position_cycles.sql \
             script/sql/quant/V20261014_08__strategy_position_inventory.sql \
@@ -98,7 +98,7 @@ jobs:
             WHERE table_schema='aiquant_ci_test' AND table_name IN
             ('quant_strategy_fill_allocation','quant_strategy_position_cycle',
              'quant_strategy_position_fill_event','quant_strategy_position_inventory',
-             'quant_strategy_order_intent');" | tr -d '\\r')"
+             'quant_strategy_order_intent');" | tr -d '\r')"
           test "$tables" = 5
       - name: Validate real InnoDB locks, account capacity and lease ownership
         run: >-
