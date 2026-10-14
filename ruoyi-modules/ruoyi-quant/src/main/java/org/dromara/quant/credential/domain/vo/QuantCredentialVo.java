@@ -11,7 +11,6 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import java.io.Serial;
 import java.io.Serializable;
 import java.time.LocalDateTime;
-import java.util.List;
 
 /**
  * 凭证脱敏视图，永远不返回 Secret。
@@ -32,11 +31,6 @@ public class QuantCredentialVo implements Serializable {
      * 用户主键。
      */
     private Long userId;
-    /**
-     * 授权用户主键集合。
-     */
-    private List<Long> userIds;
-
     /**
      * 用户名称。
      */
