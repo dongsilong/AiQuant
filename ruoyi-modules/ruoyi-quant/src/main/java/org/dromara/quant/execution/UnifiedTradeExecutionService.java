@@ -419,7 +419,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                         throw new IllegalStateException("Missing transactional strategy order provenance journal");
                     }
                     acceptanceJournal.persist(credentialId, strategyId, strategyInstanceId,
-                        operationType, request, exchangeResult);
+                        runMode, operationType, request, exchangeResult);
                 } else {
                     orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult);
                 }
