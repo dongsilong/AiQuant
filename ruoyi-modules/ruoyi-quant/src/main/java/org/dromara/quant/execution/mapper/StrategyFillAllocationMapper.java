@@ -45,4 +45,27 @@ public interface StrategyFillAllocationMapper {
                          @Param("fee") BigDecimal fee,
                          @Param("pnl") BigDecimal pnl,
                          @Param("tradeTime") LocalDateTime tradeTime);
+    /**
+     * AUDIT ONLY: lifetime executed BUY/SELL quantities are not signed open position
+     * quantity. Net open interest cannot be inferred from a one-way BOTH account
+     * without immutable open/close role and position-cycle attribution.
+     */
+    @Options(timeout = 3)
+    @Select("""
+        SELECT COUNT(*) AS fill_count,
+               COALESCE(SUM(CASE WHEN side='BUY' THEN allocated_qty ELSE 0 END),0) AS bought_qty,
+               COALESCE(SUM(CASE WHEN side='SELL' THEN allocated_qty ELSE 0 END),0) AS sold_qty,
+               COALESCE(SUM(CASE WHEN side='BUY' THEN allocated_qty*allocated_price ELSE 0 END),0) AS bought_notional,
+               COALESCE(SUM(CASE WHEN side='SELL' THEN allocated_qty*allocated_price ELSE 0 END),0) AS sold_notional,
+               COALESCE(SUM(allocated_fee),0) AS total_fees,
+               COALESCE(SUM(realized_pnl),0) AS realized_pnl
+        FROM quant_strategy_fill_allocation
+        WHERE credential_id=#{credentialId} AND strategy_id=#{strategyId}
+          AND strategy_instance_id=#{instanceId} AND symbol=#{symbol}
+        """)
+    Map<String,Object> summarizeVerifiedFills(@Param("credentialId") Long credentialId,
+                                              @Param("strategyId") Long strategyId,
+                                              @Param("instanceId") Long instanceId,
+                                              @Param("symbol") String symbol);
+
 }
