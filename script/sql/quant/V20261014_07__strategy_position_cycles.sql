@@ -30,6 +30,7 @@ CREATE TABLE quant_strategy_position_fill_event (
   quantity DECIMAL(38,16) NOT NULL,
   fill_price DECIMAL(38,16) NOT NULL,
   commission DECIMAL(38,16) NOT NULL,
+  commission_asset VARCHAR(20) NOT NULL,
   realized_pnl DECIMAL(38,16) NOT NULL,
   trade_time DATETIME(6) NOT NULL,
   recorded_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
