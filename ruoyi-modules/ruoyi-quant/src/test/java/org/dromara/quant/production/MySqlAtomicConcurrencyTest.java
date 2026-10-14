@@ -39,8 +39,12 @@ import static org.mockito.Mockito.mock;
 @EnabledIfEnvironmentVariable(named = "AIQUANT_MYSQL_URL", matches = ".+")
 class MySqlAtomicConcurrencyTest {
     private static DriverManagerDataSource source() {
-        return new DriverManagerDataSource(
-            System.getenv("AIQUANT_MYSQL_URL"),
+        String url = System.getenv("AIQUANT_MYSQL_URL");
+        // This test intentionally drops tables. Never permit any database name except the dedicated CI DB.
+        if (url == null || !url.matches("(?i)^jdbc:mysql://[^/]+/aiquant_ci_test(?:\\?.*)?$")) {
+            throw new IllegalStateException("MySQL concurrency tests must use the disposable aiquant_ci_test database only");
+        }
+        return new DriverManagerDataSource(url,
             System.getenv().getOrDefault("AIQUANT_MYSQL_USERNAME", "root"),
             System.getenv().getOrDefault("AIQUANT_MYSQL_PASSWORD", "only_for_ci"));
     }
