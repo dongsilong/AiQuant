@@ -189,4 +189,30 @@ class TradingReconciliationTransactionTest {
         verify(fence).advance(eq(1L), any());
     }
 
+    @Test
+    void positionSnapshotAndCapacityReservationUseSameCredentialRowLock() {
+        stubCommonFacts();
+        var reconciliation = service();
+        var capacity = mock(org.dromara.quant.risk.mapper.OpenCapacityMapper.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "openCapacityMapper", capacity);
+        when(capacity.lockCredential(1L)).thenAnswer(invocation -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            return List.of(1L);
+        });
+        reconciliation.refreshPositionsOnly(credential());
+        verify(capacity).lockCredential(1L);
+        verify(accounts).insert(any(org.dromara.quant.account.domain.QuantAccountSnapshot.class));
+    }
+
+    @Test
+    void missingCapacityCredentialLockAbortsPositionWrite() {
+        stubCommonFacts();
+        var reconciliation = service();
+        var capacity = mock(org.dromara.quant.risk.mapper.OpenCapacityMapper.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "openCapacityMapper", capacity);
+        when(capacity.lockCredential(1L)).thenReturn(List.of());
+        assertThrows(IllegalStateException.class, () -> reconciliation.refreshPositionsOnly(credential()));
+        verifyNoInteractions(accounts, positions);
+    }
+
 }
