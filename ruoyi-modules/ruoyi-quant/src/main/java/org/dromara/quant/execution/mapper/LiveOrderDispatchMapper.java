@@ -82,6 +82,19 @@ public interface LiveOrderDispatchMapper {
                 @Param("key") String key);
 
     @Options(timeout = 3)
+    @Update("""
+        UPDATE quant_order_dispatch_ticket
+        SET dispatch_status='RECOVERED', exchange_order_id=#{orderId}, updated_at=NOW()
+        WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
+          AND symbol=#{symbol} AND client_order_id=#{clientOrderId}
+          AND dispatch_status IN ('DISPATCHING','UNKNOWN')
+        """)
+    int recoverVerified(@Param("credentialId") Long credentialId,
+                        @Param("symbol") String symbol, @Param("key") String key,
+                        @Param("clientOrderId") String clientOrderId,
+                        @Param("orderId") Long orderId);
+
+    @Options(timeout = 3)
     @Select("""
         SELECT dispatch_status FROM quant_order_dispatch_ticket
         WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
