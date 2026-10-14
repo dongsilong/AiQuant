@@ -125,6 +125,27 @@ class StrategyRuntimeSafetyTest {
         } finally { f.service.destroy(); }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"LIVE", "TESTNET"})
+    void fillReconciliationRequestIsRetainedDuringExitCoordination(String mode) throws Exception {
+        Fixture f = fixture();
+        try {
+            ((QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential")).setRunMode(mode);
+            var exitCoordinating = (java.util.concurrent.atomic.AtomicBoolean)
+                ReflectionTestUtils.getField(f.runtime, "exitCoordinating");
+            var reconcileRequested = (java.util.concurrent.atomic.AtomicBoolean)
+                ReflectionTestUtils.getField(f.runtime, "reconcileRequested");
+            exitCoordinating.set(true);
+            // UserDataStreamHub's order-fill listener invokes this method; concurrent
+            // exit coordination must coalesce the request instead of losing it.
+            ReflectionTestUtils.invokeMethod(f.service, "requestReconciliation", f.runtime);
+            assertTrue(reconcileRequested.get(), "fill-driven reconciliation must remain queued");
+            assertFalse(((java.util.concurrent.atomic.AtomicBoolean)
+                ReflectionTestUtils.getField(f.runtime, "reconciling")).get(),
+                "exit coordinator owns the position until it releases its gate");
+        } finally { f.service.destroy(); }
+    }
+
     @Test
     void newlyCreatedRuntimeMustNotAssumeMarketStreamIsReady() throws Exception {
         Fixture f = fixture();
