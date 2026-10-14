@@ -48,6 +48,7 @@ class ExecutionRecoveryServiceTest {
         record.setCredentialId(1L);
         record.setSymbol("BTCUSDT");
         record.setClientOrderId("client-123");
+        record.setIdempotencyKey("entry-123");
         record.setOperationType("OPEN");
         record.setExchangeOrderStatus("NEW");
         record.setExecutionStatus("UNKNOWN");
@@ -66,8 +67,16 @@ class ExecutionRecoveryServiceTest {
             BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now());
         when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(exchangeOrder));
 
-        new ExecutionRecoveryService(records, credentials, gateway, recovery, ledger, new QuantProperties()).recover();
+        var dispatcher = mock(LiveOrderDispatcher.class);
+        doAnswer(invocation -> {
+            record.setExecutionStatus("RECOVERED");
+            return null;
+        }).when(recovery).markRecovered(record, 123L, "FILLED");
+        var service = new ExecutionRecoveryService(records, credentials, gateway, recovery, ledger, new QuantProperties());
+        service.setLiveOrderDispatcher(dispatcher);
+        service.recover();
 
+        verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "entry-123", "client-123", 123L);
         verify(ledger).syncSnapshot(1L, exchangeOrder);
         verify(recovery).markRecovered(record, 123L, "FILLED");
         verify(gateway, never()).placeOrder(any());
