@@ -647,8 +647,17 @@ public class StrategyRuntimeService {
                 runtime.marketHealthy = false;
                 return;
             }
-            if ("DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type()) || "CONNECTING".equals(event.type())) {
-                log.warn("策略行情流断开 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
+            if ("CONNECTING".equals(event.type())) {
+                // 包括K线换周期后的REST校验；WS仍可能保持连接，不能报告为断线。
+                // 必须保留交易门控，直到MarketStreamHub重新确认行情就绪。
+                runtime.marketHealthy = false;
+                runtime.latestTradePrice = null;
+                runtime.latestTradeEventAt = null;
+                return;
+            }
+            if ("DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
+                log.warn("策略行情流断开 instanceId={} symbol={} status={}",
+                    runtime.instance.getId(), runtime.symbol.getSymbol(), event.type());
                 runtime.marketHealthy = false;
                 runtime.latestTradePrice = null;
                 runtime.latestTradeEventAt = null;
