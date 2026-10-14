@@ -93,6 +93,31 @@ public interface LiveOrderDispatchMapper {
                      @Param("clientOrderId") String clientOrderId, @Param("instanceId") Long instanceId,
                      @Param("epoch") Long epoch);
 
+    /**
+     * Pre-send strategy provenance is inserted in the SAME transaction as
+     * the durable dispatch ticket, prior to any remote Binance side effect.
+     */
+    @Options(timeout = 3)
+    @Insert("""
+        INSERT INTO quant_strategy_pre_dispatch_intent
+        (credential_id,symbol,idempotency_key,client_order_id,strategy_id,
+         strategy_instance_id,operation_type,position_side,exchange_side,
+         lease_epoch,created_at)
+        VALUES (#{credentialId},#{symbol},#{key},#{clientOrderId},#{strategyId},
+                #{instanceId},#{operation},#{positionSide},#{exchangeSide},
+                #{epoch},NOW(6))
+        """)
+    int insertPreDispatchIntent(@Param("credentialId") Long credentialId,
+                                @Param("symbol") String symbol,
+                                @Param("key") String key,
+                                @Param("clientOrderId") String clientOrderId,
+                                @Param("strategyId") Long strategyId,
+                                @Param("instanceId") Long instanceId,
+                                @Param("operation") String operation,
+                                @Param("positionSide") String positionSide,
+                                @Param("exchangeSide") String exchangeSide,
+                                @Param("epoch") Long epoch);
+
     @Options(timeout = 3)
     @Update("""
         UPDATE quant_order_dispatch_ticket
