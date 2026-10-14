@@ -52,3 +52,28 @@ deployment **set `QUANT_LIVE_ENABLED=false` explicitly**.
 No claim of real-funds production acceptance is made without the external
 evidence above. Repository CI does not access real Binance credentials or a
 real deployed database.
+
+## Follow-up fixes: crash-safe recovered dispatch and fill audit
+
+- `ExecutionRecoveryService` now rejects wrong-symbol Binance order facts
+  and refuses terminal CANCEL recovery with missing, negative or excessive
+  cumulative executed quantity. It similarly filters fallback order matches.
+- A new `QuantExecutionRecordMapper.strandedRecoveredDispatches` query scans
+  the exact **active** ticket held by a matching `RECOVERED` execution
+  record. This closes the process-crash window between committing
+  `RECOVERED` and releasing the durable dispatch guard. Every attempted
+  unlock re-queries the exact Binance order identity, reconfirms terminal
+  CANCEL and requires a persisted local order ledger record.
+  No timer-based force release is introduced.
+- The read-only `StrategyFillAuditService` and
+  `GET /quant/infrastructure/fill-audit/summary` endpoint require
+  `quant:allocation:view`; identifiers and all decimal totals are returned
+  as strings. The execution ledger screen offers a manual query form.
+  Aggregated, deduplicated **lifetime verified** BUY/SELL quantities, prices,
+  fees and realized PnL are useful for reconciliation, but **cannot** be
+  treated as live open-position quantity or used for liquidation/risk sizing.
+- New SQL, crash/restart and strict arithmetic/identity regressions are
+  part of the critical GitHub CI job. None of these changes substitutes
+  for testnet outage drills, real schema migration or signed fill-to-position
+  accounting with cycle identity.
+
