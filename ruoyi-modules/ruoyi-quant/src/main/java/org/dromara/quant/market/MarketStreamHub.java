@@ -96,6 +96,8 @@ public class MarketStreamHub {
         private Long requiredTradeId;
         private Instant connectionStarted;
         private Instant recoveryStarted;
+        // 同一K线周期重复进入补偿时仅首次告警；实际校验及交易门控不受影响。
+        private Instant lastRecoveryWarningPeriod;
         private long nextMetricsAt;
         private final java.util.concurrent.atomic.LongAccumulator maxNetworkLag = new java.util.concurrent.atomic.LongAccumulator(Long::max, 0);
         private final java.util.concurrent.atomic.LongAccumulator maxQueueLag = new java.util.concurrent.atomic.LongAccumulator(Long::max, 0);
@@ -441,7 +443,14 @@ public class MarketStreamHub {
             requiredTradeId = tradeId;
             recoveryStarted = Instant.now();
             signalUnhealthy();
-            log.warn("行情暂停决策并校验补偿，保留WS: symbol={}, interval={}, reason={}", key.symbol(), key.interval(), reason);
+            // 同一周期可能先后由watchdog、TRADE和KLINE触发校验；避免刷屏误报为多次断线。
+            Instant warningPeriod = lastKlineOpen == null ? null : nextOpen(lastKlineOpen);
+            if (warningPeriod == null || !warningPeriod.equals(lastRecoveryWarningPeriod)) {
+                lastRecoveryWarningPeriod = warningPeriod;
+                log.warn("行情暂停决策并校验补偿，保留WS: symbol={}, interval={}, reason={}", key.symbol(), key.interval(), reason);
+            } else {
+                log.debug("同周期再次触发K线REST校验: symbol={}, interval={}, reason={}", key.symbol(), key.interval(), reason);
+            }
             publish(status("CONNECTING"));
             long attempt = generation;
             recoveryTask = recoveryExecutor.submit(() -> restoreHistory(attempt));
