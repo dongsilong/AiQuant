@@ -105,6 +105,26 @@ class StrategyRuntimeSafetyTest {
         } finally { f.service.destroy(); }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"LIVE", "TESTNET"})
+    void staleRealtimeTradeNeverReachesEntryEvaluationEvenWhenMarketIsReady(String mode) throws Exception {
+        Fixture f = fixture();
+        try {
+            ((QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential")).setRunMode(mode);
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            ReflectionTestUtils.setField(f.runtime, "marketHealthy", true);
+            ReflectionTestUtils.setField(f.runtime, "marketStreamReady", true);
+            Instant receivedAt = Instant.now();
+            var staleTrade = new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m",
+                new BigDecimal("102"), null, receivedAt.minusSeconds(120), 25L, receivedAt, false);
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, staleTrade);
+            verify(f.plugin, never()).evaluateEntry(any(), anyMap());
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService)
+                ReflectionTestUtils.getField(f.service, "executionService");
+            verify(execution, never()).openByRuntime(any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any());
+        } finally { f.service.destroy(); }
+    }
+
     @Test
     void newlyCreatedRuntimeMustNotAssumeMarketStreamIsReady() throws Exception {
         Fixture f = fixture();
