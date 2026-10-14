@@ -63,6 +63,7 @@ public class LivePositionStreamTriggers {
                 subscriptions.put(id, reference);
                 coordinator.request(id);
             } catch (RuntimeException ex) {
+                closeSubscription(id);
                 freshness.invalidate(id);
                 log.warn("LIVE shared user stream enrollment failed credentialId={}", id, ex);
             }
