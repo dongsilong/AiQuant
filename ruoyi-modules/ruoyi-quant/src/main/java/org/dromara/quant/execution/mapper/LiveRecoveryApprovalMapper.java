@@ -62,6 +62,8 @@ public interface LiveRecoveryApprovalMapper {
         SET state='REJECTED', reviewed_by=#{reviewerId}, reviewed_at=NOW(6)
         WHERE case_id=#{caseId} AND state='PENDING'
           AND requested_by<>#{reviewerId}
+          AND evidence_sha256=#{evidenceHash}
         """)
-    int reject(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId);
+    int reject(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId,
+               @Param("evidenceHash") String evidenceHash);
 }
