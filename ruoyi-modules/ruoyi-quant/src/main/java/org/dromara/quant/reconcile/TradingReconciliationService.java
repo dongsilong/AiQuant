@@ -158,6 +158,13 @@ public class TradingReconciliationService {
     public void reconcileCredential(QuantCredential credential, int historyHours) {
         try {
             ExchangeFacts facts = collectExchangeFacts(credential, historyHours);
+            // Commit authenticated account/position facts independently. A later
+            // fill-allocation, protection or funding failure must not roll back
+            // an already verified flat Binance position to a stale nonzero one.
+            transaction.executeWithoutResult(status -> {
+                syncAccount(credential, facts.account());
+                syncPositions(credential, facts.positions());
+            });
             transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
         } catch (RuntimeException ex) {
             failureRecorder.record(credential.getId(), ex.getMessage());
@@ -200,8 +207,6 @@ public class TradingReconciliationService {
 
     /** Only database writes are permitted inside this short transaction. */
     private void applyExchangeFacts(QuantCredential credential, ExchangeFacts facts) {
-        syncAccount(credential, facts.account());
-        syncPositions(credential, facts.positions());
         syncOrders(credential, facts.history());
         syncOrders(credential, facts.openOrders());
         int unattributedFills = 0;
