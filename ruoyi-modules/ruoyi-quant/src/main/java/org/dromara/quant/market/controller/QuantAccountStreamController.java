@@ -79,7 +79,7 @@ public class QuantAccountStreamController {
         emitter.onError(error -> cleanup.run());
         try {
             emitter.send(SseEmitter.event().name("quant.account").data(Map.of(
-                "type", "CONNECTING", "credentialId", credentialId
+                "type", "CONNECTING", "credentialId", credentialId.toString()
             )));
             heartbeat.set(heartbeatScheduler.scheduleAtFixedRate(() -> {
                 try {
@@ -108,7 +108,7 @@ public class QuantAccountStreamController {
         }
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", event.eventType());
-        payload.put("credentialId", credential.getId());
+        payload.put("credentialId", credential.getId().toString());
         payload.put("eventTime", event.eventTime() == null ? Instant.now().toString() : event.eventTime().toString());
         if ("SNAPSHOT".equals(event.eventType())) {
             ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
