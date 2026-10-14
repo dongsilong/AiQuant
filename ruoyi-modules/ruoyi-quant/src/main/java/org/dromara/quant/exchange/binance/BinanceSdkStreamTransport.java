@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
- * Official Binance SDK 12.0.3 WebSocket Streams transport.
+ * Official Binance SDK WebSocket Streams transport (version pinned in Maven).
  *
  * <p>SDK internals allocate unbounded queues. The consumer thread therefore monitors the
  * upstream queue depth, fails closed when overloaded and asks the owning hub to reconnect and
