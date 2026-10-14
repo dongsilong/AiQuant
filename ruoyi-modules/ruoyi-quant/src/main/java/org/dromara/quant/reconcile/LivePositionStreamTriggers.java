@@ -112,8 +112,14 @@ public class LivePositionStreamTriggers {
         for (Long id : Set.copyOf(subscriptions.keySet())) {
             if (!liveIds.contains(id)) {
                 closeSubscription(id);
-                lease.release(id, ownerToken);
                 freshness.invalidate(id);
+                try {
+                    lease.release(id, ownerToken);
+                } catch (RuntimeException ex) {
+                    // Account removal must never abort cleanup of other accounts.
+                    // The DB lease expires without renewal; no stale local stream remains.
+                    log.warn("LIVE account removal lease cleanup failed credentialId={}", id, ex);
+                }
             }
         }
     }
@@ -134,7 +140,12 @@ public class LivePositionStreamTriggers {
     public synchronized void close() {
         for (Long id : Set.copyOf(subscriptions.keySet())) {
             closeSubscription(id);
-            lease.release(id, ownerToken);
+            freshness.invalidate(id);
+            try {
+                lease.release(id, ownerToken);
+            } catch (RuntimeException ex) {
+                log.warn("LIVE stream shutdown lease cleanup failed credentialId={}", id, ex);
+            }
         }
     }
 }
