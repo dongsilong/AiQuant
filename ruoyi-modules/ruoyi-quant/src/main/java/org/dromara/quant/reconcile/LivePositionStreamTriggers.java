@@ -31,9 +31,21 @@ public class LivePositionStreamTriggers {
     private final LivePositionFreshness freshness;
     private final Map<Long, ExchangeGateway.UserDataStreamSession> sessions = new HashMap<>();
     private final Map<Long, java.time.Instant> renewed = new HashMap<>();
+    /**
+     * The optional independent subscriber is single-node only. Never subscribe
+     * automatically in deployments with more than one writer node; the REST
+     * heartbeat remains active independently of this optional stream.
+     */
+    @org.springframework.beans.factory.annotation.Value("${quant.position-sync.dedicated-stream-single-node:false}")
+    private boolean dedicatedStreamSingleNode;
+
 
     @Scheduled(fixedDelay = 30000, initialDelay = 10000)
     public synchronized void supervise() {
+        if (!dedicatedStreamSingleNode) {
+            log.error("Refusing dedicated LIVE user-stream subscription without explicit single-node opt-in; use existing stream integration or REST heartbeat");
+            return;
+        }
         var active = credentials.selectList(new LambdaQueryWrapper<QuantCredential>()
             .eq(QuantCredential::getStatus, "0"));
         Set<Long> liveIds = new java.util.HashSet<>();
