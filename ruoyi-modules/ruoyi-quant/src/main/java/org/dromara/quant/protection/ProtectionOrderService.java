@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.QuantityNormalizer;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
+import org.dromara.quant.execution.LiveOrderDispatcher;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.protection.domain.QuantProtectionOrder;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
@@ -46,6 +47,18 @@ public class ProtectionOrderService {
     }
 
     private final ExchangeGateway gateway;
+    private volatile LiveOrderDispatcher liveOrderDispatcher;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setLiveOrderDispatcher(LiveOrderDispatcher dispatcher) {
+        this.liveOrderDispatcher = java.util.Objects.requireNonNull(dispatcher);
+    }
+
+    private LiveOrderDispatcher requireLiveDispatcher() {
+        var value = liveOrderDispatcher;
+        if (value == null) throw new IllegalStateException("LIVE 保护单调度器不可用，拒绝直连交易所");
+        return value;
+    }
     /**
      * 当前领域 Mapper。
      */
@@ -287,7 +300,7 @@ public class ProtectionOrderService {
             credentialId, position.getId(), position.getSymbol(), position.getPositionSide(), protectionType, entity.getOrderType(), quantity, stopPrice, clientAlgoId, live);
         try {
             checkTargetLease();
-            ExchangeGateway.ProtectionOrderResult result = gateway.placeProtectionOrder(new ExchangeGateway.ProtectionOrderRequest(credential, position.getSymbol(),
+            ExchangeGateway.ProtectionOrderResult result = submitProtected(credentialId, entity, new ExchangeGateway.ProtectionOrderRequest(credential, position.getSymbol(),
                 "SHORT".equalsIgnoreCase(position.getPositionSide()) ? "BUY" : "SELL", exchangePositionSide, entity.getOrderType(), quantity, stopPrice, clientAlgoId, live));
             entity.setExchangeOrderId(result.orderId());
             if (!live) {
@@ -311,6 +324,111 @@ public class ProtectionOrderService {
         }
         if (targetLease.get() != null) { targetLease.get().confirmed(entity, stepIndex); }
         return entity;
+    }
+
+    /**
+     * The primary LIVE protection order path MUST use the same durable account-symbol
+     * dispatch guard as ordinary orders. Acknowledge only after the accepted Binance
+     * algo order ID is persisted; unknown outcomes keep the guard occupied.
+     */
+    private ExchangeGateway.ProtectionOrderResult submitProtected(Long credentialId,
+                                                                  QuantProtectionOrder local,
+                                                                  ExchangeGateway.ProtectionOrderRequest request) {
+        if (!request.live()) return gateway.placeProtectionOrder(request);
+        var dispatcher = requireLiveDispatcher();
+        var ticket = dispatcher.begin(credentialId, local.getSymbol(),
+            "PROT_CREATE:" + local.getId() + ":" + UUID.randomUUID(),
+            "PROTECT_CREATE", local.getClientOrderId(), null, null);
+        boolean attempted = false;
+        boolean finished = false;
+        try {
+            attempted = true;
+            var result = gateway.placeProtectionOrder(request);
+            if (result == null || result.orderId() == null || result.orderId() <= 0
+                || !local.getClientOrderId().equals(result.clientOrderId())) {
+                throw new IllegalStateException("Binance 保护单回执缺少准确订单 ID 或客户端标识");
+            }
+            local.setExchangeOrderId(result.orderId());
+            if (mapper.updateById(local) != 1) {
+                throw new IllegalStateException("Binance 已接受保护单，但本地意图未可靠写入");
+            }
+            dispatcher.acknowledged(ticket, result.orderId());
+            finished = true;
+            return result;
+        } catch (RuntimeException ex) {
+            if (!finished) {
+                try {
+                    if (attempted && (ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException
+                        || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException)) {
+                        dispatcher.notSent(ticket);
+                    } else {
+                        dispatcher.unknown(ticket);
+                    }
+                } catch (RuntimeException dispatchError) {
+                    ex.addSuppressed(dispatchError);
+                }
+            }
+            throw ex;
+        }
+    }
+
+    /**
+     * A cancel remains UNKNOWN unless an exact exchange query proves a terminal
+     * outcome and that fact has been persisted in the local protection ledger.
+     */
+    private boolean cancelProtected(Long credentialId, QuantProtectionOrder local, boolean live,
+                                    Set<String> allowedTerminalStatuses, boolean requireUnfilled) {
+        var credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
+        if (!live) {
+            gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(
+                credential, local.getExchangeOrderId(), local.getClientOrderId(), false));
+            local.setStatus("CANCELED");
+            return mapper.updateById(local) == 1;
+        }
+        var dispatcher = requireLiveDispatcher();
+        var ticket = dispatcher.begin(credentialId, local.getSymbol(),
+            "PROT_CANCEL:" + local.getId() + ":" + UUID.randomUUID(),
+            "PROTECT_CANCEL", local.getClientOrderId(), null, null);
+        boolean finished = false;
+        try {
+            try {
+                gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(
+                    credential, local.getExchangeOrderId(), local.getClientOrderId(), true));
+            } catch (RuntimeException ex) {
+                // A cancel can race with a fill: the exact Binance snapshot decides,
+                // not the transport exception or absence from an open-order list.
+            }
+            var actual = readProtectionSnapshot(credential, local);
+            if (actual == null || !allowedTerminalStatuses.contains(actual.status())
+                || actual.executedQuantity() == null
+                || requireUnfilled && actual.executedQuantity().signum() != 0
+                || actual.algoId() == null || actual.algoId() <= 0
+                || !local.getClientOrderId().equals(actual.clientAlgoId())) {
+                return false;
+            }
+            if (decisionLogs != null) decisionLogs.protection(credentialId, local, actual);
+            local.setStatus(actual.status());
+            local.setExecutedQuantity(actual.executedQuantity()
+                .max(local.getExecutedQuantity() == null ? BigDecimal.ZERO : local.getExecutedQuantity()));
+            if (mapper.updateById(local) != 1) {
+                throw new IllegalStateException("保护撤单终态未可靠写入本地账本");
+            }
+            dispatcher.acknowledged(ticket, actual.algoId());
+            finished = true;
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("保护撤单终态仍无法确认: accountId={}, symbol={}, clientAlgoId={}, errorType={}",
+                credentialId, local.getSymbol(), local.getClientOrderId(), ex.getClass().getSimpleName());
+            return false;
+        } finally {
+            if (!finished) {
+                try { dispatcher.unknown(ticket); }
+                catch (RuntimeException ex) {
+                    log.error("保护撤单调度结果未知，账户交易对必须保持阻断: accountId={}, symbol={}",
+                        credentialId, local.getSymbol(), ex);
+                }
+            }
+        }
     }
 
     /** 包括重复客户端标识在内的未知提交结果，只精确查询原意图，不再次发送。 */
@@ -358,7 +476,7 @@ public class ProtectionOrderService {
                 ExchangeGateway.ProtectionOrderResult result;
                 try {
                     checkTargetLease();
-                    result = gateway.placeProtectionOrder(new ExchangeGateway.ProtectionOrderRequest(credential, local.getSymbol(),
+                    result = submitProtected(credentialId, local, new ExchangeGateway.ProtectionOrderRequest(credential, local.getSymbol(),
                         "SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" : "SELL", exchangeSide, local.getOrderType(), local.getQuantity(), local.getStopPrice(), local.getClientOrderId(), true));
                 } catch (RuntimeException ex) {
                     local.setStatus(ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException ? "REJECTED" : "UNKNOWN");
@@ -496,19 +614,13 @@ public class ProtectionOrderService {
         }
         checkTargetLease();
         if ("MISSING".equals(order.getStatus())) { return true; }
-        ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
-        try { gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(credential, order.getExchangeOrderId(), order.getClientOrderId(), live)); }
-        catch (RuntimeException ignored) { /* 触发/超时竞争只能由精确终态解决，开放列表消失不作完成证明。 */ }
-        if (!live) { order.setStatus("CANCELED"); mapper.updateById(order); return true; }
-        try {
-            ExchangeGateway.ProtectionOrderSnapshot actual = readProtectionSnapshot(credential, order);
-            if (actual != null && Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED").contains(actual.status()) && actual.executedQuantity() != null) {
-                order.setStatus(actual.status());
-                order.setExecutedQuantity(actual.executedQuantity().max(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity()));
-                mapper.updateById(order); return true;
-            }
-        } catch (RuntimeException ignored) { /* 未知结果保留占位，后续恢复。 */ }
-        order.setStatus("CANCEL_FAILED"); mapper.updateById(order); return false;
+        if (cancelProtected(credentialId, order, live,
+            Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED"), false)) {
+            return true;
+        }
+        order.setStatus("CANCEL_FAILED");
+        mapper.updateById(order);
+        return false;
     }
 
     /** 条件单触发后，普通子订单也必须确认终态；不能仅凭算法订单 FINISHED 再发减仓。 */
@@ -571,24 +683,8 @@ public class ProtectionOrderService {
             .eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getPositionId, position.getId())
             .eq(QuantProtectionOrder::getProtectionType, type).orderByDesc(QuantProtectionOrder::getId).last("LIMIT 1"));
         if (local == null) { return true; }
-        ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
-        // 撤单成功也必须确认终态；开放单列表中消失不能证明未成交。
-        try {
-            gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(credential, local.getExchangeOrderId(), local.getClientOrderId(), true));
-        } catch (RuntimeException ex) {
-            // 撤销与触发可能竞争，以下精确查询决定是否允许本地部分减仓。
-        }
-        try {
-            ExchangeGateway.ProtectionOrderSnapshot actual = readProtectionSnapshot(credential, local);
-            if (decisionLogs != null) { decisionLogs.protection(credentialId, local, actual); }
-            if (actual != null && Set.of("CANCELED", "EXPIRED", "REJECTED").contains(actual.status())
-                && actual.executedQuantity() != null && actual.executedQuantity().signum() == 0) {
-                local.setStatus(actual.status()); mapper.updateById(local); return true;
-            }
-        } catch (RuntimeException ex) {
-            // 查询失败/不存在均不构成未成交证明，等待对账，禁止重复首止盈。
-        }
-        return false;
+        // Cancel + exact terminal proof + durable state update execute under one dispatch ticket.
+        return cancelProtected(credentialId, local, true, Set.of("CANCELED", "EXPIRED", "REJECTED"), true);
     }
 
     /** 精确读取本周期全部首止盈订单的成交量；重挂后的成交也保留，人工减仓不计入。 */
@@ -623,15 +719,11 @@ public class ProtectionOrderService {
             .eq(QuantProtectionOrder::getPositionCycleKey, position.getProtectionCycleKey())
             .in(QuantProtectionOrder::getProtectionType, "HARD_STOP", "LOCAL_STOP", "SYMBOL_STOP", "FIRST_TP", "STEP_TP")
             .in(QuantProtectionOrder::getStatus, ACTIVE_STATUSES));
-        ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
         for (QuantProtectionOrder order : orders) {
-            try { gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(credential, order.getExchangeOrderId(), order.getClientOrderId(), true)); }
-            catch (RuntimeException ignored) { /* 撤单可能与触发竞争，必须以下面的精确查询为准。 */ }
-            ExchangeGateway.ProtectionOrderSnapshot actual = readProtectionSnapshot(credential, order);
-            if (actual == null || !Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED").contains(actual.status())
-                || actual.executedQuantity() == null) { return false; }
-            order.setExecutedQuantity(actual.executedQuantity().max(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity()));
-            order.setStatus(actual.status()); mapper.updateById(order);
+            if (!cancelProtected(credentialId, order, true,
+                Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED"), false)) {
+                return false;
+            }
         }
         return true;
     }
