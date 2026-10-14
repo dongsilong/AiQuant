@@ -54,8 +54,8 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
     }
 
     static BinanceSdkStreamTransport user(String url, String listenKey,
-                                           Consumer<String> events, Runnable disconnected, int backlogLimit) {
-        WebSocketClientConfiguration config = configuration(url);
+                                           Consumer<String> events, Runnable disconnected, int backlogLimit, QuantProperties.Proxy proxy) {
+        WebSocketClientConfiguration config = configuration(url, proxy);
         var client = new DerivativesTradingUsdsFuturesWebSocketStreams(config);
         try {
             var queue = client.userData(listenKey);
