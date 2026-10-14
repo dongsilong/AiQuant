@@ -42,6 +42,15 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private final org.dromara.quant.market.AccountPositionCache positionCache;
     private final org.dromara.quant.market.AccountBalanceCache balanceCache;
     private final TradingPreparationService preparationService;
+    private volatile org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService runtimeLease;
+
+    /** Injected by Spring; direct non-Spring constructions remain fail-closed for LIVE strategy orders. */
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setRuntimeLease(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService runtimeLease) {
+        this.runtimeLease = java.util.Objects.requireNonNull(runtimeLease);
+    }
+
+
 
     /**
      * 创建 UnifiedTradeExecutionService 实例并初始化其依赖。
@@ -257,6 +266,15 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                         java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos),
                         openCommand.signalEventTime() == null ? null : java.time.Duration.between(openCommand.signalEventTime(), java.time.Instant.now()).toMillis(),
                         openCommand.validUntil() == null ? null : java.time.Duration.between(java.time.Instant.now(), openCommand.validUntil()).toMillis());
+                }
+                if ("LIVE".equalsIgnoreCase(runMode) && strategyInstanceId != null) {
+                    // A node that lost ownership must not submit a fresh exchange order.
+                    // This is a final read check, not yet a complete cross-node fencing protocol.
+                    var verifier = runtimeLease;
+                    if (verifier == null) {
+                        throw new IllegalStateException("LIVE 策略最终下单缺少租约验证器");
+                    }
+                    verifier.requireCurrentOwner(strategyInstanceId, credentialId, symbol);
                 }
                 exchangeAttempted = true;
                 long orderStarted = System.nanoTime();
