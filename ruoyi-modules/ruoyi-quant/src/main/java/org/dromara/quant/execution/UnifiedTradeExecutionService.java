@@ -43,6 +43,12 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private final org.dromara.quant.market.AccountBalanceCache balanceCache;
     private final TradingPreparationService preparationService;
     private volatile org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService runtimeLease;
+    private volatile org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard closeOwnershipGuard;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setCloseOwnershipGuard(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard guard) {
+        this.closeOwnershipGuard = java.util.Objects.requireNonNull(guard);
+    }
 
     /** Injected by Spring; direct non-Spring constructions remain fail-closed for LIVE strategy orders. */
     @org.springframework.beans.factory.annotation.Autowired
@@ -249,6 +255,8 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                 preparationEpoch = verifier.requireCurrentEpoch(strategyInstanceId, credentialId, symbol);
             }
             ExchangeGateway.OrderRequest request = requestSupplier.get();
+            verifyLiveCloseOwnership(operationType, credentialId, strategyId, strategyInstanceId, symbol,
+                idempotencyKey, runMode, request);
             logRequest = request;
             recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
                 "REQUESTED", "执行参数已准备", request, null, null, null);
@@ -275,6 +283,8 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                         openCommand.signalEventTime() == null ? null : java.time.Duration.between(openCommand.signalEventTime(), java.time.Instant.now()).toMillis(),
                         openCommand.validUntil() == null ? null : java.time.Duration.between(java.time.Instant.now(), openCommand.validUntil()).toMillis());
                 }
+                verifyLiveCloseOwnership(operationType, credentialId, strategyId, strategyInstanceId,
+                    symbol, idempotencyKey, runMode, request);
                 if (preparationEpoch != null) {
                     // Reject requests prepared before lease expiry/takeover/reacquisition.
                     // This guards the entire preparation window, not only final token ownership.
@@ -319,6 +329,21 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             }
             throw ex;
         }
+    }
+
+    /** State is re-read directly before the exchange call; stale strategy shares fail closed. */
+    private void verifyLiveCloseOwnership(String operation, Long credentialId, Long strategyId,
+                                          Long instanceId, String symbol, String idempotencyKey,
+                                          String runMode, ExchangeGateway.OrderRequest request) {
+        if (!"LIVE".equalsIgnoreCase(runMode) || !"CLOSE".equals(operation) || instanceId == null) {
+            return;
+        }
+        var guard = closeOwnershipGuard;
+        if (guard == null) {
+            throw new IllegalStateException("LIVE 策略平仓缺少持仓归属验证器");
+        }
+        guard.requireOwnedClose(credentialId, strategyId, instanceId, symbol,
+            request.side(), request.quantity(), idempotencyKey);
     }
 
     private void recordDecision(String operation, Long credentialId, Long strategyId, Long instanceId, String symbol,
