@@ -78,6 +78,10 @@ public class TradingReconciliationService {
     private final ReconciliationFailureRecorder failureRecorder;
     private final StrategyPositionStateService strategyPositionStateService;
     private final TransactionTemplate transaction;
+    private final java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.locks.ReentrantLock> positionLocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private java.util.concurrent.locks.ReentrantLock positionLock(Long credentialId) {
+        return positionLocks.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.locks.ReentrantLock());
+    }
     private volatile org.dromara.quant.execution.StrategyFillAllocationService fillAllocations;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LivePositionFreshness positionFreshness;
@@ -162,23 +166,29 @@ public class TradingReconciliationService {
      * Never treat an unavailable exchange response as an empty account.
      */
     public void refreshPositionsOnly(QuantCredential credential) {
+        var accountLock = positionLock(credential.getId());
+        accountLock.lock();
         try {
-            ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
-                credential.getApiKey(), credential.getSecretKey(),
-                credential.getSignatureType(), credential.getRunMode());
-            var account = java.util.Objects.requireNonNull(gateway.queryAccount(exchangeCredential),
-                "Binance account snapshot missing");
-            var positions = List.copyOf(java.util.Objects.requireNonNull(
-                gateway.queryPositions(exchangeCredential, null),
-                "Binance full position snapshot missing"));
-            transaction.executeWithoutResult(status -> {
-                syncAccount(credential, account);
-                syncPositions(credential, positions);
-            });
-            markPositionVerified(credential.getId());
-        } catch (RuntimeException ex) {
-            failureRecorder.record(credential.getId(), ex.getMessage());
-            throw ex;
+            try {
+                ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
+                    credential.getApiKey(), credential.getSecretKey(),
+                    credential.getSignatureType(), credential.getRunMode());
+                var account = java.util.Objects.requireNonNull(gateway.queryAccount(exchangeCredential),
+                    "Binance account snapshot missing");
+                var positions = List.copyOf(java.util.Objects.requireNonNull(
+                    gateway.queryPositions(exchangeCredential, null),
+                    "Binance full position snapshot missing"));
+                transaction.executeWithoutResult(status -> {
+                    syncAccount(credential, account);
+                    syncPositions(credential, positions);
+                });
+                markPositionVerified(credential.getId());
+            } catch (RuntimeException ex) {
+                failureRecorder.record(credential.getId(), ex.getMessage());
+                throw ex;
+            }
+        } finally {
+            accountLock.unlock();
         }
     }
 
@@ -190,27 +200,33 @@ public class TradingReconciliationService {
      * account positions, orders or protections.
      */
     public void reconcileCredential(QuantCredential credential, int historyHours) {
+        var accountLock = positionLock(credential.getId());
+        accountLock.lock();
         try {
-            ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
-                credential.getApiKey(), credential.getSecretKey(),
-                credential.getSignatureType(), credential.getRunMode());
-            // Collect a complete account position snapshot before any DB writes.
-            // Commit it independently BEFORE querying order/fill/income history:
-            // a failing history endpoint must not keep already-closed Binance
-            // positions counted as open indefinitely.
-            var account = gateway.queryAccount(exchangeCredential);
-            var positions = List.copyOf(gateway.queryPositions(exchangeCredential, null));
-            transaction.executeWithoutResult(status -> {
-                syncAccount(credential, account);
-                syncPositions(credential, positions);
-            });
-            markPositionVerified(credential.getId());
-            ExchangeFacts facts = collectExchangeFacts(credential, historyHours,
-                exchangeCredential, account, positions);
-            transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
-        } catch (RuntimeException ex) {
-            failureRecorder.record(credential.getId(), ex.getMessage());
-            throw ex;
+            try {
+                ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
+                    credential.getApiKey(), credential.getSecretKey(),
+                    credential.getSignatureType(), credential.getRunMode());
+                // Collect a complete account position snapshot before any DB writes.
+                // Commit it independently BEFORE querying order/fill/income history:
+                // a failing history endpoint must not keep already-closed Binance
+                // positions counted as open indefinitely.
+                var account = gateway.queryAccount(exchangeCredential);
+                var positions = List.copyOf(gateway.queryPositions(exchangeCredential, null));
+                transaction.executeWithoutResult(status -> {
+                    syncAccount(credential, account);
+                    syncPositions(credential, positions);
+                });
+                markPositionVerified(credential.getId());
+                ExchangeFacts facts = collectExchangeFacts(credential, historyHours,
+                    exchangeCredential, account, positions);
+                transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
+            } catch (RuntimeException ex) {
+                failureRecorder.record(credential.getId(), ex.getMessage());
+                throw ex;
+            }
+        } finally {
+            accountLock.unlock();
         }
     }
 
