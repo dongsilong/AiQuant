@@ -12,11 +12,9 @@ import org.dromara.common.core.utils.StringUtils;
 import org.dromara.common.mybatis.core.page.PageQuery;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.credential.domain.QuantCredential;
-import org.dromara.quant.credential.domain.QuantCredentialUser;
 import org.dromara.quant.credential.domain.bo.QuantCredentialBo;
 import org.dromara.quant.credential.domain.vo.QuantCredentialVo;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
-import org.dromara.quant.credential.mapper.QuantCredentialUserMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.security.CredentialMasker;
 import org.springframework.stereotype.Service;
@@ -36,10 +34,6 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
      * 交易凭证 Mapper。
      */
     private final QuantCredentialMapper credentialMapper;
-    /**
-     * 凭证授权关系 Mapper。
-     */
-    private final QuantCredentialUserMapper credentialUserMapper;
     /**
      * 交易所统一网关。
      */
@@ -82,11 +76,10 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setUserId(LoginHelper.getUserId());
         }
         entity.setSecretKey(bo.getSecretKey());
-        validateSingleBoundUser(bo.getUserIds(), entity.getUserId());
+        validateSingleBoundUser(entity.getUserId());
         applyDefaults(entity);
         validateCredential(entity);
         credentialMapper.insert(entity);
-        saveUsers(entity.getId(), bo.getUserIds(), entity.getUserId());
         return toVo(entity);
     }
 
@@ -120,7 +113,7 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         if (StringUtils.isBlank(entity.getSignatureType())) {
             entity.setSignatureType(current.getSignatureType());
         }
-        validateSingleBoundUser(bo.getUserIds(), entity.getUserId());
+        validateSingleBoundUser(entity.getUserId());
         boolean modeChanged = !java.util.Objects.equals(current.getRunMode(), entity.getRunMode());
         boolean credentialChanged = StringUtils.isNotBlank(bo.getApiKey()) || StringUtils.isNotBlank(bo.getSecretKey());
         if (modeChanged || credentialChanged || "PAPER".equalsIgnoreCase(entity.getRunMode())) {
@@ -133,7 +126,6 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setLastConnectTime(current.getLastConnectTime());
         }
         credentialMapper.updateById(entity);
-        credentialUserMapper.delete(new LambdaQueryWrapper<QuantCredentialUser>().eq(QuantCredentialUser::getCredentialId, entity.getId()));
         saveUsers(entity.getId(), bo.getUserIds(), entity.getUserId());
         return toVo(entity);
     }
@@ -236,14 +228,13 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
     private QuantCredentialVo toVo(QuantCredential entity) {
         QuantCredentialVo vo = MapstructUtils.convert(entity, QuantCredentialVo.class);
         vo.setMaskedApiKey(CredentialMasker.maskApiKey(entity.getApiKey()));
-        vo.setUserIds(credentialUserMapper.selectList(new LambdaQueryWrapper<QuantCredentialUser>().eq(QuantCredentialUser::getCredentialId, entity.getId())).stream().map(QuantCredentialUser::getUserId).toList());
         return vo;
     }
 
     private void applyUserScope(LambdaQueryWrapper<QuantCredential> wrapper) {
         Long userId = LoginHelper.getUserId();
         if (!LoginHelper.isSuperAdmin(userId)) {
-            wrapper.inSql(QuantCredential::getId, "select credential_id from quant_credential_user where user_id = " + userId);
+            wrapper.eq(QuantCredential::getUserId, userId);
         }
     }
 
@@ -252,28 +243,14 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             return;
         }
         Long userId = LoginHelper.getUserId();
-        boolean related =
-            credentialUserMapper.selectCount(new LambdaQueryWrapper<QuantCredentialUser>().eq(QuantCredentialUser::getCredentialId, entity.getId()).eq(QuantCredentialUser::getUserId, userId)) > 0;
-        if (!LoginHelper.isSuperAdmin(userId) && !userId.equals(entity.getUserId()) && !related) {
+        if (!LoginHelper.isSuperAdmin(userId) && !userId.equals(entity.getUserId())) {
             throw new ServiceException("无权访问该交易账户");
         }
     }
 
-    static void validateSingleBoundUser(List<Long> userIds, Long ownerUserId) {
+    static void validateSingleBoundUser(Long ownerUserId) {
         if (ownerUserId == null || ownerUserId <= 0) {
             throw new ServiceException("交易凭证必须指定唯一所属用户");
         }
-        if (userIds != null && (userIds.size() != 1
-            || userIds.get(0) == null || !ownerUserId.equals(userIds.get(0)))) {
-            throw new ServiceException("一个交易凭证只能绑定一个用户，且必须与所属用户一致");
-        }
-    }
-
-    private void saveUsers(Long credentialId, List<Long> userIds, Long fallbackUserId) {
-        validateSingleBoundUser(userIds, fallbackUserId);
-        QuantCredentialUser relation = new QuantCredentialUser();
-        relation.setCredentialId(credentialId);
-        relation.setUserId(fallbackUserId);
-        credentialUserMapper.insert(relation);
     }
 }
