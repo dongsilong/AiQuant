@@ -214,6 +214,7 @@ class UnifiedTradeExecutionServiceTest {
         when(gateway.placeOrder(any())).thenReturn(new ExchangeGateway.OrderResult(55L, "close", "FILLED"));
         var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
             mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        service.setRuntimeLease(mock(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService.class));
         var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
         service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", mode),
             "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "close", mode, rule, safety));
@@ -247,6 +248,7 @@ class UnifiedTradeExecutionServiceTest {
         when(gateway.placeOrder(any())).thenReturn(new ExchangeGateway.OrderResult(55L, "open", "FILLED"));
         var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
             mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        service.setRuntimeLease(mock(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService.class));
         var safety = new ExecutionSafetyContext(true, true, true, true, true, true, true, true);
         service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", mode),
             "BTCUSDT", "BUY", "MARKET", new BigDecimal("3.5"), BigDecimal.TEN, null, "open", mode, rule, 10, "ISOLATED", safety));
@@ -267,6 +269,7 @@ class UnifiedTradeExecutionServiceTest {
         when(gateway.placeOrder(any())).thenReturn(new ExchangeGateway.OrderResult(55L, "close", "FILLED"));
         var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
             mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        service.setRuntimeLease(mock(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService.class));
         var imported = "missing".equals(localRule) ? null : new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0,
             new BigDecimal("0.01"), new BigDecimal("0.1"), new BigDecimal("0.1"), null, "TRADING");
         var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
@@ -275,6 +278,30 @@ class UnifiedTradeExecutionServiceTest {
             new BigDecimal("1.5"), null, "BOTH", "close-actual-rule", "LIVE", imported, safety));
         assertTrue(result.accepted());
         verify(gateway).placeOrder(argThat(request -> request.reduceOnly() && request.quantity().compareTo(BigDecimal.ONE) == 0));
+    }
+
+    @Test
+    void liveRuntimeCloseWithoutCurrentLeaseCannotReachBinance() {
+        var gateway = mock(ExchangeGateway.class);
+        var records = mock(ExecutionRecordService.class);
+        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(new QuantExecutionRecord());
+        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0,
+            new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
+        when(gateway.queryTradingRule(any(), any())).thenReturn(rule);
+        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records,
+            mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class),
+            mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        var lease = mock(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService.class);
+        service.setRuntimeLease(lease);
+        doThrow(new IllegalStateException("lease moved")).when(lease).requireCurrentOwner(3L, 1L, "BTCUSDT");
+        var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
+        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(
+            1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
+            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "stale-worker",
+            "LIVE", rule, safety)));
+        verify(gateway, never()).placeOrder(any());
+        verify(lease).requireCurrentOwner(3L, 1L, "BTCUSDT");
     }
 
     @Test
