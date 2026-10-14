@@ -28,3 +28,40 @@ jobs:
           -Dtest=StrategyEntryGuardServiceTest,StrategyRuntimeLeaseServiceTest,OpenCapacityServiceTest,PaperAtomicMapperTest,ExecutionRecoveryServiceTest,BinanceGatewayClockOffsetTest,BinanceGatewayConnectivityTest,BinanceSdkContractTest,BinanceWebSocketTransportSelectionTest,StrategyRuntimeSafetyTest
           -Dsurefire.failIfNoSpecifiedTests=false
           test
+
+  mysql-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: only_for_ci
+          MYSQL_DATABASE: aiquant_ci_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -ponly_for_ci"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=15
+    env:
+      AIQUANT_MYSQL_URL: jdbc:mysql://127.0.0.1:3306/aiquant_ci_test?useSSL=false&allowPublicKeyRetrieval=true
+      AIQUANT_MYSQL_USERNAME: root
+      AIQUANT_MYSQL_PASSWORD: only_for_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Validate real InnoDB locks, account capacity and lease ownership
+        run: >-
+          bash mvnw -B -ntp
+          -pl ruoyi-modules/ruoyi-quant -am
+          -Dtest=MySqlAtomicConcurrencyTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+          test
