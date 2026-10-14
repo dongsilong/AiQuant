@@ -133,6 +133,11 @@ public interface LiveOrderDispatchMapper {
           AND symbol=#{symbol} AND client_order_id=#{clientOrderId}
           AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
           AND dispatch_status IN ('DISPATCHING','UNKNOWN')
+          AND EXISTS (
+            SELECT 1 FROM quant_live_dispatch_guard g
+            WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+              AND g.active_dispatch_key=#{key}
+          )
         """)
     int recoverVerified(@Param("credentialId") Long credentialId,
                         @Param("symbol") String symbol, @Param("key") String key,
