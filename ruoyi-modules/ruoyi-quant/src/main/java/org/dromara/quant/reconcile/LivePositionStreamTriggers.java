@@ -53,6 +53,13 @@ public class LivePositionStreamTriggers {
                     freshness.invalidate(id);
                     continue;
                 }
+                // Hub may have forcibly removed the old WebSocket after a
+                // lease loss while this supervisor still holds its old handle.
+                // Discard that handle and re-enroll instead of silently
+                // treating the lost stream as active after lease reacquisition.
+                if (subscriptions.containsKey(id) && !hub.hasLocalStream(id)) {
+                    closeSubscription(id);
+                }
                 hub.registerLeaseOwner(id, ownerToken);
                 if (subscriptions.containsKey(id)) {
                     continue;
