@@ -214,3 +214,32 @@ NOT EXISTS concurrently. APPROVED transitions also require the exact active
 ticket to remain UNKNOWN/DISPATCHING and preserve operation type, client order
 ID, and nullable exchange order ID. The SQL contract test checks these
 invariants. This is not yet a real-MySQL migration or concurrency validation.
+
+### Manual recovery execution path — implemented, staging gate still open
+
+`LiveManualRecoveryController` provides four separately permissioned POST
+endpoints at `/quant/infrastructure/recovery/{request,approve,reject,execute}`.
+The actor comes only from the Sa-Token session, never from a request field.
+The independent requester and reviewer must differ; execution requires a
+**third** distinct authenticated actor.
+
+`LiveManualRecoveryExecutionService` obtains the persisted APPROVED case,
+checks exact credential/symbol/client ID/order ID, reads an exact Binance order
+via the configured ExchangeGateway, validates order identity, known status
+and cumulative quantities, and requires a terminal fact for CANCEL.
+A missing/uncertain Binance order NEVER authorizes an unlock. The order
+snapshot must persist before the short MySQL transaction; then the execution
+record transition, approval-case EXECUTED CAS, durable dispatch ticket recovery,
+guard release and EXECUTE audit insert must all commit together. SQL status
+conditions reject a parallel/stale executor. Uncertain outcomes remain blocked.
+
+**Not yet production accepted:** V05 is a draft needing canonical schema
+migration rehearsal; explicit permission grants must be reviewed and
+separated across identities. MySQL grant restrictions plus WORM audit export
+must be verified. The exchange fact and protection/position lifecycle still
+require isolated Binance fault-injection and multi-node tests. A fresh exact
+order snapshot alone does not prove full account/protective-order equivalence,
+and the flow intentionally excludes CONFIG_SETTINGS and protection tickets.
+Existing standard reconciliation remains available for those distinct types.
+
+No LIVE trade is automatically resumed merely because a case is APPROVED.
