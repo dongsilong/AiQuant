@@ -73,3 +73,38 @@ manual reconciliation is implemented.
   injection and production rollback drills are still outstanding.
 - A green GitHub CI run establishes unit/Integration SQL behavior, **not**
   production authorization. LIVE permission now defaults to **ON** per operator request, while production strategy runtime defaults **OFF**. Set `QUANT_LIVE_ENABLED=false` until all production gates have passed.
+
+## Additional OMS race and operator hardening
+
+- Normal LIVE cancel now resolves the authentic Binance client order ID
+  before reserving a cancel execution record when the caller supplies only
+  an exchange order ID. It does not invent a synthetic client ID that could
+  later make exact recovery impossible.
+- A successful CANCEL API response is **not** terminal proof. The dispatcher
+  releases the account-symbol slot only after exact Binance `queryOrder`
+  confirms one of `CANCELED`, `EXPIRED`, `FILLED`, `REJECTED`, checks
+  both identifiers and cumulative executed quantity, persists the local
+  order snapshot, and updates the execution record. `PARTIALLY_FILLED`
+  remains quarantined; the remaining unfilled quantity may still be live.
+- The recovery scheduler follows the same rule. It may reconcile a partial
+  fill's ledger facts without marking CANCEL `RECOVERED` or unlocking
+  the corresponding unresolved ticket.
+- Once a strategy captures a lease epoch, it revalidates it before AND
+  after the durable dispatch-guard acquisition. Losing the lease during
+  a blocked claim therefore causes a `FAILED_NOT_SENT` ticket, without
+  contacting Binance.
+- `QuantOrderMapper.mergeExchangeFactIfMonotonic` performs conditional SQL
+  updates: older `NEW` facts cannot replace confirmed partial fills or
+  terminal statuses, cumulative fills cannot decrease, and strategy or
+  exchange-order identity cannot silently change. H2 and disposable
+  MySQL/InnoDB regression tests cover competing snapshots.
+- Privileged operators may inspect the 100 oldest unresolved account-symbol
+  dispatch tickets at `GET /quant/infrastructure/dispatch/unresolved`,
+  requiring `quant:dispatch:view`. Binance/Snowflake IDs are exposed as
+  strings. The market administration page displays this **read-only** queue;
+  there is no administrative force-unlock endpoint.
+
+**Caveat:** A status-safe SQL merge is not a complete fills/fees PnL ledger.
+Some manual/external orders, snapshot-history gaps, order-cancel retry paths,
+and close-protection takeover conditions still need Binance staging fault
+injection. No LIVE production execution is authorized solely by CI.
