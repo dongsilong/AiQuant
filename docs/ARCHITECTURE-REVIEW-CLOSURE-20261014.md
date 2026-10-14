@@ -69,3 +69,25 @@ persists cycle transitions exactly once, quarantines unknown manual/legacy
 activity, reconciles with Binance position and fees, and passes MySQL
 concurrency, restart and exchange-staging acceptance. Do not use the new
 calculator for live sizing or release approvals yet.
+
+## Durable position projector scaffold (not yet LIVE connected)
+
+V08 adds a per-strategy, per-position-side inventory table with a composite
+primary key for InnoDB row locking. `StrategyPositionProjectionMapper` and
+`StrategyPositionProjectionService` provide a transactionally locked path
+that checks the exact exchange trade ID, strategy ownership, strictly
+monotonic trade-time/trade-ID sequence and explicitly supplied OPEN/CLOSE
+role. They write a unique fill event, cycle open/close and quantity/cost/PnL
+inventory together; an invalid close, conflicting replay, missing origin or
+out-of-order fill causes rollback. Numeric decimals compare by value even
+when the exchange provides a different scale.
+
+**This is deliberately NOT called by automatic Binance reconciliation.**
+The current order metadata cannot prove immutable OPEN/CLOSE intent for
+all one-way/hedge/manual/reversal cases; treating reduceOnly=false as proof of
+OPEN is unsafe. No automation should invoke the projector until the trusted
+order-intent origin, gap handling, backfill replay and exchange-side position
+reconciliation are implemented and validated. V07 and V08 remain design-only
+migrations awaiting actual MySQL schema review and restore rehearsal.
+
+P0-04 remains OPEN.
