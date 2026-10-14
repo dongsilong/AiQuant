@@ -211,8 +211,10 @@ public class TradingReconciliationService {
                 // Commit it independently BEFORE querying order/fill/income history:
                 // a failing history endpoint must not keep already-closed Binance
                 // positions counted as open indefinitely.
-                var account = gateway.queryAccount(exchangeCredential);
-                var positions = List.copyOf(gateway.queryPositions(exchangeCredential, null));
+                var account = java.util.Objects.requireNonNull(
+                    gateway.queryAccount(exchangeCredential), "Binance account snapshot missing");
+                var positions = List.copyOf(java.util.Objects.requireNonNull(
+                    gateway.queryPositions(exchangeCredential, null), "Binance full position snapshot missing"));
                 transaction.executeWithoutResult(status -> {
                     syncAccount(credential, account);
                     syncPositions(credential, positions);
