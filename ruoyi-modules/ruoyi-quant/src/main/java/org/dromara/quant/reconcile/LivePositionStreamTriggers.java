@@ -6,19 +6,21 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
-import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.market.UserDataStreamHub;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * Optional independent LIVE user stream position triggers. Activate only
- * after checking whether the existing account-stream supervisor already
- * subscribes to these credentials: duplicate listenKeys waste exchange quota.
- * REST heartbeat remains the fallback while subscription is unavailable.
+ * Keep one LIVE subscription reference per enabled credential, via the existing
+ * UserDataStreamHub. The hub owns all Binance connections, listenKey renewal,
+ * reconnect and fan-out; this component MUST NEVER subscribe to Binance itself.
+ * Other consumers (including terminal SSE) share the same in-JVM connection.
  */
 @Slf4j
 @Component
@@ -26,88 +28,59 @@ import java.util.Set;
 @ConditionalOnProperty(prefix = "quant.position-sync", name = "event-driven", havingValue = "true")
 public class LivePositionStreamTriggers {
     private final QuantCredentialMapper credentials;
-    private final ExchangeGateway gateway;
+    private final UserDataStreamHub hub;
     private final LivePositionEventCoordinator coordinator;
     private final LivePositionFreshness freshness;
-    private final Map<Long, ExchangeGateway.UserDataStreamSession> sessions = new HashMap<>();
-    private final Map<Long, java.time.Instant> renewed = new HashMap<>();
-    /**
-     * The optional independent subscriber is single-node only. Never subscribe
-     * automatically in deployments with more than one writer node; the REST
-     * heartbeat remains active independently of this optional stream.
-     */
-    @org.springframework.beans.factory.annotation.Value("${quant.position-sync.dedicated-stream-single-node:false}")
-    private boolean dedicatedStreamSingleNode;
-
+    private final Map<Long, AutoCloseable> subscriptions = new HashMap<>();
 
     @Scheduled(fixedDelay = 30000, initialDelay = 10000)
     public synchronized void supervise() {
-        if (!dedicatedStreamSingleNode) {
-            return;
-        }
-        var active = credentials.selectList(new LambdaQueryWrapper<QuantCredential>()
-            .eq(QuantCredential::getStatus, "0"));
-        Set<Long> liveIds = new java.util.HashSet<>();
-        for (QuantCredential credential : active) {
+        Set<Long> liveIds = new HashSet<>();
+        for (QuantCredential credential : credentials.selectList(
+            new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"))) {
             if (!"LIVE".equalsIgnoreCase(credential.getRunMode())) {
                 continue;
             }
             Long id = credential.getId();
             liveIds.add(id);
-            ExchangeGateway.UserDataStreamSession session = sessions.get(id);
-            if (session != null && session.isConnected()) {
-                var last = renewed.get(id);
-                if (last != null && java.time.Duration.between(last, java.time.Instant.now()).toMinutes() < 20) {
-                    continue;
-                }
-                try {
-                    session.keepAlive();
-                    renewed.put(id, java.time.Instant.now());
-                    continue;
-                } catch (RuntimeException ex) {
-                    log.warn("LIVE user stream listenKey renewal failed credentialId={}", id, ex);
-                }
+            if (subscriptions.containsKey(id)) {
+                continue;
             }
-            if (session != null) {
-                sessions.remove(id);
-                renewed.remove(id);
-                try { session.close(); } catch (RuntimeException ex) {
-                    log.warn("Closing disconnected LIVE user stream failed credentialId={}", id, ex);
-                }
-            }
-            freshness.invalidate(id);
             try {
-                var exchangeCredential = new ExchangeGateway.Credential(
-                    credential.getApiKey(), credential.getSecretKey(),
-                    credential.getSignatureType(), credential.getRunMode());
-                var bound = gateway.subscribeUserData(exchangeCredential,
-                    event -> coordinator.onUserDataEvent(id, event));
-                sessions.put(id, bound);
-                renewed.put(id, java.time.Instant.now());
-                coordinator.request(id); // refresh after reconnect / subscription
+                AutoCloseable reference = hub.subscribe(credential, event -> {
+                    // Hub centrally forwards events into the coordinator; this
+                    // listener exists only to hold an active subscription.
+                });
+                subscriptions.put(id, reference);
+                coordinator.request(id);
             } catch (RuntimeException ex) {
-                log.warn("LIVE user stream subscribe failed credentialId={}", id, ex);
+                freshness.invalidate(id);
+                log.warn("LIVE shared user stream enrollment failed credentialId={}", id, ex);
             }
         }
-        for (Long id : Set.copyOf(sessions.keySet())) {
+        for (Long id : Set.copyOf(subscriptions.keySet())) {
             if (!liveIds.contains(id)) {
-                try { sessions.remove(id).close(); } catch (RuntimeException ex) {
-                    log.warn("Closing disabled LIVE user stream failed credentialId={}", id, ex);
-                }
-                renewed.remove(id);
+                closeSubscription(id);
                 freshness.invalidate(id);
+            }
+        }
+    }
+
+    private void closeSubscription(Long id) {
+        AutoCloseable subscription = subscriptions.remove(id);
+        if (subscription != null) {
+            try {
+                subscription.close();
+            } catch (Exception ex) {
+                log.warn("LIVE shared stream unsubscribe failed credentialId={}", id, ex);
             }
         }
     }
 
     @PreDestroy
     public synchronized void close() {
-        for (var session : sessions.values()) {
-            try { session.close(); } catch (RuntimeException ex) {
-                log.warn("Closing LIVE user stream during shutdown failed", ex);
-            }
+        for (Long id : Set.copyOf(subscriptions.keySet())) {
+            closeSubscription(id);
         }
-        sessions.clear();
-        renewed.clear();
     }
 }
