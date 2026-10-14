@@ -65,7 +65,7 @@ public class LiveRecoveryCaseService {
     public void reject(long caseId, long reviewerId, String evidenceHash, String detailHash) {
         validateCase(caseId, reviewerId, evidenceHash, detailHash);
         tx.executeWithoutResult(status -> {
-            if (cases.reject(caseId, reviewerId) != 1) {
+            if (cases.reject(caseId, reviewerId, evidenceHash.toLowerCase(Locale.ROOT)) != 1) {
                 throw new IllegalStateException("Recovery rejection CAS failed");
             }
             append(caseId, reviewerId, "REJECT", evidenceHash, detailHash);
