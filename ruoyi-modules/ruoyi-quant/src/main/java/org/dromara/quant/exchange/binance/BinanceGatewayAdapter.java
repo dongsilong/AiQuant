@@ -1084,7 +1084,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                     try { api(credential).closeUserDataStream(); } catch (RuntimeException ignored) { }
                     throw ex;
                 }
-                log.warn("Binance SDK user stream session not ready; using RAW_OKHTTP for this credential without disabling LIVE reconciliation, credentialId={}", credential.id());
+                log.warn("Binance SDK user stream session not ready; using RAW_OKHTTP for this LIVE credential without disabling reconciliation");
             }
         }
         SocketConnection socket = new SocketConnection(base + listenKey, events, disconnected);
