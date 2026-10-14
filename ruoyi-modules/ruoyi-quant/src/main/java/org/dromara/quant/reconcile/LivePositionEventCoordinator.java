@@ -21,6 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class LivePositionEventCoordinator {
     private final QuantCredentialMapper credentials;
     private final TradingReconciliationService reconciliation;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LivePositionFreshness freshness;
     private final Set<Long> pending = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<Long, Long> retryNotBefore = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> failures = new ConcurrentHashMap<>();
@@ -29,6 +31,11 @@ public class LivePositionEventCoordinator {
 
     public void request(Long credentialId) {
         if (credentialId != null) {
+            // A stream event may make the previously verified snapshot stale.
+            // No further LIVE opening until a full REST snapshot commits.
+            if (freshness != null) {
+                freshness.invalidate(credentialId);
+            }
             pending.add(credentialId);
         }
     }
