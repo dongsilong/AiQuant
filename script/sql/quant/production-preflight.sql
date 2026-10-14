@@ -55,3 +55,10 @@ ORDER BY r.table_name;
 
 -- Preflight rejects empty production credentials before any LIVE enablement.
 -- Index name/shape validation is independent of H2 tests, which do not test the real production schema.
+
+-- Fencing schema gate: the migration V20261014_01__runtime_lease_epoch.sql
+-- MUST be installed before the new LIVE runtime is started.
+SELECT CASE WHEN COUNT(*)=1 THEN 'OK' ELSE 'MISSING_LEASE_EPOCH' END AS status
+FROM information_schema.columns
+WHERE table_schema=DATABASE() AND table_name='quant_strategy_runtime_lease'
+  AND column_name='lease_epoch' AND data_type='bigint' AND is_nullable='NO';
