@@ -132,4 +132,30 @@ class UserDataStreamLeaseGateTest {
         hub.destroy();
     }
 
+    @Test
+    void startupFailureAfterSocketCreationClosesPrivateConnection() {
+        var gateway = mock(ExchangeGateway.class);
+        var lease = mock(LiveUserStreamLeaseMapper.class);
+        var positions = mock(AccountPositionCache.class);
+        var balances = mock(AccountBalanceCache.class);
+        var preparation = mock(TradingPreparationService.class);
+        var session = mock(ExchangeGateway.UserDataStreamSession.class);
+        when(lease.owns(eq(103L), eq("node-a"))).thenReturn(1L);
+        when(gateway.subscribeUserData(any(), any())).thenReturn(session);
+        doThrow(new IllegalStateException("initial cache unavailable"))
+            .when(positions).onEvent(eq(103L), any());
+        var hub = new UserDataStreamHub(gateway,
+            mock(TradeExecutionApplicationService.class), positions, balances, preparation);
+        ReflectionTestUtils.setField(hub, "streamLease", lease);
+        var credential = new QuantCredential();
+        credential.setId(103L);
+        credential.setRunMode("LIVE");
+        hub.registerLeaseOwner(103L, "node-a");
+        hub.subscribe(credential, ignored -> {});
+        verify(session).close();
+        verify(positions).disconnect(103L);
+        verify(balances).disconnect(103L);
+        hub.destroy();
+    }
+
 }
