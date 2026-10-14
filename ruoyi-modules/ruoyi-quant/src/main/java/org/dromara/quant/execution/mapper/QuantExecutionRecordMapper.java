@@ -53,6 +53,22 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
                                @Param("exchangeStatus") String exchangeStatus,
                                @Param("now") LocalDateTime now);
 
+    /**
+     * A CANCEL may race with a fill. Annotate only the exact recovered exchange fact;
+     * never update a stale entity with updateById after another recovery worker ran.
+     */
+    @Options(timeout = 3)
+    @Update("""
+        UPDATE quant_execution_record
+        SET error_message=#{message}, updated_at=#{now}
+        WHERE id=#{id} AND operation_type='CANCEL'
+          AND execution_status='RECOVERED' AND exchange_order_status=#{exchangeStatus}
+          AND exchange_order_id=#{orderId}
+        """)
+    int annotateRecoveredCancelFill(@Param("id") Long id, @Param("orderId") Long orderId,
+                                    @Param("exchangeStatus") String exchangeStatus,
+                                    @Param("message") String message, @Param("now") LocalDateTime now);
+
     @Options(timeout = 3)
     @Update("""
         UPDATE quant_execution_record
