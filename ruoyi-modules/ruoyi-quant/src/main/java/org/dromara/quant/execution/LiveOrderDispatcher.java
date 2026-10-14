@@ -74,6 +74,21 @@ public class LiveOrderDispatcher {
         });
     }
 
+    /**
+     * Account setup has no Binance order ID. The caller may invoke this ONLY
+     * after BOTH changeMarginType and changeInitialLeverage return successfully.
+     * No TTL takeover: if process/network outcome is uncertain, leave UNKNOWN.
+     */
+    public void configurationApplied(Ticket ticket) {
+        if (ticket == null) throw new IllegalArgumentException("Missing configuration dispatch ticket");
+        transaction.executeWithoutResult(status -> {
+            if (mapper.acknowledgeConfiguration(ticket.credentialId(), ticket.symbol(), ticket.key()) != 1
+                || mapper.release(ticket.credentialId(), ticket.symbol(), ticket.key()) != 1) {
+                throw new IllegalStateException("账户配置未能可靠确认，保持该交易对调度阻断");
+            }
+        });
+    }
+
     /** Reserved for a provably NOT-SENT result. All timeouts are UNKNOWN instead. */
     public void notSent(Ticket ticket) {
         transaction.executeWithoutResult(status -> {
