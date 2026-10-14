@@ -87,6 +87,11 @@ public class UserDataStreamHub {
         return stream != null && !stream.closed;
     }
 
+    /** Only the node holding the current LIVE private-stream DB lease may start a strategy subscription. */
+    public boolean hasLiveStreamOwnership(Long credentialId) {
+        return credentialId != null && ownsLiveStream(credentialId);
+    }
+
     private boolean ownsLiveStream(Long credentialId) {
         String token = localLeaseOwners.get(credentialId);
         return token != null && streamLease.owns(credentialId, token) == 1;
