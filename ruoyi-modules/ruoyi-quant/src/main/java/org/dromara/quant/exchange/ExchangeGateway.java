@@ -193,7 +193,14 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param time        交易所事实发生时间
      */
     record TradeSnapshot(String symbol, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long tradeId, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId, String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl,
-                         Instant time) {
+                         Instant time, String commissionAsset) {
+        /** Legacy callers have unknown fee asset and MUST NOT project as settled PnL. */
+        public TradeSnapshot(String symbol, Long tradeId, Long orderId, String side,
+                             BigDecimal quantity, BigDecimal price, BigDecimal commission,
+                             BigDecimal realizedPnl, Instant time) {
+            this(symbol, tradeId, orderId, side, quantity, price,
+                commission, realizedPnl, time, null);
+        }
     }
 
     /**
