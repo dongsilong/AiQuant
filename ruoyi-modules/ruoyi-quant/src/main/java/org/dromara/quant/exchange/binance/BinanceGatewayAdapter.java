@@ -1075,8 +1075,16 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(),
                     managed::close, sdk::connected);
             } catch (RuntimeException ex) {
-                try { api(credential).closeUserDataStream(); } catch (RuntimeException ignored) { }
-                throw ex;
+                // SDK 12.0.3 can attempt userData() SUBSCRIBE before its async Jetty
+                // session exists. Do not repeatedly fail the LIVE account stream:
+                // use the established listenKey on the supported raw transport.
+                // SDK transport has already closed its failed connection.
+                if (!(ex instanceof NullPointerException)
+                    || ex.getMessage() == null || !ex.getMessage().contains("session")) {
+                    try { api(credential).closeUserDataStream(); } catch (RuntimeException ignored) { }
+                    throw ex;
+                }
+                log.warn("Binance SDK user stream session not ready; using RAW_OKHTTP for this credential without disabling LIVE reconciliation, credentialId={}", credential.id());
             }
         }
         SocketConnection socket = new SocketConnection(base + listenKey, events, disconnected);
