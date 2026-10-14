@@ -55,4 +55,17 @@ class LivePositionEventCoordinatorTest {
         verify(reconciliation, times(1)).refreshPositionsOnly(live);
     }
 
+    @Test
+    void newExchangeEventRevokesFreshnessUntilRestVerification() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        var freshness = new LivePositionFreshness();
+        freshness.verified(99L);
+        org.springframework.test.util.ReflectionTestUtils.setField(coordinator, "freshness", freshness);
+        org.junit.jupiter.api.Assertions.assertTrue(freshness.fresh(99L));
+        coordinator.request(99L);
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(99L));
+    }
+
 }
