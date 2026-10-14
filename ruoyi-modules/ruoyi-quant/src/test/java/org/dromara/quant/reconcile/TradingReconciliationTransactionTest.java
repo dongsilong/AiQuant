@@ -86,12 +86,12 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
-    void failedNetworkCollectionCannotPersistPartialAccountFacts() {
+    void failedHistoryQueryCannotRollbackEarlierVerifiedAccountSnapshot() {
         stubCommonFacts();
         when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong()))
             .thenThrow(new IllegalStateException("Binance unavailable"));
         assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 48));
-        verifyNoInteractions(accounts);
+        verify(accounts).insert(any(org.dromara.quant.account.domain.QuantAccountSnapshot.class));
         verify(errors).record(eq(1L), anyString());
     }
 
