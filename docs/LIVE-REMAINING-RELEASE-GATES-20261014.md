@@ -267,3 +267,21 @@ V06 uses MySQL client DELIMITER directives; it is an operator-reviewed
 mysql-client migration, NOT a Flyway migration. Both V05 and V06 require
 staging rehearsal and independent approval before application or production
 acceptance. The recovery audit P0 remains open until that evidence exists.
+
+### Cross-node stale-epoch reservation hardening
+
+Strategy-backed LIVE dispatch now atomically claims an account-symbol durable
+slot **only if** the current unexpired `quant_strategy_runtime_lease` row
+matches the strategy instance and exact lease epoch. The MyBatis guarded
+UPDATE executes before inserting the dispatch ticket, in the same short DB
+transaction. An expired/taken-over strategy owner cannot subsequently reserve
+an outbound slot. Non-strategy/manual and configuration operations continue
+through the separate guarded claim path.
+
+`LiveDispatchLeaseEpochSqlTest` checks stale epoch, different owner, valid
+owner and no automatic takeover of an UNKNOWN ticket. This closes an
+application-side time-of-check-to-reserve race; it does **not** atomically fence
+a Binance HTTP request already in flight. A live distributed crash/takeover
+drill, delayed HTTP acceptance with the old owner, client-order idempotency
+and exchange/position/protection reconciliation remain release blockers.
+Never auto-expire an UNKNOWN dispatch guard.
