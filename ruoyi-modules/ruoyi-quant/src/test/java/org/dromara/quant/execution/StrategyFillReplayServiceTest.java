@@ -2,6 +2,9 @@ package org.dromara.quant.execution;
 
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.dromara.quant.order.domain.QuantOrder;
+import java.util.Map;
+import static org.mockito.ArgumentMatchers.*;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -38,5 +41,30 @@ class StrategyFillReplayServiceTest {
         assertEquals(List.of(2L),result.quarantineTradeIds());
         verify(mapper).verifiedIntent(1L,"BTCUSDT",99L);
         verifyNoInteractions(projector,orders);
+    }    @Test
+    void sortedCompleteHistoryProjectsOnlyVerifiedOrderFacts() {
+        var order=new QuantOrder();
+        order.setCredentialId(1L);
+        order.setSymbol("BTCUSDT");
+        order.setExchangeOrderId(99L);
+        order.setClientOrderId("client-99");
+        order.setStrategyId(20L);
+        order.setStrategyInstanceId(30L);
+        when(mapper.verifiedIntent(1L,"BTCUSDT",99L)).thenReturn(Map.of(
+            "strategy_id",20L,"strategy_instance_id",30L,
+            "position_side","LONG","fill_role","OPEN",
+            "client_order_id","client-99"));
+        when(orders.selectOne(any())).thenReturn(order);
+        var outcome=replay.replay(1L,"BTCUSDT",List.of(trade(3),trade(2)),true);
+        assertEquals(2,outcome.projected());
+        assertEquals(0,outcome.quarantined());
+        var sequence=inOrder(projector);
+        sequence.verify(projector).project(1L,order,trade(2),
+            StrategyPositionAccounting.PositionSide.LONG,
+            StrategyPositionAccounting.Role.OPEN);
+        sequence.verify(projector).project(1L,order,trade(3),
+            StrategyPositionAccounting.PositionSide.LONG,
+            StrategyPositionAccounting.Role.OPEN);
     }
+
 }
