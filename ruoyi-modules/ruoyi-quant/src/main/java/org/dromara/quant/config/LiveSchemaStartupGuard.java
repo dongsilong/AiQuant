@@ -42,17 +42,20 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
     void verify() {
         List<String> actualTables = mapper.innodbTables();
         List<String> actualUnique = mapper.uniqueContracts();
-        if (actualTables == null || actualUnique == null) {
+        List<String> leaseEpoch = mapper.leaseEpochColumns();
+        if (actualTables == null || actualUnique == null || leaseEpoch == null) {
             throw new IllegalStateException("LIVE database metadata unavailable; refuse to enable real trading");
         }
         var missingTables = new java.util.TreeSet<>(TABLES);
         missingTables.removeAll(actualTables);
         var missingUnique = new java.util.TreeSet<>(UNIQUE);
         missingUnique.removeAll(actualUnique);
-        if (!missingTables.isEmpty() || !missingUnique.isEmpty()) {
+        boolean missingEpoch = !leaseEpoch.contains("quant_strategy_runtime_lease|lease_epoch");
+        if (!missingTables.isEmpty() || !missingUnique.isEmpty() || missingEpoch) {
             throw new IllegalStateException(
                 "LIVE schema preflight rejected startup; missing InnoDB tables=" + missingTables
-                + ", missing unique-index contracts=" + missingUnique);
+                + ", missing unique-index contracts=" + missingUnique
+                + ", leaseEpochMissing=" + missingEpoch);
         }
     }
 }
