@@ -87,6 +87,7 @@ public interface LiveOrderDispatchMapper {
         SET dispatch_status='RECOVERED', exchange_order_id=#{orderId}, updated_at=NOW()
         WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
           AND symbol=#{symbol} AND client_order_id=#{clientOrderId}
+          AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
           AND dispatch_status IN ('DISPATCHING','UNKNOWN')
         """)
     int recoverVerified(@Param("credentialId") Long credentialId,
@@ -103,7 +104,7 @@ public interface LiveOrderDispatchMapper {
         SELECT g.active_dispatch_key
         FROM quant_live_dispatch_guard g
         JOIN quant_order_dispatch_ticket t ON t.credential_id=g.credential_id
-          AND t.idempotency_key=g.active_dispatch_key
+          AND t.idempotency_key=g.active_dispatch_key AND t.symbol=g.symbol
         WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
           AND t.client_order_id=#{clientOrderId} AND t.operation_type=#{operation}
           AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
