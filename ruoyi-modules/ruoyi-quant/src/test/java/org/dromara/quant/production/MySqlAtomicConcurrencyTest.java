@@ -212,6 +212,63 @@ class MySqlAtomicConcurrencyTest {
             "SELECT COUNT(*) FROM quant_open_capacity WHERE status='RESERVED'", Long.class));
     }
 
+    @Test
+    void durableDispatcherRejectsSecondNodeAndRetainsUnknownAfterProcessDeath() throws Exception {
+        var source = source();
+        var jdbc = new JdbcTemplate(source);
+        jdbc.execute("DROP TABLE IF EXISTS quant_order_dispatch_ticket");
+        jdbc.execute("DROP TABLE IF EXISTS quant_live_dispatch_guard");
+        jdbc.execute("""
+            CREATE TABLE quant_live_dispatch_guard (
+              credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
+              active_dispatch_key VARCHAR(160), updated_at DATETIME,
+              PRIMARY KEY (credential_id,symbol)) ENGINE=InnoDB
+            """);
+        jdbc.execute("""
+            CREATE TABLE quant_order_dispatch_ticket (
+              id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+              credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
+              idempotency_key VARCHAR(160) NOT NULL, operation_type VARCHAR(16),
+              client_order_id VARCHAR(80), strategy_instance_id BIGINT, lease_epoch BIGINT,
+              dispatch_status VARCHAR(32), exchange_order_id BIGINT,
+              created_at DATETIME, updated_at DATETIME,
+              UNIQUE KEY uk_ticket(credential_id,idempotency_key)) ENGINE=InnoDB
+            """);
+        var mapper = session(source, org.dromara.quant.execution.mapper.LiveOrderDispatchMapper.class)
+            .getMapper(org.dromara.quant.execution.mapper.LiveOrderDispatchMapper.class);
+        var txManager = new DataSourceTransactionManager(source);
+        var first = new org.dromara.quant.execution.LiveOrderDispatcher(mapper, txManager);
+        var second = new org.dromara.quant.execution.LiveOrderDispatcher(mapper, txManager);
+        var gate = new CountDownLatch(1);
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var one = pool.submit(() -> {
+                gate.await();
+                try { return first.begin(1L, "BTCUSDT", "node1", "OPEN", "cid-node1", 10L, 4L); }
+                catch (IllegalStateException blocked) { return null; }
+            });
+            var two = pool.submit(() -> {
+                gate.await();
+                try { return second.begin(1L, "BTCUSDT", "node2", "OPEN", "cid-node2", 20L, 5L); }
+                catch (IllegalStateException blocked) { return null; }
+            });
+            gate.countDown();
+            var ticket1 = one.get(15, TimeUnit.SECONDS);
+            var ticket2 = two.get(15, TimeUnit.SECONDS);
+            assertNotEquals(ticket1 == null, ticket2 == null);
+            var winning = ticket1 == null ? ticket2 : ticket1;
+            (ticket1 == null ? second : first).unknown(winning);
+            assertEquals(1L, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM quant_order_dispatch_ticket WHERE dispatch_status='UNKNOWN'", Long.class));
+            assertThrows(IllegalStateException.class,
+                () -> first.begin(1L, "BTCUSDT", "restarted", "OPEN", "cid-restart", 10L, 6L));
+            assertFalse(first.recoveredFromExchange(1L, "BTCUSDT", winning.key(), "wrong-client", 990L));
+            String expectedClient = ticket1 == null ? "cid-node2" : "cid-node1";
+            assertTrue(second.recoveredFromExchange(1L, "BTCUSDT", winning.key(), expectedClient, 990L));
+            var resumed = first.begin(1L, "BTCUSDT", "new-key", "OPEN", "cid-new", 10L, 6L);
+            first.notSent(resumed);
+        }
+    }
+
     private static OpenPositionCommand order(String symbol, String key) {
         return new OpenPositionCommand(1L, 10L, 100L, null, symbol, "BUY", "MARKET",
             BigDecimal.ONE, BigDecimal.TEN, null, key, "TESTNET", null, 1, "ISOLATED", null);
