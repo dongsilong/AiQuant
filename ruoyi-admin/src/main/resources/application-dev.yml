@@ -6,7 +6,7 @@ quant:
     # SDK 内部无界队列积压阈值，达到后显式断线以触发订阅恢复。
     sdk-stream-backlog-limit: ${QUANT_BINANCE_SDK_BACKLOG_LIMIT:2048}
   live:
-    enabled: ${QUANT_LIVE_ENABLED:false}
+    enabled: ${QUANT_LIVE_ENABLED:true}
   security:
     # 通过部署环境变量提供，禁止写入源码或提交真实密钥。
     secret-key: ${QUANT_SECRET_KEY}
