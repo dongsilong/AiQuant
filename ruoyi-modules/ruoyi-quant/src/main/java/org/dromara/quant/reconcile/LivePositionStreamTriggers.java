@@ -36,6 +36,8 @@ public class LivePositionStreamTriggers {
     private final String ownerToken = java.util.UUID.randomUUID().toString();
     private static final int LEASE_SECONDS = 75;
     private final Map<Long, AutoCloseable> subscriptions = new HashMap<>();
+    /** Avoid flooding WARN when an account is leased to a different LIVE node. */
+    private final Map<Long, Long> nextLeaseConflictLogAt = new HashMap<>();
 
     @Scheduled(fixedDelay = 30000, initialDelay = 0)
     public synchronized void supervise() {
@@ -72,6 +74,11 @@ public class LivePositionStreamTriggers {
             try {
                 lease.ensure(id, ownerToken, LEASE_SECONDS);
                 if (lease.acquireOrRenew(id, ownerToken, LEASE_SECONDS) != 1) {
+                    long now = System.currentTimeMillis();
+                    if (now >= nextLeaseConflictLogAt.getOrDefault(id, 0L)) {
+                        nextLeaseConflictLogAt.put(id, now + 60_000L);
+                        log.warn("LIVE私有流租约未获取 credentialId={}：可能由其他进程持有有效租约；本节点不启动该账户策略行情订阅。请核查quant_live_user_stream_lease的lease_until、owner_token和其他服务实例", id);
+                    }
                     closeSubscription(id);
                     freshness.invalidate(id);
                     continue;
@@ -96,6 +103,8 @@ public class LivePositionStreamTriggers {
                     // listener exists only to hold an active subscription.
                 });
                 subscriptions.put(id, reference);
+                nextLeaseConflictLogAt.remove(id);
+                log.info("LIVE私有流租约已获取并注册共享订阅 credentialId={}，允许本节点策略运行时继续初始化", id);
                 coordinator.request(id);
             } catch (RuntimeException ex) {
                 closeSubscription(id);
