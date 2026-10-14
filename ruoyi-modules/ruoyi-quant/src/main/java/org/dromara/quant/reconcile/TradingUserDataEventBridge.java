@@ -65,9 +65,12 @@ public class TradingUserDataEventBridge {
         }
         java.util.List<QuantCredential> enabledCredentials = credentialMapper.selectList(new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"));
         java.util.Set<Long> activeIds =
-            enabledCredentials.stream().filter(credential -> !"PAPER".equalsIgnoreCase(credential.getRunMode())).map(QuantCredential::getId).collect(java.util.stream.Collectors.toSet());
+            enabledCredentials.stream().filter(credential -> !"PAPER".equalsIgnoreCase(credential.getRunMode()) && !"LIVE".equalsIgnoreCase(credential.getRunMode())).map(QuantCredential::getId).collect(java.util.stream.Collectors.toSet());
         for (QuantCredential credential : enabledCredentials) {
-            if ("PAPER".equalsIgnoreCase(credential.getRunMode())) {
+            if ("PAPER".equalsIgnoreCase(credential.getRunMode()) || "LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                // LIVE has one lease-owning resident subscriber (LivePositionStreamTriggers).
+                // UserDataStreamHub forwards events directly to LivePositionEventCoordinator.
+                // This legacy bridge must never subscribe independently for LIVE.
                 continue;
             }
             subscriptions.computeIfAbsent(credential.getId(), ignored -> userDataStreamHub.subscribe(credential, event -> onEvent(credential.getId(), event)));
