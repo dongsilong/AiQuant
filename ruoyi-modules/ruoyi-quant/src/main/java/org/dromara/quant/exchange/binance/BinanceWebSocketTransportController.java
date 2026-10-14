@@ -1,0 +1,44 @@
+package org.dromara.quant.exchange.binance;
+
+import cn.dev33.satoken.annotation.SaCheckPermission;
+import org.dromara.common.core.domain.R;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
+
+/**
+ * Privileged, node-local WebSocket transport control.
+ * No transport-switch permission is assigned to regular trading accounts by default.
+ * The action interrupts active streams and forces the account/market hubs to reconnect.
+ */
+@RestController
+@RequestMapping("/quant/infrastructure/websocket")
+public class BinanceWebSocketTransportController {
+    private final BinanceGatewayAdapter adapter;
+
+    public BinanceWebSocketTransportController(BinanceGatewayAdapter adapter) {
+        this.adapter = adapter;
+    }
+
+    @SaCheckPermission("quant:transport:view")
+    @GetMapping("/transport")
+    public R<Map<String, Object>> current() {
+        return R.ok(Map.of("transport", adapter.websocketTransport(), "scope", "THIS_NODE"));
+    }
+
+    @SaCheckPermission("quant:transport:switch")
+    @PostMapping("/transport")
+    public R<Map<String, Object>> change(@RequestParam String mode,
+                                         @RequestParam(defaultValue = "false") boolean acknowledgeReconnectionRisk) {
+        if (!acknowledgeReconnectionRisk) {
+            throw new IllegalArgumentException("切换 WebSocket 会触发账户和行情流重订阅，必须显式确认");
+        }
+        int restarted = adapter.switchWebsocketTransport(mode);
+        return R.ok(Map.of("transport", adapter.websocketTransport(), "scope", "THIS_NODE",
+            "streamsReconnected", restarted));
+    }
+}
