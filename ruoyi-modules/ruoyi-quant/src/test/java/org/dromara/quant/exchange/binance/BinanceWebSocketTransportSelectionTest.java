@@ -8,6 +8,24 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("dev")
 class BinanceWebSocketTransportSelectionTest {
     @Test
+    void sdkSwitchWithConfiguredProxyDoesNotDisconnectExistingLiveStreams() {
+        var config = new QuantProperties();
+        config.getProxy().setHost("127.0.0.1");
+        config.getProxy().setPort(7890);
+        var gateway = new BinanceGatewayAdapter(config);
+        var closed = new java.util.concurrent.atomic.AtomicInteger();
+        var notified = new java.util.concurrent.atomic.AtomicInteger();
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(gateway, "trackWebsocket",
+            (Runnable) closed::incrementAndGet, (Runnable) notified::incrementAndGet);
+
+        assertThrows(IllegalStateException.class, () -> gateway.switchWebsocketTransport("BINANCE_SDK"));
+        assertEquals("RAW_OKHTTP", gateway.websocketTransport());
+        assertFalse(gateway.sdkStreamsEnabled());
+        assertEquals(0, closed.get(), "rejecting incompatible mode must not close LIVE sockets");
+        assertEquals(0, notified.get(), "rejecting incompatible mode must not signal disconnection");
+    }
+
+    @Test
     void rawTransportIsDefaultAndSdkModeIsExplicit() {
         var config = new QuantProperties();
         var gateway = new BinanceGatewayAdapter(config);
