@@ -58,6 +58,28 @@ public interface LiveOrderDispatchMapper {
     int claim(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
               @Param("key") String key);
 
+    /**
+     * Strategy dispatch claim requires a simultaneously visible, unexpired lease
+     * generation. A stale node cannot claim after lease takeover.
+     * The guard remains held until exact recovery; it is not a Binance-side fence.
+     */
+    @Options(timeout = 3)
+    @Update("""
+        UPDATE quant_live_dispatch_guard
+        SET active_dispatch_key=#{key}, updated_at=NOW()
+        WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+          AND active_dispatch_key IS NULL
+          AND EXISTS (
+              SELECT 1 FROM quant_strategy_runtime_lease l
+              WHERE l.credential_id=#{credentialId} AND l.symbol=#{symbol}
+                AND l.instance_id=#{instanceId} AND l.lease_epoch=#{epoch}
+                AND l.lease_until>NOW() AND l.owner_token IS NOT NULL
+          )
+        """)
+    int claimWithLease(@Param("credentialId") Long credentialId,
+                       @Param("symbol") String symbol, @Param("key") String key,
+                       @Param("instanceId") Long instanceId, @Param("epoch") Long epoch);
+
     @Options(timeout = 3)
     @Insert("""
         INSERT INTO quant_order_dispatch_ticket
