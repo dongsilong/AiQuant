@@ -59,17 +59,27 @@ public class StrategyRuntimeLeaseService {
      * This does NOT provide an atomic fence between the SQL read and a remote Binance request.
      */
     public void requireCurrentOwner(Long instanceId, Long credentialId, String symbol) {
+        requireCurrentEpoch(instanceId, credentialId, symbol);
+    }
+
+    /**
+     * Returns the nonzero database fencing epoch for this node's current unexpired lease.
+     * Calling the method twice around trade preparation detects a takeover/reacquisition.
+     * It cannot fence a remote HTTP already in flight; that requires serialized dispatch.
+     */
+    public long requireCurrentEpoch(Long instanceId, Long credentialId, String symbol) {
         if (instanceId == null || credentialId == null || symbol == null || symbol.isBlank()) {
             throw new IllegalStateException("策略最终下单缺少租约所有权上下文");
         }
         try {
-            Long count = mapper.countCurrentOwner(instanceId, credentialId,
+            Long epoch = mapper.currentEpoch(instanceId, credentialId,
                 symbol.toUpperCase(Locale.ROOT), ownerToken(instanceId));
-            if (!Long.valueOf(1L).equals(count)) {
+            if (epoch == null || epoch <= 0) {
                 throw new IllegalStateException("策略运行租约已失效或转移，拒绝最终交易所下单");
             }
+            return epoch;
         } catch (RuntimeException ex) {
-            throw new IllegalStateException("无法证明策略租约所有权，拒绝最终交易所下单", ex);
+            throw new IllegalStateException("无法证明策略租约所有权代次，拒绝最终交易所下单", ex);
         }
     }
 
