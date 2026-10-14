@@ -33,6 +33,24 @@ public interface LiveUserStreamLeaseMapper {
     int acquireOrRenew(@Param("id") Long id, @Param("owner") String owner,
                        @Param("seconds") int seconds);
 
+    /**
+     * One DB-side snapshot for diagnosing a failed compare-and-set lease acquire.
+     * Uses the exact same MyBatis datasource and database clock as acquireOrRenew.
+     */
+    @Options(timeout = 3)
+    @Select("""
+        SELECT CONCAT(
+            'schema=', DATABASE(),
+            ', owner=', owner_token,
+            ', epoch=', lease_epoch,
+            ', lease_until=', DATE_FORMAT(lease_until, '%Y-%m-%d %H:%i:%s.%f'),
+            ', db_now=', DATE_FORMAT(NOW(6), '%Y-%m-%d %H:%i:%s.%f'),
+            ', remaining_ms=', TIMESTAMPDIFF(MICROSECOND, NOW(6), lease_until) DIV 1000
+        )
+        FROM quant_live_user_stream_lease WHERE credential_id=#{id}
+        """)
+    String describe(@Param("id") Long id);
+
     @Options(timeout = 3)
     @Select("""
         SELECT COUNT(*) FROM quant_live_user_stream_lease
