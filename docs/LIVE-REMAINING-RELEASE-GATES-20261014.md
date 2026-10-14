@@ -77,3 +77,15 @@ real deployed database.
   for testnet outage drills, real schema migration or signed fill-to-position
   accounting with cycle identity.
 
+### Additional outbound-account mutation audit
+
+`TradingPreparationService` still calls `gateway.setMarginType` and
+`gateway.setLeverage` from a background preparation task using a JVM-local
+account-symbol lock. Its preconditions check positions and approval, but it
+has **not** yet been serialized with the durable cross-node
+`LiveOrderDispatcher` guard. These account-configuration API mutations can
+race with another node; they need a separate verified-settings dispatch
+protocol because they have no exchange order ID to use as an ACK.
+**Do not interpret order/algo dispatch coverage as coverage of account
+configuration mutations.**
+
