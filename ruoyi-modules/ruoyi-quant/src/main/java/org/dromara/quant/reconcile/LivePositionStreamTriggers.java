@@ -30,6 +30,7 @@ public class LivePositionStreamTriggers {
     private final LivePositionEventCoordinator coordinator;
     private final LivePositionFreshness freshness;
     private final Map<Long, ExchangeGateway.UserDataStreamSession> sessions = new HashMap<>();
+    private final Map<Long, java.time.Instant> renewed = new HashMap<>();
 
     @Scheduled(fixedDelay = 30000, initialDelay = 10000)
     public synchronized void supervise() {
@@ -44,10 +45,21 @@ public class LivePositionStreamTriggers {
             liveIds.add(id);
             ExchangeGateway.UserDataStreamSession session = sessions.get(id);
             if (session != null && session.isConnected()) {
-                continue;
+                var last = renewed.get(id);
+                if (last != null && java.time.Duration.between(last, java.time.Instant.now()).toMinutes() < 20) {
+                    continue;
+                }
+                try {
+                    session.keepAlive();
+                    renewed.put(id, java.time.Instant.now());
+                    continue;
+                } catch (RuntimeException ex) {
+                    log.warn("LIVE user stream listenKey renewal failed credentialId={}", id, ex);
+                }
             }
             if (session != null) {
                 sessions.remove(id);
+                renewed.remove(id);
                 try { session.close(); } catch (RuntimeException ex) {
                     log.warn("Closing disconnected LIVE user stream failed credentialId={}", id, ex);
                 }
@@ -65,6 +77,7 @@ public class LivePositionStreamTriggers {
                     }
                 });
                 sessions.put(id, bound);
+                renewed.put(id, java.time.Instant.now());
                 coordinator.request(id); // refresh after reconnect / subscription
             } catch (RuntimeException ex) {
                 log.warn("LIVE user stream subscribe failed credentialId={}", id, ex);
@@ -75,6 +88,7 @@ public class LivePositionStreamTriggers {
                 try { sessions.remove(id).close(); } catch (RuntimeException ex) {
                     log.warn("Closing disabled LIVE user stream failed credentialId={}", id, ex);
                 }
+                renewed.remove(id);
                 freshness.invalidate(id);
             }
         }
@@ -88,5 +102,6 @@ public class LivePositionStreamTriggers {
             }
         }
         sessions.clear();
+        renewed.clear();
     }
 }
