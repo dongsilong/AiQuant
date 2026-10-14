@@ -226,6 +226,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
         boolean exchangeAttempted = false;
         long startedNanos = System.nanoTime();
         org.dromara.quant.market.AccountBalanceSnapshot balance = null;
+        Long preparationEpoch = null;
         try {
             if (openCommand != null) {
                 requireFresh(openCommand);
@@ -240,6 +241,13 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                 openCapacityService.reserve(openCommand, notional, positions, balance);
             }
             checkLive(operationType, runMode, safety, credential, rule);
+            if ("LIVE".equalsIgnoreCase(runMode) && strategyInstanceId != null) {
+                var verifier = runtimeLease;
+                if (verifier == null) {
+                    throw new IllegalStateException("LIVE 策略执行缺少租约验证器");
+                }
+                preparationEpoch = verifier.requireCurrentEpoch(strategyInstanceId, credentialId, symbol);
+            }
             ExchangeGateway.OrderRequest request = requestSupplier.get();
             logRequest = request;
             recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
@@ -267,14 +275,13 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                         openCommand.signalEventTime() == null ? null : java.time.Duration.between(openCommand.signalEventTime(), java.time.Instant.now()).toMillis(),
                         openCommand.validUntil() == null ? null : java.time.Duration.between(java.time.Instant.now(), openCommand.validUntil()).toMillis());
                 }
-                if ("LIVE".equalsIgnoreCase(runMode) && strategyInstanceId != null) {
-                    // A node that lost ownership must not submit a fresh exchange order.
-                    // This is a final read check, not yet a complete cross-node fencing protocol.
-                    var verifier = runtimeLease;
-                    if (verifier == null) {
-                        throw new IllegalStateException("LIVE 策略最终下单缺少租约验证器");
+                if (preparationEpoch != null) {
+                    // Reject requests prepared before lease expiry/takeover/reacquisition.
+                    // This guards the entire preparation window, not only final token ownership.
+                    long currentEpoch = runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol);
+                    if (preparationEpoch.longValue() != currentEpoch) {
+                        throw new IllegalStateException("LIVE 策略租约代次在下单准备期间变化，拒绝旧交易信号");
                     }
-                    verifier.requireCurrentOwner(strategyInstanceId, credentialId, symbol);
                 }
                 exchangeAttempted = true;
                 long orderStarted = System.nanoTime();
