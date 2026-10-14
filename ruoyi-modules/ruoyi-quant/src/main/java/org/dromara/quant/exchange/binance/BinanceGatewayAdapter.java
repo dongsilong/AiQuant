@@ -73,7 +73,16 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     public BinanceGatewayAdapter(QuantProperties properties) {
         this.properties = properties;
-        currentWebsocketTransport.set(validateWebsocketTransport(properties.getBinance().getWebsocketTransport()));
+        String requested = validateWebsocketTransport(properties.getBinance().getWebsocketTransport());
+        // Binance SDK 12.0.3 Streams was linked against a Jetty WebSocket API
+        // incompatible with the Jetty 12 runtime selected by Spring Boot 4.
+        // Never start a LIVE socket with broken SDK linkage: use the supported
+        // RAW transport until the SDK is isolated or its Jetty API is upgraded.
+        if ("BINANCE_SDK".equals(requested) && !sdkJettyBinaryCompatible()) {
+            log.error("Binance SDK 12.0.3 WebSocket Jetty API is incompatible with the application runtime; falling back to RAW_OKHTTP for LIVE/TESTNET streams. REST remains on the official SDK.");
+            requested = "RAW_OKHTTP";
+        }
+        currentWebsocketTransport.set(requested);
     }
 
     /**
@@ -399,6 +408,25 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return "BINANCE_SDK".equals(currentWebsocketTransport.get());
     }
 
+    /**
+     * Detect the two incompatible Jetty linkage points before making network
+     * requests. A plain class-presence check is insufficient: Jetty 12 still
+     * exports some legacy package names but has incompatible method signatures.
+     */
+    static boolean sdkJettyBinaryCompatible() {
+        try {
+            Class<?> request = Class.forName("org.eclipse.jetty.websocket.client.impl.JettyClientUpgradeRequest");
+            Class<?> session = Class.forName("org.eclipse.jetty.websocket.api.Session");
+            boolean requestCompatible = "org.eclipse.jetty.client.api.Request".equals(
+                request.getMethod("headers", java.util.function.Consumer.class).getReturnType().getName());
+            boolean sessionCompatible = "org.eclipse.jetty.websocket.api.RemoteEndpoint".equals(
+                session.getMethod("getRemote").getReturnType().getName());
+            return requestCompatible && sessionCompatible;
+        } catch (ReflectiveOperationException | LinkageError ex) {
+            return false;
+        }
+    }
+
     /** Validate proxy before switching any active LIVE streams. */
     private void requireSdkStreamsCanConnect() {
         QuantProperties.Proxy proxy = properties.getProxy();
@@ -430,6 +458,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         // transport or notifying existing sockets. Otherwise all LIVE market and
         // private streams disconnect and enter a permanent reconnect failure loop.
         if ("BINANCE_SDK".equals(normalized)) {
+            if (!sdkJettyBinaryCompatible()) {
+                throw new IllegalStateException("Binance SDK Streams Jetty API incompatible with application Jetty runtime; keep RAW_OKHTTP until dependencies are isolated.");
+            }
             requireSdkStreamsCanConnect();
         }
         if (normalized.equals(currentWebsocketTransport.get())) { return 0; }
