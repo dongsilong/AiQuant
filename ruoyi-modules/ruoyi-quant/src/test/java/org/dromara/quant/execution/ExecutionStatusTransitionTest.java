@@ -88,6 +88,20 @@ class ExecutionStatusTransitionTest {
     }
 
     @Test
+    void conflictingExchangeOrderIdCannotReplacePersistedOrderIdentity() throws Exception {
+        var db = db();
+        var now = LocalDateTime.now();
+        db.jdbc.update("INSERT INTO quant_execution_record(id,execution_status,exchange_order_id) VALUES (1,'UNKNOWN',101),(2,'CONFIRMED',201)");
+        assertEquals(0, db.mapper.markAccepted(1L, 102L, "NEW", now));
+        assertEquals(0, db.mapper.markRecoveredAfterFact(1L, 102L, "FILLED", now));
+        assertEquals(0, db.mapper.markRecoveredAfterFact(2L, 202L, "FILLED", now));
+        assertEquals(0, db.mapper.markRecoveredAfterFact(2L, null, "FILLED", now));
+        assertEquals(101L, db.jdbc.queryForObject("SELECT exchange_order_id FROM quant_execution_record WHERE id=1", Long.class));
+        assertEquals(201L, db.jdbc.queryForObject("SELECT exchange_order_id FROM quant_execution_record WHERE id=2", Long.class));
+        assertEquals(1, db.mapper.markRecoveredAfterFact(2L, 201L, "FILLED", now));
+    }
+
+    @Test
     void recoveryCounterIsAtomicAndDoesNotChangeTerminalStatus() throws Exception {
         var db = db();
         db.jdbc.update("INSERT INTO quant_execution_record(id, execution_status) VALUES (1,'UNKNOWN')");
