@@ -13,6 +13,27 @@ import static org.mockito.Mockito.*;
 @Tag("dev")
 class LivePositionStreamSingleNodeGateTest {
     @Test
+    void startupRunnerEstablishesLiveStreamBeforeScheduledStrategyTick() throws Exception {
+        var credentials = mock(QuantCredentialMapper.class);
+        var hub = mock(UserDataStreamHub.class);
+        var coordinator = mock(LivePositionEventCoordinator.class);
+        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var account = new QuantCredential();
+        account.setId(108L); account.setStatus("0"); account.setRunMode("LIVE");
+        when(credentials.selectList(any())).thenReturn(List.of(account));
+        when(lease.acquireOrRenew(eq(108L), anyString(), anyInt())).thenReturn(1);
+        var reference = mock(AutoCloseable.class);
+        when(hub.subscribe(eq(account), any())).thenReturn(reference);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), lease);
+        try {
+            stream.run(new org.springframework.boot.DefaultApplicationArguments());
+            verify(hub).registerLeaseOwner(eq(108L), anyString());
+            verify(hub).subscribe(eq(account), any());
+            verify(coordinator).request(108L);
+        } finally { stream.close(); }
+    }
+
+    @Test
     void existingHubHoldsOnlyOneAccountReferenceAcrossRepeatedSupervision() throws Exception {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
