@@ -129,6 +129,20 @@ public class PaperTradingService {
     }
 
     /**
+     * 对尚未形成持仓且已被业务执行流程明确确认失败的 PAPER 保证金做原子退款。
+     * LIVE/TESTNET 订单不得调用此方法；仅当订单明确未发送时由策略协调层调用。
+     */
+    @Transactional
+    public void refundReservedMargin(Long credentialId, BigDecimal margin) {
+        if (margin == null || margin.signum() <= 0) { return; }
+        ensure(credentialId);
+        QuantPaperAccount account = atomicMapper.lockAccount(credentialId);
+        if (account == null || atomicMapper.refundMargin(account.getId(), margin) != 1) {
+            throw new IllegalStateException("PAPER 预留保证金退款失败");
+        }
+    }
+
+    /**
      * 处理 PAPER 开仓失败并回滚预留保证金。
      */
     @Transactional
