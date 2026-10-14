@@ -28,7 +28,8 @@ public class StrategyFillAllocationService {
 
     public void allocate(ExchangeGateway.TradeSnapshot fill, QuantOrder order, Long credentialId) {
         if (fill == null || order == null || credentialId == null
-            || fill.tradeId() == null || fill.orderId() == null
+            || fill.tradeId() == null || fill.tradeId() <= 0
+            || fill.orderId() == null || fill.orderId() <= 0
             || fill.quantity() == null || fill.quantity().signum() <= 0
             || fill.price() == null || fill.price().signum() <= 0
             || order.getStrategyId() == null || order.getStrategyInstanceId() == null
@@ -38,8 +39,15 @@ public class StrategyFillAllocationService {
             throw new IllegalStateException("缺少交易所成交或可证明的策略订单归属，不得分配成交");
         }
         String symbol = fill.symbol().toUpperCase(Locale.ROOT);
-        BigDecimal fee = fill.commission() == null ? BigDecimal.ZERO : fill.commission();
-        BigDecimal pnl = fill.realizedPnl() == null ? BigDecimal.ZERO : fill.realizedPnl();
+        // A missing commission/PnL is UNKNOWN, not zero: silent coercion
+        // corrupts the immutable per-strategy financial allocation.
+        if (fill.commission() == null || fill.realizedPnl() == null
+            || !java.util.Set.of("BUY", "SELL").contains(
+                fill.side() == null ? "" : fill.side().toUpperCase(Locale.ROOT))) {
+            throw new IllegalStateException("Binance 成交手续费、盈亏或买卖方向缺失，不得写入不可变分账");
+        }
+        BigDecimal fee = fill.commission();
+        BigDecimal pnl = fill.realizedPnl();
         LocalDateTime when = fill.time() == null ? null
             : LocalDateTime.ofInstant(fill.time(), ZoneOffset.UTC);
         if (when == null || fill.side() == null || fill.side().isBlank()) {
