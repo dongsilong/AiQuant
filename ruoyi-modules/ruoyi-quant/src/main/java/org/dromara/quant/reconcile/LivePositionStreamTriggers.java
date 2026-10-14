@@ -53,6 +53,7 @@ public class LivePositionStreamTriggers {
                     freshness.invalidate(id);
                     continue;
                 }
+                hub.registerLeaseOwner(id, ownerToken);
                 if (subscriptions.containsKey(id)) {
                     continue;
                 }
@@ -78,6 +79,7 @@ public class LivePositionStreamTriggers {
     }
 
     private void closeSubscription(Long id) {
+        hub.unregisterLeaseOwner(id, ownerToken);
         AutoCloseable subscription = subscriptions.remove(id);
         if (subscription != null) {
             try {
