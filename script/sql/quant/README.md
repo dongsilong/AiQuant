@@ -51,3 +51,24 @@ verified quant schema-history baseline. Run it only after checking the current
 
 The runtime checks an identical epoch before and after order preparation. This
 does **not** make an already-in-flight remote HTTP request atomic with the database.
+
+## V04 immutable cross-node margin/leverage intent
+
+After reviewed upgrades V01 (lease epoch), V02 (dispatch guard), V03 (verified
+fill allocation), the next additive change is
+[`V20261014_04__account_settings_intent.sql`](V20261014_04__account_settings_intent.sql).
+Install it once during a **LIVE-off / all-old-nodes-stopped** migration window,
+after confirming it is absent and validating the actual production schema.
+The application startup schema guard and `production-preflight.sql` both
+require this InnoDB table's unique `(credential_id,symbol)` key.
+
+The first confirmed desired account-symbol configuration becomes an immutable
+contract shared across instances. A different strategy's leverage or margin
+mode will be blocked even after the other node has completed its setup. To
+change that policy intentionally, use a separately audited maintenance
+procedure confirming zero positions/open orders/UNKNOWN dispatches and no
+active strategy. The normal API has no automatic update/force-unlock path.
+
+Never assume this immutable *desired* configuration proves current remote
+Binance settings, including external/manual changes or API timeouts. The
+staging readback/recovery workflow remains an explicit release requirement.
