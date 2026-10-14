@@ -386,6 +386,22 @@ public class ProtectionOrderService {
             return mapper.updateById(local) == 1;
         }
         var dispatcher = requireLiveDispatcher();
+        // Never resend a cancel when this precise algo order has an unresolved
+        // dispatch ticket. First query and reconcile the exchange terminal fact.
+        String unresolved = dispatcher.activeProtectionTicket(credentialId, local.getSymbol(),
+            local.getClientOrderId(), "PROTECT_CANCEL");
+        if (unresolved != null) {
+            try {
+                Long terminalAlgoId = persistVerifiedCancelledProtection(credentialId, local, credential,
+                    allowedTerminalStatuses, requireUnfilled);
+                return terminalAlgoId != null && dispatcher.recoveredFromExchange(
+                    credentialId, local.getSymbol(), unresolved, local.getClientOrderId(), terminalAlgoId);
+            } catch (RuntimeException ex) {
+                log.warn("既有保护撤单仍未知，继续保留调度占用: accountId={}, symbol={}",
+                    credentialId, local.getSymbol());
+                return false;
+            }
+        }
         var ticket = dispatcher.begin(credentialId, local.getSymbol(),
             "PROT_CANCEL:" + local.getId() + ":" + UUID.randomUUID(),
             "PROTECT_CANCEL", local.getClientOrderId(), null, null);
@@ -398,22 +414,10 @@ public class ProtectionOrderService {
                 // A cancel can race with a fill: the exact Binance snapshot decides,
                 // not the transport exception or absence from an open-order list.
             }
-            var actual = readProtectionSnapshot(credential, local);
-            if (actual == null || !allowedTerminalStatuses.contains(actual.status())
-                || actual.executedQuantity() == null
-                || requireUnfilled && actual.executedQuantity().signum() != 0
-                || actual.algoId() == null || actual.algoId() <= 0
-                || !local.getClientOrderId().equals(actual.clientAlgoId())) {
-                return false;
-            }
-            if (decisionLogs != null) decisionLogs.protection(credentialId, local, actual);
-            local.setStatus(actual.status());
-            local.setExecutedQuantity(actual.executedQuantity()
-                .max(local.getExecutedQuantity() == null ? BigDecimal.ZERO : local.getExecutedQuantity()));
-            if (mapper.updateById(local) != 1) {
-                throw new IllegalStateException("保护撤单终态未可靠写入本地账本");
-            }
-            dispatcher.acknowledged(ticket, actual.algoId());
+            Long terminalAlgoId = persistVerifiedCancelledProtection(credentialId, local, credential,
+                allowedTerminalStatuses, requireUnfilled);
+            if (terminalAlgoId == null) return false;
+            dispatcher.acknowledged(ticket, terminalAlgoId);
             finished = true;
             return true;
         } catch (RuntimeException ex) {
@@ -429,6 +433,28 @@ public class ProtectionOrderService {
                 }
             }
         }
+    }
+
+    /** Persist exact exchange cancellation/trigger result before freeing any dispatch guard. */
+    private Long persistVerifiedCancelledProtection(Long credentialId, QuantProtectionOrder local,
+                                                     ExchangeGateway.Credential credential,
+                                                     Set<String> allowedStatuses, boolean requireUnfilled) {
+        var actual = readProtectionSnapshot(credential, local);
+        if (actual == null || !allowedStatuses.contains(actual.status())
+            || actual.executedQuantity() == null
+            || requireUnfilled && actual.executedQuantity().signum() != 0
+            || actual.algoId() == null || actual.algoId() <= 0
+            || !local.getClientOrderId().equals(actual.clientAlgoId())) {
+            return null;
+        }
+        if (decisionLogs != null) decisionLogs.protection(credentialId, local, actual);
+        local.setStatus(actual.status());
+        local.setExecutedQuantity(actual.executedQuantity()
+            .max(local.getExecutedQuantity() == null ? BigDecimal.ZERO : local.getExecutedQuantity()));
+        if (mapper.updateById(local) != 1) {
+            throw new IllegalStateException("保护撤单终态未可靠写入本地账本");
+        }
+        return actual.algoId();
     }
 
     /** 包括重复客户端标识在内的未知提交结果，只精确查询原意图，不再次发送。 */
@@ -520,7 +546,15 @@ public class ProtectionOrderService {
         }
         boolean newlyConfirmed = !"WORKING".equals(local.getStatus());
         local.setStatus("WORKING");
-        mapper.updateById(local);
+        if (mapper.updateById(local) != 1) {
+            throw new IllegalStateException("保护单已生效但本地账本更新失败，保持调度占用");
+        }
+        // Restore a previously uncertain LIVE placement only after the exact
+        // Binance algo ID, client algo ID, parameters and durable local status agree.
+        if (!"PAPER".equalsIgnoreCase(credential.runMode())) {
+            requireLiveDispatcher().recoverVerifiedProtection(credentialId, local.getSymbol(),
+                local.getClientOrderId(), "PROTECT_CREATE", actual.algoId());
+        }
         if (newlyConfirmed) {
             log.info("止盈止损交易所确认生效: accountId={}, positionId={}, symbol={}, protectionType={}, exchangeOrderId={}, clientAlgoId={}, quantity={}, triggerPrice={}, exchangeStatus={}",
                 credentialId, local.getPositionId(), local.getSymbol(), local.getProtectionType(), actual.algoId(), local.getClientOrderId(), actual.quantity(), actual.triggerPrice(), actual.status());
