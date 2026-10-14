@@ -11,6 +11,19 @@ import java.util.Map;
  */
 @Mapper
 public interface StrategyPositionProjectionMapper {
+    /** Immutable, server-owned order intent; never caller-supplied role alone. */
+    @Options(timeout = 3)
+    @Select("""
+        SELECT strategy_id,strategy_instance_id,position_side,fill_role,
+               exchange_side,client_order_id
+        FROM quant_strategy_order_intent
+        WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+          AND exchange_order_id=#{orderId}
+        """)
+    Map<String,Object> verifiedIntent(@Param("credentialId") long credentialId,
+                                      @Param("symbol") String symbol,
+                                      @Param("orderId") long orderId);
+
     @Options(timeout = 3)
     @Insert("""
         INSERT IGNORE INTO quant_strategy_position_inventory
