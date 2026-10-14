@@ -66,7 +66,7 @@ public class StrategyFillReplayService {
             if (origin==null || !(origin.get("position_side") instanceof String)
                 || !(origin.get("fill_role") instanceof String)) {
                 quarantined.add(t.tradeId());
-                continue;
+                break;
             }
             QuantOrder order=orders.selectOne(new LambdaQueryWrapper<QuantOrder>()
                 .eq(QuantOrder::getCredentialId,credentialId)
@@ -77,7 +77,7 @@ public class StrategyFillReplayService {
                 || !Objects.equals(order.getStrategyId(),origin.get("strategy_id"))
                 || !Objects.equals(order.getStrategyInstanceId(),origin.get("strategy_instance_id"))) {
                 quarantined.add(t.tradeId());
-                continue;
+                break;
             }
             try {
                 var side=StrategyPositionAccounting.PositionSide.valueOf(
@@ -88,6 +88,7 @@ public class StrategyFillReplayService {
                 projected++;
             } catch (IllegalArgumentException invalidOrigin) {
                 quarantined.add(t.tradeId());
+                break;
             }
             // SQL, inconsistency, and time-gap failures stop replay. Never
             // silently advance a checkpoint past a failed projection.
