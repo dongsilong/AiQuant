@@ -42,6 +42,26 @@ public class LiveOrderDispatcher {
      */
     public Ticket begin(Long credentialId, String symbol, String key, String operation,
                         String clientOrderId, Long instanceId, Long epoch) {
+        if ("CONFIG_SETTINGS".equals(operation)) {
+            throw new IllegalArgumentException("配置操作必须通过 beginConfiguration 核实全局参数契约");
+        }
+        return reserve(credentialId, symbol, key, operation, clientOrderId,
+            instanceId, epoch, null, null);
+    }
+
+    public Ticket beginConfiguration(Long credentialId, String symbol, String key,
+                                     String marginMode, int leverage) {
+        if (!java.util.Set.of("ISOLATED", "CROSSED").contains(marginMode)
+            || leverage < 1 || leverage > 125) {
+            throw new IllegalArgumentException("LIVE Binance 配置范围或保证金模式无效");
+        }
+        return reserve(credentialId, symbol, key, "CONFIG_SETTINGS",
+            "SETTINGS:" + marginMode + ":" + leverage, null, null, marginMode, leverage);
+    }
+
+    private Ticket reserve(Long credentialId, String symbol, String key, String operation,
+                           String clientOrderId, Long instanceId, Long epoch,
+                           String marginMode, Integer leverage) {
         if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank()
             || key == null || key.isBlank() || operation == null || operation.isBlank()
             || clientOrderId == null || clientOrderId.isBlank()
@@ -53,6 +73,12 @@ public class LiveOrderDispatcher {
             mapper.ensureGuard(credentialId, normalized);
             if (mapper.claim(credentialId, normalized, key) != 1) {
                 throw new IllegalStateException("同账户交易对存在未完成或未知的交易所操作，拒绝并发发送");
+            }
+            if (marginMode != null) {
+                mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
+                if (mapper.matchingSettingsIntent(credentialId, normalized, marginMode, leverage) != 1L) {
+                    throw new IllegalStateException("同账户交易对存在冲突的保证金/杠杆配置契约，拒绝更改交易所");
+                }
             }
             if (mapper.insertTicket(credentialId, normalized, key, operation, clientOrderId, instanceId, epoch) != 1) {
                 throw new IllegalStateException("LIVE dispatch 发送票据落库失败");
