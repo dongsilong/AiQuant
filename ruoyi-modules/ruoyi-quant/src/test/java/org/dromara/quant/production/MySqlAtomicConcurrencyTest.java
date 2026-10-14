@@ -308,6 +308,65 @@ class MySqlAtomicConcurrencyTest {
             "SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
     }
 
+    @Test
+    void concurrentMySqlOrderUpdatesCannotRegressFilledToNew() throws Exception {
+        var source = source();
+        var db = new JdbcTemplate(source);
+        db.execute("DROP TABLE IF EXISTS quant_order");
+        db.execute("""
+            CREATE TABLE quant_order (
+              id BIGINT PRIMARY KEY, credential_id BIGINT NOT NULL,
+              strategy_id BIGINT, strategy_instance_id BIGINT,
+              symbol VARCHAR(32), exchange_order_id BIGINT,
+              client_order_id VARCHAR(120), side VARCHAR(8), order_type VARCHAR(24),
+              status VARCHAR(32), position_side VARCHAR(8),
+              price DECIMAL(30,12), original_quantity DECIMAL(30,12),
+              executed_quantity DECIMAL(30,12), reduce_only BOOLEAN,
+              updated_at DATETIME
+            ) ENGINE=InnoDB
+            """);
+        db.update("""
+            INSERT INTO quant_order (id,credential_id,strategy_id,strategy_instance_id,symbol,
+              exchange_order_id,client_order_id,side,order_type,status,executed_quantity,updated_at)
+            VALUES (1,1,10,20,'BTCUSDT',99,'cid-99','BUY','LIMIT','PARTIALLY_FILLED',0.7,NOW())
+            """);
+        var mapper = session(source, org.dromara.quant.order.mapper.QuantOrderMapper.class)
+            .getMapper(org.dromara.quant.order.mapper.QuantOrderMapper.class);
+        java.util.function.BiFunction<String,String,org.dromara.quant.order.domain.QuantOrder> fact = (status,qty) -> {
+            var order = new org.dromara.quant.order.domain.QuantOrder();
+            order.setId(1L);
+            order.setCredentialId(1L);
+            order.setStrategyId(10L);
+            order.setStrategyInstanceId(20L);
+            order.setSymbol("BTCUSDT");
+            order.setExchangeOrderId(99L);
+            order.setClientOrderId("cid-99");
+            order.setSide("BUY");
+            order.setOrderType("LIMIT");
+            order.setStatus(status);
+            order.setExecutedQuantity(new BigDecimal(qty));
+            order.setUpdatedAt(java.time.LocalDateTime.now());
+            return order;
+        };
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var filled = pool.submit(() -> {
+                start.await();
+                return mapper.mergeExchangeFactIfMonotonic(fact.apply("FILLED","1"));
+            });
+            var lateNew = pool.submit(() -> {
+                start.await();
+                return mapper.mergeExchangeFactIfMonotonic(fact.apply("NEW","0.9"));
+            });
+            start.countDown();
+            assertEquals(1, filled.get(15, TimeUnit.SECONDS));
+            assertEquals(0, lateNew.get(15, TimeUnit.SECONDS));
+        }
+        assertEquals("FILLED", db.queryForObject("SELECT status FROM quant_order WHERE id=1", String.class));
+        assertEquals(0, BigDecimal.ONE.compareTo(db.queryForObject(
+            "SELECT executed_quantity FROM quant_order WHERE id=1", BigDecimal.class)));
+    }
+
     private static OpenPositionCommand order(String symbol, String key) {
         return new OpenPositionCommand(1L, 10L, 100L, null, symbol, "BUY", "MARKET",
             BigDecimal.ONE, BigDecimal.TEN, null, key, "TESTNET", null, 1, "ISOLATED", null);
