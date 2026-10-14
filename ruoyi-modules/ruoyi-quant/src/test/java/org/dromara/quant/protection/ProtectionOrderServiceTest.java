@@ -114,6 +114,20 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void exactRecoveredLiveAlgoPlacementUnblocksOnlyMatchingProtectionTicket() {
+        QuantProtectionOrder local = order();
+        local.setStatus("UNKNOWN");
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(gateway.queryProtectionOrder(any(), eq(55L), eq("QFTP_test"), eq("BTCUSDT")))
+            .thenReturn(snapshot(55L, "QFTP_test", BigDecimal.ONE, "NEW", null));
+        when(dispatcher.recoverVerifiedProtection(1L, "BTCUSDT", "QFTP_test", "PROTECT_CREATE", 55L))
+            .thenReturn(true);
+        assertSame(local, service.ensureMarginHardStop(1L, position, new BigDecimal("0.1"), true));
+        verify(dispatcher).recoverVerifiedProtection(1L, "BTCUSDT", "QFTP_test", "PROTECT_CREATE", 55L);
+        verify(gateway, never()).placeProtectionOrder(any());
+    }
+
+    @Test
     void intentIsDurableBeforeSendingProtectionOrder() {
         when(gateway.placeProtectionOrder(any())).thenAnswer(invocation -> {
             verify(mapper).insert(any(QuantProtectionOrder.class));
