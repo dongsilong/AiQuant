@@ -70,11 +70,11 @@ public class QuantProperties {
          */
         private String testnetUrl = "https://demo-fapi.binance.com";
         /**
-         * WebSocket 连接实现：RAW_OKHTTP（默认，原始流、有界业务队列）
-         * 或 BINANCE_SDK（官方 12.0.3 Streams + 积压阈值故障断开）。
+         * WebSocket 连接实现：BINANCE_SDK（默认，官方 12.0.3 Streams + HTTP 代理 + 积压阈值故障断开）
+         * 或 RAW_OKHTTP（显式备用传输，原始流、有界业务队列）。
          * 仅影响新建连接。切换已有连接须主动重新订阅/安全滚动重启。
          */
-        private String websocketTransport = "RAW_OKHTTP";
+        private String websocketTransport = "BINANCE_SDK";
         /** SDK 无界内部队列的过载断开阈值；不得小于 64。 */
         private int sdkStreamBacklogLimit = 2048;
         /** 正式网组合行情流地址。 */
