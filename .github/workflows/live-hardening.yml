@@ -27,7 +27,7 @@ jobs:
         run: >-
           bash mvnw -B -ntp
           -pl ruoyi-modules/ruoyi-quant -am
-          -Dtest=StrategyEntryGuardServiceTest,StrategyRuntimeLeaseServiceTest,OpenCapacityServiceTest,PaperAtomicMapperTest,ProtectionTargetCoordinatorTest,ExecutionRecoveryServiceTest,TradingReconciliationTransactionTest,ExecutionStatusTransitionTest,LiveSchemaStartupGuardTest,ExchangeIdJsonPrecisionTest,BinanceGatewayClockOffsetTest,BinanceGatewayConnectivityTest,BinanceSdkContractTest,BinanceWebSocketTransportSelectionTest,BinanceTransportPermissionTest,StrategyRuntimeSafetyTest
+          -Dtest=UnifiedTradeExecutionServiceTest,StrategyEntryGuardServiceTest,StrategyRuntimeLeaseServiceTest,OpenCapacityServiceTest,PaperAtomicMapperTest,ProtectionTargetCoordinatorTest,ExecutionRecoveryServiceTest,TradingReconciliationTransactionTest,ExecutionStatusTransitionTest,LiveSchemaStartupGuardTest,ExchangeIdJsonPrecisionTest,BinanceGatewayClockOffsetTest,BinanceGatewayConnectivityTest,BinanceSdkContractTest,BinanceWebSocketTransportSelectionTest,BinanceTransportPermissionTest,StrategyRuntimeSafetyTest
           -Dsurefire.failIfNoSpecifiedTests=false
           test
 
