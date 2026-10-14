@@ -45,6 +45,27 @@ public class UserDataStreamHub {
      * 共享底层流连接缓存。
      */
     private final Map<Long, SharedUserStream> streams = new ConcurrentHashMap<>();
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper streamLease;
+    private final Map<Long, String> localLeaseOwners = new ConcurrentHashMap<>();
+
+    /** Called only after the resident subscriber acquired the DB lease. */
+    public void registerLeaseOwner(Long credentialId, String token) {
+        if (streamLease.owns(credentialId, token) != 1) {
+            throw new IllegalStateException("LIVE user stream lease is not owned by this node");
+        }
+        localLeaseOwners.put(credentialId, token);
+    }
+
+    public void unregisterLeaseOwner(Long credentialId, String token) {
+        localLeaseOwners.remove(credentialId, token);
+    }
+
+    private boolean ownsLiveStream(Long credentialId) {
+        String token = localLeaseOwners.get(credentialId);
+        return token != null && streamLease.owns(credentialId, token) == 1;
+    }
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private org.dromara.quant.reconcile.LivePositionEventCoordinator positionEvents;
 
@@ -66,6 +87,9 @@ public class UserDataStreamHub {
     public AutoCloseable subscribe(QuantCredential credential, Consumer<ExchangeGateway.UserDataEvent> listener) {
         if (credential == null || credential.getId() == null) {
             throw new IllegalArgumentException("用户数据流缺少凭证");
+        }
+        if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && !ownsLiveStream(credential.getId())) {
+            throw new IllegalStateException("LIVE private stream belongs to another node or no lease owner is active");
         }
         final AutoCloseable[] subscription = new AutoCloseable[1];
         streams.compute(credential.getId(), (id, current) -> {
@@ -158,6 +182,9 @@ public class UserDataStreamHub {
             if (closed || session != null) {
                 return;
             }
+            if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && !ownsLiveStream(credential.getId())) {
+                return;
+            }
             try {
                 long attempt = ++generation;
                 ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
@@ -170,7 +197,10 @@ public class UserDataStreamHub {
                     () -> !closed && attempt == generation && session != null && session.isConnected());
                 session = gateway.subscribeUserData(exchangeCredential, event -> {
                     synchronized (this) {
-                        if (!closed && attempt == generation) { onEvent(event); }
+                        if (!closed && attempt == generation
+                            && (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || ownsLiveStream(credential.getId()))) {
+                            onEvent(event);
+                        }
                     }
                 });
                 lastEventAt = Instant.now();
