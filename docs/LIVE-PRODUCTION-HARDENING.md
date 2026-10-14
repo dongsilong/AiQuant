@@ -1,6 +1,6 @@
 # AiQuant LIVE hardening notes — 2026-10-14
 
-> This branch is **NOT certified production-ready**. LIVE trading must remain disabled until the release gates below pass.
+> This branch is **NOT certified production-ready**. Per operator request, the `quant.live.enabled` **configuration defaults to `true`**. Keep `QUANT_LIVE_ENABLED=false` in any environment that has not passed the release gates below; production strategy supervisor remains independently disabled by default.
 > Do not deploy with active positions unless position protection, execution recovery and credential migration have been validated.
 
 ## Technology rules
@@ -18,7 +18,7 @@
 - Execution recovery no longer drops unresolved records solely because they are older than 24 hours. Query order favors least-recently-checked records; fallback order matches use actual exchange status.
 - Binance SDK authentication adapter no longer imports OkHttp's private/internal `HttpMethod` class.
 - Binance LIVE connectivity now rejects `canWithdraw=true` and missing/unknown withdrawal status (and rejects non-tradable credentials); the previous commented-out security check plus unconditional `withdrawalDisabled=true` success report was unsafe. Added permission regression tests. Account/API-key privileges still require independent operational verification.
-- LIVE defaults to OFF. Production strategy supervisor defaults to OFF. Production PAPER is disabled without deleting the implementation or its tests.
+- LIVE global configuration defaults to **ON** (`QUANT_LIVE_ENABLED:true`), with explicit `QUANT_LIVE_ENABLED=false` override. The production strategy supervisor still defaults to **OFF** (`QUANT_RUNTIME_ENABLED:false`). Production PAPER remains disabled.
 - Production and development credential values were replaced with environment-variable references. **Existing Git history still contains earlier values: rotate all actual exposed credentials immediately.**
 - Trading terminal sends close quantity as the original decimal string, avoiding browser float rounding.
 
@@ -62,7 +62,7 @@ A switch chooses the new transport for future subscriptions, closes existing str
 
 Mandatory before booting either prod/dev profile: `QUANT_SECRET_KEY`, `MYBATIS_ENCRYPTOR_PASSWORD`, `AIQUANT_JDBC_URL`, `AIQUANT_DB_USERNAME`, `AIQUANT_DB_PASSWORD`, `AIQUANT_REDIS_PASSWORD`.
 
-For explicit LIVE enablement: `QUANT_LIVE_ENABLED=true` and, in prod, `QUANT_RUNTIME_ENABLED=true`. These environment variables are **not** sufficient approval to deploy. Check per-account authorization, risk limits, API withdrawal prohibition, credential permissions, and platform network rules independently. No API credentials should appear in git, logs, screenshots, or monitoring payloads.
+LIVE global permission is now enabled by default. For active strategy execution in prod, `QUANT_RUNTIME_ENABLED=true` remains separately required. Set `QUANT_LIVE_ENABLED=false` wherever real trading has not been approved. These environment variables are **not** sufficient approval to deploy. Check per-account authorization, risk limits, API withdrawal prohibition, credential permissions, and platform network rules independently. No API credentials should appear in git, logs, screenshots, or monitoring payloads.
 
 **Encryption migration warning:** Changing `QUANT_SECRET_KEY` or `MYBATIS_ENCRYPTOR_PASSWORD` without re-encrypting stored values can make existing credentials unreadable. Copy the current key into a secret manager **outside git** and coordinate a controlled key rotation with data migration. Environment-variable substitution alone does not revoke compromised credentials.
 
