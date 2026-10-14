@@ -41,7 +41,7 @@ import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.springframework.beans.BeanUtils;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLedgerMapper;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -146,7 +146,7 @@ public class StrategyRuntimeService {
     /**
      * 用于执行需要数据库原子语义的 SQL 操作。
      */
-    private final JdbcTemplate jdbcTemplate;
+    private final StrategyRuntimeLedgerMapper runtimeLedgerMapper;
     /**
      * 当前 JVM 节点正在运行的策略实例上下文。
      */
@@ -161,7 +161,7 @@ public class StrategyRuntimeService {
                                   StrategySlopeTelemetryHub slopeTelemetryHub,
                                   StrategyRuntimeLeaseService leaseService, StrategyEntryGuardService entryGuardService, StrategyPositionStateService stateService,
                                   TradeExecutionApplicationService executionService, ProtectionOrderService protectionOrderService, PaperTradingService paperTradingService,
-                                  ExecutionRecordService executionRecordService, QuantTradeNotificationService notificationService, JdbcTemplate jdbcTemplate,
+                                  ExecutionRecordService executionRecordService, QuantTradeNotificationService notificationService, StrategyRuntimeLedgerMapper runtimeLedgerMapper,
                                   org.dromara.quant.market.AccountBalanceCache balanceCache, org.dromara.quant.risk.OpenCapacityService openCapacityService, org.dromara.quant.execution.TradingPreparationService preparationService) {
         this.properties = properties;
         this.instanceMapper = instanceMapper;
@@ -183,7 +183,7 @@ public class StrategyRuntimeService {
         this.paperTradingService = paperTradingService;
         this.executionRecordService = executionRecordService;
         this.notificationService = notificationService;
-        this.jdbcTemplate = jdbcTemplate;
+        this.runtimeLedgerMapper = runtimeLedgerMapper;
         this.balanceCache = balanceCache;
         this.openCapacityService = openCapacityService;
         this.preparationService = preparationService;
@@ -823,13 +823,8 @@ public class StrategyRuntimeService {
             Long openCount;
             try {
                 // FIXED: 统计状态包含 OPEN_PENDING，避免并发下突破最大开仓数。
-                openCount = jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM quant_strategy_position_state s "
-                        + "JOIN quant_strategy_instance i ON i.id=s.instance_id "
-                        + "WHERE i.strategy_id=? AND i.credential_id=? "
-                        + "AND s.status IN ('OPEN_PENDING','OPEN','EXIT_PENDING','PROTECTION_CLEANUP') "
-                        + "AND s.position_qty>0",
-                    Long.class, runtime.strategy.getId(), runtime.credential.getId());
+                openCount = runtimeLedgerMapper.countStrategyExposures(runtime.strategy.getId(), runtime.credential.getId());
+                if (openCount == null) { throw new IllegalStateException("Strategy exposure count unavailable"); }
             } catch (org.springframework.dao.DataAccessException ex) {
                 // 持仓事实不可读时必须停止本次开仓，不能在数据库连接异常期间放行交易。
                 logEntryDecision(runtime, context, "POSITION_COUNT_UNAVAILABLE", "最大持仓数查询失败，禁止放行");
@@ -2045,8 +2040,7 @@ public class StrategyRuntimeService {
         if (margin == null || margin.signum() <= 0) {
             return;
         }
-        var account = paperTradingService.ensure(credentialId);
-        jdbcTemplate.update("UPDATE quant_paper_account SET available_balance=available_balance+?, updated_at=NOW() WHERE id=?", margin, account.getId());
+        paperTradingService.refundReservedMargin(credentialId, margin);
     }
 
     /**
