@@ -31,7 +31,9 @@ class ProtectionOrderServiceTest {
     @BeforeEach
     void setup() {
         service.setLiveOrderDispatcher(dispatcher);
-        when(dispatcher.begin(any(), any(), any(), any(), any(), any(), any()))
+        when(dispatcher.begin(any(), any(), any(), any(), any(),
+            org.mockito.ArgumentMatchers.<Long>nullable(Long.class),
+            org.mockito.ArgumentMatchers.<Long>nullable(Long.class)))
             .thenAnswer(call -> new LiveOrderDispatcher.Ticket(call.getArgument(0),
                 call.getArgument(1), call.getArgument(2)));
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(new org.apache.ibatis.session.Configuration(), "test"), QuantProtectionOrder.class);
