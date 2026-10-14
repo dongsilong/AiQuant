@@ -61,6 +61,16 @@ public class UserDataStreamHub {
         localLeaseOwners.remove(credentialId, token);
     }
 
+    /**
+     * Whether the local Hub still retains the shared stream. A connection that
+     * is temporarily reconnecting is still retained and must not be duplicated.
+     * A stream forcibly removed after lease loss is no longer a valid enrollment.
+     */
+    public boolean hasLocalStream(Long credentialId) {
+        SharedUserStream stream = streams.get(credentialId);
+        return stream != null && !stream.closed;
+    }
+
     private boolean ownsLiveStream(Long credentialId) {
         String token = localLeaseOwners.get(credentialId);
         return token != null && streamLease.owns(credentialId, token) == 1;
