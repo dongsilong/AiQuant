@@ -5,6 +5,8 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
+import org.springframework.core.annotation.Order;
+import org.springframework.core.Ordered;
 
 import java.util.List;
 import java.util.Set;
@@ -14,6 +16,7 @@ import java.util.Set;
  * Schema presence is necessary, not sufficient: Binance integration drills remain mandatory.
  */
 @Component
+@Order(Ordered.HIGHEST_PRECEDENCE + 50)
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "quant.live", name = "enabled", havingValue = "true")
 public class LiveSchemaStartupGuard implements ApplicationRunner {
