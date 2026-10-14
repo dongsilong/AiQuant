@@ -81,6 +81,25 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Smoke-test strategy allocation migrations on disposable MySQL 8.4
+        run: |
+          set -euo pipefail
+          MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
+          test -n "$MYSQL_CONTAINER"
+          for ddl in \\
+            script/sql/quant/V20261014_03__strategy_fill_allocation.sql \\
+            script/sql/quant/V20261014_07__strategy_position_cycles.sql \\
+            script/sql/quant/V20261014_08__strategy_position_inventory.sql \\
+            script/sql/quant/V20261014_09__strategy_order_intent.sql; do
+            docker exec -i "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test < "$ddl"
+          done
+          docker exec -i "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test -e "
+            SELECT COUNT(*) AS tables_present FROM information_schema.tables
+            WHERE table_schema='aiquant_ci_test' AND table_name IN
+            ('quant_strategy_fill_allocation','quant_strategy_position_cycle',
+             'quant_strategy_position_fill_event','quant_strategy_position_inventory',
+             'quant_strategy_order_intent');
+          "
       - name: Validate real InnoDB locks, account capacity and lease ownership
         run: >-
           bash mvnw -B -ntp
