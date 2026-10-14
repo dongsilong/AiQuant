@@ -158,4 +158,35 @@ class TradingReconciliationTransactionTest {
         assertFalse(freshness.fresh(1L));
     }
 
+    @Test
+    void olderNodeSnapshotMustNotOverwriteNewerPersistedWatermark() {
+        stubCommonFacts();
+        var reconciliation = service();
+        var fence = mock(org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "snapshotFence", fence);
+        when(fence.lockAndRead(1L)).thenReturn(java.time.LocalDateTime.now().plusMinutes(5));
+        assertThrows(IllegalStateException.class,
+            () -> reconciliation.refreshPositionsOnly(credential()));
+        verify(fence).ensure(1L);
+        verifyNoInteractions(positions);
+        verify(accounts, never()).insert(any(org.dromara.quant.account.domain.QuantAccountSnapshot.class));
+        verify(fence, never()).advance(any(), any());
+    }
+
+    @Test
+    void verifiedSnapshotAdvancesWatermarkWithinDatabaseTransaction() {
+        stubCommonFacts();
+        var reconciliation = service();
+        var fence = mock(org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "snapshotFence", fence);
+        when(fence.advance(eq(1L), any())).thenAnswer(inv -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            return 1;
+        });
+        reconciliation.refreshPositionsOnly(credential());
+        verify(fence).ensure(1L);
+        verify(fence).lockAndRead(1L);
+        verify(fence).advance(eq(1L), any());
+    }
+
 }
