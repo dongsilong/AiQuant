@@ -12,6 +12,15 @@ import static org.mockito.Mockito.*;
 
 @Tag("dev")
 class UnifiedTradeExecutionServiceTest {
+    private static LiveOrderDispatcher validDispatcher() {
+        var dispatcher = mock(LiveOrderDispatcher.class);
+        when(dispatcher.begin(anyLong(), anyString(), anyString(), anyString(), anyString(),
+            org.mockito.ArgumentMatchers.<Long>nullable(Long.class),
+            org.mockito.ArgumentMatchers.<Long>nullable(Long.class)))
+            .thenAnswer(inv -> new LiveOrderDispatcher.Ticket(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
+        return dispatcher;
+    }
+
     private static org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService validLease() {
         var lease = mock(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService.class);
         when(lease.requireCurrentEpoch(anyLong(), anyLong(), anyString())).thenReturn(1L);
@@ -221,6 +230,7 @@ class UnifiedTradeExecutionServiceTest {
         var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
             mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
         service.setRuntimeLease(validLease());
+        service.setLiveDispatcher(validDispatcher());
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
         var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
         service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", mode),
@@ -256,6 +266,7 @@ class UnifiedTradeExecutionServiceTest {
         var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
             mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
         service.setRuntimeLease(validLease());
+        service.setLiveDispatcher(validDispatcher());
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
         var safety = new ExecutionSafetyContext(true, true, true, true, true, true, true, true);
         service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", mode),
@@ -278,6 +289,7 @@ class UnifiedTradeExecutionServiceTest {
         var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
             mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
         service.setRuntimeLease(validLease());
+        service.setLiveDispatcher(validDispatcher());
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
         var imported = "missing".equals(localRule) ? null : new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0,
             new BigDecimal("0.01"), new BigDecimal("0.1"), new BigDecimal("0.1"), null, "TRADING");
