@@ -169,3 +169,21 @@ ledger and exercised operator recovery workflow are not yet implemented. The
 database baseline and all real-network/database drills cannot be completed from
 this repository without isolated authorized systems. Keep the independent
 runtime supervisor disabled until genuine approval.
+
+### Recovery approval CAS groundwork (not dispatch remediation)
+
+The reviewed `V20261014_05` migration draft now enforces that an APPROVED
+or EXECUTED case must have a reviewer distinct from its requester.
+`LiveRecoveryApprovalMapper` adds guarded request/approve/reject SQL:
+requests must match the current UNKNOWN/DISPATCHING live dispatch slot, and
+a request cannot be approved by its own requester or if the immutable
+evidence hash changed. Approval also rechecks that the same dispatch ticket
+remains active. Static regression checks run in CI.
+
+This mapper is **not exposed as an authenticated controller**, does not
+write immutable audit events yet, and deliberately has **no execute/unlock**
+method. It requires an operator-authenticated service, transactionally
+linked audit inserts, durable independent approval, fresh Binance order
+and position verification, concurrency/restart tests and a reviewed migration
+before use. Do not treat an APPROVED database row as permission to resume
+LIVE trading.
