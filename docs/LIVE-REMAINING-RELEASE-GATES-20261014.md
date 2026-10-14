@@ -139,3 +139,33 @@ the recorded order identity. The critical workflow also runs
 
 This work branch is **NOT production-certified** until all the above evidence
 is attached to a release review and independently accepted.
+
+### Seven-blocker closure attempt — evidence-gated, not claimed as complete
+
+The repository adds `script/security/check_live_release_evidence.py` and
+offline regression tests. The script rejects absent evidence, a self-reviewing
+operator, invalid evidence paths and mismatched SHA256 checksums. Run it on a
+separate deployment evidence bundle using
+`python3 script/security/check_live_release_evidence.py manifest.json --evidence-root /path/to/evidence`.
+It validates manifest integrity, NOT the content or authenticity of captured
+exchange facts. An independent reviewer must verify the evidence.
+
+`V20261014_05__recovery_case_audit.sql` is a **design-only additive migration**
+for two-person recovery case metadata and append-only audit event records. It
+is NOT applied, not a completed recovery workflow, and does NOT expose any
+manual unlock endpoint. Operator recovery still requires a carefully reviewed
+service/controller state machine with fresh Binance identity, position and
+protection facts, synchronized DB state, and separate authorization.
+
+The required evidence categories are `ci`, `schema_backup_restore`,
+`binance_fault_injection`, `multi_node_fencing`,
+`position_pnl_reconciliation`, `operator_recovery_approval`, and
+`deployment_rollback_monitoring`. The manifest must reference the exact
+release commit and two different reviewers. Production approval remains blocked
+until each artifact exists and its findings are independently accepted.
+
+**Remaining implementation gap:** a strategy-level signed inventory accounting
+ledger and exercised operator recovery workflow are not yet implemented. The
+database baseline and all real-network/database drills cannot be completed from
+this repository without isolated authorized systems. Keep the independent
+runtime supervisor disabled until genuine approval.
