@@ -21,11 +21,12 @@ import java.util.Set;
  * UserDataStreamHub. The hub owns all Binance connections, listenKey renewal,
  * reconnect and fan-out; this component MUST NEVER subscribe to Binance itself.
  * Other consumers (including terminal SSE) share the same in-JVM connection.
+ * LIVE lease supervision is mandatory even if event-driven position refresh is disabled.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@ConditionalOnProperty(prefix = "quant.position-sync", name = "event-driven", havingValue = "true")
+@ConditionalOnProperty(prefix = "quant.live", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class LivePositionStreamTriggers {
     private final QuantCredentialMapper credentials;
     private final UserDataStreamHub hub;
@@ -36,7 +37,7 @@ public class LivePositionStreamTriggers {
     private static final int LEASE_SECONDS = 75;
     private final Map<Long, AutoCloseable> subscriptions = new HashMap<>();
 
-    @Scheduled(fixedDelay = 30000, initialDelay = 10000)
+    @Scheduled(fixedDelay = 30000, initialDelay = 0)
     public synchronized void supervise() {
         Set<Long> liveIds = new HashSet<>();
         final java.util.List<QuantCredential> enabledCredentials;
