@@ -43,6 +43,12 @@ public class ExecutionRecoveryService {
      * 量化模块配置。
      */
     private final QuantProperties properties;
+    private volatile LiveOrderDispatcher liveOrderDispatcher;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setLiveOrderDispatcher(LiveOrderDispatcher dispatcher) {
+        this.liveOrderDispatcher = java.util.Objects.requireNonNull(dispatcher);
+    }
 
     /**
      * 创建 ExecutionRecoveryService 实例并初始化其依赖。
@@ -109,6 +115,7 @@ public class ExecutionRecoveryService {
                     } else {
                         recordService.markRecovered(record, exact.orderId(), exact.status());
                     }
+                    releaseRecoveredTicket(credential, record, exact);
                     continue;
                 }
                 ExchangeGateway.OrderSnapshot matched = record.getClientOrderId() == null ? null
@@ -119,6 +126,7 @@ public class ExecutionRecoveryService {
                     // A fallback match must use actual exchange facts, not possibly stale local status.
                     orderLedgerService.syncSnapshot(record.getCredentialId(), matched);
                     recordService.markRecovered(record, matched.orderId(), matched.status());
+                    releaseRecoveredTicket(credential, record, matched);
                 } else if (record.getCreatedAt() != null && Duration.between(record.getCreatedAt(), LocalDateTime.now()).getSeconds() >= 90) {
                     recordService.markUnknown(record, "超过 90 秒仍无法确认交易所订单状态，保持 UNKNOWN 并等待后续对账");
                 }
@@ -127,4 +135,21 @@ public class ExecutionRecoveryService {
             }
         }
     }
+    /**
+     * The exact Binance client order ID, recovered execution state and persisted
+     * order ledger must all agree before releasing the durable LIVE dispatch slot.
+     */
+    private void releaseRecoveredTicket(QuantCredential credential, QuantExecutionRecord record,
+                                        ExchangeGateway.OrderSnapshot snapshot) {
+        if (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || liveOrderDispatcher == null
+            || !"RECOVERED".equals(record.getExecutionStatus())
+            || record.getClientOrderId() == null
+            || !record.getClientOrderId().equals(snapshot.clientOrderId())
+            || snapshot.orderId() == null) {
+            return;
+        }
+        liveOrderDispatcher.recoveredFromExchange(record.getCredentialId(), record.getSymbol(),
+            record.getIdempotencyKey(), record.getClientOrderId(), snapshot.orderId());
+    }
+
 }
