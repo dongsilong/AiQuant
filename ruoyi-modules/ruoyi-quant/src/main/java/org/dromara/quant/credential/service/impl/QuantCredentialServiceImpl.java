@@ -23,7 +23,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
@@ -102,6 +101,8 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         }
         validateOwner(current);
         QuantCredential entity = MapstructUtils.convert(bo, QuantCredential.class);
+        // Bound principal is immutable on ordinary edit. Ownership transfer
+        // requires an explicitly authorized, audited workflow.
         entity.setUserId(current.getUserId());
         entity.setStatus(current.getStatus());
         if (StringUtils.isBlank(entity.getRunMode())) {
@@ -257,15 +258,16 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
     }
 
     private void saveUsers(Long credentialId, List<Long> userIds, Long fallbackUserId) {
-        List<Long> ids = userIds == null ? new ArrayList<>() : userIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
-        if (ids.isEmpty() && fallbackUserId != null) {
-            ids = List.of(fallbackUserId);
+        if (fallbackUserId == null || fallbackUserId <= 0) {
+            throw new ServiceException("交易凭证必须指定唯一所属用户");
         }
-        for (Long userId : ids) {
-            QuantCredentialUser relation = new QuantCredentialUser();
-            relation.setCredentialId(credentialId);
-            relation.setUserId(userId);
-            credentialUserMapper.insert(relation);
+        if (userIds != null && (userIds.size() != 1
+            || userIds.get(0) == null || !fallbackUserId.equals(userIds.get(0)))) {
+            throw new ServiceException("一个交易凭证只能绑定一个用户，且必须与所属用户一致");
         }
+        QuantCredentialUser relation = new QuantCredentialUser();
+        relation.setCredentialId(credentialId);
+        relation.setUserId(fallbackUserId);
+        credentialUserMapper.insert(relation);
     }
 }
