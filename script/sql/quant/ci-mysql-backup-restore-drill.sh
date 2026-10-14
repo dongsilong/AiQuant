@@ -37,6 +37,14 @@ INSERT INTO quant_strategy_pre_dispatch_intent
   strategy_instance_id,operation_type,position_side,exchange_side,lease_epoch)
  VALUES (930001,'BTCUSDT','ci-unknown-dispatch','ci-client-1',71001,
          81001,'OPEN','LONG','BUY',41);
+INSERT INTO quant_live_recovery_case
+ (case_id,credential_id,symbol,dispatch_key,operation_type,requested_by,
+  evidence_sha256,expected_client_order_id,state)
+ VALUES (85001,930001,'BTCUSDT','ci-unknown-dispatch','OPEN',2001,
+         REPEAT('a',64),'ci-client-1','PENDING');
+INSERT INTO quant_live_recovery_audit
+ (audit_id,case_id,actor_id,action,evidence_sha256,detail_hash)
+ VALUES (86001,85001,2001,'REQUEST',REPEAT('a',64),REPEAT('b',64));
 SQL
 # Snapshot SQL dump is the disaster recovery artifact. An uncompressed file is
 # only kept in CI temporary storage; never upload database secrets/artifacts.
@@ -60,6 +68,17 @@ mysql_ci -e "CREATE DATABASE \`$RESTORE_DB\`;"
 mysql_ci "$RESTORE_DB" < "$tmp/backup.sql"
 after="$(mysql_ci -N -B "$RESTORE_DB" -e "$facts_sql" | tr -d '\r')"
 test "$after" = "$before"
+# Every restored audit event must remain protected by immutable UPDATE/DELETE triggers.
+audit_count="$(mysql_ci -N -B "$RESTORE_DB" -e "SELECT COUNT(*) FROM quant_live_recovery_audit WHERE audit_id=86001;" | tr -d '\r')"
+test "$audit_count" = 1
+if mysql_ci "$RESTORE_DB" -e "UPDATE quant_live_recovery_audit SET actor_id=7777 WHERE audit_id=86001;" >/dev/null 2>&1; then
+  echo "FAIL: restored audit UPDATE unexpectedly allowed" >&2
+  exit 1
+fi
+if mysql_ci "$RESTORE_DB" -e "DELETE FROM quant_live_recovery_audit WHERE audit_id=86001;" >/dev/null 2>&1; then
+  echo "FAIL: restored audit DELETE unexpectedly allowed" >&2
+  exit 1
+fi
 # Both PK/foreign key and unique idempotency invariants must survive restore.
 fk_count="$(mysql_ci -N -B -e "
  SELECT COUNT(*) FROM information_schema.referential_constraints
