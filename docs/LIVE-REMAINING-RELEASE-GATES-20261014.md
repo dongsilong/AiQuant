@@ -204,3 +204,13 @@ request parameters. Audit immutability requires MySQL privileges and
 independent WORM archival. This is still NOT operator remediation: approvals
 never query Binance, execute recovery or release a dispatch guard. V05 needs
 a verified deployment schema and rehearsal before its tables can be used.
+
+### Approval race / stale exchange-ticket hardening
+
+The uninstalled V05 draft now has a MySQL generated nullable active-case key
+and UNIQUE index, preventing two concurrent PENDING/APPROVED approval cases for
+the same credential, symbol and dispatch key even if both requests passed
+NOT EXISTS concurrently. APPROVED transitions also require the exact active
+ticket to remain UNKNOWN/DISPATCHING and preserve operation type, client order
+ID, and nullable exchange order ID. The SQL contract test checks these
+invariants. This is not yet a real-MySQL migration or concurrency validation.
