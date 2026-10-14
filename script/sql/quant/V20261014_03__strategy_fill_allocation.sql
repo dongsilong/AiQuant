@@ -15,6 +15,7 @@ CREATE TABLE quant_strategy_fill_allocation (
   allocated_qty DECIMAL(38,16) NOT NULL,
   allocated_price DECIMAL(38,16) NOT NULL,
   allocated_fee DECIMAL(38,16) NOT NULL,
+  allocated_fee_asset VARCHAR(20) NOT NULL,
   realized_pnl DECIMAL(38,16) NOT NULL,
   trade_time DATETIME NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
