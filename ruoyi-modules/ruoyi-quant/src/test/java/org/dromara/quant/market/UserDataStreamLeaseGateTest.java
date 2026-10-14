@@ -49,4 +49,30 @@ class UserDataStreamLeaseGateTest {
         verify(lease).owns(82L, "foreign-node");
         hub.destroy();
     }
+    @Test
+    void healthCheckClosesFormerOwnerConnectionAfterLeaseLoss() throws Exception {
+        var gateway = mock(ExchangeGateway.class);
+        var lease = mock(LiveUserStreamLeaseMapper.class);
+        var positions = mock(AccountPositionCache.class);
+        var balances = mock(AccountBalanceCache.class);
+        var preparation = mock(TradingPreparationService.class);
+        var execution = mock(TradeExecutionApplicationService.class);
+        var session = mock(ExchangeGateway.UserDataStreamSession.class);
+        when(session.isConnected()).thenReturn(true);
+        when(gateway.subscribeUserData(any(), any())).thenReturn(session);
+        when(lease.owns(eq(93L), eq("node-a"))).thenReturn(1L, 1L, 1L, 0L);
+        var hub = new UserDataStreamHub(gateway, execution, positions, balances, preparation);
+        ReflectionTestUtils.setField(hub, "streamLease", lease);
+        var credential = new QuantCredential();
+        credential.setId(93L);
+        credential.setRunMode("LIVE");
+        hub.registerLeaseOwner(93L, "node-a");
+        hub.subscribe(credential, event -> {});
+        hub.healthCheck();
+        verify(session).close();
+        verify(positions).remove(93L);
+        verify(balances).remove(93L);
+        hub.destroy();
+    }
+
 }
