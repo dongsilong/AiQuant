@@ -18,7 +18,7 @@ This file records **implemented** hardening and release blockers; it does not ce
 
 ## Current gate
 
-Both `QUANT_LIVE_ENABLED` and `QUANT_RUNTIME_ENABLED` remain off by default.
+`QUANT_LIVE_ENABLED` now **defaults to true** (operator-directed); production `QUANT_RUNTIME_ENABLED` remains **false** unless explicitly enabled. Set `QUANT_LIVE_ENABLED=false` in all unapproved deployments. LIVE schema/permissions checks and independent risk controls remain mandatory.
 A passing Maven, H2, Mockito or MySQL CI run establishes a regression baseline, **not** an approval to enable capital.
 
 ## Following round: persisted fencing epoch and strategy CLOSE ownership
