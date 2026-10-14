@@ -20,6 +20,8 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
         SET execution_status='CONFIRMED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
             exchange_order_status=#{exchangeStatus}, updated_at=#{now}
         WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN')
+          AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
+          AND #{orderId} IS NOT NULL AND #{orderId}>0
         """)
     int markAccepted(@Param("id") Long id, @Param("orderId") Long orderId,
                      @Param("exchangeStatus") String exchangeStatus, @Param("now") LocalDateTime now);
@@ -48,6 +50,8 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
         SET execution_status='RECOVERED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
             exchange_order_status=COALESCE(#{exchangeStatus},exchange_order_status), updated_at=#{now}
         WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN','CONFIRMED')
+          AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
+          AND #{orderId} IS NOT NULL AND #{orderId}>0
         """)
     int markRecoveredAfterFact(@Param("id") Long id, @Param("orderId") Long orderId,
                                @Param("exchangeStatus") String exchangeStatus,
