@@ -97,13 +97,20 @@ public class TradingReconciliationService {
      * Commit an account's verified REST snapshot under a database row lock.
      * Earlier-started requests cannot overwrite later-started snapshots.
      */
+    /** A fresh account event invalidated an in-flight REST snapshot; safe to fetch again. */
+    public static final class SnapshotSupersededException extends IllegalStateException {
+        public SnapshotSupersededException() {
+            super("Binance position snapshot superseded by newer account event");
+        }
+    }
+
     private void commitPositionSnapshot(QuantCredential credential,
                                         ExchangeGateway.AccountSnapshot account,
                                         List<ExchangeGateway.PositionSnapshot> positions,
                                         LocalDateTime fetchStartedAt, long eventGeneration) {
         if (positionFreshness != null
             && positionFreshness.generation(credential.getId()) != eventGeneration) {
-            throw new IllegalStateException("Binance position snapshot superseded by newer account event");
+            throw new SnapshotSupersededException();
         }
         transaction.executeWithoutResult(status -> {
             if (openCapacityMapper != null
@@ -119,7 +126,7 @@ public class TradingReconciliationService {
             }
             if (positionFreshness != null
                 && positionFreshness.generation(credential.getId()) != eventGeneration) {
-                throw new IllegalStateException("Binance position snapshot superseded by newer account event");
+                throw new SnapshotSupersededException();
             }
             syncAccount(credential, account);
             syncPositions(credential, positions);
