@@ -37,4 +37,22 @@ class LivePositionEventCoordinatorTest {
         coordinator.drain();
         verifyNoInteractions(reconciliation);
     }
+    @Test
+    void failedRestRefreshIsRetriedRatherThanLost() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        QuantCredential live = new QuantCredential();
+        live.setId(43L); live.setStatus("0"); live.setRunMode("LIVE");
+        when(credentials.selectById(43L)).thenReturn(live);
+        doThrow(new IllegalStateException("network failure"))
+            .when(reconciliation).refreshPositionsOnly(live);
+        coordinator.request(43L);
+        coordinator.drain();
+        verify(reconciliation, times(1)).refreshPositionsOnly(live);
+        // No immediate hot-loop retry; the failed request stays queued.
+        coordinator.drain();
+        verify(reconciliation, times(1)).refreshPositionsOnly(live);
+    }
+
 }
