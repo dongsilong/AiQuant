@@ -109,9 +109,10 @@ public class ExecutionRecoveryService {
                     orderLedgerService.syncSnapshot(record.getCredentialId(), exact);
                     if ("CANCEL".equalsIgnoreCase(record.getOperationType())) {
                         String status = exact.status();
-                        if ("CANCELED".equalsIgnoreCase(status) || "EXPIRED".equalsIgnoreCase(status)) {
+                        if ("CANCELED".equalsIgnoreCase(status) || "EXPIRED".equalsIgnoreCase(status)
+                            || "REJECTED".equalsIgnoreCase(status)) {
                             recordService.markRecovered(record, exact.orderId(), exact.status());
-                        } else if ("FILLED".equalsIgnoreCase(status) || "PARTIALLY_FILLED".equalsIgnoreCase(status)) {
+                        } else if ("FILLED".equalsIgnoreCase(status)) {
                             recordService.markRecovered(record, exact.orderId(), exact.status());
                             // The annotation must be guarded by the exact recovered order and status.
                             // A stale recovery worker must never overwrite a newer execution fact.
@@ -119,6 +120,12 @@ public class ExecutionRecoveryService {
                                 recordMapper.annotateRecoveredCancelFill(record.getId(), exact.orderId(), status,
                                     "取消请求到达时订单已经成交: " + status, LocalDateTime.now());
                             }
+                        } else if ("PARTIALLY_FILLED".equalsIgnoreCase(status)) {
+                            // PARTIALLY_FILLED can still have live remaining quantity.
+                            // Keep CANCEL unresolved and its dispatch guard occupied;
+                            // a later exact terminal exchange fact may resolve it.
+                            recordService.markUnknown(record,
+                                "撤单时订单部分成交，剩余量状态未终结，必须继续对账");
                         }
                     } else {
                         recordService.markRecovered(record, exact.orderId(), exact.status());
@@ -155,7 +162,7 @@ public class ExecutionRecoveryService {
             || !record.getClientOrderId().equals(snapshot.clientOrderId())
             || snapshot.orderId() == null
             || "CANCEL".equalsIgnoreCase(record.getOperationType())
-                && !java.util.Set.of("CANCELED", "EXPIRED", "FILLED", "PARTIALLY_FILLED")
+                && !java.util.Set.of("CANCELED", "EXPIRED", "FILLED", "REJECTED")
                     .contains(snapshot.status() == null ? "" : snapshot.status().toUpperCase(java.util.Locale.ROOT))) {
             return;
         }
