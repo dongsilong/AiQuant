@@ -155,6 +155,18 @@ public class TradingPreparationService {
                                 }
                                 gateway.setLeverage(state.credential, state.symbol, state.leverage);
                                 if (configTicket != null) {
+                                    // A setter HTTP success is not independent proof of
+                                    // actual Binance leverage/margin, especially after
+                                    // retries or ambiguous exchanges. Read fresh facts
+                                    // under the same persistent cross-node dispatch slot.
+                                    var verified = gateway.querySymbolTradingSettings(
+                                        state.credential, state.symbol);
+                                    if (verified == null
+                                        || !state.symbol.equalsIgnoreCase(verified.symbol())
+                                        || !state.marginMode.equals(verified.marginMode())
+                                        || state.leverage != verified.leverage()) {
+                                        throw new IllegalStateException("Binance 实际保证金或杠杆与目标配置不一致，保留调度阻断");
+                                    }
                                     dispatcher.configurationApplied(configTicket);
                                     configTicket = null;
                                 }
