@@ -22,7 +22,7 @@ public class SqlLogProperties {
      */
     private String output = "console";
 
-    private Boolean logSuccess = true;
+    private Boolean logSuccess = false;
 
     private Boolean logError = true;
 
