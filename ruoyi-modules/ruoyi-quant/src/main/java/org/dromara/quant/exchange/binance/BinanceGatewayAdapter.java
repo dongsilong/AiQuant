@@ -64,12 +64,16 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * Binance 事件解析使用的 JSON 工具。
      */
     private final Gson gson = new Gson();
+    private final java.util.concurrent.atomic.AtomicReference<String> currentWebsocketTransport =
+        new java.util.concurrent.atomic.AtomicReference<>();
+    private final java.util.Set<StreamHandle> activeWebsocketStreams = ConcurrentHashMap.newKeySet();
 
     /**
      * 创建 BinanceGatewayAdapter 实例并初始化其依赖。
      */
     public BinanceGatewayAdapter(QuantProperties properties) {
         this.properties = properties;
+        currentWebsocketTransport.set(validateWebsocketTransport(properties.getBinance().getWebsocketTransport()));
     }
 
     /**
@@ -381,19 +385,18 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             requireSdkStreamsCanConnect();
             BinanceSdkStreamTransport sdk = BinanceSdkStreamTransport.market(base, streamSymbol, interval, events, disconnected,
                 properties.getBinance().getSdkStreamBacklogLimit());
-            return new MarketStreamSession(sdk::close);
+            StreamHandle managed = trackWebsocket(sdk::close, disconnected);
+            return new MarketStreamSession(managed::close);
         }
         String url = base + "?streams=" + streamSymbol + "@aggTrade/" + streamSymbol + "@markPrice@1s/" + streamSymbol + "@kline_" + interval;
         SocketConnection socket = new SocketConnection(url, events, disconnected);
-        return new MarketStreamSession(socket::close);
+        StreamHandle managed = trackWebsocket(socket::close, disconnected);
+        return new MarketStreamSession(managed::close);
     }
 
     /** New subscriptions use this transport; existing subscriptions change only after safe reconnect. */
     boolean sdkStreamsEnabled() {
-        String transport = properties.getBinance().getWebsocketTransport();
-        if ("BINANCE_SDK".equalsIgnoreCase(transport)) { return true; }
-        if ("RAW_OKHTTP".equalsIgnoreCase(transport)) { return false; }
-        throw new IllegalStateException("Unsupported Binance WebSocket transport: " + transport);
+        return "BINANCE_SDK".equals(currentWebsocketTransport.get());
     }
 
     /** An SDK stream can bypass the configured HTTP proxy; reject instead of silently connecting directly. */
@@ -401,6 +404,71 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         QuantProperties.Proxy proxy = properties.getProxy();
         if (proxy != null && proxy.getHost() != null && !proxy.getHost().isBlank()) {
             throw new IllegalStateException("BINANCE_SDK Streams 尚未实现代理配置；请选 RAW_OKHTTP 传输");
+        }
+    }
+
+    /** Node-local current mode; cluster deployments must switch every trading node. */
+    public String websocketTransport() {
+        return currentWebsocketTransport.get();
+    }
+
+    /**
+     * Atomically choose the transport for future subscriptions and force old sessions to reconnect.
+     * The market and account stream hubs receive DISCONNECTED and perform existing recovery/replay.
+     * This is NOT a zero-gap migration; operators must verify LIVE protections and user-data health.
+     *
+     * @return number of sessions instructed to reconnect
+     */
+    public synchronized int switchWebsocketTransport(String target) {
+        String normalized = validateWebsocketTransport(target);
+        if (normalized.equals(currentWebsocketTransport.get())) { return 0; }
+        currentWebsocketTransport.set(normalized);
+        int count = 0;
+        for (StreamHandle stream : java.util.List.copyOf(activeWebsocketStreams)) {
+            stream.reconnect();
+            count++;
+        }
+        log.warn("Binance WebSocket transport changed to {} on this node, reconnecting {} streams", normalized, count);
+        return count;
+    }
+
+    private static String validateWebsocketTransport(String input) {
+        String value = input == null ? "" : input.trim().toUpperCase(Locale.ROOT);
+        if (!"RAW_OKHTTP".equals(value) && !"BINANCE_SDK".equals(value)) {
+            throw new IllegalArgumentException("WebSocket transport must be RAW_OKHTTP or BINANCE_SDK");
+        }
+        return value;
+    }
+
+    private StreamHandle trackWebsocket(Runnable close, Runnable notifyDisconnected) {
+        StreamHandle handle = new StreamHandle(close, notifyDisconnected);
+        activeWebsocketStreams.add(handle);
+        return handle;
+    }
+
+    private final class StreamHandle {
+        private final Runnable closeTransport;
+        private final Runnable notifyDisconnected;
+        private final AtomicBoolean stopped = new AtomicBoolean();
+
+        StreamHandle(Runnable closeTransport, Runnable notifyDisconnected) {
+            this.closeTransport = closeTransport;
+            this.notifyDisconnected = notifyDisconnected;
+        }
+
+        void close() {
+            if (stopped.compareAndSet(false, true)) {
+                activeWebsocketStreams.remove(this);
+                try { closeTransport.run(); }
+                catch (RuntimeException ex) { log.warn("Binance WebSocket close failed: {}", ex.getClass().getSimpleName()); }
+            }
+        }
+
+        void reconnect() {
+            if (stopped.get()) { return; }
+            close();
+            try { notifyDisconnected.run(); }
+            catch (RuntimeException ex) { log.warn("Binance WebSocket reconnect notification failed"); }
         }
     }
 
@@ -914,20 +982,24 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 String sdkBase = base.endsWith("/private/ws/") ? base.substring(0, base.length() - "/private/ws/".length()) + "/stream" : base;
                 BinanceSdkStreamTransport sdk = BinanceSdkStreamTransport.user(sdkBase, listenKey, events, disconnected,
                     properties.getBinance().getSdkStreamBacklogLimit());
-                return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(), () -> {
+                StreamHandle managed = trackWebsocket(() -> {
                     sdk.close();
                     try { api(credential).closeUserDataStream(); } catch (RuntimeException ignored) { }
-                }, sdk::connected);
+                }, disconnected);
+                return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(),
+                    managed::close, sdk::connected);
             } catch (RuntimeException ex) {
                 try { api(credential).closeUserDataStream(); } catch (RuntimeException ignored) { }
                 throw ex;
             }
         }
         SocketConnection socket = new SocketConnection(base + listenKey, events, disconnected);
-        return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(), () -> {
+        StreamHandle managed = trackWebsocket(() -> {
             socket.close();
             try { api(credential).closeUserDataStream(); } catch (RuntimeException ignored) { }
-        }, socket.connected::get);
+        }, disconnected);
+        return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(),
+            managed::close, socket.connected::get);
     }
 
     private UserDataEvent parseUserDataEvent(String text) {
