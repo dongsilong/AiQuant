@@ -16,6 +16,7 @@ class LivePositionStreamSingleNodeGateTest {
     void existingHubHoldsOnlyOneAccountReferenceAcrossRepeatedSupervision() throws Exception {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
+        when(hub.hasLocalStream(anyLong())).thenReturn(true);
         var coordinator = mock(LivePositionEventCoordinator.class);
         var freshness = new LivePositionFreshness();
         var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
@@ -41,6 +42,7 @@ class LivePositionStreamSingleNodeGateTest {
     void disabledAccountReleasesHubSubscription() throws Exception {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
+        when(hub.hasLocalStream(anyLong())).thenReturn(true);
         var coordinator = mock(LivePositionEventCoordinator.class);
         var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
         when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
@@ -61,6 +63,7 @@ class LivePositionStreamSingleNodeGateTest {
     void foreignOwnerNeverCreatesSharedStreamAndRevokesPriorReference() throws Exception {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
+        when(hub.hasLocalStream(anyLong())).thenReturn(true);
         var coordinator = mock(LivePositionEventCoordinator.class);
         var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
         var freshness = new LivePositionFreshness();
@@ -83,6 +86,7 @@ class LivePositionStreamSingleNodeGateTest {
     void failedHubSubscriptionReleasesDbLeaseImmediately() {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
+        when(hub.hasLocalStream(anyLong())).thenReturn(true);
         var coordinator = mock(LivePositionEventCoordinator.class);
         var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
         when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
@@ -96,6 +100,33 @@ class LivePositionStreamSingleNodeGateTest {
         verify(hub).unregisterLeaseOwner(eq(94L), anyString());
         verify(lease).release(eq(94L), anyString());
         verifyNoInteractions(coordinator);
+    }
+
+    @Test
+    void previouslyLostHubStreamIsResubscribedAfterLeaseReacquisition() throws Exception {
+        var credentials = mock(QuantCredentialMapper.class);
+        var hub = mock(UserDataStreamHub.class);
+        var coordinator = mock(LivePositionEventCoordinator.class);
+        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator,
+            new LivePositionFreshness(), lease);
+        var account = new QuantCredential();
+        account.setId(95L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectList(any())).thenReturn(List.of(account));
+        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        when(hub.hasLocalStream(95L)).thenReturn(false);
+        var first = mock(AutoCloseable.class);
+        var replacement = mock(AutoCloseable.class);
+        when(hub.subscribe(eq(account), any())).thenReturn(first, replacement);
+        stream.supervise();
+        stream.supervise();
+        verify(first).close();
+        verify(hub, times(2)).subscribe(eq(account), any());
+        verify(coordinator, times(2)).request(95L);
+        stream.close();
+        verify(replacement).close();
     }
 
 }
