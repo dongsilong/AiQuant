@@ -785,8 +785,9 @@ class StrategyRuntimeSafetyTest {
             ReflectionTestUtils.setField(f.runtime, "plugin", new KlineSlopeRateStrategy());
             var strategy = (QuantStrategy) ReflectionTestUtils.getField(f.runtime, "strategy");
             strategy.setMaxOpenCount(1); strategy.setDefaultOpenRatio(new BigDecimal("0.1")); strategy.setStrategyName("当前策略快照");
-            var jdbc = (org.springframework.jdbc.core.JdbcTemplate) ReflectionTestUtils.getField(f.service, "jdbcTemplate");
-            when(jdbc.queryForObject(anyString(), eq(Long.class), any(), any())).thenReturn(1L, 0L);
+            var ledger = (org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLedgerMapper)
+                ReflectionTestUtils.getField(f.service, "runtimeLedgerMapper");
+            when(ledger.countStrategyExposures(anyLong(), anyLong())).thenReturn(1L, 0L);
             var context = new StrategyContext("BTCUSDT", null, null, new BigDecimal("102"), null, new BigDecimal("100"),
                 Instant.now(), false, Instant.now(), null, null, null, 10, null, null, false);
             var balance = (org.dromara.quant.market.AccountBalanceCache) ReflectionTestUtils.getField(f.service, "balanceCache");
