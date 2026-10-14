@@ -3,6 +3,9 @@ package org.dromara.quant.execution;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.order.domain.QuantOrder;
+import org.dromara.quant.execution.domain.QuantExecutionRecord;
+import org.springframework.transaction.TransactionStatus;
 import org.dromara.quant.execution.mapper.LiveOrderDispatchMapper;
 import org.dromara.quant.execution.mapper.LiveRecoveryApprovalMapper;
 import org.dromara.quant.execution.mapper.LiveRecoveryAuditMapper;
@@ -89,6 +92,45 @@ class LiveManualRecoveryExecutionServiceTest {
         assertThrows(IllegalStateException.class, () ->
             service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
         verifyNoInteractions(dispatch, ledger, audit);
+    }
+
+    @Test
+    void approvedExactFactAtomicallyRecoversTicketAndAudits() {
+        when(cases.findCase(1L)).thenReturn(approved("OPEN"));
+        var credential = new QuantCredential();
+        credential.setRunMode("LIVE");
+        when(credentials.selectById(20L)).thenReturn(credential);
+        var snapshot = new ExchangeGateway.OrderSnapshot(
+            "BTCUSDT", 33L, "client-1", "BUY", "LIMIT", "FILLED",
+            BigDecimal.ONE, BigDecimal.TEN, BigDecimal.TEN, Instant.now());
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), isNull(), eq("client-1")))
+            .thenReturn(snapshot);
+        var persisted = new QuantOrder();
+        persisted.setId(55L);
+        when(ledger.syncSnapshot(20L, snapshot)).thenReturn(persisted);
+        var exec = new QuantExecutionRecord();
+        exec.setId(100L);
+        exec.setCredentialId(20L);
+        exec.setSymbol("BTCUSDT");
+        exec.setIdempotencyKey("key-1");
+        exec.setClientOrderId("client-1");
+        exec.setOperationType("OPEN");
+        exec.setExecutionStatus("RECOVERED");
+        exec.setExchangeOrderId(33L);
+        when(executions.selectOne(any())).thenReturn(exec);
+        when(manager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+        when(cases.markExecuted(1L, "a".repeat(64))).thenReturn(1);
+        when(dispatch.recoverVerified(20L, "BTCUSDT", "key-1", "client-1", 33L))
+            .thenReturn(1);
+        when(dispatch.release(20L, "BTCUSDT", "key-1")).thenReturn(1);
+        when(audit.append(anyLong(), eq(1L), eq(12L), eq("EXECUTE"),
+            eq("a".repeat(64)), eq("b".repeat(64)))).thenReturn(1);
+        service.execute(1L, 12L, "a".repeat(64), "b".repeat(64));
+        verify(cases).markExecuted(1L, "a".repeat(64));
+        verify(dispatch).release(20L, "BTCUSDT", "key-1");
+        verify(audit).append(anyLong(), eq(1L), eq(12L), eq("EXECUTE"),
+            eq("a".repeat(64)), eq("b".repeat(64)));
+        verify(manager).commit(any());
     }
 
     @Test
