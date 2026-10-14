@@ -78,6 +78,12 @@ public class TradingReconciliationService {
     private final ReconciliationFailureRecorder failureRecorder;
     private final StrategyPositionStateService strategyPositionStateService;
     private final TransactionTemplate transaction;
+    private volatile org.dromara.quant.execution.StrategyFillAllocationService fillAllocations;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setFillAllocations(org.dromara.quant.execution.StrategyFillAllocationService service) {
+        this.fillAllocations = java.util.Objects.requireNonNull(service);
+    }
 
     /**
      * 创建 TradingReconciliationService 实例并初始化其依赖。
@@ -347,6 +353,14 @@ public class TradingReconciliationService {
             if (sourceOrder != null) {
                 entity.setStrategyId(sourceOrder.getStrategyId());
                 entity.setStrategyInstanceId(sourceOrder.getStrategyInstanceId());
+                if ("LIVE".equalsIgnoreCase(credential.getRunMode())
+                    && sourceOrder.getStrategyInstanceId() != null) {
+                    var allocations = fillAllocations;
+                    if (allocations == null) {
+                        throw new IllegalStateException("LIVE 策略成交分配账本不可用，拒绝不完整对账");
+                    }
+                    allocations.allocate(s, sourceOrder, credential.getId());
+                }
             }
             entity.setSide(s.side());
             entity.setQuantity(nvl(s.quantity()));
