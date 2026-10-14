@@ -20,7 +20,19 @@ class ProtectionTargetCoordinatorTest {
         jdbc.execute("CREATE TABLE quant_protection_target (target_key VARCHAR(64) PRIMARY KEY, credential_id BIGINT NOT NULL, position_id BIGINT NOT NULL, position_cycle_key VARCHAR(36) NOT NULL, position_side VARCHAR(8) NOT NULL, protection_type VARCHAR(24) NOT NULL, target_version BIGINT DEFAULT 0 NOT NULL, step_index INT DEFAULT 0 NOT NULL, confirmed_step INT DEFAULT 0 NOT NULL, quantity DECIMAL(32,16), trigger_price DECIMAL(32,16), order_type VARCHAR(32), current_order_id BIGINT, pending_order_id BIGINT, previous_order_id BIGINT, owner_token VARCHAR(36), lease_until TIMESTAMP, updated_at TIMESTAMP)");
         jdbc.execute("CREATE TABLE test_order (id BIGINT PRIMARY KEY, client_id VARCHAR(64))");
         var position = new QuantPosition(); position.setId(10L); position.setPositionSide("LONG"); position.setProtectionCycleKey(UUID.randomUUID().toString());
-        return new Fixture(jdbc, new ProtectionTargetCoordinator(jdbc, new DataSourceTransactionManager(source)), new ProtectionTargetCoordinator(jdbc, new DataSourceTransactionManager(source)), position);
+        try {
+            var configuration = new org.apache.ibatis.session.Configuration();
+            configuration.addMapper(org.dromara.quant.protection.mapper.ProtectionTargetMapper.class);
+            var factoryBean = new org.mybatis.spring.SqlSessionFactoryBean();
+            factoryBean.setDataSource(source);
+            factoryBean.setConfiguration(configuration);
+            var session = new org.mybatis.spring.SqlSessionTemplate(java.util.Objects.requireNonNull(factoryBean.getObject()));
+            var mapper = session.getMapper(org.dromara.quant.protection.mapper.ProtectionTargetMapper.class);
+            return new Fixture(jdbc, new ProtectionTargetCoordinator(mapper, new DataSourceTransactionManager(source)),
+                new ProtectionTargetCoordinator(mapper, new DataSourceTransactionManager(source)), position);
+        } catch (Exception ex) {
+            throw new IllegalStateException("Cannot initialize MyBatis transactional protection fixture", ex);
+        }
     }
     private QuantProtectionOrder order(long id) {
         var o = new QuantProtectionOrder(); o.setId(id); o.setClientOrderId("client" + id); o.setQuantity(BigDecimal.ONE); o.setStopPrice(new BigDecimal("101")); o.setOrderType("STOP_MARKET"); return o;
