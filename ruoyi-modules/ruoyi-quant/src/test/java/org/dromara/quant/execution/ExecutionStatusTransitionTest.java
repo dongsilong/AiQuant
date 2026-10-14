@@ -24,7 +24,7 @@ class ExecutionStatusTransitionTest {
         var jdbc = new JdbcTemplate(source);
         jdbc.execute("""
             CREATE TABLE quant_execution_record (
-              id BIGINT PRIMARY KEY, execution_status VARCHAR(24) NOT NULL,
+              id BIGINT PRIMARY KEY, operation_type VARCHAR(20), execution_status VARCHAR(24) NOT NULL,
               exchange_order_id BIGINT, exchange_order_status VARCHAR(36),
               error_message VARCHAR(255), recovery_attempts INT,
               last_recovery_at TIMESTAMP, updated_at TIMESTAMP)
@@ -68,6 +68,23 @@ class ExecutionStatusTransitionTest {
             "SELECT execution_status FROM quant_execution_record WHERE id=1", String.class));
         assertEquals("FAILED", db.jdbc.queryForObject(
             "SELECT execution_status FROM quant_execution_record WHERE id=2", String.class));
+    }
+
+    @Test
+    void lateCancelRecoveryCannotOverwriteNewerExchangeOrderFact() throws Exception {
+        var db = db();
+        db.jdbc.update("INSERT INTO quant_execution_record(id,operation_type,execution_status) VALUES (1,'CANCEL','UNKNOWN')");
+        var now = LocalDateTime.now();
+        assertEquals(1, db.mapper.markRecoveredAfterFact(1L, 99L, "PARTIALLY_FILLED", now));
+        assertEquals(0, db.mapper.annotateRecoveredCancelFill(1L, 98L, "PARTIALLY_FILLED", "stale event", now));
+        assertEquals(0, db.mapper.annotateRecoveredCancelFill(1L, 99L, "FILLED", "stale status", now));
+        assertEquals(1, db.mapper.annotateRecoveredCancelFill(1L, 99L, "PARTIALLY_FILLED", "cancel raced with fill", now));
+        assertEquals("cancel raced with fill", db.jdbc.queryForObject(
+            "SELECT error_message FROM quant_execution_record WHERE id=1", String.class));
+        assertEquals("RECOVERED", db.jdbc.queryForObject(
+            "SELECT execution_status FROM quant_execution_record WHERE id=1", String.class));
+        assertEquals(99L, db.jdbc.queryForObject(
+            "SELECT exchange_order_id FROM quant_execution_record WHERE id=1", Long.class));
     }
 
     @Test
