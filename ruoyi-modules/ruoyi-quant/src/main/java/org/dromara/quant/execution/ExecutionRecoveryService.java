@@ -98,6 +98,14 @@ public class ExecutionRecoveryService {
                     // 精确订单不存在或交易所暂时不可用时，继续使用当前挂单兜底查询。
                 }
                 if (exact != null) {
+                    if (record.getExchangeOrderId() != null
+                        && !record.getExchangeOrderId().equals(exact.orderId())
+                        || record.getClientOrderId() != null
+                        && !record.getClientOrderId().equals(exact.clientOrderId())) {
+                        // Query by orderId or clientOrderId must not accept the other
+                        // identity changing unexpectedly. Keep UNKNOWN, block dispatch.
+                        throw new IllegalStateException("Binance recovery returned conflicting order identity");
+                    }
                     orderLedgerService.syncSnapshot(record.getCredentialId(), exact);
                     if ("CANCEL".equalsIgnoreCase(record.getOperationType())) {
                         String status = exact.status();
