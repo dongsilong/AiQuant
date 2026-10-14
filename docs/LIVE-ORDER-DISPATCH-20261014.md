@@ -52,10 +52,16 @@ manual reconciliation is implemented.
 
 ## Boundaries and blockers
 
-- This version covers the primary unified entry/exit/cancel execution path.
-  Protection/algorithm order APIs and other direct exchange requests require a
-  separate audit and dispatch integration before claiming a truly single
-  outbound gateway.
+- This version covers unified LIVE entry/exit/cancel **and the ProtectionOrderService
+  algorithm-order placement, explicit retry, cancellation, and lifecycle cleanup
+  paths** through the same durable account-symbol dispatch slot. An accepted
+  protection order is acknowledged only after its exact Binance algo ID is persisted
+  locally. Uncertain placement or cancel retains the slot. Subsequent exact algo
+  query and local ledger update can safely recover the matching active ticket;
+  wrong algo ID/client algo ID may not unlock it.
+- Other direct gateway callers and manual/external order requests still require
+  a full outbound path audit before claiming a universal single-writer gateway.
+  Unknown outcomes may deliberately block further trading pending operator review.
 - Binance cannot validate an internal fencing epoch. A remote HTTP request
   already in flight may still be accepted after a newer owner takes over. The
   durable single-writer guard reduces this window, but a complete centralized
