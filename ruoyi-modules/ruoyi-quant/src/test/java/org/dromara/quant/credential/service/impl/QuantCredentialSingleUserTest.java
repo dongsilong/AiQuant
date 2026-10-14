@@ -3,30 +3,29 @@ package org.dromara.quant.credential.service.impl;
 import org.dromara.common.core.exception.ServiceException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 @Tag("dev")
 class QuantCredentialSingleUserTest {
     @Test
-    void onePrincipalMayBeBoundAndLegacyUnspecifiedListMapsToOwner() {
-        assertDoesNotThrow(() -> QuantCredentialServiceImpl.validateSingleBoundUser(List.of(12L),12L));
-        assertDoesNotThrow(() -> QuantCredentialServiceImpl.validateSingleBoundUser(null,12L));
+    void singleCredentialOwnerIsRequired() {
+        assertDoesNotThrow(() -> QuantCredentialServiceImpl.validateSingleBoundUser(12L));
+        assertThrows(ServiceException.class,
+            () -> QuantCredentialServiceImpl.validateSingleBoundUser(null));
+        assertThrows(ServiceException.class,
+            () -> QuantCredentialServiceImpl.validateSingleBoundUser(0L));
     }
+
     @Test
-    void rejectsMultipleUsersIncludingDuplicatedSameId() {
-        assertThrows(ServiceException.class, () ->
-            QuantCredentialServiceImpl.validateSingleBoundUser(List.of(12L,13L),12L));
-        assertThrows(ServiceException.class, () ->
-            QuantCredentialServiceImpl.validateSingleBoundUser(List.of(12L,12L),12L));
-    }
-    @Test
-    void rejectsDifferentOwnerAndUnassigningAllUsers() {
-        assertThrows(ServiceException.class, () ->
-            QuantCredentialServiceImpl.validateSingleBoundUser(List.of(13L),12L));
-        assertThrows(ServiceException.class, () ->
-            QuantCredentialServiceImpl.validateSingleBoundUser(List.of(),12L));
-        assertThrows(ServiceException.class, () ->
-            QuantCredentialServiceImpl.validateSingleBoundUser(null,null));
+    void credentialServiceMustNotQueryDeletedGrantsTable() throws Exception {
+        var fields = QuantCredentialServiceImpl.class.getDeclaredFields();
+        assertTrue(java.util.Arrays.stream(fields).noneMatch(f ->
+            f.getType().getSimpleName().equals("QuantCredentialUserMapper")));
+        assertThrows(NoSuchFieldException.class,
+            () -> org.dromara.quant.credential.domain.bo.QuantCredentialBo.class
+                .getDeclaredField("userIds"));
+        assertThrows(NoSuchFieldException.class,
+            () -> org.dromara.quant.credential.domain.vo.QuantCredentialVo.class
+                .getDeclaredField("userIds"));
     }
 }
