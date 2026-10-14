@@ -595,18 +595,30 @@ public class StrategyRuntimeService {
             instanceMapper.updateById(runtime.instance);
             log.error("既有持仓保护事实不完整，保留现有委托，需人工核查 instanceId={}", instance.getId());
         }
-        synchronized (runtime) {
-            activeRuntimes.put(instance.getId(), runtime);
-            if (runtime.position != null) { ensureHardStop(runtime); }
-            runtime.subscription = marketStreamHub.subscribe(credential.getRunMode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), event -> onMarketEvent(runtime, event),
-                ready -> runtime.marketStreamReady = ready);
-            if (!"PAPER".equalsIgnoreCase(credential.getRunMode())) {
-                runtime.userSubscription = userDataStreamHub.subscribe(credential, event -> {
-                    if (event != null) { requestReconciliation(runtime); }
-                });
+        try {
+            synchronized (runtime) {
+                activeRuntimes.put(instance.getId(), runtime);
+                if (runtime.position != null) { ensureHardStop(runtime); }
+                runtime.subscription = marketStreamHub.subscribe(credential.getRunMode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), event -> onMarketEvent(runtime, event),
+                    ready -> runtime.marketStreamReady = ready);
+                if (!"PAPER".equalsIgnoreCase(credential.getRunMode())) {
+                    runtime.userSubscription = userDataStreamHub.subscribe(credential, event -> {
+                        if (event != null) { requestReconciliation(runtime); }
+                    });
+                }
             }
+            prepareTrading(runtime);
+        } catch (RuntimeException ex) {
+            // A failed private-stream subscription or trading preparation must
+            // not leave a half-initialized runtime with a live market socket.
+            activeRuntimes.remove(instance.getId(), runtime);
+            try {
+                closeRuntime(runtime);
+            } catch (RuntimeException cleanupError) {
+                ex.addSuppressed(cleanupError);
+            }
+            throw ex;
         }
-        prepareTrading(runtime);
         runtime.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
         log.info("策略运行时已启动 instanceId={} strategy={} plugin={} symbol={} interval={} mode={} protectionOnly={}", instance.getId(),
             strategy.getStrategyName(), strategy.getPluginCode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), credential.getRunMode(), protectionOnly);
@@ -2741,10 +2753,10 @@ public class StrategyRuntimeService {
      * 释放单个 Runtime 的订阅和租约资源。
      */
     private void closeRuntime(ActiveRuntime runtime) {
-        preparationService.release(runtime.credential.getId(), runtime.symbol.getSymbol());
         if (runtime == null) {
             return;
         }
+        preparationService.release(runtime.credential.getId(), runtime.symbol.getSymbol());
         java.util.concurrent.Future<?> protectionTask;
         java.util.concurrent.Future<?> exitTask;
         synchronized (runtime) {
