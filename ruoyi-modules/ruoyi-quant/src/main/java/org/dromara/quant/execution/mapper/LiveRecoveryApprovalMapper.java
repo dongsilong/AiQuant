@@ -4,6 +4,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 /**
@@ -74,4 +75,38 @@ public interface LiveRecoveryApprovalMapper {
         """)
     int reject(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId,
                @Param("evidenceHash") String evidenceHash);
+    /** Fetch the approved case, not a client-supplied order identity. */
+    @Options(timeout = 3)
+    @Select("""
+        SELECT case_id, credential_id, symbol, dispatch_key, operation_type,
+               requested_by, reviewed_by, evidence_sha256,
+               expected_exchange_order_id, expected_client_order_id, state
+        FROM quant_live_recovery_case WHERE case_id=#{caseId}
+        """)
+    java.util.Map<String,Object> findCase(@Param("caseId") long caseId);
+
+    /** Atomic case CAS; caller must commit this together with ticket and audit. */
+    @Options(timeout = 3)
+    @Update("""
+        UPDATE quant_live_recovery_case
+        SET state='EXECUTED', completed_at=NOW(6)
+        WHERE case_id=#{caseId} AND state='APPROVED'
+          AND evidence_sha256=#{evidenceHash}
+          AND reviewed_by IS NOT NULL AND reviewed_by<>requested_by
+          AND EXISTS (
+            SELECT 1 FROM quant_live_dispatch_guard g
+            JOIN quant_order_dispatch_ticket t
+              ON t.credential_id=g.credential_id AND t.symbol=g.symbol
+             AND t.idempotency_key=g.active_dispatch_key
+            WHERE g.credential_id=quant_live_recovery_case.credential_id
+              AND g.symbol=quant_live_recovery_case.symbol
+              AND g.active_dispatch_key=quant_live_recovery_case.dispatch_key
+              AND t.operation_type=quant_live_recovery_case.operation_type
+              AND t.client_order_id=quant_live_recovery_case.expected_client_order_id
+              AND (t.exchange_order_id <=> quant_live_recovery_case.expected_exchange_order_id)
+              AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
+          )
+        """)
+    int markExecuted(@Param("caseId") long caseId, @Param("evidenceHash") String evidenceHash);
+
 }
