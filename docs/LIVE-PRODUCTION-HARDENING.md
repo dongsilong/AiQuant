@@ -22,6 +22,14 @@
 - Production and development credential values were replaced with environment-variable references. **Existing Git history still contains earlier values: rotate all actual exposed credentials immediately.**
 - Trading terminal sends close quantity as the original decimal string, avoiding browser float rounding.
 
+## 2026-10-14 next-round fixes
+
+- Removed committed SMTP credential literals from both dev/prod application profiles. Mail is disabled by default and requires `AIQUANT_MAIL_*` deployment secrets. Shared MQTT credentials also moved to `AIQUANT_MQTT_*` environment variables. CI now runs `script/security/check_quant_config_secrets.py` to prevent plaintext regressions in these known fields. **Rotate previously exposed real secrets** and review historical commits; editing tracked files does not revoke credentials.
+- Fixed CANCEL/FILL recovery overwrite: `ExecutionRecoveryService` no longer invokes unguarded `updateById` on a stale `QuantExecutionRecord`. Recovery annotations use conditional MyBatis updates scoped to the exact recovered order ID/status.
+- Exchange `Long` order/trade/algo IDs in key REST/SSE DTOs and execution results now serialize as **JSON strings** (with an explicit regression test). Frontend SSE parsing preserves `i`, `t`, and `aid` integer literals before `JSON.parse`, and rejects already-rounded unsafe `number` IDs. Other untyped/map-based APIs still require an audit.
+- Migrated `ProtectionTargetCoordinator` atomic lease/intent SQL to `ProtectionTargetMapper`, retaining the short `REQUIRES_NEW` transaction, `FOR UPDATE` and conditional owner/lease guards. Existing H2 coordinator tests now execute via MyBatis-Spring.
+- Added `script/sql/quant/production-preflight.sql`: read-only MySQL table/unique-index verification. **A reviewed canonical production DDL and numbered migrations are still missing.** Do not copy the temporary CI schema to LIVE.
+
 ## WebSocket transport options and node-local cutover
 
 Two independent transports are implemented under the same `ExchangeGateway` market/user-data interfaces:
