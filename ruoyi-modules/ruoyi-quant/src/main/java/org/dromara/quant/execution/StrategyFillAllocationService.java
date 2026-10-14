@@ -71,7 +71,7 @@ public class StrategyFillAllocationService {
             // A second reconciler may have committed the same exchange fill.
             existing = mapper.getAllocation(credentialId, symbol, fill.tradeId());
             if (existing == null) throw race;
-            verifyImmutable(existing, fill, order, fee, pnl);
+            verifyImmutable(existing, fill, order, fee, feeAsset, pnl);
         }
     }
 
