@@ -384,7 +384,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (sdkStreamsEnabled()) {
             requireSdkStreamsCanConnect();
             BinanceSdkStreamTransport sdk = BinanceSdkStreamTransport.market(base, streamSymbol, interval, events, disconnected,
-                properties.getBinance().getSdkStreamBacklogLimit());
+                properties.getBinance().getSdkStreamBacklogLimit(), properties.getProxy());
             StreamHandle managed = trackWebsocket(sdk::close, disconnected);
             return new MarketStreamSession(managed::close);
         }
@@ -399,11 +399,16 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return "BINANCE_SDK".equals(currentWebsocketTransport.get());
     }
 
-    /** An SDK stream can bypass the configured HTTP proxy; reject instead of silently connecting directly. */
+    /** Validate proxy before switching any active LIVE streams. */
     private void requireSdkStreamsCanConnect() {
         QuantProperties.Proxy proxy = properties.getProxy();
-        if (proxy != null && proxy.getHost() != null && !proxy.getHost().isBlank()) {
-            throw new IllegalStateException("BINANCE_SDK Streams 尚未实现代理配置；请选 RAW_OKHTTP 传输");
+        if (proxy == null) { return; }
+        boolean hasHost = proxy.getHost() != null && !proxy.getHost().isBlank();
+        if (hasHost && (proxy.getPort() == null || proxy.getPort() < 1 || proxy.getPort() > 65535)) {
+            throw new IllegalArgumentException("Binance SDK Streams HTTP proxy port is invalid");
+        }
+        if (!hasHost && proxy.getPort() != null) {
+            throw new IllegalArgumentException("Binance SDK Streams HTTP proxy host is missing");
         }
     }
 
