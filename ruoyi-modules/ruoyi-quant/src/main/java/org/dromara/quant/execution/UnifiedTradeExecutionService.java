@@ -43,6 +43,12 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private final org.dromara.quant.market.AccountBalanceCache balanceCache;
     private final TradingPreparationService preparationService;
     private volatile LiveOrderDispatcher liveDispatcher;
+    private volatile StrategyOrderAcceptanceJournal acceptanceJournal;
+
+    @Autowired
+    public void setAcceptanceJournal(StrategyOrderAcceptanceJournal journal) {
+        this.acceptanceJournal = java.util.Objects.requireNonNull(journal);
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public void setLiveDispatcher(LiveOrderDispatcher dispatcher) {
@@ -408,7 +414,15 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
                 "PARTIALLY_FILLED".equals(exchangeResult.status()) ? "PARTIALLY_FILLED" : "ACCEPTED", "交易所已受理，等待成交事实", request, exchangeResult, null, null);
             try {
-                orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult);
+                if ("LIVE".equalsIgnoreCase(runMode) && strategyId != null && strategyInstanceId != null) {
+                    if (acceptanceJournal == null) {
+                        throw new IllegalStateException("Missing transactional strategy order provenance journal");
+                    }
+                    acceptanceJournal.persist(credentialId, strategyId, strategyInstanceId,
+                        operationType, request, exchangeResult);
+                } else {
+                    orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult);
+                }
             } catch (RuntimeException ledgerEx) {
                 // 交易所已经返回订单结果；本地账本失败不能把执行事实改写为 FAILED。由恢复/对账补齐账本。
                 throw ledgerEx;
