@@ -132,6 +132,32 @@ class TradingPreparationServiceTest {
     }
 
     @Test
+    void liveRenewalRejectsOutOfBandLeverageDriftWithoutRewritingSettings() throws Exception {
+        ready();
+        var dispatcher = liveDispatcher();
+        service.setLiveOrderDispatcher(dispatcher);
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
+            .get(3, TimeUnit.SECONDS);
+        service.requireReady(1L, "BTCUSDT", 10, "ISOLATED");
+
+        // Simulate an expired background refresh window without waiting in real time.
+        var states = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(service, "states");
+        Object state = states.values().iterator().next();
+        org.springframework.test.util.ReflectionTestUtils.setField(state, "checkedAt", 0L);
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
+            .thenReturn(new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings(
+                "BTCUSDT", "ISOLATED", 20));
+
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
+            .get(3, TimeUnit.SECONDS);
+        assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> service.requireReady(1L, "BTCUSDT", 10, "ISOLATED"));
+        verify(gateway, times(1)).setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
+        verify(gateway, times(1)).setLeverage(any(), eq("BTCUSDT"), eq(10));
+        verify(dispatcher, times(1)).configurationApplied(any());
+    }
+
+    @Test
     void missingLiveDispatcherBlocksAllAccountConfigurationWrites() throws Exception {
         ready();
         service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
