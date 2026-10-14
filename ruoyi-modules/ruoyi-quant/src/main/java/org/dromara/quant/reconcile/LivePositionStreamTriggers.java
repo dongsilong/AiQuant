@@ -80,13 +80,8 @@ public class LivePositionStreamTriggers {
                 var exchangeCredential = new ExchangeGateway.Credential(
                     credential.getApiKey(), credential.getSecretKey(),
                     credential.getSignatureType(), credential.getRunMode());
-                var bound = gateway.subscribeUserData(exchangeCredential, event -> {
-                    if (event != null && ("ACCOUNT_UPDATE".equals(event.eventType())
-                        || "ORDER_TRADE_UPDATE".equals(event.eventType()))) {
-                        // Never perform Binance REST from the WebSocket callback.
-                        coordinator.request(id);
-                    }
-                });
+                var bound = gateway.subscribeUserData(exchangeCredential,
+                    event -> coordinator.onUserDataEvent(id, event));
                 sessions.put(id, bound);
                 renewed.put(id, java.time.Instant.now());
                 coordinator.request(id); // refresh after reconnect / subscription
