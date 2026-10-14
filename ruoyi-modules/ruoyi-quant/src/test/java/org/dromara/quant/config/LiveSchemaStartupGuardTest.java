@@ -22,6 +22,17 @@ class LiveSchemaStartupGuardTest {
     }
 
     @Test
+    void refusesStartupWhenFencingEpochColumnHasNotBeenMigrated() {
+        var mapper = mock(LiveSchemaContractMapper.class);
+        // Other metadata is non-null but may be incomplete; epoch is a mandatory release gate.
+        when(mapper.innodbTables()).thenReturn(List.of("quant_strategy_runtime_lease"));
+        when(mapper.uniqueContracts()).thenReturn(List.of("quant_strategy_runtime_lease|credential_id,symbol"));
+        when(mapper.leaseEpochColumns()).thenReturn(List.of());
+        var ex = assertThrows(IllegalStateException.class, new LiveSchemaStartupGuard(mapper)::verify);
+        assertTrue(ex.getMessage().contains("leaseEpochMissing=true"));
+    }
+
+    @Test
     void refusesStartupWhenMetadataCannotBeRead() {
         var mapper = mock(LiveSchemaContractMapper.class);
         assertThrows(IllegalStateException.class, new LiveSchemaStartupGuard(mapper)::verify);
