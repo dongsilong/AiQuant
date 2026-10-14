@@ -53,6 +53,46 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
+    void configurationTicketSerializesBothBinanceSettingsChangesWithOtherNodes() throws Exception {
+        var f = fixture();
+        var setup = f.first().begin(1L, "BTCUSDT", "config-run-1",
+            "CONFIG_SETTINGS", "SETTINGS:ISOLATED:10", null, null);
+        assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "config-run-1"));
+        assertThrows(IllegalStateException.class, () ->
+            f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", 44L, 4L));
+        f.first().configurationApplied(setup);
+        assertEquals("CONFIG_APPLIED", f.mapper().ticketStatus(1L, "config-run-1"));
+        var next = f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", 44L, 4L);
+        f.other().notSent(next);
+    }
+
+    @Test
+    void unknownConfigurationCannotExpireAndBlockOrdersOnAllNodes() throws Exception {
+        var f = fixture();
+        var setup = f.first().begin(1L, "BTCUSDT", "config-timeout",
+            "CONFIG_SETTINGS", "SETTINGS:CROSSED:20", null, null);
+        f.first().unknown(setup);
+        assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "config-timeout"));
+        assertThrows(IllegalStateException.class, () ->
+            f.other().begin(1L, "BTCUSDT", "any-order", "OPEN", "cid-next", 44L, 4L));
+        assertThrows(IllegalStateException.class, () ->
+            f.other().begin(1L, "BTCUSDT", "new-config",
+                "CONFIG_SETTINGS", "SETTINGS:CROSSED:25", null, null));
+        assertEquals("config-timeout", f.jdbc().queryForObject(
+            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
+            String.class));
+    }
+
+    @Test
+    void orderTicketMustNotUseConfigurationAcknowledgement() throws Exception {
+        var f = fixture();
+        var order = f.first().begin(1L, "BTCUSDT", "not-config", "OPEN", "cid-open", 1L, 1L);
+        assertThrows(IllegalStateException.class, () -> f.first().configurationApplied(order));
+        assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "not-config"));
+        f.first().unknown(order);
+    }
+
+    @Test
     void noConcurrentAccountSymbolDispatchAcrossServiceInstances() throws Exception {
         var f = fixture();
         var first = f.first().begin(1L, "btcusdt", "a", "OPEN", "cid-a", 10L, 3L);
