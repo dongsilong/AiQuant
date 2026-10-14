@@ -45,3 +45,27 @@ asserts no allocation row is written on missing financial data. This does
 not supply per-position signed quantity, cost basis, cycle tracking, or
 shared account-symbol strategy isolation; position/PnL P0 remains OPEN.
 CI results and real Binance reconciliation must be checked at release SHA.
+
+## Position accounting work in this round
+
+`StrategyPositionAccounting` provides deterministic BigDecimal bookkeeping
+for explicitly verified LONG/SHORT plus OPEN/CLOSE fill facts. It tracks
+position cycle, outstanding quantity, proportional average cost basis,
+signed Binance realized PnL and commissions; it fails closed on reversal,
+invalid side and over-close. `StrategyPositionAccountingTest` covers
+multi-fill cost, partial close, new cycles and shorts.
+
+`V20261014_07__strategy_position_cycles.sql` is a **review-only**
+InnoDB schema for immutable position-cycle/event facts, with uniqueness by
+the exact Binance trade ID. **No online projector currently writes the new
+tables.** The current ExchangeGateway.TradeSnapshot carries BUY/SELL but no
+authenticated OPEN/CLOSE intent or positionSide; deriving either from trade
+side, current aggregate position or client order status is unsafe for hedge,
+one-way reversals and external/manual fills.
+
+P0 position/PnL allocation remains OPEN until a durable, order-identified,
+transactionally serialized projector consumes authenticated fill role,
+persists cycle transitions exactly once, quarantines unknown manual/legacy
+activity, reconciles with Binance position and fees, and passes MySQL
+concurrency, restart and exchange-staging acceptance. Do not use the new
+calculator for live sizing or release approvals yet.
