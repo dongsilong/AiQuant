@@ -78,6 +78,6 @@ For explicit LIVE enablement: `QUANT_LIVE_ENABLED=true` and, in prod, `QUANT_RUN
 ## Current limits
 
 - Known `JdbcTemplate` call sites in the four reviewed quant runtime services (entry guard, runtime lease, capacity and PAPER settlement) have been migrated to MyBatis custom SQL. Audit other modules separately rather than assuming every JDBC operation in the whole repository has been removed.
-- Maven GitHub Actions critical tests cover capacity/lease/entry-guard, recovery, execution-state CAS, SDK transport selection and permissions. A separate MySQL/InnoDB concurrency job covers the atomic lease/guard/capacity semantics. Neither CI job substitutes for independent multi-node fault injection against actual Binance services.
+- Maven GitHub Actions now run critical invariants, the complete `@Tag("dev")` quant regression suite, and a separate MySQL/InnoDB concurrency job for atomic lease/guard/capacity semantics. These checks do not substitute for independent multi-node fault injection against real Binance services.
 - Strategy runtime and terminal component decomposition, shared strategy position attribution and full OMS state machine are not yet implemented.
 - The environment executing these edits cannot clone or compile GitHub repositories; source-level inspection and added tests are **not** evidence that tests passed.
