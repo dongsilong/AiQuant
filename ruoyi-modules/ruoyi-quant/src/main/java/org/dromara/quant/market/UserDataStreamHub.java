@@ -45,6 +45,9 @@ public class UserDataStreamHub {
      * 共享底层流连接缓存。
      */
     private final Map<Long, SharedUserStream> streams = new ConcurrentHashMap<>();
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.dromara.quant.reconcile.LivePositionEventCoordinator positionEvents;
+
 
     /**
      * 创建 UserDataStreamHub 实例并初始化其依赖。
@@ -186,6 +189,9 @@ public class UserDataStreamHub {
         }
 
         private void onEvent(ExchangeGateway.UserDataEvent event) {
+            if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && positionEvents != null) {
+                positionEvents.onUserDataEvent(credential.getId(), event);
+            }
             if (decisionLogs != null) { decisionLogs.privateEvent(credential.getId(), event); }
             lastEventAt = Instant.now();
             positionCache.onEvent(credential.getId(), event);
