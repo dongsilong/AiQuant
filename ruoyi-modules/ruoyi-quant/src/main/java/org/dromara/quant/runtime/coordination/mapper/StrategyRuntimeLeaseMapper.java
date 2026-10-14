@@ -41,6 +41,22 @@ public interface StrategyRuntimeLeaseMapper {
                        @Param("ownerToken") String ownerToken,
                        @Param("leaseSeconds") int leaseSeconds);
 
+    /**
+     * Final outbound check: owner token AND instance identity AND unexpired lease
+     * must all match. This narrows the stale-worker window, but Binance does not
+     * recognize internal fencing epochs; a centralized outbound executor remains required.
+     */
+    @Options(timeout = 3)
+    @org.apache.ibatis.annotations.Select("""
+        SELECT COUNT(*) FROM quant_strategy_runtime_lease
+        WHERE instance_id=#{instanceId} AND credential_id=#{credentialId}
+          AND symbol=#{symbol} AND owner_token=#{ownerToken} AND lease_until>NOW()
+        """)
+    Long countCurrentOwner(@Param("instanceId") Long instanceId,
+                           @Param("credentialId") Long credentialId,
+                           @Param("symbol") String symbol,
+                           @Param("ownerToken") String ownerToken);
+
     @Options(timeout = 3)
     @Delete("""
         DELETE FROM quant_strategy_runtime_lease
