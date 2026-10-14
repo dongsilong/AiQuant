@@ -13,6 +13,20 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class LivePositionFreshness {
     private final ConcurrentHashMap<Long, Instant> verified = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicLong> generations = new ConcurrentHashMap<>();
+
+    public long generation(Long credentialId) {
+        return generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong()).get();
+    }
+
+    /** Only release LIVE entry gate if no stream event arrived during this REST snapshot. */
+    public boolean verifiedIfUnchanged(Long credentialId, long expectedGeneration) {
+        synchronized (generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong())) {
+            if (generation(credentialId) != expectedGeneration) return false;
+            verified.put(credentialId, Instant.now());
+            return true;
+        }
+    }
     private static final Duration MAX_AGE = Duration.ofSeconds(120);
 
     public void verified(Long credentialId) {
@@ -23,7 +37,11 @@ public class LivePositionFreshness {
 
     public void invalidate(Long credentialId) {
         if (credentialId != null) {
-            verified.remove(credentialId);
+            var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+            synchronized (counter) {
+                counter.incrementAndGet();
+                verified.remove(credentialId);
+            }
         }
     }
 
