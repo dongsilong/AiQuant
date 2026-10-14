@@ -86,7 +86,13 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
     }
 
     boolean connected() {
-        return connected.get() && !closed.get();
+        if (closed.get()) { return false; }
+        // User-data streams may legitimately have no events for long periods.
+        try {
+            return connected.get() || client.getConnection().isConnected();
+        } catch (RuntimeException ex) {
+            return connected.get();
+        }
     }
 
     private void consume() {
