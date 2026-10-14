@@ -21,6 +21,17 @@ import static org.mockito.Mockito.*;
 @org.junit.jupiter.api.Tag("dev")
 class StrategyRuntimeSafetyTest {
     @Test
+    void newlyCreatedRuntimeMustNotAssumeMarketStreamIsReady() throws Exception {
+        Fixture f = fixture();
+        try {
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "marketStreamReady"),
+                "LIVE and TESTNET must wait for an explicit healthy market-stream callback");
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "marketHealthy"),
+                "No trading decision is allowed before live market readiness");
+        } finally { f.service.destroy(); }
+    }
+
+    @Test
     void persistedStepIsRestoredAndExtremaAdvanceItWithoutRegression() throws Exception {
         Fixture f = fixture();
         try {
