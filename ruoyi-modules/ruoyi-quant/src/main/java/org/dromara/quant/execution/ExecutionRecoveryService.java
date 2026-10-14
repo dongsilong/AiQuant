@@ -145,7 +145,10 @@ public class ExecutionRecoveryService {
             || !"RECOVERED".equals(record.getExecutionStatus())
             || record.getClientOrderId() == null
             || !record.getClientOrderId().equals(snapshot.clientOrderId())
-            || snapshot.orderId() == null) {
+            || snapshot.orderId() == null
+            || "CANCEL".equalsIgnoreCase(record.getOperationType())
+                && !java.util.Set.of("CANCELED", "EXPIRED", "FILLED", "PARTIALLY_FILLED")
+                    .contains(snapshot.status() == null ? "" : snapshot.status().toUpperCase(java.util.Locale.ROOT))) {
             return;
         }
         liveOrderDispatcher.recoveredFromExchange(record.getCredentialId(), record.getSymbol(),
