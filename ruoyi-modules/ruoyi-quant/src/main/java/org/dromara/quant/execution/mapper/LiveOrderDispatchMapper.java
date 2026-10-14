@@ -21,6 +21,33 @@ public interface LiveOrderDispatchMapper {
         """)
     int ensureGuard(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
+    /**
+     * Immutable approved desired configuration, created in the same transaction
+     * as the account-symbol dispatch claim. Concurrent contradictory nodes
+     * cannot silently change each other's margin or leverage settings.
+     */
+    @Options(timeout = 3)
+    @Insert("""
+        INSERT IGNORE INTO quant_live_account_settings_intent
+            (credential_id, symbol, margin_mode, leverage, created_at)
+        VALUES (#{credentialId}, #{symbol}, #{marginMode}, #{leverage}, NOW())
+        """)
+    int ensureSettingsIntent(@Param("credentialId") Long credentialId,
+                             @Param("symbol") String symbol,
+                             @Param("marginMode") String marginMode,
+                             @Param("leverage") int leverage);
+
+    @Options(timeout = 3)
+    @Select("""
+        SELECT COUNT(*) FROM quant_live_account_settings_intent
+        WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+          AND margin_mode=#{marginMode} AND leverage=#{leverage}
+        """)
+    long matchingSettingsIntent(@Param("credentialId") Long credentialId,
+                                @Param("symbol") String symbol,
+                                @Param("marginMode") String marginMode,
+                                @Param("leverage") int leverage);
+
     @Options(timeout = 3)
     @Update("""
         UPDATE quant_live_dispatch_guard
