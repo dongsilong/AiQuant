@@ -27,6 +27,10 @@ class LiveRecoveryApprovalSqlContractTest {
         assertTrue(approve.contains("state='PENDING'"));
         assertTrue(approve.contains("evidence_sha256=#{evidenceHash}"));
         assertTrue(approve.contains("g.active_dispatch_key=quant_live_recovery_case.dispatch_key"));
+        assertTrue(approve.contains("t.dispatch_status IN ('UNKNOWN','DISPATCHING')"));
+        assertTrue(approve.contains("t.operation_type=quant_live_recovery_case.operation_type"));
+        assertTrue(approve.contains("t.client_order_id=quant_live_recovery_case.expected_client_order_id"));
+        assertTrue(approve.contains("t.exchange_order_id <=> quant_live_recovery_case.expected_exchange_order_id"));
         assertFalse(Arrays.stream(LiveRecoveryApprovalMapper.class.getMethods())
             .map(m -> m.getName().toLowerCase())
             .anyMatch(name -> name.contains("unlock") || name.contains("release")));
