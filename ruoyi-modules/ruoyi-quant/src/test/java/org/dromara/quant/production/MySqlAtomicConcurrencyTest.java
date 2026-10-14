@@ -269,6 +269,45 @@ class MySqlAtomicConcurrencyTest {
         }
     }
 
+    @Test
+    void actualInnoDbFillUniquenessForbidsCompetingStrategyAttribution() throws Exception {
+        var source = source();
+        var db = new JdbcTemplate(source);
+        db.execute("DROP TABLE IF EXISTS quant_strategy_fill_allocation");
+        db.execute("""
+            CREATE TABLE quant_strategy_fill_allocation (
+              id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+              credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
+              exchange_trade_id BIGINT NOT NULL, exchange_order_id BIGINT NOT NULL,
+              strategy_id BIGINT NOT NULL, strategy_instance_id BIGINT NOT NULL,
+              side VARCHAR(8) NOT NULL, allocated_qty DECIMAL(38,16) NOT NULL,
+              allocated_price DECIMAL(38,16) NOT NULL, allocated_fee DECIMAL(38,16) NOT NULL,
+              realized_pnl DECIMAL(38,16) NOT NULL, trade_time DATETIME NOT NULL,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              UNIQUE KEY uk_strategy_exchange_fill(credential_id,symbol,exchange_trade_id)
+            ) ENGINE=InnoDB
+            """);
+        var mapper = session(source, org.dromara.quant.execution.mapper.StrategyFillAllocationMapper.class)
+            .getMapper(org.dromara.quant.execution.mapper.StrategyFillAllocationMapper.class);
+        var allocations = new org.dromara.quant.execution.StrategyFillAllocationService(mapper);
+        var order = new org.dromara.quant.order.domain.QuantOrder();
+        order.setCredentialId(1L);
+        order.setSymbol("BTCUSDT");
+        order.setExchangeOrderId(500L);
+        order.setStrategyId(10L);
+        order.setStrategyInstanceId(20L);
+        var fill = new org.dromara.quant.exchange.ExchangeGateway.TradeSnapshot(
+            "BTCUSDT", 9007199254740993L, 500L, "BUY",
+            new BigDecimal("1.25"), new BigDecimal("100"), new BigDecimal("0.01"),
+            BigDecimal.ZERO, Instant.parse("2026-10-14T03:00:00Z"));
+        allocations.allocate(fill, order, 1L);
+        allocations.allocate(fill, order, 1L);
+        order.setStrategyInstanceId(21L);
+        assertThrows(IllegalStateException.class, () -> allocations.allocate(fill, order, 1L));
+        assertEquals(1L, db.queryForObject(
+            "SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
+    }
+
     private static OpenPositionCommand order(String symbol, String key) {
         return new OpenPositionCommand(1L, 10L, 100L, null, symbol, "BUY", "MARKET",
             BigDecimal.ONE, BigDecimal.TEN, null, key, "TESTNET", null, 1, "ISOLATED", null);
