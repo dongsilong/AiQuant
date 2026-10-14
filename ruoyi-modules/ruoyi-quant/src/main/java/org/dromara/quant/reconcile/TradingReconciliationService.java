@@ -85,9 +85,12 @@ public class TradingReconciliationService {
     private volatile org.dromara.quant.execution.StrategyFillAllocationService fillAllocations;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LivePositionFreshness positionFreshness;
-    private void markPositionVerified(Long credentialId) {
+    private long positionGeneration(Long credentialId) {
+        return positionFreshness == null ? 0L : positionFreshness.generation(credentialId);
+    }
+    private void markPositionVerified(Long credentialId, long generation) {
         if (positionFreshness != null) {
-            positionFreshness.verified(credentialId);
+            positionFreshness.verifiedIfUnchanged(credentialId, generation);
         }
     }
 
@@ -170,6 +173,7 @@ public class TradingReconciliationService {
         accountLock.lock();
         try {
             try {
+                long positionGeneration = positionGeneration(credential.getId());
                 ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
                     credential.getApiKey(), credential.getSecretKey(),
                     credential.getSignatureType(), credential.getRunMode());
@@ -182,7 +186,7 @@ public class TradingReconciliationService {
                     syncAccount(credential, account);
                     syncPositions(credential, positions);
                 });
-                markPositionVerified(credential.getId());
+                markPositionVerified(credential.getId(), positionGeneration);
             } catch (RuntimeException ex) {
                 failureRecorder.record(credential.getId(), ex.getMessage());
                 throw ex;
@@ -204,6 +208,7 @@ public class TradingReconciliationService {
         accountLock.lock();
         try {
             try {
+                long positionGeneration = positionGeneration(credential.getId());
                 ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
                     credential.getApiKey(), credential.getSecretKey(),
                     credential.getSignatureType(), credential.getRunMode());
@@ -219,7 +224,7 @@ public class TradingReconciliationService {
                     syncAccount(credential, account);
                     syncPositions(credential, positions);
                 });
-                markPositionVerified(credential.getId());
+                markPositionVerified(credential.getId(), positionGeneration);
                 ExchangeFacts facts = collectExchangeFacts(credential, historyHours,
                     exchangeCredential, account, positions);
                 transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
