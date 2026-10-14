@@ -95,7 +95,8 @@ jobs:
             script/sql/quant/V20261014_08__strategy_position_inventory.sql \
             script/sql/quant/V20261014_09__strategy_order_intent.sql \
             script/sql/quant/V20261014_10__pre_dispatch_strategy_intent.sql \
-            script/sql/quant/V20261014_12__position_sync_fence.sql; do
+            script/sql/quant/V20261014_12__position_sync_fence.sql \
+            script/sql/quant/V20261014_13__live_user_stream_lease.sql; do
             docker exec -i "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test < "$ddl"
           done
           tables="$(docker exec -i "$MYSQL_CONTAINER" mysql -N -B -uroot -ponly_for_ci aiquant_ci_test -e "
@@ -105,8 +106,8 @@ jobs:
              'quant_live_recovery_audit','quant_strategy_position_cycle',
              'quant_strategy_position_fill_event','quant_strategy_position_inventory',
              'quant_strategy_order_intent','quant_strategy_pre_dispatch_intent',
-             'quant_position_sync_fence');" | tr -d '\r')"
-          test "$tables" = 9
+             'quant_position_sync_fence','quant_live_user_stream_lease');" | tr -d '\r')"
+          test "$tables" = 10
       - name: Verify V12 account fence blocks concurrent InnoDB writers
         run: |
           set -euo pipefail
