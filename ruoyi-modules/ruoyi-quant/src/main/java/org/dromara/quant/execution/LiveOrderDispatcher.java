@@ -81,6 +81,32 @@ public class LiveOrderDispatcher {
         });
     }
 
+    /**
+     * Called ONLY after querying the exact Binance order and durably reconciling
+     * the local order ledger. Legacy (pre-migration) orders have no ticket.
+     * Never release on an absent/ambiguous exchange response.
+     *
+     * @return true when an unresolved ticket was recovered and its guard released
+     */
+    public boolean recoveredFromExchange(Long credentialId, String symbol, String key,
+                                         String clientOrderId, Long exchangeOrderId) {
+        if (credentialId == null || symbol == null || symbol.isBlank() || key == null || key.isBlank()
+            || clientOrderId == null || clientOrderId.isBlank() || exchangeOrderId == null
+            || exchangeOrderId <= 0) {
+            throw new IllegalArgumentException("Cannot reconcile a LIVE ticket without exact exchange identity");
+        }
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (mapper.recoverVerified(credentialId, symbol.toUpperCase(Locale.ROOT),
+                    key, clientOrderId, exchangeOrderId) != 1) {
+                return false;
+            }
+            if (mapper.release(credentialId, symbol.toUpperCase(Locale.ROOT), key) != 1) {
+                throw new IllegalStateException("Recovered exchange fact but durable dispatch guard mismatch");
+            }
+            return true;
+        }));
+    }
+
     /** Keep slot occupied after a remote timeout, process crash or failed local persist. */
     public void unknown(Ticket ticket) {
         transaction.executeWithoutResult(status -> {
