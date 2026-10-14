@@ -66,6 +66,13 @@ public class LivePositionStreamTriggers {
             } catch (RuntimeException ex) {
                 closeSubscription(id);
                 freshness.invalidate(id);
+                // A failed Hub enrollment must not strand a DB lease for 75 seconds.
+                // A conditional release cannot affect another node's ownership.
+                try {
+                    lease.release(id, ownerToken);
+                } catch (RuntimeException releaseError) {
+                    log.warn("LIVE shared stream lease cleanup failed credentialId={}", id, releaseError);
+                }
                 log.warn("LIVE shared user stream enrollment failed credentialId={}", id, ex);
             }
         }
