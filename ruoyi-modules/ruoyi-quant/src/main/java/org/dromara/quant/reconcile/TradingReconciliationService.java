@@ -157,14 +157,21 @@ public class TradingReconciliationService {
      */
     public void reconcileCredential(QuantCredential credential, int historyHours) {
         try {
-            ExchangeFacts facts = collectExchangeFacts(credential, historyHours);
-            // Commit authenticated account/position facts independently. A later
-            // fill-allocation, protection or funding failure must not roll back
-            // an already verified flat Binance position to a stale nonzero one.
+            ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
+                credential.getApiKey(), credential.getSecretKey(),
+                credential.getSignatureType(), credential.getRunMode());
+            // Collect a complete account position snapshot before any DB writes.
+            // Commit it independently BEFORE querying order/fill/income history:
+            // a failing history endpoint must not keep already-closed Binance
+            // positions counted as open indefinitely.
+            var account = gateway.queryAccount(exchangeCredential);
+            var positions = List.copyOf(gateway.queryPositions(exchangeCredential, null));
             transaction.executeWithoutResult(status -> {
-                syncAccount(credential, facts.account());
-                syncPositions(credential, facts.positions());
+                syncAccount(credential, account);
+                syncPositions(credential, positions);
             });
+            ExchangeFacts facts = collectExchangeFacts(credential, historyHours,
+                exchangeCredential, account, positions);
             transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
         } catch (RuntimeException ex) {
             failureRecorder.record(credential.getId(), ex.getMessage());
@@ -180,15 +187,14 @@ public class TradingReconciliationService {
                                  Map<String, List<ExchangeGateway.ProtectionOrderSnapshot>> protections,
                                  List<ExchangeGateway.IncomeSnapshot> income) {}
 
-    private ExchangeFacts collectExchangeFacts(QuantCredential credential, int historyHours) {
-        ExchangeGateway.Credential c = new ExchangeGateway.Credential(
-            credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(), credential.getRunMode());
+    private ExchangeFacts collectExchangeFacts(QuantCredential credential, int historyHours,
+                                              ExchangeGateway.Credential c,
+                                              ExchangeGateway.AccountSnapshot account,
+                                              List<ExchangeGateway.PositionSnapshot> positions) {
         LocalDateTime now = LocalDateTime.now();
         ExchangeGateway.TimeRange range = new ExchangeGateway.TimeRange(
             now.minusHours(Math.max(1, historyHours)).toInstant(ZoneOffset.UTC),
             now.toInstant(ZoneOffset.UTC));
-        var account = gateway.queryAccount(c);
-        var positions = List.copyOf(gateway.queryPositions(c, null));
         var openOrders = List.copyOf(gateway.queryOrders(c, null));
         var history = List.copyOf(gateway.queryOrderHistory(c, null, range, 1000L));
         Set<String> symbols = new HashSet<>();
