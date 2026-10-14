@@ -133,6 +133,12 @@ jobs:
           grep -q '1205' /tmp/position-fence-contender.log
           wait "$holder"
           trap - EXIT
+      - name: Verify account stream DB lease takeover and stale node exclusion
+        run: |
+          set -euo pipefail
+          export MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
+          test -n "$MYSQL_CONTAINER"
+          bash script/sql/quant/ci-user-stream-lease-takeover.sh
       - name: Disaster drill - verify backup, restore and UNKNOWN dispatch protection
         env:
           MYSQL_CI_PASSWORD: only_for_ci
