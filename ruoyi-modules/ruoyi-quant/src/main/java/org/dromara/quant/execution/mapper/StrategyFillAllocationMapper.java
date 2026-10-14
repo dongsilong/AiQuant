@@ -15,7 +15,7 @@ public interface StrategyFillAllocationMapper {
     @Options(timeout = 3)
     @Select("""
         SELECT strategy_id, strategy_instance_id, exchange_order_id,
-               allocated_qty, allocated_price, allocated_fee, realized_pnl
+               allocated_qty, allocated_price, allocated_fee, realized_pnl, side, trade_time
         FROM quant_strategy_fill_allocation
         WHERE credential_id=#{credentialId} AND symbol=#{symbol}
           AND exchange_trade_id=#{tradeId}
