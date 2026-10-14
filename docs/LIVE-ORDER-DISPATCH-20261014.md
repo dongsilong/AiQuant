@@ -143,3 +143,33 @@ code paths using the new persistent guard; old application versions must
 never run alongside the new writers. It does NOT protect writes made
 manually/external to AiQuant, and it is not a remote exchange-enforced
 fencing protocol.
+
+## Cross-node desired-settings contract (V04)
+
+A persistent dispatch ticket prevents overlap *during* a margin/leverage write,
+but does not by itself prevent one node configuring 10× immediately after
+another node configured 20×. The new
+`quant_live_account_settings_intent` table stores one immutable desired
+`(credential_id,symbol,margin_mode,leverage)` contract.
+
+`beginConfiguration` atomically claims the same durable dispatch guard,
+inserts the desired contract if absent, and rejects any conflicting mode or
+leverage before touching Binance. A conflicting configuration rolls back the
+claim; it cannot disturb an existing strategy's approved settings or hold a
+spurious UNKNOWN guard. The ordinary `begin` API explicitly refuses
+`CONFIG_SETTINGS`, making it impossible for a caller to bypass this contract.
+
+**Migration order:** deploy only after validating and applying V01 lease epoch,
+V02 durable dispatch, V03 verified fill attribution, and
+`script/sql/quant/V20261014_04__account_settings_intent.sql` while
+all older nodes and LIVE strategy execution are stopped. The LIVE schema
+startup check now requires this table and its primary key.
+
+**Changing leverage/margin later:** the immutable desired contract must be
+revised through a separately audited maintenance procedure with no live
+positions, working orders, UNKNOWN/CONFIG tickets, or active strategies.
+The current public API intentionally offers no automatic update/force
+release. This contract prevents conflicting AiQuant nodes but does not
+prove that external users have not modified exchange-side settings; private
+WebSocket invalidation, regular preflight checks and testnet verification
+remain mandatory.
