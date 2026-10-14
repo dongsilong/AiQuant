@@ -379,8 +379,18 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                     }
                 }
                 if ("LIVE".equalsIgnoreCase(runMode)) {
-                    dispatchTicket = requireLiveDispatcher().begin(credentialId, symbol, idempotencyKey,
-                        operationType, request.clientOrderId(), strategyInstanceId, preparationEpoch);
+                    if (strategyId != null && strategyInstanceId != null
+                        && java.util.Set.of("LONG", "SHORT").contains(
+                            request.positionSide() == null ? "" : request.positionSide().toUpperCase(java.util.Locale.ROOT))) {
+                        dispatchTicket = requireLiveDispatcher().beginStrategy(
+                            credentialId, symbol, idempotencyKey, operationType,
+                            request.clientOrderId(), strategyId, strategyInstanceId,
+                            preparationEpoch, request.positionSide().toUpperCase(java.util.Locale.ROOT),
+                            request.side().toUpperCase(java.util.Locale.ROOT));
+                    } else {
+                        dispatchTicket = requireLiveDispatcher().begin(credentialId, symbol, idempotencyKey,
+                            operationType, request.clientOrderId(), strategyInstanceId, preparationEpoch);
+                    }
                     // The durable guard transaction itself may block behind another
                     // node. Re-check the exact lease epoch AFTER acquiring the guard
                     // and BEFORE any network request. If ownership changed, the
