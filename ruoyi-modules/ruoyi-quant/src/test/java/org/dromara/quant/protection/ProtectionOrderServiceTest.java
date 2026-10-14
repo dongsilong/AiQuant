@@ -2,6 +2,7 @@ package org.dromara.quant.protection;
 
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
+import org.dromara.quant.execution.LiveOrderDispatcher;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.protection.domain.QuantProtectionOrder;
@@ -23,11 +24,16 @@ class ProtectionOrderServiceTest {
     private final QuantProtectionOrderMapper mapper = mock(QuantProtectionOrderMapper.class);
     private final TradeExecutionApplicationService execution = mock(TradeExecutionApplicationService.class);
     private final ProtectionOrderService service = new ProtectionOrderService(gateway, mapper, execution);
+    private final LiveOrderDispatcher dispatcher = mock(LiveOrderDispatcher.class);
     private final QuantPosition position = new QuantPosition();
     private final QuantCredential credential = new QuantCredential();
 
     @BeforeEach
     void setup() {
+        service.setLiveOrderDispatcher(dispatcher);
+        when(dispatcher.begin(any(), any(), any(), any(), any(), any(), any()))
+            .thenAnswer(call -> new LiveOrderDispatcher.Ticket(call.getArgument(0),
+                call.getArgument(1), call.getArgument(2)));
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(new org.apache.ibatis.session.Configuration(), "test"), QuantProtectionOrder.class);
         position.setId(10L);
         position.setSymbol("BTCUSDT");
