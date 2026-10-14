@@ -34,6 +34,18 @@ public interface ExchangeAccountPort {
     void setMarginType(ExchangeGateway.Credential credential, String symbol, String marginType);
 
     /**
+     * Fresh read-after-write of actual exchange margin mode and leverage.
+     * The base implementation fails closed until an adapter explicitly supports
+     * verified results even when account position quantity is zero.
+     */
+    record SymbolTradingSettings(String symbol, String marginMode, int leverage) {}
+
+    default SymbolTradingSettings querySymbolTradingSettings(
+        ExchangeGateway.Credential credential, String symbol) {
+        throw new UnsupportedOperationException("交易所未提供可验证的账户交易对杠杆/保证金模式回查");
+    }
+
+    /**
      * 设置交易对杠杆。
      */
     void setLeverage(ExchangeGateway.Credential credential, String symbol, int leverage);
