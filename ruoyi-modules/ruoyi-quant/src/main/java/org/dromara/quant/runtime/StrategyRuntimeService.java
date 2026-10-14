@@ -727,6 +727,14 @@ public class StrategyRuntimeService {
                 }
             }
             if (!event.replay()) { logUnavailableEntry(runtime, event, "MARKET_UNREADY", "行情尚未就绪，暂停开仓"); }
+            // LIVE/TESTNET统一检查：斜率展示不代表交易就绪。每实例限频诊断真实阻塞门控。
+            if (!event.replay() && ("TRADE".equals(event.type()) || "KLINE".equals(event.type()))
+                && System.currentTimeMillis() >= runtime.nextMarketUnreadyLogAt) {
+                runtime.nextMarketUnreadyLogAt = System.currentTimeMillis() + 60_000L;
+                log.warn("策略收到实时行情但交易门控未就绪 instanceId={} mode={} symbol={} eventType={} marketHealthy={} marketStreamReady={} eventTime={}",
+                    runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(),
+                    runtime.marketHealthy, runtime.marketStreamReady, event.eventTime());
+            }
             // 新增：定位 TESTNET 无遥测
             if (log.isDebugEnabled() && System.currentTimeMillis() >= runtime.nextLatencyLogAt) {
                 log.debug("evaluate 早退[MARKET_UNREADY] instanceId={} symbol={} marketHealthy={} marketStreamReady={} replay={} eventType={}",
@@ -2969,6 +2977,7 @@ public class StrategyRuntimeService {
         private volatile boolean closed;
 
         private long nextSlopeDiagLogAt;
+        private long nextMarketUnreadyLogAt;
 
         /**
          * 创建单个策略实例的活动 Runtime 上下文。
