@@ -482,12 +482,15 @@ public class MarketStreamHub {
 
         private synchronized void checkHealth() {
             if (closed || reconnect != null) { return; }
-//            if (System.currentTimeMillis() >= nextMetricsAt) {
-//                nextMetricsAt = System.currentTimeMillis() + 60000;
-//                log.info("行情链路统计: symbol={}, interval={}, ready={}, recovering={}, networkMaxMs={}, queueMaxMs={}, ingress={}",
-//                    key.symbol(), key.interval(), connected, recovering, maxNetworkLag.getThenReset(), maxQueueLag.getThenReset(), ingress.statistics());
-//                listeners.forEach((id, consumer) -> log.info("行情消费者统计: symbol={}, interval={}, listenerId={}, {}", key.symbol(), key.interval(), id, consumer.statistics()));
-//            }
+            if (!connected && System.currentTimeMillis() >= nextMetricsAt) {
+                nextMetricsAt = System.currentTimeMillis() + 60_000L;
+                Instant now = Instant.now();
+                log.warn("行情未就绪诊断 mode={} symbol={} interval={} recovering={} wsMarkSeen={} markAgeMs={} klineOpen={} klineClosed={} currentKlineValid={} listeners={} ingress={}",
+                    key.runMode(), key.symbol(), key.interval(), recovering,
+                    lastEventTime.get("MARK") != null,
+                    lastEventTime.get("MARK") == null ? null : java.time.Duration.between(lastEventTime.get("MARK"), now).toMillis(),
+                    lastKlineOpen, lastKlineClosed, currentKlineValid(now), listeners.size(), ingress.statistics());
+            }
             if (connectionStarted != null && connectionStarted.isBefore(Instant.now().minusSeconds(23 * 3600 + 55 * 60))) {
                 disconnect(new IllegalStateException("连接接近24小时有效期，主动轮换并补偿"));
                 return;
