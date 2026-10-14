@@ -55,7 +55,8 @@ class StrategyEntryGuardServiceTest {
 
     @Test
     void unknownClaimIsRetainedAndOnlyItsOwnerCanBindOrReleaseIt() {
-        var jdbc = database();
+        var db = database();
+        var jdbc = db.jdbc();
         var guard = new StrategyEntryGuardService(db.mapper());
         var candle = Instant.parse("2026-10-12T00:00:00Z");
         assertTrue(guard.tryClaim(1L, 10L, "BTCUSDT", candle));
