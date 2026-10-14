@@ -46,7 +46,7 @@ public class LiveOrderDispatcher {
             throw new IllegalArgumentException("配置操作必须通过 beginConfiguration 核实全局参数契约");
         }
         return reserve(credentialId, symbol, key, operation, clientOrderId,
-            instanceId, epoch, null, null);
+            instanceId, epoch, null, null, null, null, null);
     }
 
     public Ticket beginConfiguration(Long credentialId, String symbol, String key,
@@ -56,12 +56,35 @@ public class LiveOrderDispatcher {
             throw new IllegalArgumentException("LIVE Binance 配置范围或保证金模式无效");
         }
         return reserve(credentialId, symbol, key, "CONFIG_SETTINGS",
-            "SETTINGS:" + marginMode + ":" + leverage, null, null, marginMode, leverage);
+            "SETTINGS:" + marginMode + ":" + leverage, null, null, marginMode, leverage,
+            null, null, null);
+    }
+
+    /**
+     * Proof-carrying LIVE hedge strategy reservation. This commits immutable
+     * OPEN/CLOSE and LONG/SHORT provenance with the outbound dispatch ticket.
+     */
+    public Ticket beginStrategy(Long credentialId, String symbol, String key,
+                                String operation, String clientOrderId,
+                                Long strategyId, Long instanceId, Long epoch,
+                                String positionSide, String exchangeSide) {
+        if (strategyId == null || strategyId <= 0 || instanceId == null || instanceId <= 0
+            || epoch == null || epoch <= 0
+            || !java.util.Set.of("OPEN","CLOSE").contains(operation)
+            || !java.util.Set.of("LONG","SHORT").contains(positionSide)
+            || !java.util.Set.of("BUY","SELL").contains(exchangeSide)
+            || !exchangeSide.equals((("LONG".equals(positionSide)) == "OPEN".equals(operation))
+                ? "BUY" : "SELL")) {
+            throw new IllegalArgumentException("Unproven strategy order intent cannot be dispatched");
+        }
+        return reserve(credentialId, symbol, key, operation, clientOrderId,
+            instanceId, epoch, null, null, strategyId, positionSide, exchangeSide);
     }
 
     private Ticket reserve(Long credentialId, String symbol, String key, String operation,
                            String clientOrderId, Long instanceId, Long epoch,
-                           String marginMode, Integer leverage) {
+                           String marginMode, Integer leverage, Long strategyId,
+                           String positionSide, String exchangeSide) {
         if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank()
             || key == null || key.isBlank() || operation == null || operation.isBlank()
             || clientOrderId == null || clientOrderId.isBlank()
@@ -85,6 +108,11 @@ public class LiveOrderDispatcher {
             }
             if (mapper.insertTicket(credentialId, normalized, key, operation, clientOrderId, instanceId, epoch) != 1) {
                 throw new IllegalStateException("LIVE dispatch 发送票据落库失败");
+            }
+            if (strategyId != null && mapper.insertPreDispatchIntent(credentialId,
+                normalized, key, clientOrderId, strategyId, instanceId, operation,
+                positionSide, exchangeSide, epoch) != 1) {
+                throw new IllegalStateException("LIVE pre-send strategy intent is not durable");
             }
             return new Ticket(credentialId, normalized, key);
         });
