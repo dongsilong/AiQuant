@@ -141,6 +141,17 @@ public class OpenCapacityService {
                 if (command.idempotencyKey().equals(slot.get("idempotency_key"))) { alreadyReserved = true; }
             }
             if (alreadyReserved) { return; }
+            // First LIVE release deliberately does not support sharing the same exchange
+            // account+symbol across multiple strategies or opposite hedge directions.
+            // Exchange position facts are aggregated and cannot prove strategy attribution.
+            // This fail-closed rule must stay until a verified strategy fill-allocation ledger exists.
+            if ("LIVE".equalsIgnoreCase(command.runMode()) && command.strategyInstanceId() != null) {
+                String symbolPrefix = command.symbol().toUpperCase(Locale.ROOT) + ":";
+                if (accountKeys.stream().anyMatch(positionKey -> positionKey.startsWith(symbolPrefix))) {
+                    throw new CapacityBlockedException(
+                        "LIVE 单账户同交易对已有仓位或待确认订单，尚不支持多策略/双向共享持仓: " + command.symbol(), true);
+                }
+            }
             if (command.strategyId() != null && strategyKeys.size() >= strategyLimit) {
                 throw new CapacityBlockedException("策略最大持仓数已达到: 已持仓及待确认=" + strategyKeys.size() + ", 上限=" + strategyLimit, true);
             }
