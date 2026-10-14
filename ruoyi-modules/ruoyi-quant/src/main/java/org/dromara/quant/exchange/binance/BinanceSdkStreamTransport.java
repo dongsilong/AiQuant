@@ -11,6 +11,8 @@ import com.binance.connector.client.derivatives_trading_usds_futures.websocket.s
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
+import org.dromara.quant.config.QuantProperties;
+import org.eclipse.jetty.client.HttpProxy;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -35,8 +37,8 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
     private final Thread consumer;
 
     static BinanceSdkStreamTransport market(String url, String symbol, String interval,
-                                             Consumer<String> events, Runnable disconnected, int backlogLimit) {
-        WebSocketClientConfiguration config = configuration(url);
+                                             Consumer<String> events, Runnable disconnected, int backlogLimit, QuantProperties.Proxy proxy) {
+        WebSocketClientConfiguration config = configuration(url, proxy);
         var client = new DerivativesTradingUsdsFuturesWebSocketStreams(config);
         try {
             var trades = client.aggregateTradeStreams(new AggregateTradeStreamsRequest().symbol(symbol));
@@ -64,13 +66,21 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
         }
     }
 
-    private static WebSocketClientConfiguration configuration(String url) {
+    static WebSocketClientConfiguration configuration(String url, QuantProperties.Proxy proxy) {
         if (url == null || !url.startsWith("wss://") || !url.endsWith("/stream")) {
             throw new IllegalArgumentException("Binance SDK Streams 连接地址必须为 wss://.../stream");
         }
         var config = DerivativesTradingUsdsFuturesWebSocketStreamsUtil.getClientConfiguration();
         config.setUrl(url);
         config.setUsePool(false);
+        if (proxy != null && proxy.getHost() != null && !proxy.getHost().isBlank()) {
+            if (proxy.getPort() == null || proxy.getPort() < 1 || proxy.getPort() > 65535) {
+                throw new IllegalArgumentException("Binance SDK WebSocket HTTP proxy port is invalid");
+            }
+            config.setWebSocketProxy(new HttpProxy(proxy.getHost().trim(), proxy.getPort()));
+        } else if (proxy != null && proxy.getPort() != null) {
+            throw new IllegalArgumentException("Binance SDK WebSocket HTTP proxy host is missing");
+        }
         return config;
     }
 
