@@ -149,6 +149,31 @@ public class TradingReconciliationService {
     }
 
     /**
+     * Startup/triggered position-only refresh. No historical orders or fills
+     * are required to persist an authenticated full account position snapshot.
+     * Never treat an unavailable exchange response as an empty account.
+     */
+    public void refreshPositionsOnly(QuantCredential credential) {
+        try {
+            ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
+                credential.getApiKey(), credential.getSecretKey(),
+                credential.getSignatureType(), credential.getRunMode());
+            var account = java.util.Objects.requireNonNull(gateway.queryAccount(exchangeCredential),
+                "Binance account snapshot missing");
+            var positions = List.copyOf(java.util.Objects.requireNonNull(
+                gateway.queryPositions(exchangeCredential, null),
+                "Binance full position snapshot missing"));
+            transaction.executeWithoutResult(status -> {
+                syncAccount(credential, account);
+                syncPositions(credential, positions);
+            });
+        } catch (RuntimeException ex) {
+            failureRecorder.record(credential.getId(), ex.getMessage());
+            throw ex;
+        }
+    }
+
+    /**
      * 对单个交易凭证执行完整事实对账。
      */
     /**
