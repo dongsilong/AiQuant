@@ -127,7 +127,6 @@ mybatis-plus:
     output: log
     log-success: false
     log-error: true
-    slow-threshold-ms: 0
     # 默认隐藏 SQL 和参数，避免敏感信息进入日志
     include-sql: false
 
