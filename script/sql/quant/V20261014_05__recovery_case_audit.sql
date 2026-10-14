@@ -17,8 +17,10 @@ CREATE TABLE quant_live_recovery_case (
   completed_at DATETIME(6) DEFAULT NULL,
   PRIMARY KEY (case_id),
   UNIQUE KEY uq_recovery_case_scope (credential_id, dispatch_key, case_id),
+  KEY idx_recovery_ticket (credential_id, symbol, dispatch_key),
   KEY idx_recovery_state (state, created_at),
   CONSTRAINT chk_distinct_reviewer CHECK (reviewed_by IS NULL OR reviewed_by <> requested_by),
+  CONSTRAINT chk_execution_requires_reviewer CHECK (state NOT IN ('APPROVED','EXECUTED') OR reviewed_by IS NOT NULL),
   CONSTRAINT chk_recovery_state CHECK (state IN ('PENDING','APPROVED','REJECTED','EXECUTED','FAILED'))
 ) ENGINE=InnoDB COMMENT='Operator two-person recovery approval metadata; no direct unlock';
 
