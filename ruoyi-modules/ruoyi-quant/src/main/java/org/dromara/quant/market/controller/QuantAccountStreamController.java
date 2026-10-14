@@ -5,6 +5,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.quant.config.BeijingTime;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
@@ -109,7 +110,7 @@ public class QuantAccountStreamController {
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", event.eventType());
         payload.put("credentialId", credential.getId().toString());
-        payload.put("eventTime", event.eventTime() == null ? Instant.now().toString() : event.eventTime().toString());
+        payload.put("eventTime", BeijingTime.format(event.eventTime() == null ? Instant.now() : event.eventTime()));
         if ("SNAPSHOT".equals(event.eventType())) {
             ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
             boolean available = false;
