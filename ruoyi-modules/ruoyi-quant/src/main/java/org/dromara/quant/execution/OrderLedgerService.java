@@ -58,12 +58,7 @@ public class OrderLedgerService {
         entity.setOriginalQuantity(snapshot.originalQuantity());
         entity.setExecutedQuantity(snapshot.executedQuantity());
         entity.setUpdatedAt(snapshot.updateTime() == null ? LocalDateTime.now() : LocalDateTime.ofInstant(snapshot.updateTime(), java.time.ZoneOffset.UTC));
-        if (entity.getId() == null) {
-            mapper.insert(entity);
-        } else {
-            mapper.updateById(entity);
-        }
-        return entity;
+        return persistMonotonic(entity);
     }
 
     /**
@@ -97,11 +92,36 @@ public class OrderLedgerService {
             entity.getExecutedQuantity()));
         entity.setReduceOnly(request.reduceOnly());
         entity.setUpdatedAt(LocalDateTime.now());
-        if (entity.getId() == null) {
-            mapper.insert(entity);
-        } else {
-            mapper.updateById(entity);
-        }
-        return entity;
+        return persistMonotonic(entity);
     }
+    /**
+     * Never let a stale Binance event regress terminal order status, cumulative
+     * executed quantity, confirmed order identity or strategy ownership.
+     * The comparison/update is one database statement, not a stale read-then-write.
+     */
+    private QuantOrder persistMonotonic(QuantOrder entity) {
+        if (entity.getId() == null) {
+            if (mapper.insert(entity) != 1) {
+                throw new IllegalStateException("无法持久化新的交易所订单事实");
+            }
+            return entity;
+        }
+        if (mapper.mergeExchangeFactIfMonotonic(entity) == 1) {
+            return entity;
+        }
+        QuantOrder current = mapper.selectById(entity.getId());
+        if (current == null) {
+            throw new IllegalStateException("订单对账期间本地订单消失，等待重试");
+        }
+        if (entity.getExchangeOrderId() != null && current.getExchangeOrderId() != null
+            && !entity.getExchangeOrderId().equals(current.getExchangeOrderId())
+            || entity.getStrategyInstanceId() != null && current.getStrategyInstanceId() != null
+            && !entity.getStrategyInstanceId().equals(current.getStrategyInstanceId())) {
+            throw new IllegalStateException("交易所订单身份或策略归属冲突，禁止覆盖");
+        }
+        // Returning the freshest DB state (rather than the stale in-memory entity)
+        // ensures downstream reconciliation never assumes a rejected snapshot won.
+        return current;
+    }
+
 }
