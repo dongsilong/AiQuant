@@ -108,3 +108,38 @@ manual reconciliation is implemented.
 Some manual/external orders, snapshot-history gaps, order-cancel retry paths,
 and close-protection takeover conditions still need Binance staging fault
 injection. No LIVE production execution is authorized solely by CI.
+
+## Account configuration writes: one persistent CONFIG_SETTINGS ticket
+
+`TradingPreparationService` previously used only a JVM-local lock while
+calling Binance `changeMarginType` and `changeInitialLeverage`. Other
+application nodes could interleave exchange orders or incompatible settings
+between those two calls.
+
+The LIVE setup path now claims the **same** persistent
+`quant_live_dispatch_guard(credential_id,symbol)` slot with one
+`CONFIG_SETTINGS` ticket **before** either exchange write. The complete
+margin-mode + leverage sequence is protected by this single ticket.
+Before starting the remote writes it rechecks the local preparation revision,
+fresh account balance and position absence *after* database claim. On success
+of **both** SDK calls, `configurationApplied()` atomically changes the
+ticket to `CONFIG_APPLIED` and releases the guard. The config ACK path is
+separate from ordinary order ACK because Binance account settings have no
+exchange order ID; no synthetic exchange ID is ever stored.
+
+If either API call times out, an exception occurs mid-sequence, or the node
+dies before the acknowledgement transaction, the ticket remains
+`UNKNOWN` or `DISPATCHING` and continues blocking account-symbol order
+dispatch across all nodes. There is deliberately **no automatic retry,
+TTL takeover or timeout-based force unlock**. A read-only operator queue
+shows these blocked config tickets and their requested settings identifier.
+A future independently verified Binance configuration snapshot and audited
+operator recovery procedure are still necessary before safe automated
+unblocking; HTTP 200 from an SDK setter is not equivalent to independently
+verifying the final account configuration.
+
+This prevents configuration writes from overlapping order dispatch only for
+code paths using the new persistent guard; old application versions must
+never run alongside the new writers. It does NOT protect writes made
+manually/external to AiQuant, and it is not a remote exchange-enforced
+fencing protocol.
