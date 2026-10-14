@@ -694,6 +694,21 @@ public class StrategyRuntimeService {
      */
     private void evaluate(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
         if (!runtime.marketHealthy || !runtime.marketStreamReady || event.replay()) {
+            // Market readiness is a trading gate, not a UI telemetry gate.
+            // TESTNET market streams can lack the fresh MARK needed to unlock
+            // trading even while valid TRADE/KLINE ticks continue arriving.
+            // Show a fresh slope without permitting any entry/exit decision.
+            if (!event.replay() && runtime.plugin instanceof KlineSlopeRateStrategy
+                && ("TRADE".equalsIgnoreCase(event.type()) || "KLINE".equalsIgnoreCase(event.type()))
+                && event.eventTime() != null && event.receivedAt() != null
+                && !event.eventTime().isAfter(Instant.now().plusSeconds(1))
+                && !event.eventTime().isBefore(Instant.now().minusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())))
+                && !event.receivedAt().isBefore(Instant.now().minusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())))) {
+                BigDecimal displayPrice = event.price() != null ? event.price() : runtime.currentPrice();
+                if (displayPrice != null && displayPrice.signum() > 0) {
+                    publishSlopeTelemetry(runtime, buildContext(runtime, displayPrice, event));
+                }
+            }
             if (!event.replay()) { logUnavailableEntry(runtime, event, "MARKET_UNREADY", "行情尚未就绪，暂停开仓"); }
             // 新增：定位 TESTNET 无遥测
             if (log.isDebugEnabled() && System.currentTimeMillis() >= runtime.nextLatencyLogAt) {
