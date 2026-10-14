@@ -111,6 +111,33 @@ class OpenCapacityServiceTest {
     }
 
     @Test
+    void liveDoesNotAllowTwoStrategiesOrOppositeDirectionsOnSameExchangeSymbol() {
+        Fixture f = fixture(10, 10);
+        f.jdbc.update("INSERT INTO quant_position VALUES (1,'BTCUSDT','LONG',1)");
+        var newShort = new OpenPositionCommand(1L, 20L, 200L, null, "BTCUSDT",
+            "SELL", "MARKET", BigDecimal.ONE, BigDecimal.TEN, "SHORT", "live-conflict",
+            "LIVE", null, 1, "ISOLATED", null);
+        var blocked = assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> f.first.reserve(newShort, BigDecimal.TEN, List.of(),
+                balance(1L, "100", Set.of())));
+        assertTrue(blocked.getMessage().contains("尚不支持多策略"));
+        assertEquals(0L, f.jdbc.queryForObject("SELECT COUNT(*) FROM quant_open_capacity", Long.class));
+    }
+
+    @Test
+    void liveRejectsNewStrategyEvenWhenOnlyUnknownReservationExistsOnSameSymbol() {
+        Fixture f = fixture(10, 10);
+        f.jdbc.update("INSERT INTO quant_open_capacity VALUES (1,'pending',10,100,'BTCUSDT','LONG',10,'RESERVED',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)");
+        var candidate = new OpenPositionCommand(1L, 20L, 200L, null, "BTCUSDT",
+            "SELL", "MARKET", BigDecimal.ONE, BigDecimal.TEN, "SHORT", "live-retry",
+            "LIVE", null, 1, "ISOLATED", null);
+        assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> f.first.reserve(candidate, BigDecimal.TEN, List.of(),
+                balance(1L, "100", Set.of())));
+        assertEquals(1L, f.jdbc.queryForObject("SELECT COUNT(*) FROM quant_open_capacity", Long.class));
+    }
+
+    @Test
     void unknownLocalPositionQuantityFailsClosedInsteadOfUsingOneAvailableSlot() {
         Fixture f = fixture(10, 10);
         f.jdbc.update("INSERT INTO quant_position VALUES (1,'BTCUSDT','BOTH',NULL)");
