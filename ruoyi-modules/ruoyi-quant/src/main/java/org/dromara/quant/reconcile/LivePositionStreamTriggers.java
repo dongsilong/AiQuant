@@ -31,6 +31,9 @@ public class LivePositionStreamTriggers {
     private final UserDataStreamHub hub;
     private final LivePositionEventCoordinator coordinator;
     private final LivePositionFreshness freshness;
+    private final org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper lease;
+    private final String ownerToken = java.util.UUID.randomUUID().toString();
+    private static final int LEASE_SECONDS = 75;
     private final Map<Long, AutoCloseable> subscriptions = new HashMap<>();
 
     @Scheduled(fixedDelay = 30000, initialDelay = 10000)
@@ -43,10 +46,16 @@ public class LivePositionStreamTriggers {
             }
             Long id = credential.getId();
             liveIds.add(id);
-            if (subscriptions.containsKey(id)) {
-                continue;
-            }
             try {
+                lease.ensure(id, ownerToken, LEASE_SECONDS);
+                if (lease.acquireOrRenew(id, ownerToken, LEASE_SECONDS) != 1) {
+                    closeSubscription(id);
+                    freshness.invalidate(id);
+                    continue;
+                }
+                if (subscriptions.containsKey(id)) {
+                    continue;
+                }
                 AutoCloseable reference = hub.subscribe(credential, event -> {
                     // Hub centrally forwards events into the coordinator; this
                     // listener exists only to hold an active subscription.
@@ -61,6 +70,7 @@ public class LivePositionStreamTriggers {
         for (Long id : Set.copyOf(subscriptions.keySet())) {
             if (!liveIds.contains(id)) {
                 closeSubscription(id);
+                lease.release(id, ownerToken);
                 freshness.invalidate(id);
             }
         }
@@ -81,6 +91,7 @@ public class LivePositionStreamTriggers {
     public synchronized void close() {
         for (Long id : Set.copyOf(subscriptions.keySet())) {
             closeSubscription(id);
+            lease.release(id, ownerToken);
         }
     }
 }
