@@ -11,6 +11,7 @@ CREATE TABLE quant_strategy_position_inventory (
   cost_basis DECIMAL(38,16) NOT NULL DEFAULT 0,
   realized_pnl DECIMAL(38,16) NOT NULL DEFAULT 0,
   commissions DECIMAL(38,16) NOT NULL DEFAULT 0,
+  commission_asset VARCHAR(20) DEFAULT NULL,
   cycle_number BIGINT NOT NULL DEFAULT 0,
   cycle_id BIGINT NULL,
   last_trade_time DATETIME(6) NULL,
