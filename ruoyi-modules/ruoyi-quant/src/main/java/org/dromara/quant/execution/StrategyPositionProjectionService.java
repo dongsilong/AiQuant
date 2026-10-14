@@ -79,10 +79,10 @@ public class StrategyPositionProjectionService {
                     || !positionSide.name().equals(previous.get("position_side"))
                     || !verifiedRole.name().equals(previous.get("fill_role"))
                     || !trade.side().equalsIgnoreCase(String.valueOf(previous.get("exchange_side")))
-                    || !decimal(previous,"quantity").equals(trade.quantity())
-                    || !decimal(previous,"fill_price").equals(trade.price())
-                    || !decimal(previous,"commission").equals(trade.commission())
-                    || !decimal(previous,"realized_pnl").equals(trade.realizedPnl())
+                    || decimal(previous,"quantity").compareTo(trade.quantity()) != 0
+                    || decimal(previous,"fill_price").compareTo(trade.price()) != 0
+                    || decimal(previous,"commission").compareTo(trade.commission()) != 0
+                    || decimal(previous,"realized_pnl").compareTo(trade.realizedPnl()) != 0
                     || !when.equals(time(previous,"trade_time"))) {
                     throw new IllegalStateException("Exchange trade replay conflicts with immutable attribution");
                 }
