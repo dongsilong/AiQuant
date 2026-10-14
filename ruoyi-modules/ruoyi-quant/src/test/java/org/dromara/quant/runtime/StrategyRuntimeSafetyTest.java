@@ -72,6 +72,39 @@ class StrategyRuntimeSafetyTest {
         } finally { f.service.destroy(); }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"LIVE", "TESTNET"})
+    void readyRealtimeTradeDispatchesEntryEvaluationWithoutSendingAnOrder(String mode) throws Exception {
+        Fixture f = fixture();
+        try {
+            var credential = (QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential");
+            credential.setRunMode(mode);
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("CLOSED");
+            state.setPositionQty(BigDecimal.ZERO);
+            Object market = ReflectionTestUtils.getField(f.runtime, "market");
+            Instant open = Instant.now().minusSeconds(5);
+            ReflectionTestUtils.setField(market, "currentKline",
+                new ExchangeGateway.Kline(open, open.plusSeconds(60), new BigDecimal("100"),
+                    new BigDecimal("103"), new BigDecimal("99"), new BigDecimal("101"), BigDecimal.ONE, false));
+            ReflectionTestUtils.setField(market, "previousKlineOpen", new BigDecimal("100"));
+            ReflectionTestUtils.setField(f.runtime, "marketHealthy", true);
+            ReflectionTestUtils.setField(f.runtime, "marketStreamReady", true);
+            when(f.plugin.evaluateEntry(any(), anyMap())).thenReturn(Optional.empty());
+
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m",
+                    new BigDecimal("102"), null, Instant.now()));
+
+            verify(f.plugin, times(1)).evaluateEntry(argThat(ctx ->
+                new BigDecimal("102").compareTo(ctx.currentPrice()) == 0), anyMap());
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService)
+                ReflectionTestUtils.getField(f.service, "executionService");
+            verify(execution, never()).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any());
+        } finally { f.service.destroy(); }
+    }
+
     @Test
     void newlyCreatedRuntimeMustNotAssumeMarketStreamIsReady() throws Exception {
         Fixture f = fixture();
