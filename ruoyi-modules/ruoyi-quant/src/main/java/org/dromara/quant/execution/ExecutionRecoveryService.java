@@ -99,9 +99,12 @@ public class ExecutionRecoveryService {
                             recordService.markRecovered(record, exact.orderId(), exact.status());
                         } else if ("FILLED".equalsIgnoreCase(status) || "PARTIALLY_FILLED".equalsIgnoreCase(status)) {
                             recordService.markRecovered(record, exact.orderId(), exact.status());
-                            record.setErrorMessage("取消请求到达时订单已经成交: " + status);
-                            record.setUpdatedAt(LocalDateTime.now());
-                            recordMapper.updateById(record);
+                            // The annotation must be guarded by the exact recovered order and status.
+                            // A stale recovery worker must never overwrite a newer execution fact.
+                            if (record.getId() != null && exact.orderId() != null) {
+                                recordMapper.annotateRecoveredCancelFill(record.getId(), exact.orderId(), status,
+                                    "取消请求到达时订单已经成交: " + status, LocalDateTime.now());
+                            }
                         }
                     } else {
                         recordService.markRecovered(record, exact.orderId(), exact.status());
