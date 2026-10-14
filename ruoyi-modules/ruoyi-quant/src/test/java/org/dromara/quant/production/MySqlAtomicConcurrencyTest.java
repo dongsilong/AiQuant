@@ -67,10 +67,17 @@ class MySqlAtomicConcurrencyTest {
         db.execute("""
             CREATE TABLE quant_strategy_runtime_lease (
                 instance_id BIGINT NOT NULL, credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
-                owner_token VARCHAR(128) NOT NULL, lease_epoch BIGINT NOT NULL DEFAULT 1, lease_until DATETIME NOT NULL,
+                owner_token VARCHAR(128) NOT NULL, lease_until DATETIME NOT NULL,
                 create_time DATETIME, update_time DATETIME,
                 UNIQUE KEY uk_lease (credential_id, symbol)
             ) ENGINE=InnoDB
+            """);
+        // Exercise the actual additive upgrade shape against the legacy table,
+        // rather than starting tests with the column already present.
+        db.execute("""
+            ALTER TABLE quant_strategy_runtime_lease
+              ADD COLUMN lease_epoch BIGINT NOT NULL DEFAULT 1
+              COMMENT 'Monotonic owner epoch; increment on lease takeover or expiry'
             """);
         db.execute("""
             CREATE TABLE quant_strategy_entry_guard (
