@@ -528,7 +528,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             }
         }
         @Override public void onFailure(okhttp3.WebSocket socket, Throwable failure, okhttp3.Response response) {
-            log.warn("Binance WebSocket传输失败: errorType={}, httpStatus={}", failure.getClass().getSimpleName(), response == null ? null : response.code());
+            // socket.cancel() 会异步触发 onFailure；主动关闭的旧连接不应当产生误导性 WARN。
+            // 非预期失败必须继续向 Hub 发送断线事件，以触发重连、REST 补偿和交易门控。
+            if (closed.get()) { return; }
+            log.warn("Binance WebSocket传输失败: errorType={}, httpStatus={}, wasConnected={}",
+                failure.getClass().getSimpleName(), response == null ? null : response.code(), connected.get());
             fail();
         }
         @Override public void onClosing(okhttp3.WebSocket socket, int code, String reason) { socket.close(code, null); fail(); }
