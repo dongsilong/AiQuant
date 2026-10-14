@@ -71,8 +71,11 @@ public class LiveOrderDispatcher {
         String normalized = symbol.toUpperCase(Locale.ROOT);
         return transaction.execute(status -> {
             mapper.ensureGuard(credentialId, normalized);
-            if (mapper.claim(credentialId, normalized, key) != 1) {
-                throw new IllegalStateException("同账户交易对存在未完成或未知的交易所操作，拒绝并发发送");
+            int claimed = instanceId == null
+                ? mapper.claim(credentialId, normalized, key)
+                : mapper.claimWithLease(credentialId, normalized, key, instanceId, epoch);
+            if (claimed != 1) {
+                throw new IllegalStateException("同账户交易对存在未完成交易所操作或策略租约已过期/转移，拒绝发送");
             }
             if (marginMode != null) {
                 mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
