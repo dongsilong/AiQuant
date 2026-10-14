@@ -24,7 +24,7 @@ class StrategyFillReplayServiceTest {
     private ExchangeGateway.TradeSnapshot trade(long id) {
         return new ExchangeGateway.TradeSnapshot("BTCUSDT",id,99L,"BUY",
             BigDecimal.ONE,BigDecimal.TEN,BigDecimal.ZERO,BigDecimal.ZERO,
-            Instant.parse("2026-10-14T02:00:00Z").plusSeconds(id));
+            Instant.parse("2026-10-14T02:00:00Z").plusSeconds(id),"USDT");
     }
 
     @Test
