@@ -105,7 +105,31 @@ public class UserDataStreamHub {
      */
     @Scheduled(fixedDelay = 15000, initialDelay = 20000)
     public void healthCheck() {
-        streams.values().forEach(SharedUserStream::checkHealth);
+        streams.forEach((id, stream) -> {
+            if ("LIVE".equalsIgnoreCase(stream.credential.getRunMode())) {
+                boolean currentOwner;
+                try {
+                    currentOwner = ownsLiveStream(id);
+                } catch (RuntimeException ex) {
+                    // A missing/failed lease verification is not permission
+                    // to keep a Binance private connection alive.
+                    currentOwner = false;
+                    log.warn("LIVE user-stream lease health verification failed credentialId={}", id, ex);
+                }
+                if (!currentOwner) {
+                    if (streams.remove(id, stream)) {
+                        stream.close();
+                        if (positionEvents != null) {
+                            positionEvents.onUserDataEvent(id,
+                                new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
+                        }
+                        log.warn("Closed obsolete LIVE private stream after lease loss credentialId={}", id);
+                    }
+                    return;
+                }
+            }
+            stream.checkHealth();
+        });
     }
 
     /**
