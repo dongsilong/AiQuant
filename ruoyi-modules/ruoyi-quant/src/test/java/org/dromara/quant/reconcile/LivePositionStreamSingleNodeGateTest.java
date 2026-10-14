@@ -18,7 +18,9 @@ class LivePositionStreamSingleNodeGateTest {
         var hub = mock(UserDataStreamHub.class);
         var coordinator = mock(LivePositionEventCoordinator.class);
         var freshness = new LivePositionFreshness();
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness);
+        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
         var account = new QuantCredential();
         account.setId(71L);
         account.setStatus("0");
@@ -39,7 +41,9 @@ class LivePositionStreamSingleNodeGateTest {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
         var coordinator = mock(LivePositionEventCoordinator.class);
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness());
+        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), lease);
         var account = new QuantCredential();
         account.setId(72L);
         account.setStatus("0");
@@ -51,4 +55,26 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         verify(subscription).close();
     }
+    @Test
+    void foreignOwnerNeverCreatesSharedStreamAndRevokesPriorReference() throws Exception {
+        var credentials = mock(QuantCredentialMapper.class);
+        var hub = mock(UserDataStreamHub.class);
+        var coordinator = mock(LivePositionEventCoordinator.class);
+        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var freshness = new LivePositionFreshness();
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
+        var account = new QuantCredential();
+        account.setId(91L); account.setStatus("0"); account.setRunMode("LIVE");
+        when(credentials.selectList(any())).thenReturn(List.of(account));
+        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1, 0);
+        var reference = mock(AutoCloseable.class);
+        when(hub.subscribe(eq(account), any())).thenReturn(reference);
+        stream.supervise();
+        freshness.verified(91L);
+        stream.supervise();
+        verify(hub, times(1)).subscribe(eq(account), any());
+        verify(reference).close();
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(91L));
+    }
 }
+
