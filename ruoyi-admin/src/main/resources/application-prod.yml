@@ -125,10 +125,14 @@ snail-ai:
 --- # MyBatis Plus 配置
 mybatis-plus:
   sql-log:
-    # 生产环境默认关闭 SQL 内容日志
-    enabled: false
+    # 仅记录失败的 SQL；参数默认隐藏，避免泄漏凭证
+    enabled: true
     # 输出方式，可选 console、log
-    output: console
+    output: log
+    log-success: false
+    log-error: true
+    slow-threshold-ms: 0
+    include-sql: false
 
 --- # 数据加密
 mybatis-encryptor:
