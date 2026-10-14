@@ -107,6 +107,34 @@ public class LiveOrderDispatcher {
         }));
     }
 
+    /**
+     * Find the ONLY currently held protection ticket, if its persisted operation
+     * and client algo ID match the exact exchange object being reconciled.
+     */
+    public String activeProtectionTicket(Long credentialId, String symbol, String clientAlgoId,
+                                         String operation) {
+        if (credentialId == null || symbol == null || symbol.isBlank()
+            || clientAlgoId == null || clientAlgoId.isBlank()
+            || !java.util.Set.of("PROTECT_CREATE", "PROTECT_CANCEL").contains(operation)) {
+            throw new IllegalArgumentException("Cannot inspect protection dispatch without exact identity");
+        }
+        return mapper.activeProtectionTicket(credentialId, symbol.toUpperCase(Locale.ROOT),
+            clientAlgoId, operation);
+    }
+
+    /**
+     * Recovery may only be called AFTER the exact algo order ID, client ID and
+     * locally persisted order status have been independently verified.
+     */
+    public boolean recoverVerifiedProtection(Long credentialId, String symbol, String clientAlgoId,
+                                             String operation, Long algoOrderId) {
+        if (algoOrderId == null || algoOrderId <= 0) {
+            throw new IllegalArgumentException("Missing verified algo order ID");
+        }
+        String key = activeProtectionTicket(credentialId, symbol, clientAlgoId, operation);
+        return key != null && recoveredFromExchange(credentialId, symbol, key, clientAlgoId, algoOrderId);
+    }
+
     /** Keep slot occupied after a remote timeout, process crash or failed local persist. */
     public void unknown(Ticket ticket) {
         transaction.executeWithoutResult(status -> {
