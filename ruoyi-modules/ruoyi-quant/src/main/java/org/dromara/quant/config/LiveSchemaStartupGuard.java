@@ -27,7 +27,8 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_order", "quant_position", "quant_protection_order", "quant_protection_target",
         "quant_trade", "quant_trade_decision_log",
         "quant_live_dispatch_guard", "quant_order_dispatch_ticket", "quant_strategy_fill_allocation",
-        "quant_live_account_settings_intent", "quant_position_sync_fence");
+        "quant_live_account_settings_intent", "quant_position_sync_fence",
+        "quant_live_user_stream_lease");
 
     private static final Set<String> UNIQUE = Set.of(
         "quant_strategy_runtime_lease|credential_id,symbol",
