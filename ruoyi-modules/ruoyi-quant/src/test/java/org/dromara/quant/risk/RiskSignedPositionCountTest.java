@@ -36,6 +36,9 @@ class RiskSignedPositionCountTest {
             return 1L;
         });
         var service = new RiskDecisionService(risks, positions, execution, trades, finance);
+        var freshness = new org.dromara.quant.reconcile.LivePositionFreshness();
+        freshness.verified(11L);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "positionFreshness", freshness);
         assertFalse(service.approveOpen(11L, "BTCUSDT", BigDecimal.TEN, "LIVE"));
         verify(positions).selectCount(any());
     }
