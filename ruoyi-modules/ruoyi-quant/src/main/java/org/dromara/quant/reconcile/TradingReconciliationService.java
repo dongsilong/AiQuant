@@ -182,6 +182,12 @@ public class TradingReconciliationService {
                 var positions = List.copyOf(java.util.Objects.requireNonNull(
                     gateway.queryPositions(exchangeCredential, null),
                     "Binance full position snapshot missing"));
+                // Reject a snapshot that was already superseded by a user-data
+                // event during REST collection. Do not overwrite local facts.
+                if (positionFreshness != null
+                    && positionFreshness.generation(credential.getId()) != positionGeneration) {
+                    throw new IllegalStateException("Binance position snapshot superseded by a newer account event");
+                }
                 transaction.executeWithoutResult(status -> {
                     syncAccount(credential, account);
                     syncPositions(credential, positions);
@@ -220,6 +226,12 @@ public class TradingReconciliationService {
                     gateway.queryAccount(exchangeCredential), "Binance account snapshot missing");
                 var positions = List.copyOf(java.util.Objects.requireNonNull(
                     gateway.queryPositions(exchangeCredential, null), "Binance full position snapshot missing"));
+                // Reject a snapshot that was already superseded by a user-data
+                // event during REST collection. Do not overwrite local facts.
+                if (positionFreshness != null
+                    && positionFreshness.generation(credential.getId()) != positionGeneration) {
+                    throw new IllegalStateException("Binance position snapshot superseded by a newer account event");
+                }
                 transaction.executeWithoutResult(status -> {
                     syncAccount(credential, account);
                     syncPositions(credential, positions);
