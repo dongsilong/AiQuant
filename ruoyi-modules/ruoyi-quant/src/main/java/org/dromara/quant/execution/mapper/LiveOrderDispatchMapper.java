@@ -54,6 +54,23 @@ public interface LiveOrderDispatchMapper {
     int acknowledge(@Param("credentialId") Long credentialId, @Param("key") String key,
                     @Param("orderId") Long orderId);
 
+    /**
+     * Account trading settings have no exchange order ID. Complete the
+     * persistent CONFIG ticket only after BOTH margin and leverage SDK
+     * calls have returned explicit successful responses.
+     */
+    @Options(timeout = 3)
+    @Update("""
+        UPDATE quant_order_dispatch_ticket
+        SET dispatch_status='CONFIG_APPLIED', updated_at=NOW()
+        WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
+          AND symbol=#{symbol} AND operation_type='CONFIG_SETTINGS'
+          AND dispatch_status='DISPATCHING' AND exchange_order_id IS NULL
+        """)
+    int acknowledgeConfiguration(@Param("credentialId") Long credentialId,
+                                 @Param("symbol") String symbol,
+                                 @Param("key") String key);
+
     @Options(timeout = 3)
     @Update("""
         UPDATE quant_order_dispatch_ticket
