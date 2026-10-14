@@ -94,6 +94,25 @@ public interface LiveOrderDispatchMapper {
                         @Param("clientOrderId") String clientOrderId,
                         @Param("orderId") Long orderId);
 
+    /**
+     * Only the active account-symbol slot is eligible for fact-proven protection recovery.
+     * It must match the exact client algo ID and operation type.
+     */
+    @Options(timeout = 3)
+    @Select("""
+        SELECT g.active_dispatch_key
+        FROM quant_live_dispatch_guard g
+        JOIN quant_order_dispatch_ticket t ON t.credential_id=g.credential_id
+          AND t.idempotency_key=g.active_dispatch_key
+        WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+          AND t.client_order_id=#{clientOrderId} AND t.operation_type=#{operation}
+          AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
+        """)
+    String activeProtectionTicket(@Param("credentialId") Long credentialId,
+                                  @Param("symbol") String symbol,
+                                  @Param("clientOrderId") String clientOrderId,
+                                  @Param("operation") String operation);
+
     @Options(timeout = 3)
     @Select("""
         SELECT dispatch_status FROM quant_order_dispatch_ticket
