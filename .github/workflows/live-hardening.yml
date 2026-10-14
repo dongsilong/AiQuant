@@ -29,7 +29,7 @@ jobs:
         run: >-
           bash mvnw -B -ntp
           -pl ruoyi-modules/ruoyi-quant -am
-          -Dtest=QuantLiveDefaultsTest,ProtectionOrderServiceTest,UnifiedTradeExecutionServiceTest,UnifiedCancelRecoveryTest,TradingPreparationServiceTest,BinanceSymbolSettingsContractTest,OrderLedgerMonotonicTest,LiveDispatchInspectionControllerTest,LiveOrderDispatcherTest,LiveDispatchLeaseEpochSqlTest,StrategyFillAllocationServiceTest,StrategyPositionAccountingTest,StrategyPositionProjectionContractTest,StrategyPositionProjectionValidationTest,StrategyOrderIntentServiceTest,StrategyOrderAcceptanceJournalTest,StrategyFillReplayServiceTest,StrategyPositionReconciliationTest,StrategyFillAuditServiceTest,ExecutionRecoveryValidationTest,RecoveredDispatchRestartTest,RecoveredDispatchSqlTest,StrategyEntryGuardServiceTest,StrategyRuntimeLeaseServiceTest,StrategyCloseOwnershipGuardTest,StrategyCloseOwnershipMapperTest,OpenCapacityServiceTest,RiskSignedPositionCountTest,PaperAtomicMapperTest,ProtectionTargetCoordinatorTest,ExecutionRecoveryServiceTest,TradingReconciliationTransactionTest,ExecutionStatusTransitionTest,LiveDispatchRecoveryGuardSqlTest,LiveRecoveryApprovalSqlContractTest,LiveRecoveryCaseServiceTest,LiveManualRecoveryExecutionServiceTest,LiveRecoveryAuditSecurityTest,LiveSchemaStartupGuardTest,ExchangeIdJsonPrecisionTest,BinanceGatewayClockOffsetTest,BinanceGatewayConnectivityTest,BinanceSdkContractTest,BinanceWebSocketTransportSelectionTest,BinanceTransportPermissionTest,StrategyRuntimeSafetyTest
+          -Dtest=QuantLiveDefaultsTest,ProtectionOrderServiceTest,UnifiedTradeExecutionServiceTest,UnifiedCancelRecoveryTest,TradingPreparationServiceTest,BinanceSymbolSettingsContractTest,OrderLedgerMonotonicTest,LiveDispatchInspectionControllerTest,LiveOrderDispatcherTest,LiveDispatchLeaseEpochSqlTest,StrategyFillAllocationServiceTest,StrategyPositionAccountingTest,StrategyPositionProjectionContractTest,StrategyPositionProjectionValidationTest,StrategyOrderIntentServiceTest,StrategyOrderAcceptanceJournalTest,StrategyOrderCrashRecoveryServiceTest,StrategyFillReplayServiceTest,StrategyPositionReconciliationTest,StrategyFillAuditServiceTest,ExecutionRecoveryValidationTest,RecoveredDispatchRestartTest,RecoveredDispatchSqlTest,StrategyEntryGuardServiceTest,StrategyRuntimeLeaseServiceTest,StrategyCloseOwnershipGuardTest,StrategyCloseOwnershipMapperTest,OpenCapacityServiceTest,RiskSignedPositionCountTest,PaperAtomicMapperTest,ProtectionTargetCoordinatorTest,ExecutionRecoveryServiceTest,TradingReconciliationTransactionTest,ExecutionStatusTransitionTest,LiveDispatchRecoveryGuardSqlTest,LiveRecoveryApprovalSqlContractTest,LiveRecoveryCaseServiceTest,LiveManualRecoveryExecutionServiceTest,LiveRecoveryAuditSecurityTest,LiveSchemaStartupGuardTest,ExchangeIdJsonPrecisionTest,BinanceGatewayClockOffsetTest,BinanceGatewayConnectivityTest,BinanceSdkContractTest,BinanceWebSocketTransportSelectionTest,BinanceTransportPermissionTest,StrategyRuntimeSafetyTest
           -Dsurefire.failIfNoSpecifiedTests=false
           test
 
@@ -87,10 +87,12 @@ jobs:
           MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
           test -n "$MYSQL_CONTAINER"
           for ddl in \
+            script/sql/quant/V20261014_02__live_dispatch_guard.sql \
             script/sql/quant/V20261014_03__strategy_fill_allocation.sql \
             script/sql/quant/V20261014_07__strategy_position_cycles.sql \
             script/sql/quant/V20261014_08__strategy_position_inventory.sql \
-            script/sql/quant/V20261014_09__strategy_order_intent.sql; do
+            script/sql/quant/V20261014_09__strategy_order_intent.sql \
+            script/sql/quant/V20261014_10__pre_dispatch_strategy_intent.sql; do
             docker exec -i "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test < "$ddl"
           done
           tables="$(docker exec -i "$MYSQL_CONTAINER" mysql -N -B -uroot -ponly_for_ci aiquant_ci_test -e "
@@ -98,8 +100,8 @@ jobs:
             WHERE table_schema='aiquant_ci_test' AND table_name IN
             ('quant_strategy_fill_allocation','quant_strategy_position_cycle',
              'quant_strategy_position_fill_event','quant_strategy_position_inventory',
-             'quant_strategy_order_intent');" | tr -d '\r')"
-          test "$tables" = 5
+             'quant_strategy_order_intent','quant_strategy_pre_dispatch_intent');" | tr -d '\r')"
+          test "$tables" = 6
       - name: Validate real InnoDB locks, account capacity and lease ownership
         run: >-
           bash mvnw -B -ntp
