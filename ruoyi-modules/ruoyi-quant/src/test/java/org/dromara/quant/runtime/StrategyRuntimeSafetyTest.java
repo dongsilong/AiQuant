@@ -20,6 +20,33 @@ import static org.mockito.Mockito.*;
 
 @org.junit.jupiter.api.Tag("dev")
 class StrategyRuntimeSafetyTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"LIVE", "TESTNET"})
+    void marketRecoveryStatusKeepsTradingClosedUntilExplicitReady(String mode) throws Exception {
+        Fixture f = fixture();
+        try {
+            var credential = (QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential");
+            credential.setRunMode(mode);
+            var connected = new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, Instant.now());
+            var recovering = new ExchangeGateway.MarketEvent("CONNECTING", "BTCUSDT", "1m", null, null, Instant.now());
+            var disconnected = new ExchangeGateway.MarketEvent("DISCONNECTED", "BTCUSDT", "1m", null, null, Instant.now());
+
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, connected);
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "marketHealthy"));
+            // CONNECTING also means Kline REST recovery while WS remains open.
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, recovering);
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "marketHealthy"));
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "marketStreamReady"));
+
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, disconnected);
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "marketHealthy"));
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, connected);
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "marketHealthy"));
+            // CONNECTED event alone is insufficient: the independent hub health callback must also approve trading.
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "marketStreamReady"));
+        } finally { f.service.destroy(); }
+    }
+
     @Test
     void newlyCreatedRuntimeMustNotAssumeMarketStreamIsReady() throws Exception {
         Fixture f = fixture();
