@@ -17,6 +17,11 @@ CREATE TABLE quant_live_recovery_case (
   completed_at DATETIME(6) DEFAULT NULL,
   PRIMARY KEY (case_id),
   UNIQUE KEY uq_recovery_case_scope (credential_id, dispatch_key, case_id),
+  -- MySQL UNIQUE allows multiple NULLs. Only one PENDING/APPROVED case
+  -- may exist per currently active ticket, even under concurrent requests.
+  active_case_key VARCHAR(160) GENERATED ALWAYS AS
+    (CASE WHEN state IN ('PENDING','APPROVED') THEN dispatch_key ELSE NULL END) STORED,
+  UNIQUE KEY uq_active_recovery_case (credential_id, symbol, active_case_key),
   KEY idx_recovery_ticket (credential_id, symbol, dispatch_key),
   KEY idx_recovery_state (state, created_at),
   CONSTRAINT chk_distinct_reviewer CHECK (reviewed_by IS NULL OR reviewed_by <> requested_by),
