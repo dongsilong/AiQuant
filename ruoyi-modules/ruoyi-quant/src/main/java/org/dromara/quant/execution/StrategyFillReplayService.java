@@ -53,7 +53,8 @@ public class StrategyFillReplayService {
         }
         List<ExchangeGateway.TradeSnapshot> sorted=new ArrayList<>(exchangeFills);
         if (sorted.stream().anyMatch(t->t==null || t.time()==null || t.tradeId()==null
-            || t.tradeId()<=0 || !symbol.equalsIgnoreCase(t.symbol()) || t.orderId()==null)) {
+            || t.tradeId()<=0 || !symbol.equalsIgnoreCase(t.symbol()) || t.orderId()==null
+            || t.commissionAsset()==null || !t.commissionAsset().matches("[A-Z0-9]{2,20}"))) {
             throw new IllegalStateException("Invalid Binance fill in replay window");
         }
         sorted.sort(Comparator.comparing(ExchangeGateway.TradeSnapshot::time)
