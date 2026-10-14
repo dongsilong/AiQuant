@@ -374,6 +374,34 @@ class UnifiedTradeExecutionServiceTest {
     }
 
     @Test
+    void leaseTakenOverWhileWaitingForDurableDispatchIsNeverSent() {
+        var gateway = mock(ExchangeGateway.class);
+        var records = mock(ExecutionRecordService.class);
+        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any()))
+            .thenReturn(new QuantExecutionRecord());
+        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0,
+            new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
+        when(gateway.queryTradingRule(any(), any())).thenReturn(rule);
+        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records,
+            mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class),
+            mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        var lease = mock(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService.class);
+        when(lease.requireCurrentEpoch(3L, 1L, "BTCUSDT")).thenReturn(11L, 11L, 12L);
+        var dispatcher = validDispatcher();
+        service.setRuntimeLease(lease);
+        service.setLiveDispatcher(dispatcher);
+        service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
+        var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
+        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(
+            1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
+            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "lease-shifted",
+            "LIVE", rule, safety)));
+        verify(lease, times(3)).requireCurrentEpoch(3L, 1L, "BTCUSDT");
+        verify(dispatcher).notSent(any(LiveOrderDispatcher.Ticket.class));
+        verify(gateway, never()).placeOrder(any());
+    }
+
+    @Test
     void disabledLiveEntryStillNeverSendsAnOrder() {
         var gateway = mock(ExchangeGateway.class);
         var records = mock(ExecutionRecordService.class);
