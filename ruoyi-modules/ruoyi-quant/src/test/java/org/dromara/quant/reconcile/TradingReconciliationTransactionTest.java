@@ -142,4 +142,20 @@ class TradingReconciliationTransactionTest {
         verify(errors).record(eq(1L),anyString());
     }
 
+    @Test
+    void newerAccountEventDuringRestCollectionMustNotOverwriteLocalPositions() {
+        stubCommonFacts();
+        var reconciliation = service();
+        var freshness = new LivePositionFreshness();
+        org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "positionFreshness", freshness);
+        when(gateway.queryPositions(any(), isNull())).thenAnswer(invocation -> {
+            freshness.invalidate(1L);
+            return List.of();
+        });
+        assertThrows(IllegalStateException.class, () -> reconciliation.refreshPositionsOnly(credential()));
+        verifyNoInteractions(positions);
+        verifyNoInteractions(accounts);
+        assertFalse(freshness.fresh(1L));
+    }
+
 }
