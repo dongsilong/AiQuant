@@ -446,7 +446,9 @@ public class ProtectionOrderService {
             || actual.executedQuantity() == null
             || requireUnfilled && actual.executedQuantity().signum() != 0
             || actual.algoId() == null || actual.algoId() <= 0
-            || !local.getClientOrderId().equals(actual.clientAlgoId())) {
+            || !local.getClientOrderId().equals(actual.clientAlgoId())
+            || local.getExchangeOrderId() != null
+                && !local.getExchangeOrderId().equals(actual.algoId())) {
             return null;
         }
         if (decisionLogs != null) decisionLogs.protection(credentialId, local, actual);
@@ -526,6 +528,13 @@ public class ProtectionOrderService {
             mapper.updateById(local);
             if (targetLease.get() != null) { targetLease.get().terminal(local); }
             return false;
+        }
+        if (local.getClientOrderId() == null
+            || !local.getClientOrderId().equals(actual.clientAlgoId())
+            || actual.algoId() == null || actual.algoId() <= 0
+            || local.getExchangeOrderId() != null
+                && !local.getExchangeOrderId().equals(actual.algoId())) {
+            throw new IllegalStateException("Binance 保护单恢复返回了冲突的算法订单身份");
         }
         if (decisionLogs != null) { decisionLogs.protection(credentialId, local, actual); }
         local.setExchangeOrderId(actual.algoId());
