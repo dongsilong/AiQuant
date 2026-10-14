@@ -79,5 +79,24 @@ class LivePositionStreamSingleNodeGateTest {
         verify(hub).unregisterLeaseOwner(eq(91L), anyString());
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(91L));
     }
+    @Test
+    void failedHubSubscriptionReleasesDbLeaseImmediately() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var hub = mock(UserDataStreamHub.class);
+        var coordinator = mock(LivePositionEventCoordinator.class);
+        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator,
+            new LivePositionFreshness(), lease);
+        var account = new QuantCredential();
+        account.setId(94L); account.setStatus("0"); account.setRunMode("LIVE");
+        when(credentials.selectList(any())).thenReturn(List.of(account));
+        when(hub.subscribe(eq(account), any())).thenThrow(new IllegalStateException("Cannot open private stream"));
+        stream.supervise();
+        verify(hub).unregisterLeaseOwner(eq(94L), anyString());
+        verify(lease).release(eq(94L), anyString());
+        verifyNoInteractions(coordinator);
+    }
+
 }
 
