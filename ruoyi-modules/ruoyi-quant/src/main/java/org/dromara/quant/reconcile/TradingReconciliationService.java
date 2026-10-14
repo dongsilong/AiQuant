@@ -21,12 +21,15 @@ import org.dromara.quant.reconcile.domain.QuantReconcileRecord;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -74,6 +77,7 @@ public class TradingReconciliationService {
     private final QuantReconcileRecordMapper reconcileMapper;
     private final ReconciliationFailureRecorder failureRecorder;
     private final StrategyPositionStateService strategyPositionStateService;
+    private final TransactionTemplate transaction;
 
     /**
      * 创建 TradingReconciliationService 实例并初始化其依赖。
@@ -81,7 +85,8 @@ public class TradingReconciliationService {
     public TradingReconciliationService(ExchangeGateway gateway, QuantAccountSnapshotMapper accountSnapshotMapper, QuantPositionMapper positionMapper,
                                         QuantOrderMapper orderMapper, QuantTradeMapper tradeMapper, QuantProtectionOrderMapper protectionOrderMapper,
                                         QuantFinancialEventMapper financialEventMapper, QuantReconcileRecordMapper reconcileMapper,
-                                        ReconciliationFailureRecorder failureRecorder, StrategyPositionStateService strategyPositionStateService) {
+                                        ReconciliationFailureRecorder failureRecorder, StrategyPositionStateService strategyPositionStateService,
+                                        PlatformTransactionManager transactionManager) {
         this.gateway = gateway;
         this.accountSnapshotMapper = accountSnapshotMapper;
         this.positionMapper = positionMapper;
@@ -92,6 +97,10 @@ public class TradingReconciliationService {
         this.reconcileMapper = reconcileMapper;
         this.failureRecorder = failureRecorder;
         this.strategyPositionStateService = strategyPositionStateService;
+        this.transaction = new TransactionTemplate(transactionManager);
+        this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        this.transaction.setTimeout(30);
     }
 
     /**
@@ -136,35 +145,67 @@ public class TradingReconciliationService {
     /**
      * 对单个交易凭证执行完整事实对账。
      */
-    @Transactional(rollbackFor = Exception.class)
+    /**
+     * Query Binance outside of a transaction; missing facts must not partially overwrite
+     * account positions, orders or protections.
+     */
     public void reconcileCredential(QuantCredential credential, int historyHours) {
-        ExchangeGateway.Credential c = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(), credential.getRunMode());
-        LocalDateTime now = LocalDateTime.now();
         try {
-            syncAccount(credential, gateway.queryAccount(c));
-            List<ExchangeGateway.PositionSnapshot> positions = gateway.queryPositions(c, null);
-            List<ExchangeGateway.OrderSnapshot> openOrders = gateway.queryOrders(c, null);
-            ExchangeGateway.TimeRange range = new ExchangeGateway.TimeRange(now.minusHours(Math.max(1, historyHours)).toInstant(ZoneOffset.UTC), now.toInstant(ZoneOffset.UTC));
-            List<ExchangeGateway.OrderSnapshot> historicalOrders = gateway.queryOrderHistory(c, null, range, 1000L);
-            syncPositions(credential, positions);
-            syncOrders(credential, historicalOrders);
-            syncOrders(credential, openOrders);
-            Set<String> symbols = new HashSet<>();
-            positions.forEach(p -> addSymbol(symbols, p.symbol()));
-            historicalOrders.forEach(o -> addSymbol(symbols, o.symbol()));
-            openOrders.forEach(o -> addSymbol(symbols, o.symbol()));
-            for (String symbol : symbols) {
-                syncTrades(credential, gateway.queryTrades(c, symbol, range));
-                syncProtectionOrders(credential, c, symbol, positions, gateway.queryProtectionOrders(c, symbol));
-            }
-            // Income History 支持 symbol 为空，一次同步账户级资金费/手续费/已实现盈亏，避免漏掉当前无持仓的币种。
-            syncFinancialEvents(credential, gateway.queryIncomeHistory(c, null, null, range, 1000L));
-            syncOrphanProtectionOrders(credential, c, symbols);
-            reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
+            ExchangeFacts facts = collectExchangeFacts(credential, historyHours);
+            transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
         } catch (RuntimeException ex) {
             failureRecorder.record(credential.getId(), ex.getMessage());
             throw ex;
         }
+    }
+
+    private record ExchangeFacts(ExchangeGateway.AccountSnapshot account,
+                                 List<ExchangeGateway.PositionSnapshot> positions,
+                                 List<ExchangeGateway.OrderSnapshot> openOrders,
+                                 List<ExchangeGateway.OrderSnapshot> history,
+                                 Map<String, List<ExchangeGateway.TradeSnapshot>> trades,
+                                 Map<String, List<ExchangeGateway.ProtectionOrderSnapshot>> protections,
+                                 List<ExchangeGateway.IncomeSnapshot> income) {}
+
+    private ExchangeFacts collectExchangeFacts(QuantCredential credential, int historyHours) {
+        ExchangeGateway.Credential c = new ExchangeGateway.Credential(
+            credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(), credential.getRunMode());
+        LocalDateTime now = LocalDateTime.now();
+        ExchangeGateway.TimeRange range = new ExchangeGateway.TimeRange(
+            now.minusHours(Math.max(1, historyHours)).toInstant(ZoneOffset.UTC),
+            now.toInstant(ZoneOffset.UTC));
+        var account = gateway.queryAccount(c);
+        var positions = List.copyOf(gateway.queryPositions(c, null));
+        var openOrders = List.copyOf(gateway.queryOrders(c, null));
+        var history = List.copyOf(gateway.queryOrderHistory(c, null, range, 1000L));
+        Set<String> symbols = new HashSet<>();
+        positions.forEach(p -> addSymbol(symbols, p.symbol()));
+        history.forEach(o -> addSymbol(symbols, o.symbol()));
+        openOrders.forEach(o -> addSymbol(symbols, o.symbol()));
+        Map<String, List<ExchangeGateway.TradeSnapshot>> trades = new HashMap<>();
+        Map<String, List<ExchangeGateway.ProtectionOrderSnapshot>> protections = new HashMap<>();
+        for (String symbol : symbols) {
+            trades.put(symbol, List.copyOf(gateway.queryTrades(c, symbol, range)));
+            protections.put(symbol, List.copyOf(gateway.queryProtectionOrders(c, symbol)));
+        }
+        var income = List.copyOf(gateway.queryIncomeHistory(c, null, null, range, 1000L));
+        return new ExchangeFacts(account, positions, openOrders, history, trades, protections, income);
+    }
+
+    /** Only database writes are permitted inside this short transaction. */
+    private void applyExchangeFacts(QuantCredential credential, ExchangeFacts facts) {
+        syncAccount(credential, facts.account());
+        syncPositions(credential, facts.positions());
+        syncOrders(credential, facts.history());
+        syncOrders(credential, facts.openOrders());
+        for (var entry : facts.trades().entrySet()) {
+            syncTrades(credential, entry.getValue());
+        }
+        for (var entry : facts.protections().entrySet()) {
+            syncProtectionOrders(credential, entry.getKey(), facts.positions(), entry.getValue());
+        }
+        syncFinancialEvents(credential, facts.income());
+        reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
     }
 
     /**
@@ -348,7 +389,7 @@ public class TradingReconciliationService {
     /**
      * 同步交易所保护单状态。
      */
-    private void syncProtectionOrders(QuantCredential credential, ExchangeGateway.Credential exchangeCredential, String symbol, List<ExchangeGateway.PositionSnapshot> positions,
+    private void syncProtectionOrders(QuantCredential credential, String symbol, List<ExchangeGateway.PositionSnapshot> positions,
                                       List<ExchangeGateway.ProtectionOrderSnapshot> snapshots) {
         Set<Long> seenIds = new HashSet<>();
         Set<String> seenClients = new HashSet<>();
@@ -379,17 +420,8 @@ public class TradingReconciliationService {
             } else {
                 protectionOrderMapper.updateById(entity);
             }
-            if (position == null && isOpenProtection(s.status())) {
-                try {
-                    gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(exchangeCredential, s.algoId(), s.clientAlgoId(),
-                        !"PAPER".equalsIgnoreCase(credential.getRunMode())));
-                    entity.setStatus("CANCELED");
-                    protectionOrderMapper.updateById(entity);
-                } catch (RuntimeException ex) {
-                    entity.setStatus("CANCEL_FAILED");
-                    protectionOrderMapper.updateById(entity);
-                }
-            }
+            // Missing local position mapping is not proof of an absent exchange position.
+            // Reconciliation must not cancel a possibly live protective order.
             if (s.algoId() != null) {
                 seenIds.add(s.algoId());
             }
@@ -438,27 +470,6 @@ public class TradingReconciliationService {
             }
             return null;
         });
-    }
-
-    /**
-     * 处理交易所存在但无法关联本地持仓的孤儿保护单。
-     */
-    private void syncOrphanProtectionOrders(QuantCredential credential, ExchangeGateway.Credential exchangeCredential, Set<String> symbols) {
-        List<QuantProtectionOrder> localOrphans = protectionOrderMapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>().eq(QuantProtectionOrder::getCredentialId,
-            credential.getId()).isNull(QuantProtectionOrder::getPositionId).in(QuantProtectionOrder::getStatus, "NEW", "WORKING", "ACCEPTED"));
-        for (QuantProtectionOrder order : localOrphans) {
-            if (order.getSymbol() == null || symbols.contains(order.getSymbol().toUpperCase())) {
-                continue;
-            }
-            try {
-                gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(exchangeCredential, order.getExchangeOrderId(), order.getClientOrderId(),
-                    !"PAPER".equalsIgnoreCase(credential.getRunMode())));
-                order.setStatus("CANCELED");
-            } catch (RuntimeException ex) {
-                order.setStatus("CANCEL_FAILED");
-            }
-            protectionOrderMapper.updateById(order);
-        }
     }
 
     private QuantReconcileRecord record(Long credentialId, String result, String detail) {
