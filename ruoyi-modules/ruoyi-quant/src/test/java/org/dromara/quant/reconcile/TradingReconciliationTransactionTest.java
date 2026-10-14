@@ -108,5 +108,9 @@ class TradingReconciliationTransactionTest {
         service().reconcileCredential(credential(), 48);
         verify(gateway, never()).cancelProtectionOrder(any());
         verify(protection).insert(any());
+        var record = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.reconcile.domain.QuantReconcileRecord.class);
+        verify(records).insert(record.capture());
+        assertEquals("DEGRADED", record.getValue().getResult());
+        assertTrue(record.getValue().getDetailJson().contains("unmatchedLiveProtections"));
     }
 }
