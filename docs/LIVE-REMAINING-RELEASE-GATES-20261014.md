@@ -35,7 +35,7 @@ certification that real-funds trading can be turned on safely.
 | --- | --- |
 | Actual Binance testnet/staging fault injection | Operator-provided isolated accounts with enabled permissions; simulate POST accepted then HTTP timeout, duplicate client IDs, fill during cancel, algo stop trigger during cleanup and private stream outage. Reconcile Binance REST facts against database *and* actual position/protection before approval. |
 | Remote in-flight order fencing | Binance cannot reject our internal DB epoch. Validate a single accountable dispatch authority, node termination while HTTP in flight, exchange idempotency, new owner recovery and protective-order takeover. A durable DB guard reduces duplication but is not a remote atomic transaction. |
-| Canonical production schema and migrations | Sanitized actual `SHOW CREATE TABLE` and current data inventory for all quant tables, baseline migration history, versioned additive upgrades V01–V03, backup/restore drill, rehearsal on a clone, duplicate cleanup and rollback/forward recovery. Never install disposable test DDL on production. |
+| Canonical production schema and migrations | Sanitized actual `SHOW CREATE TABLE` and current data inventory for all quant tables, baseline migration history, versioned additive upgrades V01–V04, backup/restore drill, rehearsal on a clone, duplicate cleanup and rollback/forward recovery. Never install disposable test DDL on production. |
 | Full strategy-level position / PnL allocation | A signed fill-to-position event ledger for OPEN/PARTIAL_CLOSE/CLOSE, fee treatment, multiple fill bursts, commissions, manual orders, legacy positions, isolated vs hedge and reduce-only invariants. Current unique fill ownership rows do **not** authorize shared account-symbol strategies. |
 | Operator incident recovery | Authenticated exact-fact remediation with immutable audit trail and independent approval, including `DISPATCHING` left by process crash. The existing read-only unresolved queue is diagnostic only and deliberately does not auto-release. |
 | End-to-end production verification | Staging multi-node chaos, market/user WebSocket snapshot/replay tests, recovery/kill-switch drills, credential rotation, observability alert thresholds, rollout and rollback validation and live-protection handover rehearsal. |
@@ -79,13 +79,14 @@ real deployed database.
 
 ### Additional outbound-account mutation audit
 
-`TradingPreparationService` still calls `gateway.setMarginType` and
-`gateway.setLeverage` from a background preparation task using a JVM-local
-account-symbol lock. Its preconditions check positions and approval, but it
-has **not** yet been serialized with the durable cross-node
-`LiveOrderDispatcher` guard. These account-configuration API mutations can
-race with another node; they need a separate verified-settings dispatch
-protocol because they have no exchange order ID to use as an ACK.
-**Do not interpret order/algo dispatch coverage as coverage of account
-configuration mutations.**
+`TradingPreparationService` now claims an account-symbol persistent dispatch
+slot across both Binance `setMarginType` and `setLeverage` mutations, and
+acknowledges a `CONFIG_APPLIED` ticket only after both SDK requests succeeded.
+The V04 `quant_live_account_settings_intent` table enforces one immutable
+desired margin/leverage policy per account-symbol across nodes; conflicting
+settings are refused before any exchange write. An uncertain config request
+remains `UNKNOWN`/`DISPATCHING` without automatic release. This guards known
+AiQuant writers, but **does not independently verify exchange-side config or
+allow automated restart recovery**. A verified Binance settings-readback and
+audited operator recovery remain production acceptance blockers.
 
