@@ -37,6 +37,26 @@ class LiveStartupPositionRefreshTest {
     }
 
     @Test
+    void startupRetriesSupersededSnapshotUntilFreshRestCommitSucceeds() {
+        var live = credential(2L, "LIVE");
+        when(credentials.selectList(any())).thenReturn(List.of(live));
+        doThrow(new TradingReconciliationService.SnapshotSupersededException())
+            .doNothing().when(reconciliation).refreshPositionsOnly(live);
+        assertDoesNotThrow(() -> startup.run(new DefaultApplicationArguments()));
+        verify(reconciliation, times(2)).refreshPositionsOnly(live);
+    }
+
+    @Test
+    void startupStillFailsClosedAfterRepeatedAccountEventInvalidation() {
+        var live = credential(2L, "LIVE");
+        when(credentials.selectList(any())).thenReturn(List.of(live));
+        doThrow(new TradingReconciliationService.SnapshotSupersededException())
+            .when(reconciliation).refreshPositionsOnly(live);
+        assertThrows(IllegalStateException.class, () -> startup.run(new DefaultApplicationArguments()));
+        verify(reconciliation, times(5)).refreshPositionsOnly(live);
+    }
+
+    @Test
     void startupFailsClosedIfAnyAuthenticatedSnapshotFails() {
         var live = credential(2L,"LIVE");
         when(credentials.selectList(any())).thenReturn(List.of(live));
