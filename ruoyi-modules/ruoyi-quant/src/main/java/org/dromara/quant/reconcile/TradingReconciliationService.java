@@ -88,6 +88,12 @@ public class TradingReconciliationService {
     @org.springframework.beans.factory.annotation.Autowired
     private org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper snapshotFence;
     /**
+     * Share quant_credential FOR UPDATE with OpenCapacityService.reserve().
+     * This serializes position facts and new capacity reservations across nodes.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.dromara.quant.risk.mapper.OpenCapacityMapper openCapacityMapper;
+    /**
      * Commit an account's verified REST snapshot under a database row lock.
      * Earlier-started requests cannot overwrite later-started snapshots.
      */
@@ -100,6 +106,10 @@ public class TradingReconciliationService {
             throw new IllegalStateException("Binance position snapshot superseded by newer account event");
         }
         transaction.executeWithoutResult(status -> {
+            if (openCapacityMapper != null
+                && openCapacityMapper.lockCredential(credential.getId()).isEmpty()) {
+                throw new IllegalStateException("Cannot lock credential for position snapshot reconciliation");
+            }
             if (snapshotFence != null) {
                 snapshotFence.ensure(credential.getId());
                 LocalDateTime previous = snapshotFence.lockAndRead(credential.getId());
