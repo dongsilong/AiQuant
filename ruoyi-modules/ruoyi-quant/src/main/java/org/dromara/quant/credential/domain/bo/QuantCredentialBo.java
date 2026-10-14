@@ -13,7 +13,6 @@ import org.dromara.quant.credential.domain.QuantCredential;
 
 import java.io.Serial;
 import java.io.Serializable;
-import java.util.List;
 
 /**
  * 凭证新增、修改和查询参数。
@@ -38,11 +37,6 @@ public class QuantCredentialBo implements Serializable {
      */
     @NotNull(message = "所属用户不能为空", groups = AddGroup.class)
     private Long userId;
-
-    /**
-     * 授权用户主键集合。
-     */
-    private List<Long> userIds;
 
     /**
      * 凭证/账户显示名称。
