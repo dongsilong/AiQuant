@@ -171,7 +171,7 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param updateTime       交易所事实更新时间
      * @param averagePrice     实际累计成交均价，未知时为空，不能用委托价格代替
      */
-    record OrderSnapshot(String symbol, Long orderId, String clientOrderId, String side, String type, String status, BigDecimal price, BigDecimal originalQuantity,
+    record OrderSnapshot(String symbol, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId, String clientOrderId, String side, String type, String status, BigDecimal price, BigDecimal originalQuantity,
                          BigDecimal executedQuantity, Instant updateTime, BigDecimal averagePrice) {
         public OrderSnapshot(String symbol, Long orderId, String clientOrderId, String side, String type, String status,
                              BigDecimal price, BigDecimal originalQuantity, BigDecimal executedQuantity, Instant updateTime) {
@@ -192,7 +192,7 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param realizedPnl 已实现盈亏
      * @param time        交易所事实发生时间
      */
-    record TradeSnapshot(String symbol, Long tradeId, Long orderId, String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl,
+    record TradeSnapshot(String symbol, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long tradeId, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId, String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl,
                          Instant time) {
     }
 
@@ -325,9 +325,9 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param closePosition 是否触发后平掉全部持仓
      * @param updateTime   交易所事实更新时间
      */
-    record ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
+    record ProtectionOrderSnapshot(String symbol, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                    BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
-                                   Long actualOrderId, BigDecimal actualPrice) {
+                                   @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long actualOrderId, BigDecimal actualPrice) {
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition) {
             this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition, null, null);
