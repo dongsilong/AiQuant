@@ -131,7 +131,6 @@ mybatis-plus:
     output: log
     log-success: false
     log-error: true
-    slow-threshold-ms: 0
     include-sql: false
 
 --- # 数据加密
