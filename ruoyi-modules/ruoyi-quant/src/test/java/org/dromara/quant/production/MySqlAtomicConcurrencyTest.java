@@ -111,7 +111,14 @@ class MySqlAtomicConcurrencyTest {
                     "Takeover must increment the persistent fencing epoch");
                 assertThrows(IllegalStateException.class,
                     () -> first.requireCurrentOwner(10L, 1L, "BTCUSDT"));
-                assertTrue(second.requireCurrentEpoch(20L, 1L, "BTCUSDT") >= 1);
+                assertEquals(2L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"));
+                assertTrue(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
+                assertEquals(2L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"),
+                    "Renewal by the same active owner must not increment epoch");
+                second.release(20L, 1L, "BTCUSDT");
+                assertTrue(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
+                assertEquals(3L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"),
+                    "Reacquiring an expired/released lease increments epoch even on the same node");
             } else {
                 assertTrue(second.requireCurrentEpoch(20L, 1L, "BTCUSDT") >= 1);
                 assertThrows(IllegalStateException.class,
@@ -125,6 +132,13 @@ class MySqlAtomicConcurrencyTest {
                 assertThrows(IllegalStateException.class,
                     () -> second.requireCurrentOwner(20L, 1L, "BTCUSDT"));
                 first.requireCurrentOwner(10L, 1L, "BTCUSDT");
+                assertTrue(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
+                assertEquals(2L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"),
+                    "Same-owner renewal must keep the epoch");
+                first.release(10L, 1L, "BTCUSDT");
+                assertTrue(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
+                assertEquals(3L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"),
+                    "Same-owner reacquisition must increment the epoch");
             }
         }
         var entry = session.getMapper(StrategyEntryGuardMapper.class);
