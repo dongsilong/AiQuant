@@ -3,6 +3,9 @@ package org.dromara.quant.execution;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import cn.dev33.satoken.stp.StpUtil;
 import org.dromara.common.core.domain.R;
+import org.dromara.quant.execution.mapper.LiveRecoveryAuditMapper;
+import java.util.List;
+import java.util.Map;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -16,11 +19,14 @@ import org.springframework.web.bind.annotation.*;
 public class LiveManualRecoveryController {
     private final LiveRecoveryCaseService cases;
     private final LiveManualRecoveryExecutionService executor;
+    private final LiveRecoveryAuditMapper audit;
 
     public LiveManualRecoveryController(LiveRecoveryCaseService cases,
-                                        LiveManualRecoveryExecutionService executor) {
+                                        LiveManualRecoveryExecutionService executor,
+                                        LiveRecoveryAuditMapper audit) {
         this.cases = cases;
         this.executor = executor;
+        this.audit = audit;
     }
 
     public record RequestCase(String credentialId, String symbol, String dispatchKey,
@@ -55,6 +61,28 @@ public class LiveManualRecoveryController {
     public R<Void> execute(@RequestBody Decision body) {
         executor.execute(parseId(body.caseId()), actor(), body.evidenceSha256(), body.detailSha256());
         return R.ok();
+    }
+
+    /** Audit IDs are strings to preserve long precision in browser clients. */
+    public record AuditEvent(String auditId, String caseId, String actorId,
+                             String action, String evidenceSha256,
+                             String detailSha256, String createdAt) {}
+
+    @GetMapping("/{caseId}/audit")
+    @SaCheckPermission("quant:dispatch:recovery:audit")
+    public R<List<AuditEvent>> audit(@PathVariable String caseId) {
+        // Read permission must not provide mutation rights.
+        StpUtil.checkLogin();
+        return R.ok(audit.listByCase(parseId(caseId)).stream().map(row ->
+            new AuditEvent(value(row, "audit_id"), value(row, "case_id"),
+                value(row, "actor_id"), value(row, "action"),
+                value(row, "evidence_sha256"), value(row, "detail_hash"),
+                value(row, "created_at"))).toList());
+    }
+
+    private static String value(Map<String,Object> row, String key) {
+        Object raw = row.get(key);
+        return raw == null ? null : raw.toString();
     }
 
     private static long actor() {
