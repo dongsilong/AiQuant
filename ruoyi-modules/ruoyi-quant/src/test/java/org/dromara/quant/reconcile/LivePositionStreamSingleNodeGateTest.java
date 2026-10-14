@@ -152,5 +152,31 @@ class LivePositionStreamSingleNodeGateTest {
         verify(replacement).close();
     }
 
-}
+    @Test
+    void failedCredentialDiscoveryRevokesStreamAndSnapshotInsteadOfRenewingStaleLease() throws Exception {
+        var credentials = mock(QuantCredentialMapper.class);
+        var hub = mock(UserDataStreamHub.class);
+        var coordinator = mock(LivePositionEventCoordinator.class);
+        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var freshness = new LivePositionFreshness();
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
+        var account = new QuantCredential();
+        account.setId(97L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectList(any())).thenReturn(List.of(account))
+            .thenThrow(new IllegalStateException("database unavailable"));
+        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        var reference = mock(AutoCloseable.class);
+        when(hub.subscribe(eq(account), any())).thenReturn(reference);
+        stream.supervise();
+        freshness.verified(97L);
+        stream.supervise();
+        verify(reference).close();
+        verify(hub).unregisterLeaseOwner(eq(97L), anyString());
+        verify(lease).release(eq(97L), anyString());
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(97L));
+        verify(lease, times(1)).acquireOrRenew(eq(97L), anyString(), anyInt());
+    }
 
+}
