@@ -217,6 +217,7 @@ class MySqlAtomicConcurrencyTest {
         var source = source();
         var jdbc = new JdbcTemplate(source);
         jdbc.execute("DROP TABLE IF EXISTS quant_order_dispatch_ticket");
+        jdbc.execute("DROP TABLE IF EXISTS quant_live_account_settings_intent");
         jdbc.execute("DROP TABLE IF EXISTS quant_live_dispatch_guard");
         jdbc.execute("""
             CREATE TABLE quant_live_dispatch_guard (
@@ -233,6 +234,14 @@ class MySqlAtomicConcurrencyTest {
               dispatch_status VARCHAR(32), exchange_order_id BIGINT,
               created_at DATETIME, updated_at DATETIME,
               UNIQUE KEY uk_ticket(credential_id,idempotency_key)) ENGINE=InnoDB
+            """);
+        jdbc.execute("""
+            CREATE TABLE quant_live_account_settings_intent (
+              credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
+              margin_mode VARCHAR(12) NOT NULL, leverage INT NOT NULL,
+              created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (credential_id,symbol)
+            ) ENGINE=InnoDB
             """);
         var mapper = session(source, org.dromara.quant.execution.mapper.LiveOrderDispatchMapper.class)
             .getMapper(org.dromara.quant.execution.mapper.LiveOrderDispatchMapper.class);
@@ -266,15 +275,18 @@ class MySqlAtomicConcurrencyTest {
             assertTrue(second.recoveredFromExchange(1L, "BTCUSDT", winning.key(), expectedClient, 990L));
             var resumed = first.begin(1L, "BTCUSDT", "new-key", "OPEN", "cid-new", 10L, 6L);
             first.notSent(resumed);
-            var config = first.begin(1L, "BTCUSDT", "config-first",
-                "CONFIG_SETTINGS", "SETTINGS:ISOLATED:10", null, null);
+            var config = first.beginConfiguration(1L, "BTCUSDT", "config-first", "ISOLATED", 10);
             assertThrows(IllegalStateException.class, () ->
                 second.begin(1L, "BTCUSDT", "during-config", "OPEN", "cid-during", 20L, 6L));
             first.configurationApplied(config);
             assertEquals("CONFIG_APPLIED", mapper.ticketStatus(1L, "config-first"),
                 "Both account settings ACKs must atomically clear the dispatch slot");
-            var badConfig = second.begin(1L, "BTCUSDT", "config-unknown",
-                "CONFIG_SETTINGS", "SETTINGS:CROSSED:20", null, null);
+            assertThrows(IllegalStateException.class, () ->
+                second.beginConfiguration(1L, "BTCUSDT", "wrong-leverage", "ISOLATED", 20));
+            assertEquals(10, jdbc.queryForObject(
+                "SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'",
+                Integer.class));
+            var badConfig = second.beginConfiguration(1L, "BTCUSDT", "config-unknown", "ISOLATED", 10);
             second.unknown(badConfig);
             assertThrows(IllegalStateException.class, () ->
                 first.begin(1L, "BTCUSDT", "after-unknown-config", "CLOSE", "cid-after", 10L, 6L));
