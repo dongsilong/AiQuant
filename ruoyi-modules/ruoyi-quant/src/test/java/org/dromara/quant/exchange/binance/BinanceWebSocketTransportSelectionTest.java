@@ -12,7 +12,13 @@ class BinanceWebSocketTransportSelectionTest {
         var config = new QuantProperties();
         var gateway = new BinanceGatewayAdapter(config);
         assertFalse(gateway.sdkStreamsEnabled());
-        assertEquals(0, gateway.switchWebsocketTransport("BINANCE_SDK"));
+        var closed = new java.util.concurrent.atomic.AtomicInteger();
+        var notified = new java.util.concurrent.atomic.AtomicInteger();
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(gateway, "trackWebsocket",
+            (Runnable) closed::incrementAndGet, (Runnable) notified::incrementAndGet);
+        assertEquals(1, gateway.switchWebsocketTransport("BINANCE_SDK"));
+        assertEquals(1, closed.get());
+        assertEquals(1, notified.get());
         assertTrue(gateway.sdkStreamsEnabled());
         assertEquals("BINANCE_SDK", gateway.websocketTransport());
         assertEquals(0, gateway.switchWebsocketTransport("RAW_OKHTTP"));
