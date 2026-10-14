@@ -187,3 +187,20 @@ linked audit inserts, durable independent approval, fresh Binance order
 and position verification, concurrency/restart tests and a reviewed migration
 before use. Do not treat an APPROVED database row as permission to resume
 LIVE trading.
+
+### Transactional approval audit added (still no unlock)
+
+`LiveRecoveryCaseService` now wraps request, approve and reject CAS operations
+together with an INSERT-only `LiveRecoveryAuditMapper` event in one Spring
+transaction. An audit insert failure causes rollback of the case transition;
+invalid IDs and SHA256 digests fail before DB access. Rejection also checks
+the immutable evidence digest. A dedicated regression covers successful
+commit, audit failure rollback, stale CAS and invalid digests.
+
+These methods currently accept actor IDs from their caller and therefore
+**must not be exposed to remote requests** until an authenticated permission
+boundary obtains actor identity from the server security context rather than
+request parameters. Audit immutability requires MySQL privileges and
+independent WORM archival. This is still NOT operator remediation: approvals
+never query Binance, execute recovery or release a dispatch guard. V05 needs
+a verified deployment schema and rehearsal before its tables can be used.
