@@ -693,6 +693,67 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
+     * Read Binance positionRisk V2 without filtering out zero-quantity rows.
+     * A single zero-quantity row can carry active account-symbol leverage and
+     * isolated/cross mode; account aggregates or cached open positions cannot.
+     *
+     * Every returned LONG/SHORT/BOTH row must agree. Missing getters, empty
+     * data or conflicting facts fail closed rather than acknowledging settings.
+     */
+    @Override
+    public org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings querySymbolTradingSettings(
+        Credential credential, String symbol) {
+        requireCredential(credential);
+        if (symbol == null || !symbol.matches("[a-zA-Z0-9]{2,32}")) {
+            throw new IllegalArgumentException("Binance 交易设置回查缺少有效交易对");
+        }
+        var rows = api(credential, RestRequestScheduler.Kind.ACCOUNT)
+            .positionInformationV2(symbol.trim().toUpperCase(Locale.ROOT), RECV_WINDOW_MILLIS)
+            .getData();
+        if (rows == null || rows.isEmpty()) {
+            throw new IllegalStateException("Binance 未返回可核实的交易对保证金/杠杆配置");
+        }
+        String expectedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
+        String actualMode = null;
+        Integer actualLeverage = null;
+        for (var row : rows) {
+            String actualSymbol = string(row, "getSymbol");
+            if (!expectedSymbol.equalsIgnoreCase(actualSymbol)) {
+                throw new IllegalStateException("Binance 配置回查返回了不匹配的交易对");
+            }
+            String isolated = string(row, "getIsolated");
+            String mode = null;
+            if ("true".equalsIgnoreCase(isolated)) mode = "ISOLATED";
+            else if ("false".equalsIgnoreCase(isolated)) mode = "CROSSED";
+            if (mode == null) {
+                String raw = string(row, "getMarginType");
+                if ("ISOLATED".equalsIgnoreCase(raw)) mode = "ISOLATED";
+                else if ("CROSS".equalsIgnoreCase(raw) || "CROSSED".equalsIgnoreCase(raw))
+                    mode = "CROSSED";
+            }
+            String rawLeverage = string(row, "getLeverage");
+            if (mode == null || rawLeverage == null) {
+                throw new IllegalStateException("Binance 配置回查缺少保证金模式或杠杆");
+            }
+            int leverage;
+            try {
+                leverage = Integer.parseInt(rawLeverage);
+            } catch (NumberFormatException ex) {
+                throw new IllegalStateException("Binance 返回的杠杆值无效");
+            }
+            if (leverage < 1 || leverage > 125
+                || actualMode != null && !actualMode.equals(mode)
+                || actualLeverage != null && actualLeverage != leverage) {
+                throw new IllegalStateException("Binance 不同持仓方向的保证金/杠杆配置不一致");
+            }
+            actualMode = mode;
+            actualLeverage = leverage;
+        }
+        return new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings(
+            expectedSymbol, actualMode, actualLeverage);
+    }
+
+    /**
      * 查询交易所当前持仓。
      */
     @Override
