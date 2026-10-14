@@ -253,6 +253,17 @@ public class UserDataStreamHub {
                         }
                     }
                 });
+                // Opening a Binance connection can block longer than the DB
+                // lease. Never publish CONNECTED or retain a session if another
+                // node took ownership while the network request was in flight.
+                if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && !ownsLiveStream(credential.getId())) {
+                    ExchangeGateway.UserDataStreamSession obsolete = session;
+                    session = null;
+                    if (obsolete != null) {
+                        obsolete.close();
+                    }
+                    throw new IllegalStateException("LIVE private stream lease lost during connection establishment");
+                }
                 lastEventAt = Instant.now();
                 onEvent(new ExchangeGateway.UserDataEvent("CONNECTED", lastEventAt, null));
                 if (keepaliveTask != null) {
