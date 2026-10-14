@@ -34,3 +34,14 @@ LIVE feature default does not grant production trade permission.
 Do not mark a P0 complete on the basis of a class, mapper, migration draft,
 mocked test or GitHub CI alone. Record both repository commit and isolated
 environment observations. No force-unlock of unknown Binance outcomes.
+
+## Current round: fail-closed immutable fill attribution
+
+`StrategyFillAllocationService` now requires a positive exchange trade/order
+ID, known BUY/SELL side, non-null commission and non-null realized PnL.
+Missing financial fields are no longer silently stored as zero, because a
+unique fill attribution becomes immutable after commit. Regression coverage
+asserts no allocation row is written on missing financial data. This does
+not supply per-position signed quantity, cost basis, cycle tracking, or
+shared account-symbol strategy isolation; position/PnL P0 remains OPEN.
+CI results and real Binance reconciliation must be checked at release SHA.
