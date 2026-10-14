@@ -69,6 +69,35 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
                                     @Param("exchangeStatus") String exchangeStatus,
                                     @Param("message") String message, @Param("now") LocalDateTime now);
 
+    /**
+     * Crash-recovery gap: the execution record may already be RECOVERED while
+     * its durable account-symbol dispatch guard remains held. This query only
+     * selects exact matching active tickets, NOT all historical recovered orders.
+     */
+    @Options(timeout = 3)
+    @org.apache.ibatis.annotations.Select("""
+        SELECT e.id, e.credential_id AS credentialId,
+               e.symbol, e.idempotency_key AS idempotencyKey,
+               e.client_order_id AS clientOrderId,
+               e.exchange_order_id AS exchangeOrderId,
+               e.operation_type AS operationType,
+               e.execution_status AS executionStatus
+        FROM quant_execution_record e
+        JOIN quant_live_dispatch_guard g
+          ON g.credential_id=e.credential_id AND g.symbol=e.symbol
+          AND g.active_dispatch_key=e.idempotency_key
+        JOIN quant_order_dispatch_ticket t
+          ON t.credential_id=e.credential_id AND t.symbol=e.symbol
+          AND t.idempotency_key=e.idempotency_key
+          AND t.client_order_id=e.client_order_id
+        WHERE e.execution_status='RECOVERED'
+          AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
+          AND t.operation_type IN ('OPEN','CLOSE','CANCEL')
+        ORDER BY g.updated_at ASC
+        LIMIT 100
+        """)
+    java.util.List<QuantExecutionRecord> strandedRecoveredDispatches();
+
     @Options(timeout = 3)
     @Update("""
         UPDATE quant_execution_record
