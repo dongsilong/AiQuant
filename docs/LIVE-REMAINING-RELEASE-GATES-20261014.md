@@ -243,3 +243,27 @@ and the flow intentionally excludes CONFIG_SETTINGS and protection tickets.
 Existing standard reconciliation remains available for those distinct types.
 
 No LIVE trade is automatically resumed merely because a case is APPROVED.
+
+### Independent approval + audit integrity hardening (2026-10-14)
+
+The server-authenticated three-person recovery flow remains isolated by
+request/approve/execute permissions. A dedicated
+`quant:dispatch:recovery:audit` permission now controls read-only evidence
+history for a single case. The API serializes Snowflake IDs as decimal strings
+and returns at most 100 events in stable chronological order.
+
+A **review-only** V06 SQL script now adds MySQL triggers rejecting UPDATE and
+DELETE of `quant_live_recovery_audit`. The database principal must additionally
+lack UPDATE, DELETE, DROP, ALTER and TRIGGER privilege on audit tables.
+These controls prevent accidental application-side overwrites but **are not
+immutable against DB administrators or compromised database superusers**.
+True tamper-evidence requires exporting every audit event to an independently
+controlled WORM object store (bucket retention lock and separate write-only
+credentials), periodic signed/checksummed manifests, access logs, restore
+verification, and an observed retention-policy enforcement test. Those
+external controls have NOT been installed or verified by this code change.
+
+V06 uses MySQL client DELIMITER directives; it is an operator-reviewed
+mysql-client migration, NOT a Flyway migration. Both V05 and V06 require
+staging rehearsal and independent approval before application or production
+acceptance. The recovery audit P0 remains open until that evidence exists.
