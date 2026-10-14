@@ -85,7 +85,7 @@ public class TradingReconciliationService {
     private volatile org.dromara.quant.execution.StrategyFillAllocationService fillAllocations;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LivePositionFreshness positionFreshness;
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.beans.factory.annotation.Autowired
     private org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper snapshotFence;
     /**
      * Commit an account's verified REST snapshot under a database row lock.
