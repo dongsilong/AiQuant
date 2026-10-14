@@ -67,7 +67,7 @@ class MySqlAtomicConcurrencyTest {
         db.execute("""
             CREATE TABLE quant_strategy_runtime_lease (
                 instance_id BIGINT NOT NULL, credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
-                owner_token VARCHAR(128) NOT NULL, lease_until DATETIME NOT NULL,
+                owner_token VARCHAR(128) NOT NULL, lease_epoch BIGINT NOT NULL DEFAULT 1, lease_until DATETIME NOT NULL,
                 create_time DATETIME, update_time DATETIME,
                 UNIQUE KEY uk_lease (credential_id, symbol)
             ) ENGINE=InnoDB
@@ -93,24 +93,28 @@ class MySqlAtomicConcurrencyTest {
             boolean secondWon = b.get(15, TimeUnit.SECONDS);
             assertNotEquals(firstWon, secondWon, "Exactly one owner is required");
             if (firstWon) {
-                first.requireCurrentOwner(10L, 1L, "BTCUSDT");
+                assertEquals(1L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"));
                 assertThrows(IllegalStateException.class,
                     () -> second.requireCurrentOwner(20L, 1L, "BTCUSDT"));
                 second.release(20L, 1L, "BTCUSDT");
                 assertFalse(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
                 first.release(10L, 1L, "BTCUSDT");
                 assertTrue(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
+                assertEquals(2L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"),
+                    "Takeover must increment the persistent fencing epoch");
                 assertThrows(IllegalStateException.class,
                     () -> first.requireCurrentOwner(10L, 1L, "BTCUSDT"));
-                second.requireCurrentOwner(20L, 1L, "BTCUSDT");
+                assertTrue(second.requireCurrentEpoch(20L, 1L, "BTCUSDT") >= 1);
             } else {
-                second.requireCurrentOwner(20L, 1L, "BTCUSDT");
+                assertTrue(second.requireCurrentEpoch(20L, 1L, "BTCUSDT") >= 1);
                 assertThrows(IllegalStateException.class,
                     () -> first.requireCurrentOwner(10L, 1L, "BTCUSDT"));
                 first.release(10L, 1L, "BTCUSDT");
                 assertFalse(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
                 second.release(20L, 1L, "BTCUSDT");
                 assertTrue(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
+                assertEquals(2L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"),
+                    "Takeover must increment the persistent fencing epoch");
                 assertThrows(IllegalStateException.class,
                     () -> second.requireCurrentOwner(20L, 1L, "BTCUSDT"));
                 first.requireCurrentOwner(10L, 1L, "BTCUSDT");
