@@ -86,6 +86,26 @@ class StrategyFillAllocationServiceTest {
     }
 
     @Test
+    void missingFinancialFactsAndInvalidDirectionCannotBecomeImmutableZeroes() throws Exception {
+        var f = fixture();
+        var baseline = fill("1.25");
+        assertThrows(IllegalStateException.class, () -> f.service().allocate(
+            new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(),
+                baseline.orderId(), "BUY", baseline.quantity(), baseline.price(),
+                null, BigDecimal.ZERO, baseline.time()), order(11L), 2L));
+        assertThrows(IllegalStateException.class, () -> f.service().allocate(
+            new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(),
+                baseline.orderId(), "BUY", baseline.quantity(), baseline.price(),
+                baseline.commission(), null, baseline.time()), order(11L), 2L));
+        assertThrows(IllegalStateException.class, () -> f.service().allocate(
+            new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(),
+                baseline.orderId(), "UNKNOWN_SIDE", baseline.quantity(), baseline.price(),
+                baseline.commission(), baseline.realizedPnl(), baseline.time()), order(11L), 2L));
+        assertEquals(0L, f.jdbc().queryForObject(
+            "SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
+    }
+
+    @Test
     void cannotAllocateAUnverifiedOrderOrUnknownInstance() throws Exception {
         var f = fixture();
         var foreign = order(11L);
