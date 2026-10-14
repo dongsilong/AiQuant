@@ -523,6 +523,14 @@ public class StrategyRuntimeService {
         }
         boolean protectionOnly = !tradingAllowed && hasOpenPosition;
 
+        // The account-level private-stream lease is established independently by the LIVE
+        // supervisor. A strategy on a non-owner node must not start or hold a position lease.
+        // During startup the owner may not exist yet; retry at the next supervision tick.
+        if ("LIVE".equalsIgnoreCase(credential.getRunMode())
+            && !userDataStreamHub.hasLiveStreamOwnership(credential.getId())) {
+            return false;
+        }
+
         if (!leaseService.acquireOrRenew(instance.getId(), credential.getId(), symbol.getSymbol())) {
             // 无法确认物理仓位独占权时保守停止本地运行时，避免两个实例同时操作同一交易所仓位。
             log.warn("策略运行时获取租约失败 instanceId={} credentialId={} symbol={}", instance.getId(), credential.getId(), symbol.getSymbol());
