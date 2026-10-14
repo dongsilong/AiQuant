@@ -179,4 +179,39 @@ class LivePositionStreamSingleNodeGateTest {
         verify(lease, times(1)).acquireOrRenew(eq(97L), anyString(), anyInt());
     }
 
+    @Test
+    void failedLeaseReleaseOnOneDisabledAccountDoesNotKeepAnotherAccountOpen() throws Exception {
+        var credentials = mock(QuantCredentialMapper.class);
+        var hub = mock(UserDataStreamHub.class);
+        when(hub.hasLocalStream(anyLong())).thenReturn(true);
+        var coordinator = mock(LivePositionEventCoordinator.class);
+        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var freshness = new LivePositionFreshness();
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
+        var firstAccount = new QuantCredential();
+        firstAccount.setId(101L);
+        firstAccount.setStatus("0");
+        firstAccount.setRunMode("LIVE");
+        var secondAccount = new QuantCredential();
+        secondAccount.setId(102L);
+        secondAccount.setStatus("0");
+        secondAccount.setRunMode("LIVE");
+        when(credentials.selectList(any())).thenReturn(List.of(firstAccount, secondAccount), List.of());
+        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        var firstSubscription = mock(AutoCloseable.class);
+        var secondSubscription = mock(AutoCloseable.class);
+        when(hub.subscribe(eq(firstAccount), any())).thenReturn(firstSubscription);
+        when(hub.subscribe(eq(secondAccount), any())).thenReturn(secondSubscription);
+        stream.supervise();
+        freshness.verified(101L);
+        freshness.verified(102L);
+        doThrow(new IllegalStateException("MySQL unavailable"))
+            .when(lease).release(anyLong(), anyString());
+        stream.supervise();
+        verify(firstSubscription).close();
+        verify(secondSubscription).close();
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(101L));
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(102L));
+    }
+
 }
