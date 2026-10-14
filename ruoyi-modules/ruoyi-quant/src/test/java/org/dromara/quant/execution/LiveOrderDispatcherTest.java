@@ -65,10 +65,10 @@ class LiveOrderDispatcherTest {
         var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-run-1", "ISOLATED", 10);
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "config-run-1"));
         assertThrows(IllegalStateException.class, () ->
-            f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", 44L, 4L));
+            f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null));
         f.first().configurationApplied(setup);
         assertEquals("CONFIG_APPLIED", f.mapper().ticketStatus(1L, "config-run-1"));
-        var next = f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", 44L, 4L);
+        var next = f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null);
         f.other().notSent(next);
     }
 
@@ -79,7 +79,7 @@ class LiveOrderDispatcherTest {
         f.first().unknown(setup);
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "config-timeout"));
         assertThrows(IllegalStateException.class, () ->
-            f.other().begin(1L, "BTCUSDT", "any-order", "OPEN", "cid-next", 44L, 4L));
+            f.other().begin(1L, "BTCUSDT", "any-order", "OPEN", "cid-next", null, null));
         assertThrows(IllegalStateException.class, () ->
             f.other().beginConfiguration(1L, "BTCUSDT", "new-config", "CROSSED", 25));
         assertEquals("config-timeout", f.jdbc().queryForObject(
@@ -109,7 +109,7 @@ class LiveOrderDispatcherTest {
     @Test
     void orderTicketMustNotUseConfigurationAcknowledgement() throws Exception {
         var f = fixture();
-        var order = f.first().begin(1L, "BTCUSDT", "not-config", "OPEN", "cid-open", 1L, 1L);
+        var order = f.first().begin(1L, "BTCUSDT", "not-config", "OPEN", "cid-open", null, null);
         assertThrows(IllegalStateException.class, () -> f.first().configurationApplied(order));
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "not-config"));
         f.first().unknown(order);
@@ -118,13 +118,13 @@ class LiveOrderDispatcherTest {
     @Test
     void noConcurrentAccountSymbolDispatchAcrossServiceInstances() throws Exception {
         var f = fixture();
-        var first = f.first().begin(1L, "btcusdt", "a", "OPEN", "cid-a", 10L, 3L);
+        var first = f.first().begin(1L, "btcusdt", "a", "OPEN", "cid-a", null, null);
         assertThrows(IllegalStateException.class,
-            () -> f.other().begin(1L, "BTCUSDT", "b", "CLOSE", "cid-b", 20L, 4L));
+            () -> f.other().begin(1L, "BTCUSDT", "b", "CLOSE", "cid-b", null, null));
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "a"));
         f.first().acknowledged(first, 991L);
         assertEquals("ACKED", f.mapper().ticketStatus(1L, "a"));
-        var next = f.other().begin(1L, "BTCUSDT", "b", "CLOSE", "cid-b", 20L, 4L);
+        var next = f.other().begin(1L, "BTCUSDT", "b", "CLOSE", "cid-b", null, null);
         f.other().notSent(next);
         assertEquals("FAILED_NOT_SENT", f.mapper().ticketStatus(1L, "b"));
         assertNull(f.jdbc().queryForObject(
@@ -135,11 +135,11 @@ class LiveOrderDispatcherTest {
     @Test
     void unknownDoesNotExpireOrAllowAutomaticTakeoverEvenAfterRestart() throws Exception {
         var f = fixture();
-        var ticket = f.first().begin(1L, "BTCUSDT", "uncertain", "OPEN", "cid-uncertain", 10L, 7L);
+        var ticket = f.first().begin(1L, "BTCUSDT", "uncertain", "OPEN", "cid-uncertain", null, null);
         f.first().unknown(ticket);
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "uncertain"));
         assertThrows(IllegalStateException.class,
-            () -> f.other().begin(1L, "BTCUSDT", "new-signal", "OPEN", "cid-new", 11L, 8L));
+            () -> f.other().begin(1L, "BTCUSDT", "new-signal", "OPEN", "cid-new", null, null));
         assertEquals("uncertain", f.jdbc().queryForObject(
             "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
             String.class));
@@ -148,26 +148,26 @@ class LiveOrderDispatcherTest {
     @Test
     void exactVerifiedExchangeFactReleasesUnknownAndRejectsWrongClientId() throws Exception {
         var f = fixture();
-        var ticket = f.first().begin(1L, "BTCUSDT", "uncertain", "OPEN", "cid-correct", 10L, 7L);
+        var ticket = f.first().begin(1L, "BTCUSDT", "uncertain", "OPEN", "cid-correct", null, null);
         f.first().unknown(ticket);
         assertFalse(f.other().recoveredFromExchange(1L, "BTCUSDT", "uncertain", "cid-wrong", 40L));
         assertThrows(IllegalStateException.class,
-            () -> f.other().begin(1L, "BTCUSDT", "another", "OPEN", "cid-another", 10L, 7L));
+            () -> f.other().begin(1L, "BTCUSDT", "another", "OPEN", "cid-another", null, null));
         assertTrue(f.other().recoveredFromExchange(1L, "BTCUSDT", "uncertain", "cid-correct", 40L));
         assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "uncertain"));
         assertFalse(f.other().recoveredFromExchange(1L, "BTCUSDT", "uncertain", "cid-correct", 40L));
-        var after = f.other().begin(1L, "BTCUSDT", "another", "OPEN", "cid-another", 10L, 7L);
+        var after = f.other().begin(1L, "BTCUSDT", "another", "OPEN", "cid-another", null, null);
         f.other().notSent(after);
     }
 
     @Test
     void ackWithoutBinanceOrderIdCannotFreeDispatchGuard() throws Exception {
         var f = fixture();
-        var ticket = f.first().begin(1L, "BTCUSDT", "ack-no-id", "OPEN", "cid-ack", 10L, 7L);
+        var ticket = f.first().begin(1L, "BTCUSDT", "ack-no-id", "OPEN", "cid-ack", null, null);
         assertThrows(IllegalStateException.class, () -> f.first().acknowledged(ticket, null));
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "ack-no-id"));
         assertThrows(IllegalStateException.class,
-            () -> f.other().begin(1L, "BTCUSDT", "next", "OPEN", "cid-next", 11L, 8L));
+            () -> f.other().begin(1L, "BTCUSDT", "next", "OPEN", "cid-next", null, null));
         f.first().unknown(ticket);
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "ack-no-id"));
     }
