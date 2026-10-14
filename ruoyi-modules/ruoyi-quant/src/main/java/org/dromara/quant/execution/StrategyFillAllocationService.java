@@ -46,6 +46,11 @@ public class StrategyFillAllocationService {
                 fill.side() == null ? "" : fill.side().toUpperCase(Locale.ROOT))) {
             throw new IllegalStateException("Binance 成交手续费、盈亏或买卖方向缺失，不得写入不可变分账");
         }
+        String feeAsset = fill.commissionAsset() == null ? "" :
+            fill.commissionAsset().toUpperCase(Locale.ROOT);
+        if (!feeAsset.matches("[A-Z0-9]{2,20}")) {
+            throw new IllegalStateException("缺少 Binance 手续费币种，不得将不同资产费用合并");
+        }
         BigDecimal fee = fill.commission();
         BigDecimal pnl = fill.realizedPnl();
         LocalDateTime when = fill.time() == null ? null
@@ -55,13 +60,13 @@ public class StrategyFillAllocationService {
         }
         Map<String,Object> existing = mapper.getAllocation(credentialId, symbol, fill.tradeId());
         if (existing != null) {
-            verifyImmutable(existing, fill, order, fee, pnl);
+            verifyImmutable(existing, fill, order, fee, feeAsset, pnl);
             return;
         }
         try {
             mapper.insertAllocation(credentialId, symbol, fill.tradeId(), fill.orderId(),
                 order.getStrategyId(), order.getStrategyInstanceId(), fill.side().toUpperCase(Locale.ROOT),
-                fill.quantity(), fill.price(), fee, pnl, when);
+                fill.quantity(), fill.price(), fee, feeAsset, pnl, when);
         } catch (DuplicateKeyException race) {
             // A second reconciler may have committed the same exchange fill.
             existing = mapper.getAllocation(credentialId, symbol, fill.tradeId());
@@ -71,7 +76,7 @@ public class StrategyFillAllocationService {
     }
 
     private static void verifyImmutable(Map<String,Object> row, ExchangeGateway.TradeSnapshot fill,
-                                        QuantOrder order, BigDecimal fee, BigDecimal pnl) {
+                                        QuantOrder order, BigDecimal fee, String feeAsset, BigDecimal pnl) {
         if (!sameLong(row.get("strategy_id"), order.getStrategyId())
             || !sameLong(row.get("strategy_instance_id"), order.getStrategyInstanceId())
             || !sameLong(row.get("exchange_order_id"), fill.orderId())
@@ -80,6 +85,7 @@ public class StrategyFillAllocationService {
             || !sameDecimal(row.get("allocated_qty"), fill.quantity())
             || !sameDecimal(row.get("allocated_price"), fill.price())
             || !sameDecimal(row.get("allocated_fee"), fee)
+            || !feeAsset.equals(row.get("allocated_fee_asset"))
             || !sameDecimal(row.get("realized_pnl"), pnl)) {
             throw new IllegalStateException("已分配的 Binance 成交归属与新事实冲突，禁止覆盖原始持仓份额");
         }
