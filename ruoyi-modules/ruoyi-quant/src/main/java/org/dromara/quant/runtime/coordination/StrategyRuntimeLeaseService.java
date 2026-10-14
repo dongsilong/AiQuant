@@ -54,6 +54,26 @@ public class StrategyRuntimeLeaseService {
     }
 
     /**
+     * Required at the final outbound strategy order boundary.
+     * A missing/expired/mismatched owner always blocks the order; database errors fail closed.
+     * This does NOT provide an atomic fence between the SQL read and a remote Binance request.
+     */
+    public void requireCurrentOwner(Long instanceId, Long credentialId, String symbol) {
+        if (instanceId == null || credentialId == null || symbol == null || symbol.isBlank()) {
+            throw new IllegalStateException("策略最终下单缺少租约所有权上下文");
+        }
+        try {
+            Long count = mapper.countCurrentOwner(instanceId, credentialId,
+                symbol.toUpperCase(Locale.ROOT), ownerToken(instanceId));
+            if (!Long.valueOf(1L).equals(count)) {
+                throw new IllegalStateException("策略运行租约已失效或转移，拒绝最终交易所下单");
+            }
+        } catch (RuntimeException ex) {
+            throw new IllegalStateException("无法证明策略租约所有权，拒绝最终交易所下单", ex);
+        }
+    }
+
+    /**
      * 释放当前节点持有的运行租约。
      */
     public void release(Long instanceId, Long credentialId, String symbol) {
