@@ -67,6 +67,8 @@ public class StrategyFillAllocationService {
         if (!sameLong(row.get("strategy_id"), order.getStrategyId())
             || !sameLong(row.get("strategy_instance_id"), order.getStrategyInstanceId())
             || !sameLong(row.get("exchange_order_id"), fill.orderId())
+            || !Objects.equals(row.get("side"), fill.side().toUpperCase(Locale.ROOT))
+            || !sameTime(row.get("trade_time"), LocalDateTime.ofInstant(fill.time(), ZoneOffset.UTC))
             || !sameDecimal(row.get("allocated_qty"), fill.quantity())
             || !sameDecimal(row.get("allocated_price"), fill.price())
             || !sameDecimal(row.get("allocated_fee"), fee)
@@ -80,5 +82,11 @@ public class StrategyFillAllocationService {
     }
     private static boolean sameDecimal(Object actual, BigDecimal expected) {
         return actual instanceof BigDecimal b && b.compareTo(expected) == 0;
+    }
+    private static boolean sameTime(Object actual, LocalDateTime expected) {
+        if (actual instanceof java.sql.Timestamp timestamp) {
+            return timestamp.toLocalDateTime().equals(expected);
+        }
+        return actual instanceof LocalDateTime time && time.equals(expected);
     }
 }
