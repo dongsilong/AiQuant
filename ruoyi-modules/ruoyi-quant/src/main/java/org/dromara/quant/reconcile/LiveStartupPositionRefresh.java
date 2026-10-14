@@ -37,8 +37,27 @@ public class LiveStartupPositionRefresh implements ApplicationRunner {
                 continue;
             }
             try {
-                reconciliation.refreshPositionsOnly(credential);
-                log.info("LIVE startup position snapshot verified credentialId={}", credential.getId());
+                // A concurrent private account event may supersede an in-flight REST snapshot
+                // during startup. Re-fetch a NEW authenticated snapshot; never reuse the
+                // rejected facts or bypass the generation/DB fence.
+                for (int attempt = 1; ; attempt++) {
+                    try {
+                        reconciliation.refreshPositionsOnly(credential);
+                        log.info("LIVE startup position snapshot verified credentialId={} attempt={}",
+                            credential.getId(), attempt);
+                        break;
+                    } catch (TradingReconciliationService.SnapshotSupersededException ex) {
+                        if (attempt >= 5) { throw ex; }
+                        log.warn("LIVE startup snapshot invalidated by newer account event, retrying credentialId={} attempt={}",
+                            credential.getId(), attempt);
+                        try {
+                            Thread.sleep(200L * attempt);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException("LIVE startup position refresh interrupted", interrupted);
+                        }
+                    }
+                }
             } catch (RuntimeException ex) {
                 log.error("LIVE startup refused: account position snapshot unverified credentialId={}",
                     credential.getId(), ex);
