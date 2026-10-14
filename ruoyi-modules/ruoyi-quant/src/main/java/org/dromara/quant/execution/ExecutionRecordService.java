@@ -63,53 +63,66 @@ public class ExecutionRecordService {
      * 把执行记录更新为已确认并保存交易所订单状态。
      */
     public void accepted(QuantExecutionRecord entity, Long exchangeOrderId, String exchangeStatus) {
-        entity.setExchangeOrderId(exchangeOrderId);
-        entity.setExecutionStatus("CONFIRMED");
-        entity.setExchangeOrderStatus(exchangeStatus == null ? "ACCEPTED" : exchangeStatus);
-        entity.setUpdatedAt(LocalDateTime.now());
-        mapper.updateById(entity);
+        String status = exchangeStatus == null ? "ACCEPTED" : exchangeStatus;
+        LocalDateTime now = LocalDateTime.now();
+        if (mapper.markAccepted(entity.getId(), exchangeOrderId, status, now) == 1) {
+            entity.setExchangeOrderId(exchangeOrderId);
+            entity.setExecutionStatus("CONFIRMED");
+            entity.setExchangeOrderStatus(status);
+            entity.setUpdatedAt(now);
+        }
     }
 
     /**
      * 记录一次执行恢复尝试。
      */
     public void markRecoveryAttempt(QuantExecutionRecord entity) {
-        entity.setRecoveryAttempts((entity.getRecoveryAttempts() == null ? 0 : entity.getRecoveryAttempts()) + 1);
-        entity.setLastRecoveryAt(LocalDateTime.now());
-        entity.setUpdatedAt(entity.getLastRecoveryAt());
-        mapper.updateById(entity);
+        LocalDateTime now = LocalDateTime.now();
+        if (mapper.recordRecoveryAttempt(entity.getId(), now) == 1) {
+            entity.setRecoveryAttempts((entity.getRecoveryAttempts() == null ? 0 : entity.getRecoveryAttempts()) + 1);
+            entity.setLastRecoveryAt(now);
+            entity.setUpdatedAt(now);
+        }
     }
 
     /**
      * 把未触达交易所的执行记录标记为失败。
      */
     public void failed(QuantExecutionRecord entity, String message) {
-        entity.setExecutionStatus("FAILED");
-        entity.setErrorMessage(message == null ? "未知执行异常" : message);
-        entity.setUpdatedAt(LocalDateTime.now());
-        mapper.updateById(entity);
+        String reason = message == null ? "未知执行异常" : message;
+        LocalDateTime now = LocalDateTime.now();
+        if (mapper.markFailedBeforeSend(entity.getId(), reason, now) == 1) {
+            entity.setExecutionStatus("FAILED");
+            entity.setErrorMessage(reason);
+            entity.setUpdatedAt(now);
+        }
     }
 
     /**
      * 把已触达交易所但响应未知的执行记录标记为 UNKNOWN。
      */
     public void markUnknown(QuantExecutionRecord entity, String message) {
-        entity.setExecutionStatus("UNKNOWN");
-        entity.setErrorMessage(message == null ? "无法确认交易所订单事实" : message);
-        entity.setUpdatedAt(LocalDateTime.now());
-        mapper.updateById(entity);
+        String reason = message == null ? "无法确认交易所订单事实" : message;
+        LocalDateTime now = LocalDateTime.now();
+        if (mapper.markUnknownIfUnresolved(entity.getId(), reason, now) == 1) {
+            entity.setExecutionStatus("UNKNOWN");
+            entity.setErrorMessage(reason);
+            entity.setUpdatedAt(now);
+        }
     }
 
     /**
      * 把经过事实核实的执行记录标记为 RECOVERED。
      */
     public void markRecovered(QuantExecutionRecord entity, Long exchangeOrderId, String exchangeStatus) {
-        entity.setExchangeOrderId(exchangeOrderId);
-        entity.setExecutionStatus("RECOVERED");
-        if (exchangeStatus != null) {
-            entity.setExchangeOrderStatus(exchangeStatus);
+        LocalDateTime now = LocalDateTime.now();
+        if (mapper.markRecoveredAfterFact(entity.getId(), exchangeOrderId, exchangeStatus, now) == 1) {
+            entity.setExchangeOrderId(exchangeOrderId);
+            entity.setExecutionStatus("RECOVERED");
+            if (exchangeStatus != null) {
+                entity.setExchangeOrderStatus(exchangeStatus);
+            }
+            entity.setUpdatedAt(now);
         }
-        entity.setUpdatedAt(LocalDateTime.now());
-        mapper.updateById(entity);
     }
 }
