@@ -119,4 +119,22 @@ public interface LiveOrderDispatchMapper {
         WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
         """)
     String ticketStatus(@Param("credentialId") Long credentialId, @Param("key") String key);
+    /** Read-only operator queue, intentionally no TTL-based recovery or unlock. */
+    @Options(timeout = 3)
+    @Select("""
+        SELECT g.credential_id AS credential_id, g.symbol AS symbol,
+               g.active_dispatch_key AS dispatch_key, g.updated_at AS blocked_at,
+               t.operation_type AS operation_type, t.client_order_id AS client_order_id,
+               t.dispatch_status AS dispatch_status, t.exchange_order_id AS exchange_order_id,
+               t.strategy_instance_id AS strategy_instance_id,
+               t.lease_epoch AS lease_epoch
+        FROM quant_live_dispatch_guard g
+        LEFT JOIN quant_order_dispatch_ticket t
+          ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
+        WHERE g.active_dispatch_key IS NOT NULL
+        ORDER BY g.updated_at ASC
+        LIMIT 100
+        """)
+    java.util.List<java.util.Map<String,Object>> unresolvedDispatches();
+
 }
