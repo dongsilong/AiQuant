@@ -23,6 +23,8 @@ jobs:
           cache: maven
       - name: Reject committed plaintext credentials in trading configuration
         run: python3 script/security/check_quant_config_secrets.py
+      - name: Test release-evidence integrity gate
+        run: python3 -m unittest script/security/test_live_release_evidence.py
       - name: Compile and test critical trade invariants
         run: >-
           bash mvnw -B -ntp
