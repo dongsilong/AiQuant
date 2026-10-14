@@ -30,14 +30,15 @@ class StrategyFillAuditServiceTest {
               strategy_id BIGINT NOT NULL, strategy_instance_id BIGINT NOT NULL,
               symbol VARCHAR(32), side VARCHAR(8), allocated_qty DECIMAL(38,16),
               allocated_price DECIMAL(38,16), allocated_fee DECIMAL(38,16),
+              allocated_fee_asset VARCHAR(20),
               realized_pnl DECIMAL(38,16))
             """);
         jdbc.update("""
             INSERT INTO quant_strategy_fill_allocation VALUES
-              (1,9007199254740993,10,20,'BTCUSDT','BUY',0.125,60000.12,0.50,0.00),
-              (2,9007199254740993,10,20,'BTCUSDT','SELL',0.050,61000.50,0.20,47.50),
-              (3,9007199254740993,10,21,'BTCUSDT','BUY',100,60000.12,50,0),
-              (4,9007199254740993,10,20,'ETHUSDT','BUY',5,100,1,0)
+              (1,9007199254740993,10,20,'BTCUSDT','BUY',0.125,60000.12,0.50,'USDT',0.00),
+              (2,9007199254740993,10,20,'BTCUSDT','SELL',0.050,61000.50,0.20,'USDT',47.50),
+              (3,9007199254740993,10,21,'BTCUSDT','BUY',100,60000.12,50,'USDT',0),
+              (4,9007199254740993,10,20,'ETHUSDT','BUY',5,100,1,'USDT',0)
             """);
         var conf = new Configuration();
         conf.addMapper(StrategyFillAllocationMapper.class);
@@ -50,11 +51,15 @@ class StrategyFillAuditServiceTest {
         var totals = audit.summarize(9007199254740993L, 10L, 20L, "btcusdt");
         assertEquals("9007199254740993", totals.credentialId());
         assertEquals("2", totals.fillCount());
+        assertEquals("USDT", totals.feeAsset());
         assertEquals(0, new BigDecimal("0.125").compareTo(new BigDecimal(totals.boughtQty())));
         assertEquals(0, new BigDecimal("0.050").compareTo(new BigDecimal(totals.soldQty())));
         assertEquals(0, new BigDecimal("0.70").compareTo(new BigDecimal(totals.totalFees())));
         assertEquals(0, new BigDecimal("47.50").compareTo(new BigDecimal(totals.realizedPnl())));
         assertEquals("LIFETIME_VERIFIED_FILLS_NOT_OPEN_POSITION", totals.allocationScope());
+        jdbc.update("UPDATE quant_strategy_fill_allocation SET allocated_fee_asset='BNB' WHERE id=2");
+        assertThrows(IllegalStateException.class,
+            () -> audit.summarize(9007199254740993L,10L,20L,"BTCUSDT"));
         assertThrows(IllegalArgumentException.class,
             () -> audit.summarize(1L, 10L, 20L, "BTCUSDT;DROP TABLE"));
     }
