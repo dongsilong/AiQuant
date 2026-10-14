@@ -201,11 +201,19 @@ public class TradingReconciliationService {
         for (var entry : facts.trades().entrySet()) {
             syncTrades(credential, entry.getValue());
         }
+        int unmatchedProtections = 0;
         for (var entry : facts.protections().entrySet()) {
-            syncProtectionOrders(credential, entry.getKey(), facts.positions(), entry.getValue());
+            unmatchedProtections += syncProtectionOrders(credential, entry.getKey(), facts.positions(), entry.getValue());
         }
         syncFinancialEvents(credential, facts.income());
-        reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
+        if (unmatchedProtections > 0) {
+            // The exchange still reports active stops that cannot be tied to a trusted local position.
+            // Never cancel blindly, and NEVER label this reconciliation completely successful.
+            reconcileMapper.insert(record(credential.getId(), "DEGRADED",
+                "{\"unmatchedLiveProtections\":" + unmatchedProtections + "}"));
+        } else {
+            reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
+        }
     }
 
     /**
@@ -389,8 +397,9 @@ public class TradingReconciliationService {
     /**
      * 同步交易所保护单状态。
      */
-    private void syncProtectionOrders(QuantCredential credential, String symbol, List<ExchangeGateway.PositionSnapshot> positions,
+    private int syncProtectionOrders(QuantCredential credential, String symbol, List<ExchangeGateway.PositionSnapshot> positions,
                                       List<ExchangeGateway.ProtectionOrderSnapshot> snapshots) {
+        int unmatchedLiveProtections = 0;
         Set<Long> seenIds = new HashSet<>();
         Set<String> seenClients = new HashSet<>();
         for (ExchangeGateway.ProtectionOrderSnapshot s : snapshots) {
@@ -422,6 +431,9 @@ public class TradingReconciliationService {
             }
             // Missing local position mapping is not proof of an absent exchange position.
             // Reconciliation must not cancel a possibly live protective order.
+            if (position == null && isOpenProtection(s.status())) {
+                unmatchedLiveProtections++;
+            }
             if (s.algoId() != null) {
                 seenIds.add(s.algoId());
             }
@@ -441,6 +453,7 @@ public class TradingReconciliationService {
                 protectionOrderMapper.updateById(local);
             }
         }
+        return unmatchedLiveProtections;
     }
 
     /**
