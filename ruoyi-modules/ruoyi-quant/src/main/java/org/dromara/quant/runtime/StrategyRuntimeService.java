@@ -42,7 +42,6 @@ import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.springframework.beans.BeanUtils;
 import org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLedgerMapper;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -287,7 +286,6 @@ public class StrategyRuntimeService {
     /**
      * 按配置周期发现/停止实例，并同步一次真实持仓；实时价格不在这里轮询。
      */
-    @Scheduled(fixedDelayString = "#{@quantProperties.runtime.tickSeconds * 1000}", initialDelay = 5000)
     public void supervise() {
         log.debug("策略运行时监督任务开始 runtimeEnabled={}", properties.getRuntime().isEnabled());
         if (!properties.getRuntime().isEnabled()) {
@@ -328,7 +326,6 @@ public class StrategyRuntimeService {
     /**
      * 每 15 秒做一次持仓/订单事实同步，用于 WebSocket 丢消息后的恢复。
      */
-    @Scheduled(fixedDelayString = "#{@quantProperties.reconcile.intervalSeconds * 1000}", initialDelay = 15000)
     public void reconcileRunningPositions() {
         activeRuntimes.values().forEach(this::requestReconciliation);
     }
@@ -824,7 +821,7 @@ public class StrategyRuntimeService {
             try {
                 // FIXED: 统计状态包含 OPEN_PENDING，避免并发下突破最大开仓数。
                 openCount = runtimeLedgerMapper.countStrategyExposures(runtime.strategy.getId(), runtime.credential.getId());
-                if (openCount == null) { throw new IllegalStateException("Strategy exposure count unavailable"); }
+                if (openCount == null) { throw new org.springframework.dao.DataRetrievalFailureException("Strategy exposure count unavailable"); }
             } catch (org.springframework.dao.DataAccessException ex) {
                 // 持仓事实不可读时必须停止本次开仓，不能在数据库连接异常期间放行交易。
                 logEntryDecision(runtime, context, "POSITION_COUNT_UNAVAILABLE", "最大持仓数查询失败，禁止放行");
