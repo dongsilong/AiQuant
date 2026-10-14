@@ -23,7 +23,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_strategy_entry_guard", "quant_execution_record", "quant_open_capacity",
         "quant_order", "quant_position", "quant_protection_order", "quant_protection_target",
         "quant_trade", "quant_trade_decision_log",
-        "quant_live_dispatch_guard", "quant_order_dispatch_ticket");
+        "quant_live_dispatch_guard", "quant_order_dispatch_ticket", "quant_strategy_fill_allocation");
 
     private static final Set<String> UNIQUE = Set.of(
         "quant_strategy_runtime_lease|credential_id,symbol",
@@ -33,7 +33,8 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_strategy_position_state|instance_id",
         "quant_protection_target|target_key",
         "quant_live_dispatch_guard|credential_id,symbol",
-        "quant_order_dispatch_ticket|credential_id,idempotency_key");
+        "quant_order_dispatch_ticket|credential_id,idempotency_key",
+        "quant_strategy_fill_allocation|credential_id,symbol,exchange_trade_id");
 
     private final LiveSchemaContractMapper mapper;
 
