@@ -99,7 +99,7 @@ public class RiskDecisionService {
             return "单笔订单名义金额超限";
         }
         if (risk.getMaxOpenPositions() != null && risk.getMaxOpenPositions() > 0) {
-            Long count = positionMapper.selectCount(new LambdaQueryWrapper<QuantPosition>().eq(QuantPosition::getCredentialId, credentialId).gt(QuantPosition::getQuantity,
+            Long count = positionMapper.selectCount(new LambdaQueryWrapper<QuantPosition>().eq(QuantPosition::getCredentialId, credentialId).ne(QuantPosition::getQuantity,
                     BigDecimal.ZERO));
             if (count >= risk.getMaxOpenPositions()) {
                 log.warn("交易前风控未通过[最大持仓数达到上限] credentialId={} symbol={} runMode={} notional={} currentOpenPositions={} maxOpenPositions={}",
