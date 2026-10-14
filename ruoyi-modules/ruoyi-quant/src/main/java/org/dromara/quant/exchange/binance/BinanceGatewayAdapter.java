@@ -1067,7 +1067,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 // SDK userData(listenKey) subscribes via /private/stream (not the legacy /private/ws/{key} endpoint).
                 String sdkBase = base.endsWith("/private/ws/") ? base.substring(0, base.length() - "/private/ws/".length()) + "/stream" : base;
                 BinanceSdkStreamTransport sdk = BinanceSdkStreamTransport.user(sdkBase, listenKey, events, disconnected,
-                    properties.getBinance().getSdkStreamBacklogLimit());
+                    properties.getBinance().getSdkStreamBacklogLimit(), properties.getProxy());
                 StreamHandle managed = trackWebsocket(() -> {
                     sdk.close();
                     try { api(credential).closeUserDataStream(); } catch (RuntimeException ignored) { }
