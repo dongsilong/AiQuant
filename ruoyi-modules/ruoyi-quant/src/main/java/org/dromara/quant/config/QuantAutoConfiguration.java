@@ -29,6 +29,8 @@ public class QuantAutoConfiguration {
 
     /**
      * 创建量化模块共享调度线程池。
+     * <p>由 Spring 容器统一管理生命周期，关闭应用时调用 shutdown，
+     * 避免后台定时线程阻止进程退出。调度池不承担订单执行幂等性或分布式租约职责。
      */
     @Bean(destroyMethod = "shutdown")
     public ScheduledExecutorService quantScheduledExecutorService() {
