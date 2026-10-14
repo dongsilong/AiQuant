@@ -40,6 +40,13 @@ class LiveOrderDispatcherTest {
               exchange_order_id BIGINT, created_at TIMESTAMP, updated_at TIMESTAMP,
               UNIQUE(credential_id,idempotency_key))
             """);
+        jdbc.execute("""
+            CREATE TABLE quant_live_account_settings_intent (
+              credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
+              margin_mode VARCHAR(12) NOT NULL, leverage INT NOT NULL,
+              created_at TIMESTAMP,
+              PRIMARY KEY(credential_id,symbol))
+            """);
         var config = new Configuration();
         config.addMapper(LiveOrderDispatchMapper.class);
         var bean = new SqlSessionFactoryBean();
@@ -55,8 +62,7 @@ class LiveOrderDispatcherTest {
     @Test
     void configurationTicketSerializesBothBinanceSettingsChangesWithOtherNodes() throws Exception {
         var f = fixture();
-        var setup = f.first().begin(1L, "BTCUSDT", "config-run-1",
-            "CONFIG_SETTINGS", "SETTINGS:ISOLATED:10", null, null);
+        var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-run-1", "ISOLATED", 10);
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "config-run-1"));
         assertThrows(IllegalStateException.class, () ->
             f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", 44L, 4L));
@@ -69,18 +75,35 @@ class LiveOrderDispatcherTest {
     @Test
     void unknownConfigurationCannotExpireAndBlockOrdersOnAllNodes() throws Exception {
         var f = fixture();
-        var setup = f.first().begin(1L, "BTCUSDT", "config-timeout",
-            "CONFIG_SETTINGS", "SETTINGS:CROSSED:20", null, null);
+        var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-timeout", "CROSSED", 20);
         f.first().unknown(setup);
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "config-timeout"));
         assertThrows(IllegalStateException.class, () ->
             f.other().begin(1L, "BTCUSDT", "any-order", "OPEN", "cid-next", 44L, 4L));
         assertThrows(IllegalStateException.class, () ->
-            f.other().begin(1L, "BTCUSDT", "new-config",
-                "CONFIG_SETTINGS", "SETTINGS:CROSSED:25", null, null));
+            f.other().beginConfiguration(1L, "BTCUSDT", "new-config", "CROSSED", 25));
         assertEquals("config-timeout", f.jdbc().queryForObject(
             "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
             String.class));
+    }
+
+    @Test
+    void anotherNodeCannotChangeAnApprovedLeverageEvenAfterConfigAck() throws Exception {
+        var f=fixture();
+        var approved=f.first().beginConfiguration(1L,"BTCUSDT","initial-settings","ISOLATED",10);
+        f.first().configurationApplied(approved);
+        assertThrows(IllegalStateException.class, () ->
+            f.other().beginConfiguration(1L,"BTCUSDT","conflicting-settings","ISOLATED",20));
+        assertThrows(IllegalStateException.class, () ->
+            f.other().beginConfiguration(1L,"BTCUSDT","cross-settings","CROSSED",10));
+        assertNull(f.jdbc().queryForObject(
+            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
+            String.class), "Rejected configuration must roll back the dispatch claim");
+        assertEquals(10, f.jdbc().queryForObject(
+            "SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'",
+            Integer.class));
+        var same=f.other().beginConfiguration(1L,"BTCUSDT","same-settings","ISOLATED",10);
+        f.other().configurationApplied(same);
     }
 
     @Test
