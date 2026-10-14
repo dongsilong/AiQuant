@@ -106,3 +106,36 @@ guard (RECOVERED). The surrounding dispatch service keeps the ticket update
 and guard release in one transaction. This is defense in depth, **not**
 permission to auto-recover UNKNOWN requests or force-unlock tickets.
 Operator-approved exact-fact remediation and live chaos evidence remain open.
+
+### 2026-10-14 execution identity CAS hardening and verification boundary
+
+The execution-record mapper now refuses `markAccepted` or
+`markRecoveredAfterFact` if a persisted positive Binance exchange order ID
+conflicts with the proposed ID. Null or nonpositive proposed IDs are rejected.
+The regression test asserts that competing recovery workers cannot replace
+the recorded order identity. The critical workflow also runs
+`LiveDispatchRecoveryGuardSqlTest`.
+
+**Still unverified, not automatically approved for funds:**
+
+1. CI must complete successfully at the exact release commit (critical, entire
+   quant regression, and MySQL/InnoDB integration). Failed checks block release.
+2. Operator must export a sanitized canonical MySQL schema and migration
+   inventory; rehearsal must be performed on a restored clone with rollback
+   evidence, NOT against production first.
+3. An isolated Binance account must verify accepted-then-timeout, cancel versus
+   fill, duplicate client IDs, stream disconnect, process death during outbound
+   HTTP, hedge/reduce-only, protective orders, and cross-node takeover. Record
+   exact Binance order/trade/position/protection facts and compare local ledgers.
+4. For an unresolved `CONFIG_SETTINGS` ticket, **do not** recover it using the
+   ordinary order recovery method. Verify actual margin/leverage, open positions,
+   exchange orders and no in-flight writers, then perform separate auditable
+   operator maintenance; never clear a dispatch guard by editing SQL manually.
+5. Operator remediation requires an independent approver, authenticated actor,
+   immutable evidence of the exact exchange object and database transaction
+   result. Neither the read-only queue nor a GET success authorizes an unlock.
+6. Test secret rotation, kill switch, observability alerts, durable recovery,
+   deployment rollback, and a fresh protection-order handover before release.
+
+This work branch is **NOT production-certified** until all the above evidence
+is attached to a release review and independently accepted.
