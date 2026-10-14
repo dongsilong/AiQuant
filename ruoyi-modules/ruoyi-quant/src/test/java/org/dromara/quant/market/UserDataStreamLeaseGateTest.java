@@ -106,4 +106,30 @@ class UserDataStreamLeaseGateTest {
         hub.destroy();
     }
 
+    @Test
+    void leaseLostDuringBlockingGatewayConnectClosesNewlyOpenedPrivateSocket() {
+        var gateway = mock(ExchangeGateway.class);
+        var lease = mock(LiveUserStreamLeaseMapper.class);
+        var positions = mock(AccountPositionCache.class);
+        var balances = mock(AccountBalanceCache.class);
+        var preparation = mock(TradingPreparationService.class);
+        var session = mock(ExchangeGateway.UserDataStreamSession.class);
+        when(lease.owns(eq(99L), eq("node-a"))).thenReturn(1L, 1L, 0L);
+        when(gateway.subscribeUserData(any(), any())).thenReturn(session);
+        var hub = new UserDataStreamHub(gateway,
+            mock(TradeExecutionApplicationService.class),
+            positions, balances, preparation);
+        ReflectionTestUtils.setField(hub, "streamLease", lease);
+        var credential = new QuantCredential();
+        credential.setId(99L);
+        credential.setRunMode("LIVE");
+        hub.registerLeaseOwner(99L, "node-a");
+        hub.subscribe(credential, ignored -> {});
+        verify(session).close();
+        verify(positions).disconnect(99L);
+        verify(balances).disconnect(99L);
+        verify(lease, atLeast(3)).owns(99L, "node-a");
+        hub.destroy();
+    }
+
 }
