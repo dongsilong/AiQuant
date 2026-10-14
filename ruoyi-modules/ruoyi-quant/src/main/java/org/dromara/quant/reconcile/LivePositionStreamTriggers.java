@@ -43,7 +43,6 @@ public class LivePositionStreamTriggers {
     @Scheduled(fixedDelay = 30000, initialDelay = 10000)
     public synchronized void supervise() {
         if (!dedicatedStreamSingleNode) {
-            log.error("Refusing dedicated LIVE user-stream subscription without explicit single-node opt-in; use existing stream integration or REST heartbeat");
             return;
         }
         var active = credentials.selectList(new LambdaQueryWrapper<QuantCredential>()
