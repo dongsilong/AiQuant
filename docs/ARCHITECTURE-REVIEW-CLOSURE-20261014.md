@@ -108,3 +108,17 @@ required: trusted intent creation tied to exchange acceptance, V07-V09
 schema rehearsal, serialized complete trade history replay, robust fee
 asset accounting, account position/protection reconciliation, and
 multi-node MySQL acceptance.
+
+## Strategy order intent writer (current iteration)
+
+`StrategyOrderIntentService` and `StrategyOrderIntentMapper` now support
+insert-once exact-order immutable provenance from a verified ExchangeGateway
+OrderRequest and OrderResult. They reject missing/mismatched ClientOrderId,
+ambiguous BOTH position mode, contradictory LONG/SHORT and OPEN/CLOSE sides,
+and conflicting database duplicate keys. CI includes focused regression.
+The service is **not connected to automated LIVE execution** pending approved
+V09 schema installation and a proven atomic linkage of order ledger and
+intent provenance. An accepted Binance order followed by a local SQL failure
+must remain recoverable and cannot silently be labeled NOT_SENT. The
+projection remains disabled when such immutable provenance is unavailable.
+P0 strategy PnL remains OPEN pending end-to-end wired test and reconciliation.
