@@ -20,3 +20,32 @@ This file records **implemented** hardening and release blockers; it does not ce
 
 Both `QUANT_LIVE_ENABLED` and `QUANT_RUNTIME_ENABLED` remain off by default.
 A passing Maven, H2, Mockito or MySQL CI run establishes a regression baseline, **not** an approval to enable capital.
+
+## Following round: persisted fencing epoch and strategy CLOSE ownership
+
+The lease mapper now retains rows on release (expiry rather than DELETE) and keeps a
+`lease_epoch BIGINT NOT NULL` that increments on owner takeover or expiry/reacquisition.
+The new LIVE strategy execution path pins the lease epoch at the start of order
+preparation and checks that the **same epoch** is still owned at the final Binance
+order boundary. This blocks a stale preparation from becoming an order after a
+takeover, including when the original worker later reacquires the lease.
+
+**Migration required BEFORE deploying this code:** review the production table and
+run `script/sql/quant/V20261014_01__runtime_lease_epoch.sql` once, after
+stopping *all* older runtime nodes and backing up. The LIVE startup guard rejects
+databases lacking `lease_epoch`. Never run old and new lease writers concurrently:
+old releases used DELETE and could reset monotonic epochs.
+
+The LIVE strategy CLOSE path additionally validates persisted
+`quant_strategy_position_state` ownership by credential, strategy, instance and
+symbol, requires an exact `EXIT_PENDING` idempotency key, expected LONG/SHORT
+direction, an explicitly safe recovery flag and a reduction no larger than that
+strategy's allocated quantity. This **reduces accidental cross-strategy closes**,
+but is not an authoritative allocation ledger.
+
+**Still not a complete multi-node fence:** Binance cannot reject the epoch itself,
+and a database read followed by a remote HTTP call still has a race. A single
+per-account outbound dispatch authority, epoch-bound dispatch tickets, takeover
+reconciliation and exchange-side idempotency probes are needed before multi-node
+LIVE can be approved. Never interpret these regressions as authorization to enable
+shared positions or production capital.
