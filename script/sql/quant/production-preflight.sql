@@ -20,7 +20,8 @@ WITH required_tables AS (
     SELECT 'quant_trade_decision_log' UNION ALL
     SELECT 'quant_live_dispatch_guard' UNION ALL
     SELECT 'quant_order_dispatch_ticket' UNION ALL
-    SELECT 'quant_strategy_fill_allocation'
+    SELECT 'quant_strategy_fill_allocation' UNION ALL
+    SELECT 'quant_live_account_settings_intent'
 )
 SELECT r.table_name, COALESCE(t.engine,'ABSENT') AS actual_engine,
        CASE WHEN t.table_name IS NULL THEN 'MISSING'
@@ -43,7 +44,8 @@ WITH required_indexes AS (
   SELECT 'quant_protection_target','target_key' UNION ALL
   SELECT 'quant_live_dispatch_guard','credential_id,symbol' UNION ALL
   SELECT 'quant_order_dispatch_ticket','credential_id,idempotency_key' UNION ALL
-  SELECT 'quant_strategy_fill_allocation','credential_id,symbol,exchange_trade_id'
+  SELECT 'quant_strategy_fill_allocation','credential_id,symbol,exchange_trade_id' UNION ALL
+  SELECT 'quant_live_account_settings_intent','credential_id,symbol'
 ), actual_indexes AS (
   SELECT table_name, index_name, non_unique,
          GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') AS indexed_columns
