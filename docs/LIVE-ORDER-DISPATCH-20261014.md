@@ -30,7 +30,7 @@ The existing `ExecutionRecoveryService` can release an unresolved LIVE ticket
 only after it has synchronized the Binance order snapshot, updated the
 execution record to `RECOVERED`, and matched the exact Binance client order ID.
 For a cancellation, it only attempts release when the exchange order is
-CANCELED, EXPIRED, FILLED or PARTIALLY_FILLED, **not** when it is still NEW.
+CANCELED, EXPIRED, FILLED or REJECTED, **not** when it is still NEW or PARTIALLY_FILLED.
 Orders lacking a recoverable clientOrderId remain quarantined until audited
 manual reconciliation is implemented.
 
@@ -41,7 +41,8 @@ manual reconciliation is implemented.
 2. Verify a backup/restore drill and the currently deployed schema.
 3. Install `script/sql/quant/V20261014_01__runtime_lease_epoch.sql`, if absent.
 4. Install `script/sql/quant/V20261014_02__live_dispatch_guard.sql` **exactly once**.
-5. Run `script/sql/quant/production-preflight.sql`. The LIVE startup guard
+5. Review and install V03 immutable fill allocation and V04 account-settings-intent migrations, exactly once each.
+6. Run `script/sql/quant/production-preflight.sql`. The LIVE startup guard
    additionally rejects missing dispatch tables/uniqueness.
 6. Deploy all nodes together; do not run legacy direct-LIVE dispatch workers
    alongside the new guard because they do not honor it.
