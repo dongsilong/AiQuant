@@ -3,7 +3,7 @@ package org.dromara.quant.protection;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.protection.domain.QuantProtectionOrder;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.dromara.quant.protection.mapper.ProtectionTargetMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -21,12 +21,11 @@ import java.util.function.Consumer;
 /** 持仓周期保护目标协调：短事务保存意图，网络请求必须在事务外执行。 */
 @Service
 public class ProtectionTargetCoordinator {
-    private final JdbcTemplate jdbc;
+    private final ProtectionTargetMapper mapper;
     private final TransactionTemplate transaction;
 
-    public ProtectionTargetCoordinator(JdbcTemplate jdbc, PlatformTransactionManager manager) {
-        this.jdbc = new JdbcTemplate(Objects.requireNonNull(jdbc.getDataSource()));
-        this.jdbc.setQueryTimeout(3);
+    public ProtectionTargetCoordinator(ProtectionTargetMapper mapper, PlatformTransactionManager manager) {
+        this.mapper = Objects.requireNonNull(mapper);
         transaction = new TransactionTemplate(manager);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         transaction.setTimeout(5);
@@ -46,11 +45,10 @@ public class ProtectionTargetCoordinator {
                 (credentialId + ":" + position.getProtectionCycleKey() + ":" + position.getPositionSide() + ":" + type).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception ex) { throw new IllegalStateException("保护目标标识生成失败", ex); }
         try {
-            jdbc.update("INSERT INTO quant_protection_target (target_key,credential_id,position_id,position_cycle_key,position_side,protection_type,target_version,step_index,confirmed_step,updated_at) VALUES (?,?,?,?,?,?,0,0,0,CURRENT_TIMESTAMP)",
-                key, credentialId, position.getId(), position.getProtectionCycleKey(), position.getPositionSide(), type);
+            mapper.insertTarget(key, credentialId, position.getId(), position.getProtectionCycleKey(), position.getPositionSide(), type);
         } catch (DuplicateKeyException existing) { /* 不覆盖已有意图。 */ }
         String owner = UUID.randomUUID().toString();
-        if (jdbc.update("UPDATE quant_protection_target SET owner_token=?,lease_until=TIMESTAMPADD(SECOND,30,CURRENT_TIMESTAMP) WHERE target_key=? AND (owner_token IS NULL OR lease_until<CURRENT_TIMESTAMP)", owner, key) != 1) {
+        if (mapper.acquireLease(key, owner) != 1) {
             throw new IllegalStateException("保护目标正在同步，等待原目标恢复");
         }
         return new Lease(key, owner);
@@ -58,9 +56,8 @@ public class ProtectionTargetCoordinator {
 
     public int confirmedStep(Long credentialId, QuantPosition position) {
         if (position.getProtectionCycleKey() == null) { throw new IllegalStateException("缺少持仓周期"); }
-        var rows = jdbc.queryForList("SELECT confirmed_step FROM quant_protection_target WHERE credential_id=? AND position_cycle_key=? AND position_side=? AND protection_type='STEP_TP'",
-            credentialId, position.getProtectionCycleKey(), position.getPositionSide());
-        return rows.isEmpty() ? 0 : ((Number) rows.getFirst().get("confirmed_step")).intValue();
+        var steps = mapper.confirmedSteps(credentialId, position.getProtectionCycleKey(), position.getPositionSide());
+        return steps.isEmpty() ? 0 : steps.getFirst();
     }
 
     private static State convert(Map<String,Object> row) {
@@ -83,21 +80,20 @@ public class ProtectionTargetCoordinator {
                     while (!closed.get()) {
                         Thread.sleep(10000);
                         if (closed.get()) { break; }
-                        if (jdbc.update("UPDATE quant_protection_target SET lease_until=TIMESTAMPADD(SECOND,30,CURRENT_TIMESTAMP) WHERE target_key=? AND owner_token=? AND lease_until>CURRENT_TIMESTAMP", key, owner) != 1) { lost.set(true); break; }
+                        if (mapper.renewLease(key, owner) != 1) { lost.set(true); break; }
                     }
                 } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
                 catch (RuntimeException ex) { lost.set(true); }
             });
         }
         public void check() {
-            if (closed.get() || lost.get() || !Integer.valueOf(1).equals(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM quant_protection_target WHERE target_key=? AND owner_token=? AND lease_until>CURRENT_TIMESTAMP", Integer.class, key, owner))) {
+            if (closed.get() || lost.get() || !Long.valueOf(1).equals(mapper.countOwned(key, owner))) {
                 lost.set(true); throw new IllegalStateException("保护目标租约失效，禁止提交或覆盖意图");
             }
         }
         private Map<String,Object> row(boolean lock) {
             check();
-            return jdbc.queryForMap("SELECT * FROM quant_protection_target WHERE target_key=?" + (lock ? " FOR UPDATE" : ""), key);
+            return lock ? mapper.lockTarget(key) : mapper.getTarget(key);
         }
         public State state() { return convert(row(false)); }
         public void prepare(QuantProtectionOrder candidate, int step, QuantProtectionOrder previous, Consumer<QuantProtectionOrder> insert) {
@@ -110,9 +106,9 @@ public class ProtectionTargetCoordinator {
                 candidate.setStepIndex(Math.max(old.stepIndex(), step));
                 insert.accept(candidate);
                 if (candidate.getId() == null) { throw new IllegalStateException("保护意图缺少持久化主键"); }
-                update("target_version=?,step_index=?,quantity=?,trigger_price=?,order_type=?,pending_order_id=?,previous_order_id=?,updated_at=CURRENT_TIMESTAMP",
-                    candidate.getTargetVersion(), candidate.getStepIndex(), candidate.getQuantity(), candidate.getStopPrice(), candidate.getOrderType(), candidate.getId(),
-                    previous == null ? old.currentOrderId() : previous.getId());
+                requireUpdate(mapper.prepareTarget(key, owner, candidate.getTargetVersion(), candidate.getStepIndex(),
+                    candidate.getQuantity(), candidate.getStopPrice(), candidate.getOrderType(), candidate.getId(),
+                    previous == null ? old.currentOrderId() : previous.getId()));
             });
         }
         public void confirmed(QuantProtectionOrder local, int step) {
@@ -121,30 +117,28 @@ public class ProtectionTargetCoordinator {
                 if (old.pendingOrderId() != null && !old.pendingOrderId().equals(local.getId())) {
                     throw new IllegalStateException("必须先恢复持久化待确认保护意图");
                 }
-                update("current_order_id=?,pending_order_id=NULL,step_index=?,confirmed_step=?,quantity=?,trigger_price=?,order_type=?,updated_at=CURRENT_TIMESTAMP",
-                    local.getId(), Math.max(old.stepIndex(), step), Math.max(old.confirmedStep(), step), local.getQuantity(), local.getStopPrice(), local.getOrderType());
+                requireUpdate(mapper.confirmTarget(key, owner, local.getId(), Math.max(old.stepIndex(), step),
+                    Math.max(old.confirmedStep(), step), local.getQuantity(), local.getStopPrice(), local.getOrderType()));
             });
         }
         /** 仅在精确确认未生效或已终止后放开原待确认意图。 */
         public void terminal(QuantProtectionOrder local) {
             transaction.executeWithoutResult(status -> {
                 var old = convert(row(true));
-                if (Objects.equals(old.pendingOrderId(), local.getId())) { update("pending_order_id=NULL,updated_at=CURRENT_TIMESTAMP"); }
+                if (Objects.equals(old.pendingOrderId(), local.getId())) { requireUpdate(mapper.clearPending(key, owner)); }
             });
         }
-        public void cleaned() { check(); update("previous_order_id=NULL,updated_at=CURRENT_TIMESTAMP"); }
-        private void update(String fields, Object... values) {
-            check();
-            var args = new Object[values.length + 2];
-            System.arraycopy(values, 0, args, 0, values.length); args[values.length] = key; args[values.length + 1] = owner;
-            if (jdbc.update("UPDATE quant_protection_target SET " + fields + " WHERE target_key=? AND owner_token=? AND lease_until>CURRENT_TIMESTAMP", args) != 1) {
+        public void cleaned() { check(); requireUpdate(mapper.clearPrevious(key, owner)); }
+        private void requireUpdate(int affected) {
+            if (affected != 1) {
+                lost.set(true);
                 throw new IllegalStateException("保护目标更新失去所有权");
             }
         }
         @Override public void close() {
             if (!closed.compareAndSet(false, true)) { return; }
             heartbeat.interrupt();
-            jdbc.update("UPDATE quant_protection_target SET owner_token=NULL,lease_until=NULL WHERE target_key=? AND owner_token=?", key, owner);
+            mapper.releaseLease(key, owner);
         }
     }
 }
