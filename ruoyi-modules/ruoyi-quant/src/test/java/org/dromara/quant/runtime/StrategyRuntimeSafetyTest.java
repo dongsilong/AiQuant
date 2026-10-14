@@ -47,6 +47,31 @@ class StrategyRuntimeSafetyTest {
         } finally { f.service.destroy(); }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"LIVE", "TESTNET"})
+    void freshTradeUpdatesSlopeTelemetryWithoutOpeningTradeGate(String mode) throws Exception {
+        Fixture f = fixture();
+        try {
+            var credential = (QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential");
+            credential.setRunMode(mode);
+            ReflectionTestUtils.setField(f.runtime, "plugin", new KlineSlopeRateStrategy());
+            Object market = ReflectionTestUtils.getField(f.runtime, "market");
+            ReflectionTestUtils.setField(market, "previousKlineOpen", new BigDecimal("100"));
+            Instant open = Instant.now().minusSeconds(5);
+            ReflectionTestUtils.setField(market, "currentKline",
+                new ExchangeGateway.Kline(open, open.plusSeconds(60), new BigDecimal("101"),
+                    new BigDecimal("103"), new BigDecimal("99"), new BigDecimal("102"), BigDecimal.ONE, false));
+            var event = new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m",
+                new BigDecimal("102"), null, Instant.now());
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime, event);
+            assertEquals(new BigDecimal("102"), ReflectionTestUtils.getField(f.runtime, "latestTradePrice"));
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "marketHealthy"));
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "marketStreamReady"));
+            var telemetry = (StrategySlopeTelemetryHub) ReflectionTestUtils.getField(f.service, "slopeTelemetryHub");
+            verify(telemetry, atLeastOnce()).publish(any());
+        } finally { f.service.destroy(); }
+    }
+
     @Test
     void newlyCreatedRuntimeMustNotAssumeMarketStreamIsReady() throws Exception {
         Fixture f = fixture();
