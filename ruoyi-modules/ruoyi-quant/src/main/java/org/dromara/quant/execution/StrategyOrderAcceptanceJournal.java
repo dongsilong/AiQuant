@@ -24,7 +24,7 @@ public class StrategyOrderAcceptanceJournal {
 
     @Transactional(rollbackFor = Exception.class)
     public QuantOrder persist(Long credentialId, Long strategyId, Long instanceId,
-                              String operation, ExchangeGateway.OrderRequest request,
+                              String runMode, String operation, ExchangeGateway.OrderRequest request,
                               ExchangeGateway.OrderResult result) {
         if (credentialId == null || credentialId <= 0 || request == null || result == null) {
             throw new IllegalArgumentException("Missing accepted order identity");
@@ -34,7 +34,7 @@ public class StrategyOrderAcceptanceJournal {
             throw new IllegalStateException("Exchange order ledger was not persisted");
         }
         if (strategyId != null && instanceId != null
-            && "LIVE".equalsIgnoreCase(request.credential().runMode())
+            && "LIVE".equalsIgnoreCase(runMode)
             && java.util.Set.of("LONG","SHORT").contains(
                 request.positionSide() == null ? "" : request.positionSide().toUpperCase(java.util.Locale.ROOT))) {
             // This does not invent attribution for BOTH/one-way mode.
