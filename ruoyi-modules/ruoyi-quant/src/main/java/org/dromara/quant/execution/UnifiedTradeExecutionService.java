@@ -375,6 +375,28 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                 if ("LIVE".equalsIgnoreCase(runMode)) {
                     dispatchTicket = requireLiveDispatcher().begin(credentialId, symbol, idempotencyKey,
                         operationType, request.clientOrderId(), strategyInstanceId, preparationEpoch);
+                    // The durable guard transaction itself may block behind another
+                    // node. Re-check the exact lease epoch AFTER acquiring the guard
+                    // and BEFORE any network request. If ownership changed, the
+                    // request is provably NOT SENT and we can free our own guard.
+                    if (preparationEpoch != null) {
+                        try {
+                            if (runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol)
+                                != preparationEpoch.longValue()) {
+                                throw new IllegalStateException("LIVE 订单调度等待期间租约代次变化，拒绝旧节点下单");
+                            }
+                        } catch (RuntimeException stale) {
+                            try {
+                                requireLiveDispatcher().notSent(dispatchTicket);
+                                dispatchTicket = null;
+                            } catch (RuntimeException releaseFailure) {
+                                stale.addSuppressed(releaseFailure);
+                                // Leave the ticket occupied; outcome of database release is unknown.
+                                dispatchTicket = null;
+                            }
+                            throw stale;
+                        }
+                    }
                 }
                 exchangeAttempted = true;
                 long orderStarted = System.nanoTime();
