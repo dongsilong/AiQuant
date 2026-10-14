@@ -50,6 +50,30 @@ class StrategyRuntimeLeaseServiceTest {
     }
 
     @Test
+    void finalOwnerCheckUsesSameTokenAndRejectsExpiredOrStolenLease() {
+        var mapper = mock(StrategyRuntimeLeaseMapper.class);
+        var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
+        when(mapper.countCurrentOwner(eq(1L), eq(2L), eq("BTCUSDT"), anyString()))
+            .thenReturn(1L, 0L);
+        service.requireCurrentOwner(1L, 2L, "btcusdt");
+        assertThrows(IllegalStateException.class,
+            () -> service.requireCurrentOwner(1L, 2L, "BTCUSDT"));
+        var captor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(mapper, times(2)).countCurrentOwner(eq(1L), eq(2L), eq("BTCUSDT"), captor.capture());
+        assertEquals(captor.getAllValues().get(0), captor.getAllValues().get(1));
+    }
+
+    @Test
+    void finalOwnerCheckFailsClosedOnDatabaseTimeout() {
+        var mapper = mock(StrategyRuntimeLeaseMapper.class);
+        doThrow(new IllegalStateException("db unavailable")).when(mapper)
+            .countCurrentOwner(anyLong(), anyLong(), anyString(), anyString());
+        var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
+        assertThrows(IllegalStateException.class,
+            () -> service.requireCurrentOwner(1L, 2L, "BTCUSDT"));
+    }
+
+    @Test
     void releaseOnlyUsesSameOwnerTokenAndNormalizedSymbol() {
         StrategyRuntimeLeaseMapper mapper = mock(StrategyRuntimeLeaseMapper.class);
         var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
