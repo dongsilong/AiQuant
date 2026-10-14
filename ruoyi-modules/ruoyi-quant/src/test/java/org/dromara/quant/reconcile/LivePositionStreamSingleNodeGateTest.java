@@ -32,6 +32,7 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         verify(hub, times(1)).subscribe(eq(account), any());
         verify(coordinator).request(71L);
+        verify(hub, times(2)).registerLeaseOwner(eq(71L), anyString());
         stream.close();
         verify(subscription).close();
     }
@@ -54,6 +55,7 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         stream.supervise();
         verify(subscription).close();
+        verify(hub).unregisterLeaseOwner(eq(72L), anyString());
     }
     @Test
     void foreignOwnerNeverCreatesSharedStreamAndRevokesPriorReference() throws Exception {
@@ -74,6 +76,7 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         verify(hub, times(1)).subscribe(eq(account), any());
         verify(reference).close();
+        verify(hub).unregisterLeaseOwner(eq(91L), anyString());
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(91L));
     }
 }
