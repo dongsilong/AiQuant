@@ -4,6 +4,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
 /**
  * Insert-only evidence ledger. Application DB role must not have UPDATE or
@@ -22,4 +23,16 @@ public interface LiveRecoveryAuditMapper {
                @Param("actorId") long actorId, @Param("action") String action,
                @Param("evidenceHash") String evidenceHash,
                @Param("detailHash") String detailHash);
+    /** Read-only evidence lookup. No UPDATE or DELETE method is exposed. */
+    @Options(timeout = 3)
+    @Select("""
+        SELECT audit_id, case_id, actor_id, action,
+               evidence_sha256, detail_hash, created_at
+        FROM quant_live_recovery_audit
+        WHERE case_id=#{caseId}
+        ORDER BY created_at ASC, audit_id ASC
+        LIMIT 100
+        """)
+    java.util.List<java.util.Map<String,Object>> listByCase(@Param("caseId") long caseId);
 }
+
