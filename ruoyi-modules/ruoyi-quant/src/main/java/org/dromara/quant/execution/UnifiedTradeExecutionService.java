@@ -199,31 +199,61 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     @Override
     public ExecutionResult cancel(CancelOrderCommand command) {
         requireIdempotency(command.idempotencyKey());
-        QuantExecutionRecordReservation reservation = reserve("CANCEL", command.credentialId(), null, null, command.symbol(), command.idempotencyKey(), command.clientOrderId());
+        boolean live = "LIVE".equalsIgnoreCase(command.runMode());
+        String targetClientId = command.clientOrderId();
+        Long targetOrderId = command.orderId();
+        // The execution record and dispatch ticket MUST identify the actual order being
+        // cancelled, not a synthetic ID unrelated to that order. A missing client ID
+        // is first resolved by a precise exchange query, before any side-effect.
+        if (live && (targetClientId == null || targetClientId.isBlank())) {
+            if (targetOrderId == null) {
+                throw new IllegalArgumentException("LIVE 撤单缺少交易所订单或客户端标识");
+            }
+            var identity = gateway.queryOrder(command.credential(), command.symbol(), targetOrderId, null);
+            if (identity == null || !targetOrderId.equals(identity.orderId())
+                || identity.clientOrderId() == null || identity.clientOrderId().isBlank()) {
+                throw new IllegalStateException("无法证明 LIVE 撤单的真实客户端订单标识");
+            }
+            targetClientId = identity.clientOrderId();
+        }
+        QuantExecutionRecordReservation reservation = reserve("CANCEL", command.credentialId(), null, null,
+            command.symbol(), command.idempotencyKey(), targetClientId);
         if (!reservation.owner()) {
             if (reservation.result() == null || !reservation.result().accepted()) {
                 throw new IllegalStateException("幂等取消请求仍处于未确认状态：" + command.idempotencyKey());
             }
             return reservation.result();
         }
+
         LiveOrderDispatcher.Ticket ticket = null;
         boolean attempted = false;
+        String resolvedClientId = targetClientId;
         try {
-            if ("LIVE".equalsIgnoreCase(command.runMode())) {
+            if (live) {
                 ticket = requireLiveDispatcher().begin(command.credentialId(), command.symbol(),
-                    command.idempotencyKey(), "CANCEL",
-                    command.clientOrderId() == null || command.clientOrderId().isBlank()
-                        ? exchangeClientOrderId(command.idempotencyKey()) : command.clientOrderId(), null, null);
+                    command.idempotencyKey(), "CANCEL", resolvedClientId, null, null);
             }
             attempted = true;
-            gateway.cancelOrder(new ExchangeGateway.CancelOrderRequest(command.credential(), command.symbol(), command.orderId(), command.clientOrderId(),
-                sendsToExchange(command.runMode())));
-            executionRecordService.accepted(reservation.record(), command.orderId(), "CANCEL_ACCEPTED");
-            if (ticket != null) {
-                requireLiveDispatcher().acknowledged(ticket, command.orderId());
-                ticket = null;
+            gateway.cancelOrder(new ExchangeGateway.CancelOrderRequest(command.credential(),
+                command.symbol(), targetOrderId, resolvedClientId, sendsToExchange(command.runMode())));
+            if (!live) {
+                executionRecordService.accepted(reservation.record(), targetOrderId, "CANCEL_ACCEPTED");
+                return new ExecutionResult(true, "CANCEL_ACCEPTED", targetOrderId, resolvedClientId);
             }
-            return new ExecutionResult(true, "CANCEL_ACCEPTED", command.orderId(), command.clientOrderId());
+            // Binance accepting a CANCEL request is NOT proof that the order ended
+            // unfilled. The order may be FILLED or PARTIALLY_FILLED by the time
+            // cancellation reaches the exchange. Do not release the dispatch slot
+            // until a precise terminal snapshot and local ledger are both durable.
+            ExchangeGateway.OrderSnapshot actual = gateway.queryOrder(
+                command.credential(), command.symbol(), targetOrderId, resolvedClientId);
+            if (!verifiedTerminalCancel(actual, command.symbol(), targetOrderId, resolvedClientId)) {
+                throw new IllegalStateException("LIVE 撤单没有可信的交易所终态，保留调度占用");
+            }
+            orderLedgerService.syncSnapshot(command.credentialId(), actual);
+            executionRecordService.accepted(reservation.record(), actual.orderId(), actual.status());
+            requireLiveDispatcher().acknowledged(ticket, actual.orderId());
+            ticket = null;
+            return new ExecutionResult(true, actual.status(), actual.orderId(), actual.clientOrderId());
         } catch (RuntimeException ex) {
             if (ticket != null) {
                 try {
@@ -234,12 +264,29 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                         requireLiveDispatcher().unknown(ticket);
                     }
                 } catch (RuntimeException dispatchEx) {
-                    ex.addSuppressed(dispatchEx); // Remains durably occupied; no automatic takeover.
+                    ex.addSuppressed(dispatchEx);
                 }
             }
-            executionRecordService.markUnknown(reservation.record(), ex.getMessage());
+            if (attempted) {
+                executionRecordService.markUnknown(reservation.record(), ex.getMessage());
+            } else {
+                executionRecordService.failed(reservation.record(), ex.getMessage());
+            }
             throw ex;
         }
+    }
+
+    /** Only order TERMINAL states allow a LIVE cancel to release the account-symbol slot. */
+    static boolean verifiedTerminalCancel(ExchangeGateway.OrderSnapshot actual, String symbol,
+                                          Long orderId, String clientId) {
+        return actual != null && actual.orderId() != null
+            && (orderId == null || orderId.equals(actual.orderId()))
+            && clientId != null && clientId.equals(actual.clientOrderId())
+            && symbol != null && symbol.equalsIgnoreCase(actual.symbol())
+            && java.util.Set.of("CANCELED", "EXPIRED", "FILLED", "REJECTED")
+                .contains(actual.status() == null ? "" : actual.status().toUpperCase(java.util.Locale.ROOT))
+            && actual.executedQuantity() != null
+            && actual.executedQuantity().signum() >= 0;
     }
 
     /**
