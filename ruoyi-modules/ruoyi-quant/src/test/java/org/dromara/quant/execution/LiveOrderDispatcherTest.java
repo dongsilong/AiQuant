@@ -83,6 +83,21 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
+    void exactVerifiedExchangeFactReleasesUnknownAndRejectsWrongClientId() throws Exception {
+        var f = fixture();
+        var ticket = f.first().begin(1L, "BTCUSDT", "uncertain", "OPEN", "cid-correct", 10L, 7L);
+        f.first().unknown(ticket);
+        assertFalse(f.other().recoveredFromExchange(1L, "BTCUSDT", "uncertain", "cid-wrong", 40L));
+        assertThrows(IllegalStateException.class,
+            () -> f.other().begin(1L, "BTCUSDT", "another", "OPEN", "cid-another", 10L, 7L));
+        assertTrue(f.other().recoveredFromExchange(1L, "BTCUSDT", "uncertain", "cid-correct", 40L));
+        assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "uncertain"));
+        assertFalse(f.other().recoveredFromExchange(1L, "BTCUSDT", "uncertain", "cid-correct", 40L));
+        var after = f.other().begin(1L, "BTCUSDT", "another", "OPEN", "cid-another", 10L, 7L);
+        f.other().notSent(after);
+    }
+
+    @Test
     void duplicateTicketInsertRollsBackGuardClaim() throws Exception {
         var f = fixture();
         var first = f.first().begin(1L, "BTCUSDT", "same-key", "OPEN", "same-cid", null, null);
