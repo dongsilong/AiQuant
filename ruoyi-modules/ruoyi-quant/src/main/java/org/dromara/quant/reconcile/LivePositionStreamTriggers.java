@@ -87,7 +87,14 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                     long now = System.currentTimeMillis();
                     if (now >= nextLeaseConflictLogAt.getOrDefault(id, 0L)) {
                         nextLeaseConflictLogAt.put(id, now + 60_000L);
-                        log.warn("LIVE私有流租约未获取 credentialId={}：可能由其他进程持有有效租约；本节点不启动该账户策略行情订阅。请核查quant_live_user_stream_lease的lease_until、owner_token和其他服务实例", id);
+                        String leaseState;
+                        try {
+                            leaseState = lease.describe(id);
+                        } catch (RuntimeException diagnosticError) {
+                            leaseState = "lease diagnostic unavailable: " + diagnosticError.getClass().getSimpleName();
+                        }
+                        log.warn("LIVE私有流租约竞争 credentialId={} localOwner={} dbLease=[{}]；本节点禁止创建交易策略运行时",
+                            id, ownerToken, leaseState);
                     }
                     closeSubscription(id);
                     freshness.invalidate(id);
