@@ -36,7 +36,7 @@ public interface StrategyPositionProjectionMapper {
 
     @Options(timeout = 3)
     @Select("""
-        SELECT strategy_id,open_quantity,cost_basis,realized_pnl,commissions,
+        SELECT strategy_id,open_quantity,cost_basis,realized_pnl,commissions,commission_asset,
                cycle_number,cycle_id,last_trade_time,last_trade_id
         FROM quant_strategy_position_inventory
         WHERE credential_id=#{credentialId} AND symbol=#{symbol}
@@ -49,7 +49,7 @@ public interface StrategyPositionProjectionMapper {
     @Options(timeout = 3)
     @Select("""
         SELECT strategy_id,strategy_instance_id,exchange_order_id,position_side,
-               fill_role,exchange_side,quantity,fill_price,commission,realized_pnl,trade_time
+               fill_role,exchange_side,quantity,fill_price,commission,commission_asset,realized_pnl,trade_time
         FROM quant_strategy_position_fill_event
         WHERE credential_id=#{credentialId} AND symbol=#{symbol}
           AND exchange_trade_id=#{tradeId}
@@ -81,10 +81,10 @@ public interface StrategyPositionProjectionMapper {
         INSERT INTO quant_strategy_position_fill_event
         (id,credential_id,symbol,strategy_id,strategy_instance_id,cycle_id,
          exchange_trade_id,exchange_order_id,position_side,fill_role,exchange_side,
-         quantity,fill_price,commission,realized_pnl,trade_time)
+         quantity,fill_price,commission,commission_asset,realized_pnl,trade_time)
         VALUES (#{id},#{credentialId},#{symbol},#{strategyId},#{instanceId},
                 #{cycleId},#{tradeId},#{orderId},#{side},#{role},#{exchangeSide},
-                #{quantity},#{price},#{fee},#{pnl},#{tradeTime})
+                #{quantity},#{price},#{fee},#{feeAsset},#{pnl},#{tradeTime})
         """)
     int insertFill(@Param("id") long id,@Param("credentialId") long credentialId,
                    @Param("symbol") String symbol,@Param("strategyId") long strategyId,
@@ -93,25 +93,28 @@ public interface StrategyPositionProjectionMapper {
                    @Param("side") String side,@Param("role") String role,
                    @Param("exchangeSide") String exchangeSide,
                    @Param("quantity") BigDecimal quantity,@Param("price") BigDecimal price,
-                   @Param("fee") BigDecimal fee,@Param("pnl") BigDecimal pnl,
+                   @Param("fee") BigDecimal fee,@Param("feeAsset") String feeAsset,
+                   @Param("pnl") BigDecimal pnl,
                    @Param("tradeTime") LocalDateTime tradeTime);
 
     @Options(timeout = 3)
     @Update("""
         UPDATE quant_strategy_position_inventory
         SET open_quantity=#{quantity},cost_basis=#{cost},
-            realized_pnl=#{pnl},commissions=#{fees},
+            realized_pnl=#{pnl},commissions=#{fees},commission_asset=#{feeAsset},
             cycle_number=#{cycle},cycle_id=#{cycleId},
             last_trade_time=#{tradeTime},last_trade_id=#{tradeId},updated_at=NOW(6)
         WHERE credential_id=#{credentialId} AND symbol=#{symbol}
           AND strategy_instance_id=#{instanceId} AND position_side=#{side}
           AND strategy_id=#{strategyId}
+          AND (commission_asset IS NULL OR commission_asset=#{feeAsset})
         """)
     int update(@Param("credentialId") long credentialId,@Param("symbol") String symbol,
                @Param("instanceId") long instanceId,@Param("side") String side,
                @Param("strategyId") long strategyId,
                @Param("quantity") BigDecimal quantity,@Param("cost") BigDecimal cost,
                @Param("pnl") BigDecimal pnl,@Param("fees") BigDecimal fees,
+               @Param("feeAsset") String feeAsset,
                @Param("cycle") long cycle,@Param("cycleId") Long cycleId,
                @Param("tradeTime") LocalDateTime tradeTime,@Param("tradeId") long tradeId);
 }
