@@ -204,19 +204,21 @@ public class TradingReconciliationService {
         syncPositions(credential, facts.positions());
         syncOrders(credential, facts.history());
         syncOrders(credential, facts.openOrders());
+        int unattributedFills = 0;
         for (var entry : facts.trades().entrySet()) {
-            syncTrades(credential, entry.getValue());
+            unattributedFills += syncTrades(credential, entry.getValue());
         }
         int unmatchedProtections = 0;
         for (var entry : facts.protections().entrySet()) {
             unmatchedProtections += syncProtectionOrders(credential, entry.getKey(), facts.positions(), entry.getValue());
         }
         syncFinancialEvents(credential, facts.income());
-        if (unmatchedProtections > 0) {
-            // The exchange still reports active stops that cannot be tied to a trusted local position.
-            // Never cancel blindly, and NEVER label this reconciliation completely successful.
+        if (unmatchedProtections > 0 || unattributedFills > 0) {
+            // Neither unowned protective orders nor unmatched fills may be
+            // reported as a completely reconciled LIVE strategy account.
             reconcileMapper.insert(record(credential.getId(), "DEGRADED",
-                "{\"unmatchedLiveProtections\":" + unmatchedProtections + "}"));
+                "{\"unmatchedLiveProtections\":" + unmatchedProtections
+                    + ",\"unattributedFills\":" + unattributedFills + "}"));
         } else {
             reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
         }
@@ -336,7 +338,8 @@ public class TradingReconciliationService {
     /**
      * 同步交易所成交事实。
      */
-    private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
+    private int syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
+        int unattributed = 0;
         for (ExchangeGateway.TradeSnapshot s : snapshots) {
             if (decisionLogs != null) { decisionLogs.trade(credential.getId(), s); }
             QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>().eq(QuantTrade::getCredentialId, credential.getId()).eq(QuantTrade::getExchangeTradeId,
@@ -362,6 +365,12 @@ public class TradingReconciliationService {
                     allocations.allocate(s, sourceOrder, credential.getId());
                 }
             }
+            if ("LIVE".equalsIgnoreCase(credential.getRunMode())
+                && (sourceOrder == null || sourceOrder.getStrategyInstanceId() == null)) {
+                // May be an intentional manual trade; preserve it, but never assign
+                // to an arbitrary strategy or silently report full reconciliation.
+                unattributed++;
+            }
             entity.setSide(s.side());
             entity.setQuantity(nvl(s.quantity()));
             entity.setPrice(nvl(s.price()));
@@ -375,6 +384,7 @@ public class TradingReconciliationService {
                 tradeMapper.updateById(entity);
             }
         }
+        return unattributed;
     }
 
     /**
