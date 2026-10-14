@@ -21,6 +21,8 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Reject committed plaintext credentials in trading configuration
+        run: python3 script/security/check_quant_config_secrets.py
       - name: Compile and test critical trade invariants
         run: >-
           bash mvnw -B -ntp
