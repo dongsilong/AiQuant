@@ -86,7 +86,11 @@ The V04 `quant_live_account_settings_intent` table enforces one immutable
 desired margin/leverage policy per account-symbol across nodes; conflicting
 settings are refused before any exchange write. An uncertain config request
 remains `UNKNOWN`/`DISPATCHING` without automatic release. This guards known
-AiQuant writers, but **does not independently verify exchange-side config or
-allow automated restart recovery**. A verified Binance settings-readback and
-audited operator recovery remain production acceptance blockers.
+AiQuant writers. The service now verifies Binance exchange-side settings after
+both setters and again at periodic LIVE readiness renewal; mismatch or missing
+readback fails closed, without silently reapplying settings. This readback is
+not a remote atomic transaction, does not guarantee the setting remains
+unchanged between renewal and order submission, and does not permit automatic
+restart recovery. Audited operator recovery, cross-node fault injection and
+staging acceptance remain production release blockers.
 
