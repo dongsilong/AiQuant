@@ -97,8 +97,8 @@ class TradingPreparationServiceTest {
     }
     private LiveOrderDispatcher liveDispatcher() {
         var dispatcher = mock(LiveOrderDispatcher.class);
-        when(dispatcher.begin(eq(1L), eq("BTCUSDT"), anyString(),
-            eq("CONFIG_SETTINGS"), eq("SETTINGS:ISOLATED:10"), isNull(), isNull()))
+        when(dispatcher.beginConfiguration(eq(1L), eq("BTCUSDT"), anyString(),
+            eq("ISOLATED"), eq(10)))
             .thenAnswer(inv -> new LiveOrderDispatcher.Ticket(1L, "BTCUSDT", inv.getArgument(2)));
         return dispatcher;
     }
@@ -120,8 +120,8 @@ class TradingPreparationServiceTest {
             .get(3, TimeUnit.SECONDS);
         service.requireReady(1L, "BTCUSDT", 10, "ISOLATED");
         var sequence = inOrder(dispatcher, gateway);
-        sequence.verify(dispatcher).begin(eq(1L), eq("BTCUSDT"), anyString(),
-            eq("CONFIG_SETTINGS"), eq("SETTINGS:ISOLATED:10"), isNull(), isNull());
+        sequence.verify(dispatcher).beginConfiguration(eq(1L), eq("BTCUSDT"), anyString(),
+            eq("ISOLATED"), eq(10));
         sequence.verify(gateway).setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
         sequence.verify(gateway).setLeverage(any(), eq("BTCUSDT"), eq(10));
         sequence.verify(dispatcher).configurationApplied(any(LiveOrderDispatcher.Ticket.class));
@@ -158,8 +158,8 @@ class TradingPreparationServiceTest {
         ready();
         var dispatcher = liveDispatcher();
         service.setLiveOrderDispatcher(dispatcher);
-        when(dispatcher.begin(eq(1L), eq("BTCUSDT"), anyString(), eq("CONFIG_SETTINGS"),
-            eq("SETTINGS:ISOLATED:10"), isNull(), isNull()))
+        when(dispatcher.beginConfiguration(eq(1L), eq("BTCUSDT"), anyString(),
+            eq("ISOLATED"), eq(10)))
             .thenThrow(new IllegalStateException("Unknown remote order holds account-symbol"));
         service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive())
             .get(3, TimeUnit.SECONDS);
