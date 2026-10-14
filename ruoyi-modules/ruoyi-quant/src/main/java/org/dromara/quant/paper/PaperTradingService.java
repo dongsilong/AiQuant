@@ -1,7 +1,6 @@
 package org.dromara.quant.paper;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
@@ -22,7 +21,6 @@ import java.util.List;
 /**
  * PAPER 虚拟撮合账本。PAPER 不访问交易所私有账户，也不发送真实订单。
  */
-@Slf4j
 @Service
 public class PaperTradingService {
     /**
@@ -175,6 +173,7 @@ public class PaperTradingService {
     @Transactional
     public QuantPosition recordOpenFill(Long credentialId, String idempotencyKey, String symbol, String direction, BigDecimal quantity, BigDecimal entryPrice, int leverage) {
         QuantExecutionRecord record = lockExecution(credentialId, idempotencyKey);
+        // 重放相同成交事件时只返回既有结果，不重复生成持仓或扣减保证金。
         if (Boolean.TRUE.equals(record.getPaperSettled())) {
             return positionMapper.selectOne(new LambdaQueryWrapper<QuantPosition>().eq(QuantPosition::getCredentialId, credentialId).eq(QuantPosition::getSymbol, symbol).eq(QuantPosition::getPositionSide, direction));
         }
@@ -198,7 +197,6 @@ public class PaperTradingService {
         record.setPaperSettled(true);
         record.setExecutionStatus("CONFIRMED");
         record.setExchangeOrderStatus("FILLED");
-        record.setExchangeOrderId(record.getExchangeOrderId());
         record.setUpdatedAt(LocalDateTime.now());
         executionRecordMapper.updateById(record);
         return position;
@@ -210,6 +208,7 @@ public class PaperTradingService {
     @Transactional
     public PaperCloseSettlement settlePaperExecution(Long credentialId, String idempotencyKey, Long positionId, BigDecimal quantity, BigDecimal fillPrice) {
         QuantExecutionRecord record = lockExecution(credentialId, idempotencyKey);
+        // 幂等保护：已结算的平仓不得再次释放保证金或累计已实现盈亏。
         if (Boolean.TRUE.equals(record.getPaperSettled())) {
             QuantPosition current = positionId == null ? null : positionMapper.selectById(positionId);
             return new PaperCloseSettlement(current, BigDecimal.ZERO, BigDecimal.ZERO);
@@ -307,7 +306,9 @@ public class PaperTradingService {
     }
 
     /**
-     * 对 PAPER 账户加数据库锁，串行化关键结算。
+     * 锁定对应执行记录，保证同一幂等键的成交确认和资金结算串行执行。
+     * <p>数据库锁与 {@code @Transactional} 必须处于同一事务；调用方须先确认执行模式为 PAPER。
+     * 找不到记录时直接失败，避免在资金状态不明时重复结算。
      */
     private QuantExecutionRecord lockExecution(Long credentialId, String idempotencyKey) {
         Long id = atomicMapper.lockExecution(credentialId, idempotencyKey);
