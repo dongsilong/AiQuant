@@ -2949,7 +2949,7 @@ public class StrategyRuntimeService {
         private BigDecimal latestTradePrice;
         private Instant latestTradeEventAt;
         // 健康回调直接关闭决策，不能等待普通行情队列的断线通知。
-        private volatile boolean marketStreamReady = true;
+        private volatile boolean marketStreamReady;
         private volatile long nextReconcileAt;
         /**
          * 最近一次参与开仓判断的 K 线开始时间。
