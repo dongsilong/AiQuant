@@ -23,6 +23,7 @@ quant:
   # 策略运行时调度与分布式租约配置
   runtime:
     # 是否启用策略运行时监督；关闭后会停止全部运行中的策略实例
+    # 默认不自动启动策略，需完成租约、对账与风控检查后显式启用。
     enabled: ${QUANT_RUNTIME_ENABLED:false}
     # 策略实例发现、启动/停止和租约维护的间隔，单位：秒
     tick-seconds: 5
@@ -31,6 +32,7 @@ quant:
     # 未确认开平仓执行记录的恢复扫描间隔，单位：秒
     recovery-seconds: 5
   paper:
+    # 生产环境禁止模拟账本入口；历史代码与数据结构暂保留用于迁移兼容。
     enabled: false
   # 交易所事实对账与用户数据流协调配置
   reconcile:
@@ -41,9 +43,6 @@ quant:
     # 对账查询历史订单和成交的回溯范围，单位：小时
     history-hours: 48
 
-#logging:
-#  level:
-#    org.dromara.quant.strategy: debug
 
 --- # 监控中心配置
 spring.boot.admin.client:
