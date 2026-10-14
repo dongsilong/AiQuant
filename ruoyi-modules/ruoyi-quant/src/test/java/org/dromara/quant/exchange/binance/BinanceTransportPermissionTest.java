@@ -18,6 +18,7 @@ class BinanceTransportPermissionTest {
         assertNotNull(permission);
         assertTrue(Arrays.asList(permission.value()).contains("quant:transport:switch"));
         var adapter = mock(BinanceGatewayAdapter.class);
+        when(adapter.websocketTransport()).thenReturn("RAW_OKHTTP");
         var controller = new BinanceWebSocketTransportController(adapter);
         assertThrows(IllegalArgumentException.class, () -> controller.change("BINANCE_SDK", false));
         verify(adapter, never()).switchWebsocketTransport(anyString());
