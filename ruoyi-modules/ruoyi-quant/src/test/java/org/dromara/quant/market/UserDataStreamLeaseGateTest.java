@@ -75,4 +75,35 @@ class UserDataStreamLeaseGateTest {
         hub.destroy();
     }
 
+    @Test
+    void explicitLeaseRevocationClosesSocketEvenIfBrowserSseStillSubscribes() throws Exception {
+        var gateway = mock(ExchangeGateway.class);
+        var lease = mock(LiveUserStreamLeaseMapper.class);
+        var positions = mock(AccountPositionCache.class);
+        var balances = mock(AccountBalanceCache.class);
+        var preparation = mock(TradingPreparationService.class);
+        var execution = mock(TradeExecutionApplicationService.class);
+        var session = mock(ExchangeGateway.UserDataStreamSession.class);
+        when(lease.owns(eq(98L), eq("node-a"))).thenReturn(1L);
+        when(gateway.subscribeUserData(any(), any())).thenReturn(session);
+        var hub = new UserDataStreamHub(gateway, execution, positions, balances, preparation);
+        ReflectionTestUtils.setField(hub, "streamLease", lease);
+        var credential = new QuantCredential();
+        credential.setId(98L);
+        credential.setRunMode("LIVE");
+        hub.registerLeaseOwner(98L, "node-a");
+        var supervisor = hub.subscribe(credential, ignored -> {});
+        var browser = hub.subscribe(credential, ignored -> {});
+        assertTrue(hub.hasLocalStream(98L));
+        hub.unregisterLeaseOwner(98L, "node-a");
+        assertFalse(hub.hasLocalStream(98L));
+        verify(session).close();
+        verify(positions).remove(98L);
+        verify(balances).remove(98L);
+        assertThrows(IllegalStateException.class, () -> hub.subscribe(credential, ignored -> {}));
+        supervisor.close();
+        browser.close();
+        hub.destroy();
+    }
+
 }
