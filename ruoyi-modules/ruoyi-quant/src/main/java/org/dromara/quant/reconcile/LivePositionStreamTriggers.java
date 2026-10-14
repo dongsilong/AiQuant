@@ -27,7 +27,7 @@ import java.util.Set;
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "quant.live", name = "enabled", havingValue = "true", matchIfMissing = true)
-public class LivePositionStreamTriggers {
+public class LivePositionStreamTriggers implements org.springframework.boot.ApplicationRunner {
     private final QuantCredentialMapper credentials;
     private final UserDataStreamHub hub;
     private final LivePositionEventCoordinator coordinator;
@@ -38,6 +38,16 @@ public class LivePositionStreamTriggers {
     private final Map<Long, AutoCloseable> subscriptions = new HashMap<>();
     /** Avoid flooding WARN when an account is leased to a different LIVE node. */
     private final Map<Long, Long> nextLeaseConflictLogAt = new HashMap<>();
+
+    /**
+     * Establish the private-stream ownership before the application reports startup
+     * complete and before the strategy runtime supervisor's initial tick.
+     * The scheduled supervisor remains responsible for continuous renewal.
+     */
+    @Override
+    public void run(org.springframework.boot.ApplicationArguments args) {
+        supervise();
+    }
 
     @Scheduled(fixedDelay = 30000, initialDelay = 0)
     public synchronized void supervise() {
