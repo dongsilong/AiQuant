@@ -28,7 +28,7 @@ class StrategyPositionProjectionContractTest {
             long.class,long.class,String.class,long.class,long.class,long.class,
             long.class,long.class,String.class,String.class,String.class,
             java.math.BigDecimal.class,java.math.BigDecimal.class,
-            java.math.BigDecimal.class,java.math.BigDecimal.class,
+            java.math.BigDecimal.class,String.class,java.math.BigDecimal.class,
             java.time.LocalDateTime.class);
         assertTrue(String.join(" ",insert.getAnnotation(Insert.class).value())
             .contains("quant_strategy_position_fill_event"));
