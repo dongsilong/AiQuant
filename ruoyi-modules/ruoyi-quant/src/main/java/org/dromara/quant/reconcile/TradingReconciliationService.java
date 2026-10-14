@@ -79,6 +79,14 @@ public class TradingReconciliationService {
     private final StrategyPositionStateService strategyPositionStateService;
     private final TransactionTemplate transaction;
     private volatile org.dromara.quant.execution.StrategyFillAllocationService fillAllocations;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LivePositionFreshness positionFreshness;
+    private void markPositionVerified(Long credentialId) {
+        if (positionFreshness != null) {
+            positionFreshness.verified(credentialId);
+        }
+    }
+
 
     @org.springframework.beans.factory.annotation.Autowired
     public void setFillAllocations(org.dromara.quant.execution.StrategyFillAllocationService service) {
@@ -167,6 +175,7 @@ public class TradingReconciliationService {
                 syncAccount(credential, account);
                 syncPositions(credential, positions);
             });
+            markPositionVerified(credential.getId());
         } catch (RuntimeException ex) {
             failureRecorder.record(credential.getId(), ex.getMessage());
             throw ex;
@@ -195,6 +204,7 @@ public class TradingReconciliationService {
                 syncAccount(credential, account);
                 syncPositions(credential, positions);
             });
+            markPositionVerified(credential.getId());
             ExchangeFacts facts = collectExchangeFacts(credential, historyHours,
                 exchangeCredential, account, positions);
             transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
