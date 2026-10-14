@@ -140,3 +140,36 @@ on preserved execution command facts. Also required are V07-V09 deployment,
 consistent fee-asset accounting, a correctly ordered exchange fill projector,
 full account position reconciliation and staging failure injection. P0-04
 remains OPEN.
+
+## Six P0-04 exit criteria — additional implementation in this round
+
+1. **Crash-recovered order intent:** still OPEN. The acceptance journal
+   is locally atomic only AFTER Binance has acknowledged the order. There is
+   no durable pre-send OPEN/CLOSE+position-side provenance surviving a crash
+   before the returned order ID is journaled. Do not backfill by guessing.
+2. **Automatic Binance fill projection:** still OPEN. Added
+   `StrategyFillReplayService` as an explicit bounded upstream-fed replay
+   coordinator, not an enabled automatic exchange poller.
+3. **Ordered historical replay and quarantine:** PARTIAL. The coordinator
+   sorts a complete caller-verified window by trade time / trade ID, checks
+   exact immutable order provenance, and halts at the first unattributed
+   fill with its TradeId. The transactional projector rejects stale, duplicate
+   conflicting and over-close facts. Pagination-completeness evidence,
+   durable checkpointing and delayed-fill gap recovery are still OPEN.
+4. **Fee asset and funding:** OPEN. The current `TradeSnapshot` carries
+   commission amount but not commission asset or funding allocation.
+   Reporting those as settled strategy-level money without fee currency and
+   separate funding facts would be unsafe.
+5. **Binance-account vs strategy inventory:** PARTIAL. New
+   `StrategyPositionReconciliation` fails closed unless LONG and SHORT
+   inventory agree using exact BigDecimal comparisons AND complete history,
+   no unattributed manual fills and common watermark are proven. Live
+   Binance account/position snapshot wiring is not enabled.
+6. **Migration and fault drills:** PARTIAL. CI now executes V03/V07/V08/V09
+   DDL on a disposable MySQL 8.4 container. This is NOT verified canonical
+   production schema migration, backup/restore, cross-node crash injection
+   or Binance environment acceptance.
+
+The runtime remains disabled for unattended LIVE operation. Do not mark
+P0-04 closed until all external validations and missing source-fact plumbing
+are completed on a staging clone.
