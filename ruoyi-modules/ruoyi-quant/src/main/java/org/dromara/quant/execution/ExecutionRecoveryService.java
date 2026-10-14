@@ -164,7 +164,55 @@ public class ExecutionRecoveryService {
                 // 网络/交易所异常不能改写交易事实；记录继续保留在当前状态，下一轮继续查询。
             }
         }
+        recoverStrandedFinalizedDispatches();
     }
+
+    /**
+     * Process death can occur after the execution record becomes RECOVERED but
+     * before its dispatch ticket is released. That RECOVERED execution is no
+     * longer selected by the ordinary unresolved scan. Recheck Binance's exact
+     * identity and persist the fact again before lifting the stranded guard.
+     *
+     * Never release a CANCEL on NEW/PARTIALLY_FILLED or missing fill totals.
+     */
+    private void recoverStrandedFinalizedDispatches() {
+        if (liveOrderDispatcher == null) return;
+        List<QuantExecutionRecord> stranded = recordMapper.strandedRecoveredDispatches();
+        if (stranded == null) return;
+        for (QuantExecutionRecord record : stranded) {
+            if (record.getCredentialId() == null || record.getSymbol() == null
+                || record.getIdempotencyKey() == null || record.getClientOrderId() == null
+                || record.getExchangeOrderId() == null) continue;
+            try {
+                QuantCredential credential = credentialMapper.selectById(record.getCredentialId());
+                if (credential == null || !"LIVE".equalsIgnoreCase(credential.getRunMode())) continue;
+                var c = new ExchangeGateway.Credential(credential.getApiKey(),
+                    credential.getSecretKey(), credential.getSignatureType(), credential.getRunMode());
+                var exact = gateway.queryOrder(c, record.getSymbol(),
+                    record.getExchangeOrderId(), record.getClientOrderId());
+                if (exact == null || exact.orderId() == null
+                    || !record.getExchangeOrderId().equals(exact.orderId())
+                    || !record.getClientOrderId().equals(exact.clientOrderId())
+                    || exact.symbol() == null || !record.getSymbol().equalsIgnoreCase(exact.symbol())) {
+                    continue;
+                }
+                if ("CANCEL".equalsIgnoreCase(record.getOperationType())
+                    && !UnifiedTradeExecutionService.verifiedTerminalCancel(exact,
+                        record.getSymbol(), record.getExchangeOrderId(), record.getClientOrderId())) {
+                    continue;
+                }
+                var persisted = orderLedgerService.syncSnapshot(record.getCredentialId(), exact);
+                if (persisted == null || persisted.getId() == null) {
+                    continue;
+                }
+                releaseRecoveredTicket(credential, record, exact);
+            } catch (RuntimeException ex) {
+                // Keep the guard held on any uncertain DB/network result. Other
+                // records may still be independently recoverable on this tick.
+            }
+        }
+    }
+
     /**
      * The exact Binance client order ID, recovered execution state and persisted
      * order ledger must all agree before releasing the durable LIVE dispatch slot.
