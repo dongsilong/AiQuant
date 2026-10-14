@@ -22,6 +22,34 @@
 - Production and development credential values were replaced with environment-variable references. **Existing Git history still contains earlier values: rotate all actual exposed credentials immediately.**
 - Trading terminal sends close quantity as the original decimal string, avoiding browser float rounding.
 
+## WebSocket transport options and node-local cutover
+
+Two independent transports are implemented under the same `ExchangeGateway` market/user-data interfaces:
+
+| Option | Configuration | Operational trade-off |
+| --- | --- | --- |
+| A — official SDK | `QUANT_BINANCE_WEBSOCKET_TRANSPORT=BINANCE_SDK` | Uses the official 12.0.3 stream subscription API for market and user events. The SDK's internal queue is unbounded; the adapter monitors queue depth and disconnects at `QUANT_BINANCE_SDK_BACKLOG_LIMIT` (default 2048) for reconciliation/replay. This is a **threshold**, not a hard memory cap. Treat as opt-in pending soak/fault testing. |
+| B — raw OkHttp | `QUANT_BINANCE_WEBSOCKET_TRANSPORT=RAW_OKHTTP` | Existing combined stream protocol, preserving raw-event parsing and existing stream-health/replay behavior. **Default for LIVE.** |
+
+**Configuration at deployment:** set environment variables above, then perform a supervised rolling restart. This is safe to configure in every profile and does not modify the Binance REST SDK version.
+
+**Controlled node-local hot switch (requires explicit RBAC grant):**
+
+- `GET /quant/infrastructure/websocket/transport` — `quant:transport:view` permission.
+- `POST /quant/infrastructure/websocket/transport?mode=BINANCE_SDK&acknowledgeReconnectionRisk=true` — `quant:transport:switch` permission. Use `mode=RAW_OKHTTP` to revert.
+
+A switch chooses the new transport for future subscriptions, closes existing streams and explicitly announces `DISCONNECTED` to hubs so they can resubscribe and replay/reconcile. Switching is **per application node**, not a cluster-wide atomic operation; coordinate multi-node cutover. There is a reconnection window, **not zero-downtime or no-lost-events**. Do not switch with unprotected open LIVE positions or during uncertain executions. Only authorized infrastructure operators should be assigned the new permissions. Reconciliation and protective order supervision must be healthy before/after cutover.
+
+**Important:** The SDK path uses its generated typed subscription API but consumes raw event strings from the SDK queue to preserve the already audited AiQuant event normalizer. Validate actual 12.0.3 listenKey, mark-price cadence, reconnection and event model compatibility on a staging account; the method-existence test alone does not prove end-to-end stream behavior. SDK Streams with a configured HTTP proxy intentionally fail closed until proper SDK proxy support is wired/tested.
+
+## Architecture changes and operational validation
+
+- Introduced `StrategyRuntimeScheduler` so supervision/reconciliation scheduling is separated from strategy decision/runtime state. The large `StrategyRuntimeService` still owns most business concerns and requires additional decomposition before high-scale operation.
+- Replaced runtime's direct JDBC exposure count with `StrategyRuntimeLedgerMapper`; PAPER margin refunds belong to `PaperTradingService`.
+- Execution record transitions now use guarded MyBatis UPDATE statements: delayed timeout/failed callbacks cannot overwrite CONFIRMED/RECOVERED facts. Recovery attempt increments are SQL-atomic.
+- Automated MySQL 8.4/InnoDB tests validate distributed lease ownership, entry guard uniqueness, and concurrent open-capacity reservation against actual row locks. CI includes a separate ephemeral MySQL container; these tests refuse any database URL outside the dedicated `aiquant_ci_test` name.
+- Before live capital, still require staged Binance endpoint tests, multi-node failure injection, stale owner fencing on the final order gateway, recovery beyond outages and 24 hours, protection-order behavior, manual intervention drills, secret rotation and explicit risk approvals.
+
 ## Required production configuration
 
 Mandatory before booting either prod/dev profile: `QUANT_SECRET_KEY`, `MYBATIS_ENCRYPTOR_PASSWORD`, `AIQUANT_JDBC_URL`, `AIQUANT_DB_USERNAME`, `AIQUANT_DB_PASSWORD`, `AIQUANT_REDIS_PASSWORD`.
