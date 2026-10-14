@@ -85,4 +85,26 @@ class LivePositionEventCoordinatorTest {
         verifyNoInteractions(credentials, reconciliation);
     }
 
+    @Test
+    void disconnectInvalidatesSnapshotAndReconnectSchedulesFullRefresh() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        var freshness = new LivePositionFreshness();
+        freshness.verified(73L);
+        org.springframework.test.util.ReflectionTestUtils.setField(coordinator, "freshness", freshness);
+        var account = new QuantCredential();
+        account.setId(73L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectById(73L)).thenReturn(account);
+        coordinator.onUserDataEvent(73L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent(
+            "DISCONNECTED", java.time.Instant.now(), null));
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(73L));
+        coordinator.onUserDataEvent(73L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent(
+            "CONNECTED", java.time.Instant.now(), null));
+        coordinator.drain();
+        verify(reconciliation).refreshPositionsOnly(account);
+    }
+
 }
