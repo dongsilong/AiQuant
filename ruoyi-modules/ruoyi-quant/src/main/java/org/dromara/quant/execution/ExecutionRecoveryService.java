@@ -98,13 +98,24 @@ public class ExecutionRecoveryService {
                     // 精确订单不存在或交易所暂时不可用时，继续使用当前挂单兜底查询。
                 }
                 if (exact != null) {
-                    if (record.getExchangeOrderId() != null
+                    if (exact.symbol() == null || !record.getSymbol().equalsIgnoreCase(exact.symbol())
+                        || record.getExchangeOrderId() != null
                         && !record.getExchangeOrderId().equals(exact.orderId())
                         || record.getClientOrderId() != null
                         && !record.getClientOrderId().equals(exact.clientOrderId())) {
                         // Query by orderId or clientOrderId must not accept the other
                         // identity changing unexpectedly. Keep UNKNOWN, block dispatch.
                         throw new IllegalStateException("Binance recovery returned conflicting order identity");
+                    }
+                    if ("CANCEL".equalsIgnoreCase(record.getOperationType())
+                        && ("CANCELED".equalsIgnoreCase(exact.status())
+                            || "EXPIRED".equalsIgnoreCase(exact.status())
+                            || "FILLED".equalsIgnoreCase(exact.status())
+                            || "REJECTED".equalsIgnoreCase(exact.status()))
+                        && (exact.executedQuantity() == null || exact.executedQuantity().signum() < 0
+                            || exact.originalQuantity() == null || exact.originalQuantity().signum() <= 0
+                            || exact.executedQuantity().compareTo(exact.originalQuantity()) > 0)) {
+                        throw new IllegalStateException("取消恢复缺少可信的累计成交数量，不得解除调度占用");
                     }
                     orderLedgerService.syncSnapshot(record.getCredentialId(), exact);
                     if ("CANCEL".equalsIgnoreCase(record.getOperationType())) {
@@ -135,7 +146,11 @@ public class ExecutionRecoveryService {
                 }
                 ExchangeGateway.OrderSnapshot matched = record.getClientOrderId() == null ? null
                     : gateway.queryOrders(c, record.getSymbol()).stream()
-                        .filter(o -> record.getClientOrderId().equals(o.clientOrderId()))
+                        .filter(o -> record.getClientOrderId().equals(o.clientOrderId())
+                            && o.symbol() != null && record.getSymbol().equalsIgnoreCase(o.symbol())
+                            && o.orderId() != null
+                            && (record.getExchangeOrderId() == null
+                                || record.getExchangeOrderId().equals(o.orderId())))
                         .findFirst().orElse(null);
                 if (matched != null && !"CANCEL".equalsIgnoreCase(record.getOperationType())) {
                     // A fallback match must use actual exchange facts, not possibly stale local status.
@@ -161,6 +176,11 @@ public class ExecutionRecoveryService {
             || record.getClientOrderId() == null
             || !record.getClientOrderId().equals(snapshot.clientOrderId())
             || snapshot.orderId() == null
+            || snapshot.symbol() == null || !record.getSymbol().equalsIgnoreCase(snapshot.symbol())
+            || "CANCEL".equalsIgnoreCase(record.getOperationType())
+                && (snapshot.originalQuantity() == null || snapshot.originalQuantity().signum() <= 0
+                    || snapshot.executedQuantity() == null || snapshot.executedQuantity().signum() < 0
+                    || snapshot.executedQuantity().compareTo(snapshot.originalQuantity()) > 0)
             || "CANCEL".equalsIgnoreCase(record.getOperationType())
                 && !java.util.Set.of("CANCELED", "EXPIRED", "FILLED", "REJECTED")
                     .contains(snapshot.status() == null ? "" : snapshot.status().toUpperCase(java.util.Locale.ROOT))) {
