@@ -91,3 +91,20 @@ reconciliation are implemented and validated. V07 and V08 remain design-only
 migrations awaiting actual MySQL schema review and restore rehearsal.
 
 P0-04 remains OPEN.
+
+## Immutable order-intent projection gate
+
+V09 adds a review-only `quant_strategy_order_intent` table with unique
+credential/symbol/exchange-order and client-order identities. The projector
+now refuses every fill unless an exact persisted intent independently
+matches strategy, instance, position side, OPEN/CLOSE role, exchange BUY/SELL
+and client order ID. The mere presence of a mutable QuantOrder or a
+reduceOnly flag is insufficient. No automatic insertion or backfill into
+V09 has been enabled; until the execution service transactionally captures
+authenticated strategy intent, the projector fails closed.
+
+This is a security/correctness gate, **not completion of P0-04**. Still
+required: trusted intent creation tied to exchange acceptance, V07-V09
+schema rehearsal, serialized complete trade history replay, robust fee
+asset accounting, account position/protection reconciliation, and
+multi-node MySQL acceptance.
