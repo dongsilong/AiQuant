@@ -21,7 +21,7 @@ class BinanceWebSocketTransportSelectionTest {
 
         assertEquals(1, gateway.switchWebsocketTransport("BINANCE_SDK"));
         assertEquals("BINANCE_SDK", gateway.websocketTransport());
-        assertFalse(gateway.sdkStreamsEnabled());
+        assertTrue(gateway.sdkStreamsEnabled());
         assertEquals(1, closed.get(), "switch must reconnect existing LIVE sockets");
         assertEquals(1, notified.get(), "switch must signal controlled recovery");
     }
@@ -43,6 +43,7 @@ class BinanceWebSocketTransportSelectionTest {
     @Test
     void rawTransportCanBeExplicitlySelected() {
         var config = new QuantProperties();
+        config.getBinance().setWebsocketTransport("RAW_OKHTTP");
         var gateway = new BinanceGatewayAdapter(config);
         assertFalse(gateway.sdkStreamsEnabled());
         var closed = new java.util.concurrent.atomic.AtomicInteger();
@@ -54,7 +55,7 @@ class BinanceWebSocketTransportSelectionTest {
         assertEquals(1, notified.get());
         assertTrue(gateway.sdkStreamsEnabled());
         assertEquals("BINANCE_SDK", gateway.websocketTransport());
-        assertEquals(0, gateway.switchWebsocketTransport("RAW_OKHTTP"));
+        assertEquals(1, gateway.switchWebsocketTransport("RAW_OKHTTP"));
         assertFalse(gateway.sdkStreamsEnabled());
         assertThrows(IllegalArgumentException.class, () -> gateway.switchWebsocketTransport("unsupported"));
         assertFalse(gateway.sdkStreamsEnabled());
