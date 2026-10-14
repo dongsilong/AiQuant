@@ -37,6 +37,39 @@ class ExecutionRecoveryServiceTest {
     }
 
     @Test
+    void conflictingBinanceOrderIdentityDoesNotRewriteLedgerOrUnlockDispatch() {
+        var records = mock(QuantExecutionRecordMapper.class);
+        var credentials = mock(QuantCredentialMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var recordService = mock(ExecutionRecordService.class);
+        var ledger = mock(OrderLedgerService.class);
+        var dispatcher = mock(LiveOrderDispatcher.class);
+        var record = new QuantExecutionRecord();
+        record.setCredentialId(1L);
+        record.setSymbol("BTCUSDT");
+        record.setIdempotencyKey("entry-123");
+        record.setClientOrderId("correct-client");
+        record.setExchangeOrderId(123L);
+        record.setExecutionStatus("UNKNOWN");
+        record.setOperationType("OPEN");
+        when(records.selectList(any())).thenReturn(List.of(record));
+        var credential = new QuantCredential();
+        credential.setApiKey("test");
+        credential.setSecretKey("test");
+        credential.setRunMode("LIVE");
+        when(credentials.selectById(1L)).thenReturn(credential);
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(123L), eq("correct-client")))
+            .thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 123L, "WRONG-client",
+                "BUY", "MARKET", "FILLED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now()));
+        var service = new ExecutionRecoveryService(records, credentials, gateway, recordService, ledger, new QuantProperties());
+        service.setLiveOrderDispatcher(dispatcher);
+        service.recover();
+        verifyNoInteractions(ledger);
+        verify(recordService, never()).markRecovered(any(), any(), any());
+        verifyNoInteractions(dispatcher);
+    }
+
+    @Test
     void fallbackOrderMatchUsesExchangeStatusRatherThanStaleLocalStatus() {
         var records = mock(QuantExecutionRecordMapper.class);
         var credentials = mock(QuantCredentialMapper.class);
