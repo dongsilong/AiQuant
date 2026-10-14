@@ -22,7 +22,7 @@ public class StrategyFillAuditService {
                           String symbol, String allocationScope,
                           String fillCount, String boughtQty, String soldQty,
                           String boughtNotional, String soldNotional,
-                          String totalFees, String realizedPnl) {}
+                          String totalFees, String feeAsset, String realizedPnl) {}
 
     public Summary summarize(Long credentialId, Long strategyId, Long instanceId, String symbol) {
         if (credentialId == null || credentialId <= 0 || strategyId == null || strategyId <= 0
@@ -36,11 +36,16 @@ public class StrategyFillAuditService {
         if (r == null || r.get("fill_count") == null) {
             throw new IllegalStateException("策略成交归属数据不可用，拒绝返回伪造的持仓汇总");
         }
+        Object feeCount = r.get("fee_asset_count");
+        if (!(feeCount instanceof Number n) || n.longValue() != 1L
+            || !(r.get("fee_asset") instanceof String asset) || asset.isBlank()) {
+            throw new IllegalStateException("Mixed or unknown fee assets; do not sum currencies");
+        }
         return new Summary(credentialId.toString(), strategyId.toString(),
             instanceId.toString(), normalized, "LIFETIME_VERIFIED_FILLS_NOT_OPEN_POSITION",
             number(r,"fill_count"), decimal(r,"bought_qty"), decimal(r,"sold_qty"),
             decimal(r,"bought_notional"), decimal(r,"sold_notional"),
-            decimal(r,"total_fees"), decimal(r,"realized_pnl"));
+            decimal(r,"total_fees"), (String)r.get("fee_asset"), decimal(r,"realized_pnl"));
     }
 
     private static String decimal(Map<String,Object> values, String field) {
