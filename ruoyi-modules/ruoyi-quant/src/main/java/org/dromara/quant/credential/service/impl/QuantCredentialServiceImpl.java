@@ -126,7 +126,6 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setLastConnectTime(current.getLastConnectTime());
         }
         credentialMapper.updateById(entity);
-        saveUsers(entity.getId(), bo.getUserIds(), entity.getUserId());
         return toVo(entity);
     }
 
