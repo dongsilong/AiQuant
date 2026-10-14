@@ -64,6 +64,10 @@ public class LivePositionStreamTriggers {
                 if (subscriptions.containsKey(id)) {
                     continue;
                 }
+                // A new stream ownership generation cannot inherit a position
+                // snapshot verified under the previous WebSocket/lease. Block
+                // LIVE entries until a fresh authenticated REST snapshot wins.
+                freshness.invalidate(id);
                 AutoCloseable reference = hub.subscribe(credential, event -> {
                     // Hub centrally forwards events into the coordinator; this
                     // listener exists only to hold an active subscription.
