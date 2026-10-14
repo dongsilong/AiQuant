@@ -99,6 +99,9 @@ public class MarketStreamHub {
         // 同一K线周期重复进入补偿时仅首次告警；实际校验及交易门控不受影响。
         private Instant lastRecoveryWarningPeriod;
         private long nextMetricsAt;
+        /** MARK freshness measured at event consumption, not at the watchdog sample. */
+        private volatile long lastMarkProcessingLagMs = -1;
+        private volatile boolean lastMarkFreshAtProcessing;
         private final java.util.concurrent.atomic.LongAccumulator maxNetworkLag = new java.util.concurrent.atomic.LongAccumulator(Long::max, 0);
         private final java.util.concurrent.atomic.LongAccumulator maxQueueLag = new java.util.concurrent.atomic.LongAccumulator(Long::max, 0);
         private java.util.concurrent.Future<?> recoveryTask;
@@ -179,6 +182,8 @@ public class MarketStreamHub {
             connected = false;
             recovering = true;
             lastEventTime.clear();
+            lastMarkProcessingLagMs = -1;
+            lastMarkFreshAtProcessing = false;
             connectionStarted = Instant.now();
             recoveryStarted = connectionStarted;
             lastReceived.put("KLINE", connectionStarted);
@@ -380,6 +385,10 @@ public class MarketStreamHub {
             lastReceived.put(event.type(), event.receivedAt());
             boolean fresh = !event.eventTime().isBefore(now.minusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())))
                 && !event.receivedAt().isBefore(now.minusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())));
+            if ("MARK".equals(event.type())) {
+                lastMarkProcessingLagMs = java.time.Duration.between(event.eventTime(), now).toMillis();
+                lastMarkFreshAtProcessing = fresh;
+            }
             if (!fresh) {
                 // 补偿期间积压的真实事件只恢复状态，不因旧事件再度重连，也不产生交易。
                 event = new ExchangeGateway.MarketEvent(event.type(), event.symbol(), event.interval(), event.price(), event.kline(), event.eventTime(), event.sequenceId(), event.receivedAt(), true);
@@ -488,11 +497,12 @@ public class MarketStreamHub {
                 Instant markTime = lastEventTime.get("MARK");
                 Instant markReceived = lastReceived.get("MARK");
                 long maxAge = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
-                log.warn("行情未就绪诊断 mode={} symbol={} interval={} recovering={} wsMarkSeen={} markAgeMs={} markReceiveAgeMs={} maxEventAgeMs={} markFresh={} klineOpen={} klineClosed={} currentKlineValid={} listeners={} ingress={}",
+                log.warn("行情未就绪诊断 mode={} symbol={} interval={} recovering={} wsMarkSeen={} markAgeMs={} markReceiveAgeMs={} maxEventAgeMs={} markFresh={} markProcessLagMs={} markFreshAtProcessing={} klineOpen={} klineClosed={} currentKlineValid={} listeners={} ingress={}",
                     key.runMode(), key.symbol(), key.interval(), recovering, markTime != null,
                     markTime == null ? null : java.time.Duration.between(markTime, now).toMillis(),
                     markReceived == null ? null : java.time.Duration.between(markReceived, now).toMillis(),
                     maxAge, markTime != null && !markTime.isBefore(now.minusMillis(maxAge)),
+                    lastMarkProcessingLagMs, lastMarkFreshAtProcessing,
                     lastKlineOpen, lastKlineClosed, currentKlineValid(now), listeners.size(), ingress.statistics());
             }
             if (connectionStarted != null && connectionStarted.isBefore(Instant.now().minusSeconds(23 * 3600 + 55 * 60))) {
