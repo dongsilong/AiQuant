@@ -173,3 +173,46 @@ remains OPEN.
 The runtime remains disabled for unattended LIVE operation. Do not mark
 P0-04 closed until all external validations and missing source-fact plumbing
 are completed on a staging clone.
+
+## 2026-10-14: Crash-window, fee-asset and page-completeness repairs
+
+- **Durable pre-HTTP order origin:** V10 `quant_strategy_pre_dispatch_intent`
+  now persists an immutable strategy OPEN/CLOSE, LONG/SHORT, client order ID,
+  strategy ID and lease epoch in the **same transaction** as the durable
+  account-symbol outbound ticket. Only explicit hedge-side strategy orders use
+  `LiveOrderDispatcher.beginStrategy`. This intent survives a process crash
+  after the Binance HTTP request is sent.
+- **Exact-order crash promotion:** `StrategyOrderCrashRecoveryService`
+  transactionally reconciles an exact Binance order, promotes the immutable
+  pre-send intent into V09, and binds the strategy fields to the local order
+  only if every identity agrees. `ExecutionRecoveryService` refuses fallback
+  open-order-list matches for LIVE strategy recovery. Missing/conflicting
+  provenance retains the guard; it never sends the Binance order again.
+- **Commission asset:** Binance account trade snapshots now retain
+  `commissionAsset`. V03/V07/V08 and allocation/projector paths persist and
+  verify the fee asset, reject unknown/mixed inventory currencies, and reject
+  multi-currency totals. **This is NOT a funding-fee attribution engine.**
+  Historical rows without fee-asset facts need supervised reconciliation.
+- **History truncation:** `StrictBinanceTradeCollector` requests bounded
+  six-day slices (at most 180 days in one call), checks TradeId collisions,
+  and rejects a full 1000-row Binance response instead of treating it as an
+  exhaustive page. Exact completeness outside the requested window and
+  the true strategy inception boundary remain to be established.
+- **Schema verification:** CI applies V02/V03/V07/V08/V09/V10 on a disposable
+  MySQL 8.4 container, validating table creation. Real deployed schema
+  compatibility, migration rollback, backup restore, cross-node HTTP chaos
+  and exchange trade/position reconciliation remain external release gates.
+
+**Status by requested item:**
+(1) Crash provenance path implemented for explicit LONG/SHORT, but not
+production fault-injection accepted. (2) Automatic projector scheduling
+remains deliberately disabled: no authenticated historical watermark.
+(3) Ordered bounded replay with quarantine implemented, but no durable
+per-account/symbol checkpoint. (4) Commission currency guarded, funding
+still requires exact attribution over historical positions. (5) Quantity
+comparison guard implemented, actual Binance-vs-ledger proof not accepted.
+(6) Disposable MySQL DDL smoke now tested; production-clone migration,
+backup/restore and staged fault drills remain unperformed.
+
+No one-way BOTH position ownership is fabricated, and no historical
+external/manual fill is attributed without verified provenance.
