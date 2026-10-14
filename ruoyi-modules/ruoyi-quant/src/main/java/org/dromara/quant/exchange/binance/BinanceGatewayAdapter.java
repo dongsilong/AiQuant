@@ -854,7 +854,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         Long to = range == null || range.to() == null ? null : range.to().toEpochMilli();
         ApiResponse<AccountTradeListResponse> response = api(credential).accountTradeList(symbol == null ? null : symbol.trim(), null, from, to, null, 1000L, RECV_WINDOW_MILLIS);
         return response.getData().stream().map(item -> new TradeSnapshot(item.getSymbol(), item.getId(), item.getOrderId(), item.getSide(), decimal(item.getQty()),
-            decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()), instant(item.getTime()))).toList();
+            decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()),
+            instant(item.getTime()), string(item, "getCommissionAsset"))).toList();
     }
 
     /**
