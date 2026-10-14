@@ -12,11 +12,12 @@ class BinanceWebSocketTransportSelectionTest {
         var config = new QuantProperties();
         var gateway = new BinanceGatewayAdapter(config);
         assertFalse(gateway.sdkStreamsEnabled());
-        config.getBinance().setWebsocketTransport("BINANCE_SDK");
+        assertEquals(0, gateway.switchWebsocketTransport("BINANCE_SDK"));
         assertTrue(gateway.sdkStreamsEnabled());
-        config.getBinance().setWebsocketTransport("RAW_OKHTTP");
+        assertEquals("BINANCE_SDK", gateway.websocketTransport());
+        assertEquals(0, gateway.switchWebsocketTransport("RAW_OKHTTP"));
         assertFalse(gateway.sdkStreamsEnabled());
-        config.getBinance().setWebsocketTransport("unsupported");
-        assertThrows(IllegalStateException.class, gateway::sdkStreamsEnabled);
+        assertThrows(IllegalArgumentException.class, () -> gateway.switchWebsocketTransport("unsupported"));
+        assertFalse(gateway.sdkStreamsEnabled());
     }
 }
