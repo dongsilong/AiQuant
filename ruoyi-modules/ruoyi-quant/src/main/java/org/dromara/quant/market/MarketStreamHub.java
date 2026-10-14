@@ -485,10 +485,14 @@ public class MarketStreamHub {
             if (!connected && System.currentTimeMillis() >= nextMetricsAt) {
                 nextMetricsAt = System.currentTimeMillis() + 60_000L;
                 Instant now = Instant.now();
-                log.warn("行情未就绪诊断 mode={} symbol={} interval={} recovering={} wsMarkSeen={} markAgeMs={} klineOpen={} klineClosed={} currentKlineValid={} listeners={} ingress={}",
-                    key.runMode(), key.symbol(), key.interval(), recovering,
-                    lastEventTime.get("MARK") != null,
-                    lastEventTime.get("MARK") == null ? null : java.time.Duration.between(lastEventTime.get("MARK"), now).toMillis(),
+                Instant markTime = lastEventTime.get("MARK");
+                Instant markReceived = lastReceived.get("MARK");
+                long maxAge = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
+                log.warn("行情未就绪诊断 mode={} symbol={} interval={} recovering={} wsMarkSeen={} markAgeMs={} markReceiveAgeMs={} maxEventAgeMs={} markFresh={} klineOpen={} klineClosed={} currentKlineValid={} listeners={} ingress={}",
+                    key.runMode(), key.symbol(), key.interval(), recovering, markTime != null,
+                    markTime == null ? null : java.time.Duration.between(markTime, now).toMillis(),
+                    markReceived == null ? null : java.time.Duration.between(markReceived, now).toMillis(),
+                    maxAge, markTime != null && !markTime.isBefore(now.minusMillis(maxAge)),
                     lastKlineOpen, lastKlineClosed, currentKlineValid(now), listeners.size(), ingress.statistics());
             }
             if (connectionStarted != null && connectionStarted.isBefore(Instant.now().minusSeconds(23 * 3600 + 55 * 60))) {
