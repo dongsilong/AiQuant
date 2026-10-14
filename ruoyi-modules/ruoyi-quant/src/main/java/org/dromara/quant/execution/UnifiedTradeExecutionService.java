@@ -42,6 +42,12 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private final org.dromara.quant.market.AccountPositionCache positionCache;
     private final org.dromara.quant.market.AccountBalanceCache balanceCache;
     private final TradingPreparationService preparationService;
+    private volatile LiveOrderDispatcher liveDispatcher;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setLiveDispatcher(LiveOrderDispatcher dispatcher) {
+        this.liveDispatcher = java.util.Objects.requireNonNull(dispatcher);
+    }
     private volatile org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService runtimeLease;
     private volatile org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard closeOwnershipGuard;
 
@@ -200,12 +206,37 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             }
             return reservation.result();
         }
+        LiveOrderDispatcher.Ticket ticket = null;
+        boolean attempted = false;
         try {
+            if ("LIVE".equalsIgnoreCase(command.runMode())) {
+                ticket = requireLiveDispatcher().begin(command.credentialId(), command.symbol(),
+                    command.idempotencyKey(), "CANCEL",
+                    command.clientOrderId() == null || command.clientOrderId().isBlank()
+                        ? exchangeClientOrderId(command.idempotencyKey()) : command.clientOrderId(), null, null);
+            }
+            attempted = true;
             gateway.cancelOrder(new ExchangeGateway.CancelOrderRequest(command.credential(), command.symbol(), command.orderId(), command.clientOrderId(),
                 sendsToExchange(command.runMode())));
             executionRecordService.accepted(reservation.record(), command.orderId(), "CANCEL_ACCEPTED");
+            if (ticket != null) {
+                requireLiveDispatcher().acknowledged(ticket, command.orderId());
+                ticket = null;
+            }
             return new ExecutionResult(true, "CANCEL_ACCEPTED", command.orderId(), command.clientOrderId());
         } catch (RuntimeException ex) {
+            if (ticket != null) {
+                try {
+                    if (attempted && (ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException
+                        || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException)) {
+                        requireLiveDispatcher().notSent(ticket);
+                    } else {
+                        requireLiveDispatcher().unknown(ticket);
+                    }
+                } catch (RuntimeException dispatchEx) {
+                    ex.addSuppressed(dispatchEx); // Remains durably occupied; no automatic takeover.
+                }
+            }
             executionRecordService.markUnknown(reservation.record(), ex.getMessage());
             throw ex;
         }
@@ -230,6 +261,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
         ExchangeGateway.OrderRequest logRequest = null;
         ExchangeGateway.OrderResult exchangeResult = null;
         boolean exchangeAttempted = false;
+        LiveOrderDispatcher.Ticket dispatchTicket = null;
         long startedNanos = System.nanoTime();
         org.dromara.quant.market.AccountBalanceSnapshot balance = null;
         Long preparationEpoch = null;
@@ -293,6 +325,10 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                         throw new IllegalStateException("LIVE 策略租约代次在下单准备期间变化，拒绝旧交易信号");
                     }
                 }
+                if ("LIVE".equalsIgnoreCase(runMode)) {
+                    dispatchTicket = requireLiveDispatcher().begin(credentialId, symbol, idempotencyKey,
+                        operationType, request.clientOrderId(), strategyInstanceId, preparationEpoch);
+                }
                 exchangeAttempted = true;
                 long orderStarted = System.nanoTime();
                 exchangeResult = gateway.placeOrder(request);
@@ -308,8 +344,25 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                 // 交易所已经返回订单结果；本地账本失败不能把执行事实改写为 FAILED。由恢复/对账补齐账本。
                 throw ledgerEx;
             }
+            if (dispatchTicket != null) {
+                requireLiveDispatcher().acknowledged(dispatchTicket, exchangeResult.orderId());
+                dispatchTicket = null;
+            }
             return new ExecutionResult(true, exchangeResult.status(), exchangeResult.orderId(), exchangeResult.clientOrderId());
         } catch (RuntimeException ex) {
+            if (dispatchTicket != null) {
+                try {
+                    if (exchangeResult == null && exchangeAttempted
+                        && (ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException
+                            || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException)) {
+                        requireLiveDispatcher().notSent(dispatchTicket);
+                    } else {
+                        requireLiveDispatcher().unknown(dispatchTicket);
+                    }
+                } catch (RuntimeException dispatchEx) {
+                    ex.addSuppressed(dispatchEx); // Unresolved guard remains blocked until verified recovery.
+                }
+            }
             String logStatus = exchangeResult != null ? "ACCEPTED" : exchangeAttempted
                 && !(ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException
                     || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException) ? "UNKNOWN" : "FAILED";
@@ -329,6 +382,14 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             }
             throw ex;
         }
+    }
+
+    private LiveOrderDispatcher requireLiveDispatcher() {
+        LiveOrderDispatcher value = liveDispatcher;
+        if (value == null) {
+            throw new IllegalStateException("LIVE 订单调度器不可用，拒绝直接调用交易所");
+        }
+        return value;
     }
 
     /** State is re-read directly before the exchange call; stale strategy shares fail closed. */
