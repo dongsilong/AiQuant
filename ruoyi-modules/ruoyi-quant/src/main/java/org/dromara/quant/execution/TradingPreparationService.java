@@ -183,6 +183,17 @@ public class TradingPreparationService {
                                 throw ex;
                             }
                         }
+                        // A previously configured account can drift out of band.
+                        // Verify exchange facts before renewing the entry token.
+                        if (state.configured && "LIVE".equalsIgnoreCase(state.credential.runMode())) {
+                            var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
+                            if (verified == null
+                                || !state.symbol.equalsIgnoreCase(verified.symbol())
+                                || !state.marginMode.equals(verified.marginMode())
+                                || state.leverage != verified.leverage()) {
+                                throw new IllegalStateException("Binance 账户配置漂移或无法核实，拒绝续期交易准备令牌");
+                            }
+                        }
                         synchronized (state) {
                             if (states.get(key) == state && revision == state.revision) {
                                 balances.requireSnapshot(state.id);
