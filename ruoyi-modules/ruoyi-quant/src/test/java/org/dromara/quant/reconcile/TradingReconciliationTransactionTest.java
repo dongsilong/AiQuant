@@ -113,4 +113,33 @@ class TradingReconciliationTransactionTest {
         assertEquals("DEGRADED", record.getValue().getResult());
         assertTrue(record.getValue().getDetailJson().contains("unmatchedLiveProtections"));
     }
+    @Test
+    void confirmedFlatAccountPositionIsNotRolledBackByLaterOrderFailure() {
+        stubCommonFacts();
+        var stale = new org.dromara.quant.position.domain.QuantPosition();
+        stale.setId(501L);
+        stale.setCredentialId(1L);
+        stale.setSymbol("BTCUSDT");
+        stale.setPositionSide("LONG");
+        stale.setQuantity(new BigDecimal("0.25"));
+        when(positions.selectList(any())).thenReturn(List.of(stale));
+        doAnswer(call -> {
+            var p = (org.dromara.quant.position.domain.QuantPosition) call.getArgument(0);
+            assertEquals(0, p.getQuantity().compareTo(BigDecimal.ZERO));
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
+            return 1;
+        }).when(positions).updateById(any(org.dromara.quant.position.domain.QuantPosition.class));
+        when(gateway.queryOrderHistory(any(),isNull(),any(),anyLong()))
+            .thenReturn(List.of(new ExchangeGateway.OrderSnapshot("BTCUSDT",78L,"filled78",
+                "SELL","MARKET","FILLED",BigDecimal.TEN,BigDecimal.ONE,
+                BigDecimal.ONE,Instant.EPOCH)));
+        when(gateway.queryTrades(any(),eq("BTCUSDT"),any())).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(),eq("BTCUSDT"))).thenReturn(List.of());
+        when(orders.selectOne(any())).thenThrow(new IllegalStateException("order database write failed"));
+        assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(),48));
+        verify(positions).updateById(stale);
+        verify(state).markClosedByPositionId(501L);
+        verify(errors).record(eq(1L),anyString());
+    }
+
 }
