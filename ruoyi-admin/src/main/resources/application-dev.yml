@@ -2,7 +2,7 @@
 quant:
   binance:
     # RAW_OKHTTP / BINANCE_SDK; SDK 路径需通过集成验证后逐步启用。
-    websocket-transport: ${QUANT_BINANCE_WEBSOCKET_TRANSPORT:RAW_OKHTTP}
+    websocket-transport: ${QUANT_BINANCE_WEBSOCKET_TRANSPORT:BINANCE_SDK}
     # SDK 内部无界队列积压阈值，达到后显式断线以触发订阅恢复。
     sdk-stream-backlog-limit: ${QUANT_BINANCE_SDK_BACKLOG_LIMIT:2048}
   live:
