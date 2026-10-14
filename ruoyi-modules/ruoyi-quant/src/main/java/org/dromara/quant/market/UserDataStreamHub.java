@@ -58,7 +58,23 @@ public class UserDataStreamHub {
     }
 
     public void unregisterLeaseOwner(Long credentialId, String token) {
-        localLeaseOwners.remove(credentialId, token);
+        if (!localLeaseOwners.remove(credentialId, token)) {
+            return;
+        }
+        // Closing only the supervisor's subscription is insufficient when an
+        // SSE browser still has a listener: the Binance socket would survive.
+        // A revoked LIVE lease invalidates every local consumer of this stream.
+        streams.computeIfPresent(credentialId, (id, stream) -> {
+            if ("LIVE".equalsIgnoreCase(stream.credential.getRunMode())) {
+                stream.close();
+                return null;
+            }
+            return stream;
+        });
+        if (positionEvents != null) {
+            positionEvents.onUserDataEvent(credentialId,
+                new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
+        }
     }
 
     /**
