@@ -34,7 +34,7 @@ public class QuantProperties {
      */
     private Reconcile reconcile = new Reconcile();
     /**
-     * PAPER 模式配置。
+     * 历史 PAPER 模式配置：保留以兼容已有调用和配置绑定，生产环境禁用。
      */
     private Paper paper = new Paper();
     /**
@@ -151,7 +151,7 @@ public class QuantProperties {
     @Data
     public static class Paper {
         /**
-         * 是否启用。
+         * PAPER 默认值用于兼容开发配置；生产配置必须显式设置为 false。
          */
         private boolean enabled = true;
         /**
