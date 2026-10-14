@@ -66,4 +66,4 @@ manual reconciliation is implemented.
   baseline migrations, operator reconciliation queue, Binance staging fault
   injection and production rollback drills are still outstanding.
 - A green GitHub CI run establishes unit/Integration SQL behavior, **not**
-  production authorization. LIVE remains off by default.
+  production authorization. LIVE permission now defaults to **ON** per operator request, while production strategy runtime defaults **OFF**. Set `QUANT_LIVE_ENABLED=false` until all production gates have passed.
