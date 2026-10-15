@@ -87,7 +87,11 @@ public class StrategyFillAllocationService {
             || !sameDecimal(row.get("allocated_fee"), fee)
             || !feeAsset.equals(row.get("allocated_fee_asset"))
             || !sameDecimal(row.get("realized_pnl"), pnl)) {
-            throw new IllegalStateException("已分配的 Binance 成交归属与新事实冲突，禁止覆盖原始持仓份额");
+            throw new IllegalStateException("已分配的 Binance 成交归属与新事实冲突，禁止覆盖原始持仓份额"
+                + " [exchangeTradeId=" + fill.tradeId() + ", symbol=" + fill.symbol()
+                + ", exchangeOrderId=" + fill.orderId()
+                + ", storedStrategyInstanceId=" + row.get("strategy_instance_id")
+                + ", incomingStrategyInstanceId=" + order.getStrategyInstanceId() + "]");
         }
     }
 
