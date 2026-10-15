@@ -99,6 +99,7 @@ public class MarketStreamHub {
         // 同一K线周期重复进入补偿时仅首次告警；实际校验及交易门控不受影响。
         private Instant lastRecoveryWarningPeriod;
         private long nextMetricsAt;
+        private long nextClockSkewWarningAt;
         /** MARK freshness measured at event consumption, not at the watchdog sample. */
         private volatile long lastMarkProcessingLagMs = -1;
         private volatile boolean lastMarkFreshAtProcessing;
@@ -384,8 +385,18 @@ public class MarketStreamHub {
                 // never allow a future event into indicators, cursors or LIVE decisions.
                 // Large offsets still force recovery and block decisions.
                 if (futureSkewMs <= 10_000L) {
-                    log.warn("忽略未来时间行情事件，维持交易禁止状态: mode={} symbol={} type={} eventTime={} receivedAt={} localNow={} futureSkewMs={}",
-                        key.runMode(), key.symbol(), event.type(), event.eventTime(), event.receivedAt(), now, futureSkewMs);
+                    // A connected stream can also encounter clock skew later:
+                    // revoke decision readiness immediately, before discarding.
+                    if (connected) {
+                        connected = false;
+                        signalUnhealthy();
+                        publish(status("CONNECTING"));
+                    }
+                    if (System.currentTimeMillis() >= nextClockSkewWarningAt) {
+                        nextClockSkewWarningAt = System.currentTimeMillis() + 30_000L;
+                        log.warn("忽略未来时间行情事件并禁止交易: mode={} symbol={} type={} eventTime={} receivedAt={} localNow={} futureSkewMs={}",
+                            key.runMode(), key.symbol(), event.type(), event.eventTime(), event.receivedAt(), now, futureSkewMs);
+                    }
                     return;
                 }
                 disconnect(new IllegalStateException("Binance事件时间超前过大: symbol=" + key.symbol()
