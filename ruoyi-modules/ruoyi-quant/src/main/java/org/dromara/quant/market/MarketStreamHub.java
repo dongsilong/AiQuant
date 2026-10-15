@@ -374,8 +374,23 @@ public class MarketStreamHub {
             }
             if (!List.of("TRADE", "MARK", "KLINE").contains(event.type())) { return; }
             Instant now = Instant.now();
-            if (event.eventTime() == null || event.eventTime().isAfter(now.plusSeconds(1))) {
-                disconnect(new IllegalStateException("Binance事件时间缺失或时钟偏差过大"));
+            if (event.eventTime() == null) {
+                disconnect(new IllegalStateException("Binance事件时间缺失: type=" + event.type() + ", symbol=" + key.symbol()));
+                return;
+            }
+            long futureSkewMs = java.time.Duration.between(now, event.eventTime()).toMillis();
+            if (futureSkewMs > 1_000L) {
+                // A small clock skew must not churn all subscriptions. However,
+                // never allow a future event into indicators, cursors or LIVE decisions.
+                // Large offsets still force recovery and block decisions.
+                if (futureSkewMs <= 10_000L) {
+                    log.warn("忽略未来时间行情事件，维持交易禁止状态: mode={} symbol={} type={} eventTime={} receivedAt={} localNow={} futureSkewMs={}",
+                        key.runMode(), key.symbol(), event.type(), event.eventTime(), event.receivedAt(), now, futureSkewMs);
+                    return;
+                }
+                disconnect(new IllegalStateException("Binance事件时间超前过大: symbol=" + key.symbol()
+                    + ", type=" + event.type() + ", futureSkewMs=" + futureSkewMs
+                    + ", eventTime=" + event.eventTime() + ", receivedAt=" + event.receivedAt() + ", localNow=" + now));
                 return;
             }
             long networkLag = Math.max(0, java.time.Duration.between(event.eventTime(), event.receivedAt()).toMillis());
