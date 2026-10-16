@@ -254,7 +254,7 @@ public class OpenCapacityService {
             LocalDateTime createdAt = localTime(row.get("created_at"));
             Instant from = createdAt == null ? now.minus(Duration.ofDays(7))
                 : createdAt.atZone(java.time.ZoneId.systemDefault()).toInstant().isAfter(now.minus(Duration.ofDays(7)))
-                    ? createdAt.toInstant(java.time.ZoneOffset.UTC) : now.minus(Duration.ofDays(7));
+                    ? createdAt.atZone(java.time.ZoneId.systemDefault()).toInstant() : now.minus(Duration.ofDays(7));
             List<ExchangeGateway.OrderSnapshot> history = historyCache.computeIfAbsent(symbol, x -> safeQueryHistory(credential, x, from, now));
             if (history == null) continue;
             ExchangeGateway.OrderSnapshot matched = findMatch(history, clientOrderId, row.get("exchange_order_id"));
