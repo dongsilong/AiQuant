@@ -1,11 +1,6 @@
 package org.dromara.quant.reconcile.mapper;
 
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Options;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.*;
 
 /**
  * Account-level database lease. DB time is authoritative, and expired ownership
@@ -19,8 +14,7 @@ public interface LiveUserStreamLeaseMapper {
           (credential_id, owner_token, lease_epoch, lease_until)
         VALUES (#{id}, #{owner}, 1, DATE_ADD(NOW(6), INTERVAL #{seconds} SECOND))
         """)
-    int ensure(@Param("id") Long id, @Param("owner") String owner,
-               @Param("seconds") int seconds);
+    int ensure(@Param("id") Long id, @Param("owner") String owner, @Param("seconds") int seconds);
 
     @Options(timeout = 3)
     @Update("""
@@ -30,8 +24,7 @@ public interface LiveUserStreamLeaseMapper {
         WHERE credential_id=#{id}
           AND (owner_token=#{owner} OR lease_until<=NOW(6))
         """)
-    int acquireOrRenew(@Param("id") Long id, @Param("owner") String owner,
-                       @Param("seconds") int seconds);
+    int acquireOrRenew(@Param("id") Long id, @Param("owner") String owner, @Param("seconds") int seconds);
 
     /**
      * One DB-side snapshot for diagnosing a failed compare-and-set lease acquire.

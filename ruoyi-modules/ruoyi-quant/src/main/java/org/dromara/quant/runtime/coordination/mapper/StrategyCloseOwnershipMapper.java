@@ -26,8 +26,6 @@ public interface StrategyCloseOwnershipMapper {
         WHERE s.instance_id=#{instanceId} AND i.credential_id=#{credentialId}
           AND i.strategy_id=#{strategyId} AND q.symbol=#{symbol}
         """)
-    Map<String, Object> pendingOwnedExit(@Param("instanceId") Long instanceId,
-                                         @Param("credentialId") Long credentialId,
-                                         @Param("strategyId") Long strategyId,
+    Map<String, Object> pendingOwnedExit(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("strategyId") Long strategyId,
                                          @Param("symbol") String symbol);
 }

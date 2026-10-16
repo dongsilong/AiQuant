@@ -1,11 +1,6 @@
 package org.dromara.quant.execution.mapper;
 
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Options;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.*;
 
 /**
  * Two-person recovery approval CAS. This mapper deliberately does not unlock
@@ -36,9 +31,8 @@ public interface LiveRecoveryApprovalMapper {
                 AND c.state IN ('PENDING','APPROVED')
           )
         """)
-    int request(@Param("caseId") long caseId, @Param("credentialId") long credentialId,
-                @Param("symbol") String symbol, @Param("dispatchKey") String dispatchKey,
-                @Param("requesterId") long requesterId, @Param("evidenceHash") String evidenceHash);
+    int request(@Param("caseId") long caseId, @Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("dispatchKey") String dispatchKey, @Param(
+        "requesterId") long requesterId, @Param("evidenceHash") String evidenceHash);
 
     @Options(timeout = 3)
     @Update("""
@@ -62,8 +56,7 @@ public interface LiveRecoveryApprovalMapper {
                 AND t.dispatch_status IN ('UNKNOWN','DISPATCHING')
           )
         """)
-    int approve(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId,
-                @Param("evidenceHash") String evidenceHash);
+    int approve(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId, @Param("evidenceHash") String evidenceHash);
 
     @Options(timeout = 3)
     @Update("""
@@ -73,9 +66,11 @@ public interface LiveRecoveryApprovalMapper {
           AND requested_by<>#{reviewerId}
           AND evidence_sha256=#{evidenceHash}
         """)
-    int reject(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId,
-               @Param("evidenceHash") String evidenceHash);
-    /** Fetch the approved case, not a client-supplied order identity. */
+    int reject(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId, @Param("evidenceHash") String evidenceHash);
+
+    /**
+     * Fetch the approved case, not a client-supplied order identity.
+     */
     @Options(timeout = 3)
     @Select("""
         SELECT case_id, credential_id, symbol, dispatch_key, operation_type,
@@ -83,9 +78,11 @@ public interface LiveRecoveryApprovalMapper {
                expected_exchange_order_id, expected_client_order_id, state
         FROM quant_live_recovery_case WHERE case_id=#{caseId}
         """)
-    java.util.Map<String,Object> findCase(@Param("caseId") long caseId);
+    java.util.Map<String, Object> findCase(@Param("caseId") long caseId);
 
-    /** Atomic case CAS; caller must commit this together with ticket and audit. */
+    /**
+     * Atomic case CAS; caller must commit this together with ticket and audit.
+     */
     @Options(timeout = 3)
     @Update("""
         UPDATE quant_live_recovery_case

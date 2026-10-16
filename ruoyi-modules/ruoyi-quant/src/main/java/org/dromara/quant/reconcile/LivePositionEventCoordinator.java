@@ -3,10 +3,12 @@ package org.dromara.quant.reconcile;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.credential.domain.QuantCredential;
-import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.quant.exchange.ExchangeGateway;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -20,15 +22,15 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 @RequiredArgsConstructor
 public class LivePositionEventCoordinator {
+    private static final long MIN_REFRESH_GAP_MILLIS = 2000L;
     private final QuantCredentialMapper credentials;
     private final TradingReconciliationService reconciliation;
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private LivePositionFreshness freshness;
     private final Set<Long> pending = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<Long, Long> retryNotBefore = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> failures = new ConcurrentHashMap<>();
-    private static final long MIN_REFRESH_GAP_MILLIS = 2000L;
     private final ConcurrentHashMap<Long, Long> lastAttempt = new ConcurrentHashMap<>();
+    @Autowired(required = false)
+    private LivePositionFreshness freshness;
 
     /**
      * Existing private-stream supervisors should forward decoded events here
@@ -46,13 +48,14 @@ public class LivePositionEventCoordinator {
             }
             return;
         }
-        if ("ACCOUNT_UPDATE".equalsIgnoreCase(type)
-            || "ORDER_TRADE_UPDATE".equalsIgnoreCase(type)
-            || "CONNECTED".equalsIgnoreCase(type)) {
+        if ("ACCOUNT_UPDATE".equalsIgnoreCase(type) || "ORDER_TRADE_UPDATE".equalsIgnoreCase(type) || "CONNECTED".equalsIgnoreCase(type)) {
             request(credentialId);
         }
     }
 
+    /**
+     * 合并同一账户的重复刷新请求并安排持仓事实对账。
+     */
     public void request(Long credentialId) {
         if (credentialId != null) {
             // A stream event may make the previously verified snapshot stale.
@@ -64,20 +67,20 @@ public class LivePositionEventCoordinator {
         }
     }
 
+    /**
+     * 取出待处理账户并执行串行刷新，避免并发覆盖新事实。
+     */
     @Scheduled(fixedDelay = 2000, initialDelay = 3000)
     public void drain() {
         for (Long id : Set.copyOf(pending)) {
             long now = System.currentTimeMillis();
-            if (now < retryNotBefore.getOrDefault(id, 0L)
-                || now - lastAttempt.getOrDefault(id, 0L) < MIN_REFRESH_GAP_MILLIS
-                || !pending.remove(id)) {
+            if (now < retryNotBefore.getOrDefault(id, 0L) || now - lastAttempt.getOrDefault(id, 0L) < MIN_REFRESH_GAP_MILLIS || !pending.remove(id)) {
                 continue;
             }
             lastAttempt.put(id, now);
             try {
                 QuantCredential credential = credentials.selectById(id);
-                if (credential == null || !"0".equals(credential.getStatus())
-                    || !"LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                if (credential == null || !"0".equals(credential.getStatus()) || !"LIVE".equalsIgnoreCase(credential.getRunMode())) {
                     failures.remove(id);
                     retryNotBefore.remove(id);
                     continue;
@@ -92,8 +95,7 @@ public class LivePositionEventCoordinator {
                 long backoffMillis = Math.min(60000L, 2000L << Math.min(count - 1, 5));
                 retryNotBefore.put(id, System.currentTimeMillis() + backoffMillis);
                 pending.add(id);
-                log.warn("LIVE event-triggered position refresh failed credentialId={} retryInMs={}",
-                    id, backoffMillis, ex);
+                log.warn("LIVE event-triggered position refresh failed credentialId={} retryInMs={}", id, backoffMillis, ex);
             }
         }
     }

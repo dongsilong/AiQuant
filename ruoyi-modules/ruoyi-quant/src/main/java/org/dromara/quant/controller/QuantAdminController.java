@@ -14,21 +14,12 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
-import org.dromara.quant.finance.domain.QuantFinancialEvent;
-import org.dromara.quant.finance.domain.vo.QuantFinancialEventVo;
-import org.dromara.quant.finance.mapper.QuantFinancialEventMapper;
 import org.dromara.quant.market.domain.QuantSymbol;
 import org.dromara.quant.market.mapper.QuantSymbolMapper;
-import org.dromara.quant.notification.QuantTradeNotificationService;
 import org.dromara.quant.notification.domain.QuantNotification;
 import org.dromara.quant.notification.mapper.QuantNotificationMapper;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
-import org.dromara.quant.protection.domain.QuantProtectionOrder;
-import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
-import org.dromara.quant.reconcile.TradingReconciliationService;
-import org.dromara.quant.reconcile.domain.QuantReconcileRecord;
-import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
 import org.dromara.quant.runtime.mapper.QuantStrategyPositionStateMapper;
 import org.dromara.quant.strategy.domain.QuantStrategy;
@@ -38,10 +29,16 @@ import org.dromara.quant.strategy.mapper.QuantStrategyInstanceMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.strategy.service.QuantStrategyService;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.*;
 
+/**
+ * 提供量化运行概况及策略实例等管理查询接口。
+ */
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/quant")
@@ -55,19 +52,43 @@ public class QuantAdminController {
     private final QuantPositionMapper positionMapper;
     private final QuantOrderMapper orderMapper;
     private final QuantTradeMapper tradeMapper;
-    private final QuantProtectionOrderMapper protectionMapper;
     private final QuantExecutionRecordMapper executionMapper;
-    private final QuantFinancialEventMapper financialMapper;
-    private final QuantReconcileRecordMapper reconcileMapper;
     private final QuantNotificationMapper notificationMapper;
     private final QuantStrategyService strategyService;
-    private final TradingReconciliationService reconciliationService;
-    private final QuantTradeNotificationService notificationService;
 
     private static Map<String, Object> map() {
         return new LinkedHashMap<>();
     }
 
+    private static String directionLabel(String direction) {
+        if ("LONG".equalsIgnoreCase(direction)) {
+            return "做多";
+        }
+        if ("SHORT".equalsIgnoreCase(direction)) {
+            return "做空";
+        }
+        return direction == null || direction.isBlank() ? "-" : direction;
+    }
+
+    private static String positionStatusLabel(String status) {
+        if ("OPEN".equalsIgnoreCase(status)) {
+            return "持仓中";
+        }
+        if ("OPEN_PENDING".equalsIgnoreCase(status)) {
+            return "开仓中";
+        }
+        if ("EXIT_PENDING".equalsIgnoreCase(status)) {
+            return "平仓中";
+        }
+        if ("CLOSED".equalsIgnoreCase(status)) {
+            return "已平仓";
+        }
+        return status == null || status.isBlank() ? "-" : status;
+    }
+
+    /**
+     * 汇总当前量化模块的运行概况。
+     */
     @SaCheckPermission("quant:dashboard:list")
     @GetMapping("/dashboard/overview")
     public R<Map<String, Object>> overview() {
@@ -75,7 +96,7 @@ public class QuantAdminController {
         Map<String, Object> result = map();
         result.put("credentialCount", credentialIds.size());
         result.put("positionCount", credentialIds.isEmpty() ? 0L :
-            positionMapper.selectCount(new LambdaQueryWrapper<org.dromara.quant.position.domain.QuantPosition>().in(org.dromara.quant.position.domain.QuantPosition::getCredentialId, credentialIds)));
+            positionMapper.selectCount(new LambdaQueryWrapper<org.dromara.quant.position.domain.QuantPosition>().in(org.dromara.quant.position.domain.QuantPosition::getCredentialId, credentialIds).ne(org.dromara.quant.position.domain.QuantPosition::getQuantity, java.math.BigDecimal.ZERO)));
         result.put("orderCount", credentialIds.isEmpty() ? 0L :
             orderMapper.selectCount(new LambdaQueryWrapper<org.dromara.quant.order.domain.QuantOrder>().in(org.dromara.quant.order.domain.QuantOrder::getCredentialId,
                 credentialIds)));
@@ -92,6 +113,9 @@ public class QuantAdminController {
         return R.ok(result);
     }
 
+    /**
+     * 按账户和状态分页查询策略实例。
+     */
     @SaCheckPermission("quant:strategy:list")
     @GetMapping("/strategy/instances")
     public R<PageResult<Map<String, Object>>> strategyInstances(PageQuery query, @RequestParam(required = false) Long credentialId, @RequestParam(required = false) String status) {
@@ -100,15 +124,17 @@ public class QuantAdminController {
             return R.ok(emptyPage());
         }
         List<Long> strategyIds = strategyService.accessibleStrategyIds();
-        if (strategyIds != null && strategyIds.isEmpty()) return R.ok(emptyPage());
+        if (strategyIds != null && strategyIds.isEmpty()) {
+            return R.ok(emptyPage());
+        }
         LambdaQueryWrapper<QuantStrategySymbol> symbolQuery = new LambdaQueryWrapper<QuantStrategySymbol>().eq(QuantStrategySymbol::getStatus, "0");
         symbolQuery.in(strategyIds != null, QuantStrategySymbol::getStrategyId, strategyIds);
         List<Long> activeStrategySymbolIds = strategySymbolMapper.selectList(symbolQuery).stream().map(QuantStrategySymbol::getId).toList();
-        if (activeStrategySymbolIds.isEmpty()) return R.ok(emptyPage());
+        if (activeStrategySymbolIds.isEmpty()) {
+            return R.ok(emptyPage());
+        }
         Page<QuantStrategyInstance> page = instanceMapper.selectPage(query.build(), new LambdaQueryWrapper<QuantStrategyInstance>().in(QuantStrategyInstance::getCredentialId,
-            ids).in(strategyIds != null, QuantStrategyInstance::getStrategyId, strategyIds).in(QuantStrategyInstance::getStrategySymbolId, activeStrategySymbolIds)
-            .eq(status != null && !status.isBlank(), QuantStrategyInstance::getStatus, status).orderByDesc(QuantStrategyInstance::getStrategyId,
-                QuantStrategyInstance::getCredentialId, QuantStrategyInstance::getStatus, QuantStrategyInstance::getStrategySymbolId, QuantStrategyInstance::getLastSignalAt));
+            ids).in(strategyIds != null, QuantStrategyInstance::getStrategyId, strategyIds).in(QuantStrategyInstance::getStrategySymbolId, activeStrategySymbolIds).eq(status != null && !status.isBlank(), QuantStrategyInstance::getStatus, status).orderByDesc(QuantStrategyInstance::getStrategyId, QuantStrategyInstance::getCredentialId, QuantStrategyInstance::getStatus, QuantStrategyInstance::getStrategySymbolId, QuantStrategyInstance::getLastSignalAt));
         Map<Long, QuantCredential> credentials = credentials(ids);
         Map<Long, QuantStrategy> strategies = strategies(page.getRecords().stream().map(QuantStrategyInstance::getStrategyId).toList());
         Map<Long, QuantStrategySymbol> strategySymbols = strategySymbols(page.getRecords().stream().map(QuantStrategyInstance::getStrategySymbolId).toList());
@@ -130,6 +156,9 @@ public class QuantAdminController {
         return R.ok(PageResult.build(rows, page.getTotal()));
     }
 
+    /**
+     * 查询策略实例维护的持仓状态，不以该结果替代交易所持仓事实。
+     */
     @SaCheckPermission("quant:strategy:list")
     @GetMapping("/strategy/position-states")
     public R<PageResult<Map<String, Object>>> strategyPositionStates(PageQuery query, @RequestParam(required = false) Long credentialId,
@@ -139,24 +168,25 @@ public class QuantAdminController {
             return R.ok(emptyPage());
         }
         List<Long> strategyIds = strategyService.accessibleStrategyIds();
-        if (strategyIds != null && strategyIds.isEmpty()) return R.ok(emptyPage());
-        List<QuantStrategyInstance> instances = instanceMapper.selectList(new LambdaQueryWrapper<QuantStrategyInstance>().in(QuantStrategyInstance::getCredentialId, ids)
-            .in(strategyIds != null, QuantStrategyInstance::getStrategyId, strategyIds));
+        if (strategyIds != null && strategyIds.isEmpty()) {
+            return R.ok(emptyPage());
+        }
+        List<QuantStrategyInstance> instances =
+            instanceMapper.selectList(new LambdaQueryWrapper<QuantStrategyInstance>().in(QuantStrategyInstance::getCredentialId, ids).in(strategyIds != null,
+                QuantStrategyInstance::getStrategyId, strategyIds));
         if (instances.isEmpty()) {
             return R.ok(emptyPage());
         }
-        List<Long> activePositionIds = positionMapper.selectList(new LambdaQueryWrapper<org.dromara.quant.position.domain.QuantPosition>()
-            .in(org.dromara.quant.position.domain.QuantPosition::getCredentialId, ids)
-            .gt(org.dromara.quant.position.domain.QuantPosition::getQuantity, java.math.BigDecimal.ZERO)).stream()
-            .map(org.dromara.quant.position.domain.QuantPosition::getId).toList();
+        List<Long> activePositionIds =
+            positionMapper.selectList(new LambdaQueryWrapper<org.dromara.quant.position.domain.QuantPosition>().in(org.dromara.quant.position.domain.QuantPosition::getCredentialId, ids).gt(org.dromara.quant.position.domain.QuantPosition::getQuantity, java.math.BigDecimal.ZERO)).stream().map(org.dromara.quant.position.domain.QuantPosition::getId).toList();
         if (activePositionIds.isEmpty()) {
             return R.ok(emptyPage());
         }
         Map<Long, QuantStrategyInstance> instanceMap = instances.stream().collect(java.util.stream.Collectors.toMap(QuantStrategyInstance::getId, v -> v));
         Page<QuantStrategyPositionState> page = positionStateMapper.selectPage(query.build(),
-            new LambdaQueryWrapper<QuantStrategyPositionState>().in(QuantStrategyPositionState::getInstanceId, instanceMap.keySet()).in(QuantStrategyPositionState::getPositionId, activePositionIds).eq(status != null && !status.isBlank(),
-                QuantStrategyPositionState::getStatus, status).in(status == null || status.isBlank(), QuantStrategyPositionState::getStatus,
-                List.of("OPEN", "OPEN_PENDING", "EXIT_PENDING")).orderByDesc(QuantStrategyPositionState::getUpdatedAt));
+            new LambdaQueryWrapper<QuantStrategyPositionState>().in(QuantStrategyPositionState::getInstanceId, instanceMap.keySet()).in(QuantStrategyPositionState::getPositionId
+                , activePositionIds).eq(status != null && !status.isBlank(), QuantStrategyPositionState::getStatus, status).in(status == null || status.isBlank(),
+                QuantStrategyPositionState::getStatus, List.of("OPEN", "OPEN_PENDING", "EXIT_PENDING")).orderByDesc(QuantStrategyPositionState::getUpdatedAt));
         Map<Long, QuantStrategy> strategyMap = strategies(instanceMap.values().stream().map(QuantStrategyInstance::getStrategyId).toList());
         Map<Long, QuantStrategySymbol> strategySymbolMap = strategySymbols(instanceMap.values().stream().map(QuantStrategyInstance::getStrategySymbolId).toList());
         Map<Long, QuantSymbol> positionSymbols = symbols(strategySymbolMap.values().stream().map(QuantStrategySymbol::getSymbolId).toList());
@@ -189,58 +219,29 @@ public class QuantAdminController {
         return R.ok(PageResult.build(rows, page.getTotal()));
     }
 
-    private static String directionLabel(String direction) {
-        if ("LONG".equalsIgnoreCase(direction)) return "做多";
-        if ("SHORT".equalsIgnoreCase(direction)) return "做空";
-        return direction == null || direction.isBlank() ? "-" : direction;
-    }
-
-    private static String positionStatusLabel(String status) {
-        if ("OPEN".equalsIgnoreCase(status)) return "持仓中";
-        if ("OPEN_PENDING".equalsIgnoreCase(status)) return "开仓中";
-        if ("EXIT_PENDING".equalsIgnoreCase(status)) return "平仓中";
-        if ("CLOSED".equalsIgnoreCase(status)) return "已平仓";
-        return status == null || status.isBlank() ? "-" : status;
-    }
-
-    @SaCheckPermission("quant:protection:list")
-    @GetMapping("/protection/page")
-    public R<PageResult<Map<String, Object>>> protection(PageQuery query, @RequestParam(required = false) Long credentialId, @RequestParam(required = false) String symbol,
-                                                         @RequestParam(required = false) String status) {
-        List<Long> ids = scopedIds(credentialId);
-        if (ids.isEmpty()) {
-            return R.ok(emptyPage());
-        }
-        Page<QuantProtectionOrder> page = protectionMapper.selectPage(query.build(), new LambdaQueryWrapper<QuantProtectionOrder>().in(QuantProtectionOrder::getCredentialId,
-            ids).eq(symbol != null && !symbol.isBlank(), QuantProtectionOrder::getSymbol, symbol).eq(status != null && !status.isBlank(), QuantProtectionOrder::getStatus,
-            status).orderByDesc(QuantProtectionOrder::getId));
-        Map<Long, QuantCredential> credentialMap = credentials(ids);
-        return R.ok(PageResult.build(page.getRecords().stream().map(item -> protectionRow(item, credentialMap)).toList(), page.getTotal()));
-    }
-
+    /**
+     * 按筛选条件分页查询执行记录。
+     */
     @SaCheckPermission("quant:execution:list")
     @GetMapping("/execution/page")
     public R<PageResult<Map<String, Object>>> execution(PageQuery query, @RequestParam(required = false) Long credentialId,
-                                                        @RequestParam(required = false) String executionStatus,
-                                                        @RequestParam(required = false) String symbol,
+                                                        @RequestParam(required = false) String executionStatus, @RequestParam(required = false) String symbol,
                                                         @RequestParam(required = false) String exchangeOrderStatus,
-                                                        @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime startTime,
-                                                        @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime endTime) {
+                                                        @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime startTime, @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime endTime) {
         var until = endTime == null ? java.time.LocalDateTime.now() : endTime;
         var from = startTime == null ? until.minusHours(24) : startTime;
-        if (from.isAfter(until)) { throw new ServiceException("开始时间不能晚于结束时间"); }
+        if (from.isAfter(until)) {
+            throw new ServiceException("开始时间不能晚于结束时间");
+        }
         List<Long> ids = scopedIds(credentialId);
         if (ids.isEmpty()) {
             return R.ok(emptyPage());
         }
         Page<QuantExecutionRecord> page = executionMapper.selectPage(query.build(),
             new LambdaQueryWrapper<QuantExecutionRecord>().in(QuantExecutionRecord::getCredentialId, ids).eq(executionStatus != null && !executionStatus.isBlank(),
-                QuantExecutionRecord::getExecutionStatus, executionStatus)
-                .eq(symbol != null && !symbol.isBlank(), QuantExecutionRecord::getSymbol, symbol == null ? null : symbol.trim().toUpperCase(Locale.ROOT))
-                .eq(exchangeOrderStatus != null && !exchangeOrderStatus.isBlank(), QuantExecutionRecord::getExchangeOrderStatus,
-                    exchangeOrderStatus == null ? null : exchangeOrderStatus.trim().toUpperCase(Locale.ROOT))
-                .ge(QuantExecutionRecord::getCreatedAt, from).le(QuantExecutionRecord::getCreatedAt, until)
-                .orderByDesc(QuantExecutionRecord::getCreatedAt));
+                QuantExecutionRecord::getExecutionStatus, executionStatus).eq(symbol != null && !symbol.isBlank(), QuantExecutionRecord::getSymbol, symbol == null ? null :
+                symbol.trim().toUpperCase(Locale.ROOT)).eq(exchangeOrderStatus != null && !exchangeOrderStatus.isBlank(), QuantExecutionRecord::getExchangeOrderStatus,
+                exchangeOrderStatus == null ? null : exchangeOrderStatus.trim().toUpperCase(Locale.ROOT)).ge(QuantExecutionRecord::getCreatedAt, from).le(QuantExecutionRecord::getCreatedAt, until).orderByDesc(QuantExecutionRecord::getCreatedAt));
         Map<Long, QuantCredential> credentialMap = credentials(ids);
         List<Map<String, Object>> rows = page.getRecords().stream().map(item -> {
             Map<String, Object> row = new LinkedHashMap<>();
@@ -251,8 +252,8 @@ public class QuantAdminController {
             row.put("executionStatus", item.getExecutionStatus());
             row.put("exchangeOrderStatus", item.getExchangeOrderStatus());
             row.put("exchangeOrderId", item.getExchangeOrderId());
-            row.put("errorMessage", org.dromara.quant.decision.TradeDecisionLogService.safeReason(
-                new ServiceException(item.getErrorMessage() == null ? "" : item.getErrorMessage())));
+            row.put("errorMessage", org.dromara.quant.decision.TradeDecisionLogService.safeReason(new ServiceException(item.getErrorMessage() == null ? "" :
+                item.getErrorMessage())));
             row.put("operationType", item.getOperationType());
             row.put("idempotencyKey", item.getIdempotencyKey());
             row.put("createdAt", item.getCreatedAt());
@@ -260,111 +261,6 @@ public class QuantAdminController {
             return row;
         }).toList();
         return R.ok(PageResult.build(rows, page.getTotal()));
-    }
-
-    @SaCheckPermission("quant:finance:list")
-    @GetMapping("/finance/page")
-    public R<PageResult<Map<String, Object>>> finance(PageQuery query, @RequestParam(required = false) Long credentialId, @RequestParam(required = false) String eventType,
-                                                      @RequestParam(required = false) String symbol) {
-        List<Long> ids = scopedIds(credentialId);
-        if (ids.isEmpty()) {
-            return R.ok(emptyPage());
-        }
-        Page<QuantFinancialEventVo> page = financialMapper.selectVoPage(query.build(),
-            new LambdaQueryWrapper<QuantFinancialEvent>().in(QuantFinancialEvent::getCredentialId, ids).eq(eventType != null && !eventType.isBlank(),
-                QuantFinancialEvent::getEventType, eventType).eq(symbol != null && !symbol.isBlank(), QuantFinancialEvent::getSymbol, symbol).orderByDesc(QuantFinancialEvent::getEventTime));
-        Map<Long, QuantCredential> credentialMap = credentials(ids);
-        List<Map<String, Object>> rows = page.getRecords().stream().map(item -> {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("id", item.getId());
-            row.put("credentialId", item.getCredentialId());
-            row.put("accountName", credentialMap.get(item.getCredentialId()) == null ? null : credentialMap.get(item.getCredentialId()).getAccountName());
-            row.put("symbol", item.getSymbol());
-            row.put("eventType", item.getEventType());
-            row.put("amount", item.getAmount());
-            row.put("asset", item.getAsset());
-            row.put("eventTime", item.getEventTime());
-            return row;
-        }).toList();
-        return R.ok(PageResult.build(rows, page.getTotal()));
-    }
-
-    @SaCheckPermission("quant:reconcile:list")
-    @GetMapping("/reconcile/page")
-    public R<PageResult<Map<String, Object>>> reconcile(PageQuery query, @RequestParam(required = false) Long credentialId) {
-        List<Long> ids = scopedIds(credentialId);
-        if (ids.isEmpty()) {
-            return R.ok(emptyPage());
-        }
-        Page<QuantReconcileRecord> page = reconcileMapper.selectPage(query.build(),
-            new LambdaQueryWrapper<QuantReconcileRecord>().in(QuantReconcileRecord::getCredentialId, ids).orderByDesc(QuantReconcileRecord::getReconciledAt));
-        Map<Long, QuantCredential> credentials = credentials(ids);
-        List<Map<String, Object>> rows = page.getRecords().stream().map(item -> {
-            Map<String, Object> row = map();
-            row.put("id", item.getId());
-            row.put("credentialId", item.getCredentialId());
-            row.put("accountName", credentials.get(item.getCredentialId()) == null ? null : credentials.get(item.getCredentialId()).getAccountName());
-            row.put("reconcileType", item.getReconcileType());
-            row.put("result", item.getResult());
-            row.put("detailJson", item.getDetailJson());
-            row.put("reconciledAt", item.getReconciledAt());
-            return row;
-        }).toList();
-        return R.ok(PageResult.build(rows, page.getTotal()));
-    }
-
-    @SaCheckPermission("quant:reconcile:run")
-    @PostMapping("/reconcile/{credentialId}/run")
-    public R<Void> runReconcile(@PathVariable Long credentialId, @RequestParam(defaultValue = "24") int historyHours) {
-        reconciliationService.reconcileCredential(requireCredential(credentialId), Math.min(Math.max(historyHours, 1), 168));
-        return R.ok();
-    }
-
-    @SaCheckPermission("quant:notification:list")
-    @GetMapping("/notification/page")
-    public R<PageResult<QuantNotification>> notifications(PageQuery query, @RequestParam(required = false) Long credentialId, @RequestParam(required = false) String status) {
-        List<Long> ids = scopedIds(credentialId);
-        if (ids.isEmpty()) {
-            return R.ok(emptyPage());
-        }
-        Page<QuantNotification> page = notificationMapper.selectPage(query.build(),
-            new LambdaQueryWrapper<QuantNotification>().in(QuantNotification::getCredentialId, ids).eq(status != null && !status.isBlank(), QuantNotification::getStatus, status).orderByDesc(QuantNotification::getCreatedAt));
-        page.getRecords().forEach(item -> item.setContent(null));
-        return R.ok(PageResult.build(page.getRecords(), page.getTotal()));
-    }
-
-    @SaCheckPermission("quant:account:list")
-    @GetMapping("/notification/terminal/{credentialId}")
-    public R<List<QuantNotification>> terminalNotifications(@PathVariable Long credentialId) {
-        requireCredential(credentialId);
-        return R.ok(notificationMapper.selectList(new LambdaQueryWrapper<QuantNotification>()
-            .eq(QuantNotification::getCredentialId, credentialId)
-            .eq(QuantNotification::getChannel, "SYSTEM")
-            .orderByDesc(QuantNotification::getCreatedAt, QuantNotification::getId)
-            .last("LIMIT 50")));
-    }
-
-    @SaCheckPermission("quant:notification:retry")
-    @PostMapping("/notification/{id}/retry")
-    public R<Void> retryNotification(@PathVariable Long id) {
-        QuantNotification notification = notificationMapper.selectById(id);
-        if (notification == null) {
-            throw new ServiceException("通知不存在");
-        }
-        requireCredential(notification.getCredentialId());
-        notificationService.retry(id);
-        return R.ok();
-    }
-
-    @SaCheckPermission("quant:notification:query")
-    @GetMapping("/notification/{id}")
-    public R<QuantNotification> notification(@PathVariable Long id) {
-        QuantNotification notification = notificationMapper.selectById(id);
-        if (notification == null) {
-            throw new ServiceException("通知不存在");
-        }
-        requireCredential(notification.getCredentialId());
-        return R.ok(notification);
     }
 
     private List<Long> accessibleCredentialIds() {
@@ -384,17 +280,6 @@ public class QuantAdminController {
             throw new ServiceException("无权访问该交易账户");
         }
         return List.of(credentialId);
-    }
-
-    private QuantCredential requireCredential(Long id) {
-        if (id == null) {
-            throw new ServiceException("交易账户不能为空");
-        }
-        QuantCredential credential = credentialMapper.selectById(id);
-        if (credential == null || !accessibleCredentialIds().contains(id)) {
-            throw new ServiceException("无权访问该交易账户");
-        }
-        return credential;
     }
 
     private Map<Long, QuantCredential> credentials(List<Long> ids) {
@@ -424,24 +309,6 @@ public class QuantAdminController {
         }
         return symbolMapper.selectList(new LambdaQueryWrapper<QuantSymbol>().in(QuantSymbol::getId, ids)).stream().collect(java.util.stream.Collectors.toMap(QuantSymbol::getId,
             v -> v));
-    }
-
-    private Map<String, Object> protectionRow(QuantProtectionOrder item, Map<Long, QuantCredential> credentialMap) {
-        Map<String, Object> row = map();
-        row.put("id", item.getId());
-        row.put("credentialId", item.getCredentialId());
-        row.put("accountName", credentialMap.get(item.getCredentialId()) == null ? null : credentialMap.get(item.getCredentialId()).getAccountName());
-        row.put("positionId", item.getPositionId());
-        row.put("symbol", item.getSymbol());
-        row.put("positionSide", item.getPositionSide());
-        row.put("exchangeOrderId", item.getExchangeOrderId());
-        row.put("clientOrderId", item.getClientOrderId());
-        row.put("protectionType", item.getProtectionType());
-        row.put("orderType", item.getOrderType());
-        row.put("quantity", item.getQuantity());
-        row.put("stopPrice", item.getStopPrice());
-        row.put("status", item.getStatus());
-        return row;
     }
 
     private <T> PageResult<T> emptyPage() {

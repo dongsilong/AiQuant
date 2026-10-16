@@ -14,7 +14,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
-import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @Tag("dev")
@@ -38,12 +39,10 @@ class RecoveredDispatchRestartTest {
     }
 
     private ExchangeGateway.OrderSnapshot snapshot(String status, BigDecimal filled) {
-        return new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "real-cid", "BUY",
-            "LIMIT", status, BigDecimal.ONE, BigDecimal.ONE, filled, Instant.now());
+        return new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "real-cid", "BUY", "LIMIT", status, BigDecimal.ONE, BigDecimal.ONE, filled, Instant.now());
     }
 
-    private void prepare(QuantExecutionRecord x, ExchangeGateway.OrderSnapshot fact,
-                         boolean ledgerPersisted) {
+    private void prepare(QuantExecutionRecord x, ExchangeGateway.OrderSnapshot fact, boolean ledgerPersisted) {
         when(mapper.selectList(any())).thenReturn(List.of());
         when(mapper.strandedRecoveredDispatches()).thenReturn(List.of(x));
         var c = new QuantCredential();
@@ -51,15 +50,13 @@ class RecoveredDispatchRestartTest {
         c.setSecretKey("test");
         c.setRunMode("LIVE");
         when(credentials.selectById(1L)).thenReturn(c);
-        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("real-cid")))
-            .thenReturn(fact);
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("real-cid"))).thenReturn(fact);
         if (ledgerPersisted) {
             var local = new QuantOrder();
             local.setId(33L);
             when(ledger.syncSnapshot(1L, fact)).thenReturn(local);
         }
-        var recovery = new ExecutionRecoveryService(mapper, credentials, gateway,
-            mock(ExecutionRecordService.class), ledger, new QuantProperties());
+        var recovery = new ExecutionRecoveryService(mapper, credentials, gateway, mock(ExecutionRecordService.class), ledger, new QuantProperties());
         recovery.setLiveOrderDispatcher(dispatcher);
         recovery.recover();
     }
@@ -68,8 +65,7 @@ class RecoveredDispatchRestartTest {
     void crashedAfterRecoveredBeforeGuardReleaseCanRecoverWithoutResending() {
         prepare(recovered("OPEN"), snapshot("FILLED", BigDecimal.ONE), true);
         verify(ledger).syncSnapshot(eq(1L), any());
-        verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT",
-            "original-key", "real-cid", 99L);
+        verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "original-key", "real-cid", 99L);
         verify(gateway, never()).placeOrder(any());
         verify(gateway, never()).cancelOrder(any());
     }
@@ -89,8 +85,7 @@ class RecoveredDispatchRestartTest {
 
     @Test
     void missingOrConflictingExchangeIdentityNeverClearsRecoveredGuard() {
-        var wrong = new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "wrong-cid",
-            "BUY", "LIMIT", "FILLED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now());
+        var wrong = new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "wrong-cid", "BUY", "LIMIT", "FILLED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now());
         prepare(recovered("OPEN"), wrong, true);
         verifyNoInteractions(ledger, dispatcher);
     }

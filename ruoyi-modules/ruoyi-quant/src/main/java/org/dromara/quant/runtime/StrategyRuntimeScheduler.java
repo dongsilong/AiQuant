@@ -17,11 +17,17 @@ public class StrategyRuntimeScheduler {
         this.runtime = runtime;
     }
 
+    /**
+     * 周期性监督策略实例并驱动运行时决策。
+     */
     @Scheduled(fixedDelayString = "#{@quantProperties.runtime.tickSeconds * 1000}", initialDelay = 5000)
     public void supervise() {
         runtime.supervise();
     }
 
+    /**
+     * 定期刷新运行策略依赖的持仓事实。
+     */
     @Scheduled(fixedDelayString = "#{@quantProperties.reconcile.intervalSeconds * 1000}", initialDelay = 15000)
     public void reconcilePositions() {
         runtime.reconcileRunningPositions();

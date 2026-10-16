@@ -20,9 +20,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class StrategyFillAuditServiceTest {
     @Test
     void auditedTotalsUseExactVerifiedFillsAndNeverClaimLivePositionSize() throws Exception {
-        var source = new DriverManagerDataSource(
-            "jdbc:h2:mem:fill_audit_" + UUID.randomUUID()
-                + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
+        var source = new DriverManagerDataSource("jdbc:h2:mem:fill_audit_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
         var jdbc = new JdbcTemplate(source);
         jdbc.execute("""
             CREATE TABLE quant_strategy_fill_allocation(
@@ -45,8 +43,7 @@ class StrategyFillAuditServiceTest {
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setConfiguration(conf);
-        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()))
-            .getMapper(StrategyFillAllocationMapper.class);
+        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(StrategyFillAllocationMapper.class);
         var audit = new StrategyFillAuditService(mapper);
         var totals = audit.summarize(9007199254740993L, 10L, 20L, "btcusdt");
         assertEquals("9007199254740993", totals.credentialId());
@@ -58,18 +55,14 @@ class StrategyFillAuditServiceTest {
         assertEquals(0, new BigDecimal("47.50").compareTo(new BigDecimal(totals.realizedPnl())));
         assertEquals("LIFETIME_VERIFIED_FILLS_NOT_OPEN_POSITION", totals.allocationScope());
         jdbc.update("UPDATE quant_strategy_fill_allocation SET allocated_fee_asset='BNB' WHERE id=2");
-        assertThrows(IllegalStateException.class,
-            () -> audit.summarize(9007199254740993L,10L,20L,"BTCUSDT"));
-        assertThrows(IllegalArgumentException.class,
-            () -> audit.summarize(1L, 10L, 20L, "BTCUSDT;DROP TABLE"));
+        assertThrows(IllegalStateException.class, () -> audit.summarize(9007199254740993L, 10L, 20L, "BTCUSDT"));
+        assertThrows(IllegalArgumentException.class, () -> audit.summarize(1L, 10L, 20L, "BTCUSDT;DROP TABLE"));
     }
 
     @Test
     void endpointRequiresAllocationViewPermission() throws Exception {
-        var perm = StrategyFillAuditController.class.getMethod("summary",
-            String.class,String.class,String.class,String.class)
-            .getAnnotation(SaCheckPermission.class);
+        var perm = StrategyFillAuditController.class.getMethod("summary", String.class, String.class, String.class, String.class).getAnnotation(SaCheckPermission.class);
         assertNotNull(perm);
-        assertEquals("quant:allocation:view",perm.value()[0]);
+        assertEquals("quant:allocation:view", perm.value()[0]);
     }
 }

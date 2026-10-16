@@ -2,12 +2,10 @@ package org.dromara.quant.notification;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.extern.slf4j.Slf4j;
-import org.dromara.common.core.exception.ServiceException;
-import org.dromara.common.mail.core.MailBuilder;
 import org.dromara.common.core.enums.PushSourceEnum;
 import org.dromara.common.core.enums.PushTypeEnum;
-import org.dromara.system.api.MessageService;
-import org.dromara.system.api.domain.PushPayloadDTO;
+import org.dromara.common.core.exception.ServiceException;
+import org.dromara.common.mail.core.MailBuilder;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.notification.domain.QuantNotification;
@@ -15,9 +13,11 @@ import org.dromara.quant.notification.mapper.QuantNotificationMapper;
 import org.dromara.quant.risk.domain.QuantRiskConfig;
 import org.dromara.quant.risk.mapper.QuantRiskConfigMapper;
 import org.dromara.quant.strategy.domain.QuantStrategy;
+import org.dromara.system.api.MessageService;
+import org.dromara.system.api.domain.PushPayloadDTO;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -46,6 +46,7 @@ public class QuantTradeNotificationService {
     private final QuantProperties properties;
     private final MessageService messageService;
     private final JdbcTemplate jdbcTemplate;
+    private final java.util.concurrent.ConcurrentHashMap<String, Long> blockedNoticeTimes = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * 创建 QuantTradeNotificationService 实例并初始化其依赖。
@@ -57,46 +58,6 @@ public class QuantTradeNotificationService {
         this.properties = properties;
         this.messageService = messageService;
         this.jdbcTemplate = jdbcTemplate;
-    }
-
-    /** 日志线程调用；与交易风险消息分开，发布到顶部工作分类。 */
-    public void notifyDecisionLogLoss(long count) {
-        List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur.user_id WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'",
-            (rs, rowNum) -> rs.getLong(1));
-        if (!admins.isEmpty()) {
-            messageService.publishMessage(admins, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW,
-                "开平仓日志写入故障，累计丢失 " + count + " 条，请检查日志队列和数据库。", null, "/trade/trade-decision-log"));
-        }
-    }
-
-    private final java.util.concurrent.ConcurrentHashMap<String, Long> blockedNoticeTimes = new java.util.concurrent.ConcurrentHashMap<>();
-
-    /**
-     * 把实盘闸门拒绝原因推送到管理员的顶部工作消息。
-     */
-    public void notifyLiveBlocked(QuantCredential credential, String symbol, String reason) {
-        long now = System.currentTimeMillis();
-        String noticeKey = (credential == null ? "unknown" : credential.getId()) + ":" + symbol + ":" + reason;
-        var publish = new java.util.concurrent.atomic.AtomicBoolean();
-        blockedNoticeTimes.compute(noticeKey, (key, previous) -> {
-            if (previous == null || now - previous >= 60_000L) { publish.set(true); return now; }
-            return previous;
-        });
-        if (!publish.get()) { return; }
-        if (blockedNoticeTimes.size() > 1024) { blockedNoticeTimes.entrySet().removeIf(entry -> now - entry.getValue() > 60_000L); }
-        String content = "实盘开仓已阻止\n账户: " + safe(credential == null ? null : credential.getAccountName())
-            + "\n交易对: " + safe(symbol) + "\n原因: " + safe(reason) + "\n时间: " + LocalDateTime.now();
-        try {
-             List<Long> adminIds = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur.user_id "
-                    + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'",
-                (rs, rowNum) -> rs.getLong(1));
-            if (!adminIds.isEmpty()) {
-                messageService.publishMessage(adminIds, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, content, null, "/quant/notification/index"));
-            }
-            log.warn("实盘开仓已阻止信息：{}", content);
-        } catch (RuntimeException ex) {
-            log.error("实盘闸门原因推送管理员消息失败 symbol={}", symbol, ex);
-        }
     }
 
     /**
@@ -118,6 +79,52 @@ public class QuantTradeNotificationService {
      */
     private static String safe(String value) {
         return value == null || value.isBlank() ? "N/A" : value;
+    }
+
+    /**
+     * 日志线程调用；与交易风险消息分开，发布到顶部工作分类。
+     */
+    public void notifyDecisionLogLoss(long count) {
+        List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur.user_id " +
+            "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
+        if (!admins.isEmpty()) {
+            messageService.publishMessage(admins, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, "开平仓日志写入故障，累计丢失 " + count + " 条，请检查日志队列和数据库。", null, "/trade" +
+                "/trade-decision-log"));
+        }
+    }
+
+    /**
+     * 把实盘闸门拒绝原因推送到管理员的顶部工作消息。
+     */
+    public void notifyLiveBlocked(QuantCredential credential, String symbol, String reason) {
+        long now = System.currentTimeMillis();
+        String noticeKey = (credential == null ? "unknown" : credential.getId()) + ":" + symbol + ":" + reason;
+        var publish = new java.util.concurrent.atomic.AtomicBoolean();
+        blockedNoticeTimes.compute(noticeKey, (key, previous) -> {
+            if (previous == null || now - previous >= 60_000L) {
+                publish.set(true);
+                return now;
+            }
+            return previous;
+        });
+        if (!publish.get()) {
+            return;
+        }
+        if (blockedNoticeTimes.size() > 1024) {
+            blockedNoticeTimes.entrySet().removeIf(entry -> now - entry.getValue() > 60_000L);
+        }
+        String content =
+            "实盘开仓已阻止\n账户: " + safe(credential == null ? null : credential.getAccountName()) + "\n交易对: " + safe(symbol) + "\n原因: " + safe(reason) + "\n时间: " + LocalDateTime.now();
+        try {
+            List<Long> adminIds = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur" +
+                ".user_id " + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
+            if (!adminIds.isEmpty()) {
+                messageService.publishMessage(adminIds, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, content, null, "/quant/terminal/index"));
+            }
+            log.warn("实盘开仓已阻止信息：{}", content);
+        } catch (RuntimeException ex) {
+            log.error("实盘闸门原因推送管理员消息失败 symbol={}", symbol, ex);
+        }
     }
 
     /**
@@ -195,8 +202,8 @@ public class QuantTradeNotificationService {
     /**
      * 通过系统内置消息中心推送通知；失败只记录日志，不影响交易与邮件。
      * 收件人：
-     *   1. 凭证所属用户（若可解析）
-     *   2. 系统管理员（兜底）
+     * 1. 凭证所属用户（若可解析）
+     * 2. 系统管理员（兜底）
      * 保证交易账户所有者无论如何都能收到。
      */
     private void publishSystemMessage(Long credentialId, String subject, String content) {
@@ -204,29 +211,24 @@ public class QuantTradeNotificationService {
             java.util.LinkedHashSet<Long> recipients = new java.util.LinkedHashSet<>();
             if (credentialId != null) {
                 try {
-                    Long ownerId = jdbcTemplate.queryForObject(
-                        "SELECT user_id FROM quant_credential WHERE id=? AND del_flag='0'",
-                        Long.class, credentialId);
-                    if (ownerId != null) { recipients.add(ownerId); }
+                    Long ownerId = jdbcTemplate.queryForObject("SELECT user_id FROM quant_credential WHERE id=? AND del_flag='0'", Long.class, credentialId);
+                    if (ownerId != null) {
+                        recipients.add(ownerId);
+                    }
                 } catch (org.springframework.dao.EmptyResultDataAccessException ignored) {
                     // 凭证不存在或已删除：交给管理员兜底
                 }
             }
-            List<Long> admins = jdbcTemplate.query(
-                "SELECT DISTINCT ur.user_id FROM sys_user_role ur "
-                    + "JOIN sys_role r ON r.role_id=ur.role_id "
-                    + "JOIN sys_user u ON u.user_id=ur.user_id "
-                    + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'",
-                (rs, rowNum) -> rs.getLong(1));
+            List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur " + "JOIN sys_role r ON r.role_id=ur.role_id " + "JOIN sys_user u ON u" +
+                ".user_id=ur.user_id " + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
             recipients.addAll(admins);
 
             if (recipients.isEmpty()) {
                 log.warn("量化交易系统消息无有效接收人 credentialId={} subject={}", credentialId, subject);
                 return;
             }
-            messageService.publishMessage(new java.util.ArrayList<>(recipients),
-                PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW,
-                    subject + "\n" + content, null, "/quant/notification/index"));
+            messageService.publishMessage(new java.util.ArrayList<>(recipients), PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, subject + "\n" + content, null,
+                "/quant/terminal/index"));
         } catch (RuntimeException ex) {
             log.error("量化交易系统消息推送失败 credentialId={} subject={}", credentialId, subject, ex);
         }
@@ -246,6 +248,9 @@ public class QuantTradeNotificationService {
         throw new ServiceException("通知正在发送或已处理");
     }
 
+    /**
+     * 定期重试仍处于可重试状态的通知。
+     */
     @Scheduled(fixedDelay = 30000L, initialDelay = 30000L)
     public void retryPendingNotifications() {
         List<QuantNotification> pending =

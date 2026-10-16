@@ -1,10 +1,6 @@
 package org.dromara.quant.runtime.coordination.mapper;
 
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Options;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.*;
 
 /**
  * MySQL 原子策略租约。唯一键 (credential_id, symbol) 是跨实例排他保证。
@@ -19,11 +15,8 @@ public interface StrategyRuntimeLeaseMapper {
         VALUES (#{instanceId}, #{credentialId}, #{symbol}, #{ownerToken}, 1,
                 DATE_ADD(NOW(), INTERVAL #{leaseSeconds} SECOND), NOW(), NOW())
         """)
-    int ensureRow(@Param("instanceId") Long instanceId,
-                  @Param("credentialId") Long credentialId,
-                  @Param("symbol") String symbol,
-                  @Param("ownerToken") String ownerToken,
-                  @Param("leaseSeconds") int leaseSeconds);
+    int ensureRow(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken, @Param(
+        "leaseSeconds") int leaseSeconds);
 
     @Options(timeout = 3)
     @Update("""
@@ -36,10 +29,7 @@ public interface StrategyRuntimeLeaseMapper {
         WHERE credential_id=#{credentialId} AND symbol=#{symbol}
           AND (owner_token=#{ownerToken} OR lease_until<NOW())
         """)
-    int acquireOrRenew(@Param("instanceId") Long instanceId,
-                       @Param("credentialId") Long credentialId,
-                       @Param("symbol") String symbol,
-                       @Param("ownerToken") String ownerToken,
+    int acquireOrRenew(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken,
                        @Param("leaseSeconds") int leaseSeconds);
 
     /**
@@ -53,10 +43,7 @@ public interface StrategyRuntimeLeaseMapper {
         WHERE instance_id=#{instanceId} AND credential_id=#{credentialId}
           AND symbol=#{symbol} AND owner_token=#{ownerToken} AND lease_until>NOW()
         """)
-    Long countCurrentOwner(@Param("instanceId") Long instanceId,
-                           @Param("credentialId") Long credentialId,
-                           @Param("symbol") String symbol,
-                           @Param("ownerToken") String ownerToken);
+    Long countCurrentOwner(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken);
 
     /**
      * Monotonic fencing epoch. This value is never reset on release or takeover.
@@ -69,10 +56,7 @@ public interface StrategyRuntimeLeaseMapper {
           AND symbol=#{symbol} AND owner_token=#{ownerToken}
           AND lease_until>NOW() AND lease_epoch>0
         """)
-    Long currentEpoch(@Param("instanceId") Long instanceId,
-                      @Param("credentialId") Long credentialId,
-                      @Param("symbol") String symbol,
-                      @Param("ownerToken") String ownerToken);
+    Long currentEpoch(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken);
 
     @Options(timeout = 3)
     @Update("""
@@ -81,7 +65,5 @@ public interface StrategyRuntimeLeaseMapper {
         WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND owner_token=#{ownerToken}
           AND lease_until>NOW()
         """)
-    int release(@Param("credentialId") Long credentialId,
-                @Param("symbol") String symbol,
-                @Param("ownerToken") String ownerToken);
+    int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken);
 }

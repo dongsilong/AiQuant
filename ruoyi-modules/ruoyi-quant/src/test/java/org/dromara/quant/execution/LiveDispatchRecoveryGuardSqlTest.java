@@ -12,15 +12,13 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import java.util.Objects;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @Tag("dev")
 class LiveDispatchRecoveryGuardSqlTest {
     @Test
     void recoverOnlyWhenTicketStillOwnsActiveAccountSymbolSlot() throws Exception {
-        var data = new DriverManagerDataSource(
-            "jdbc:h2:mem:live_recovery_guard_" + UUID.randomUUID()
-                + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
+        var data = new DriverManagerDataSource("jdbc:h2:mem:live_recovery_guard_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
         var db = new JdbcTemplate(data); // Test fixture only; production uses MyBatis mapper.
         db.execute("""
             CREATE TABLE quant_live_dispatch_guard (
@@ -46,8 +44,7 @@ class LiveDispatchRecoveryGuardSqlTest {
         var factory = new SqlSessionFactoryBean();
         factory.setConfiguration(cfg);
         factory.setDataSource(data);
-        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()))
-            .getMapper(LiveOrderDispatchMapper.class);
+        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(LiveOrderDispatchMapper.class);
 
         assertEquals(0, mapper.recoverVerified(11L, "BTCUSDT", "key1", "cid1", 123L));
         assertEquals("UNKNOWN", mapper.ticketStatus(11L, "key1"));
@@ -58,8 +55,6 @@ class LiveDispatchRecoveryGuardSqlTest {
             """);
         assertEquals(1, mapper.recoverVerified(11L, "BTCUSDT", "key1", "cid1", 123L));
         assertEquals("RECOVERED", mapper.ticketStatus(11L, "key1"));
-        assertEquals(123L, db.queryForObject(
-            "SELECT exchange_order_id FROM quant_order_dispatch_ticket WHERE credential_id=11 AND idempotency_key='key1'",
-            Long.class));
+        assertEquals(123L, db.queryForObject("SELECT exchange_order_id FROM quant_order_dispatch_ticket WHERE credential_id=11 AND idempotency_key='key1'", Long.class));
     }
 }

@@ -148,11 +148,9 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      */
     record PositionSnapshot(String symbol, String side, BigDecimal quantity, BigDecimal entryPrice, BigDecimal markPrice, BigDecimal unrealizedPnl, BigDecimal liquidationPrice,
                             BigDecimal margin, Integer leverage, BigDecimal takeProfitPrice, BigDecimal stopLossPrice, Instant updateTime) {
-        public PositionSnapshot(String symbol, String side, BigDecimal quantity, BigDecimal entryPrice, BigDecimal markPrice,
-                                BigDecimal unrealizedPnl, BigDecimal liquidationPrice, BigDecimal margin, Integer leverage,
-                                BigDecimal takeProfitPrice, BigDecimal stopLossPrice) {
-            this(symbol, side, quantity, entryPrice, markPrice, unrealizedPnl, liquidationPrice, margin, leverage,
-                takeProfitPrice, stopLossPrice, null);
+        public PositionSnapshot(String symbol, String side, BigDecimal quantity, BigDecimal entryPrice, BigDecimal markPrice, BigDecimal unrealizedPnl,
+                                BigDecimal liquidationPrice, BigDecimal margin, Integer leverage, BigDecimal takeProfitPrice, BigDecimal stopLossPrice) {
+            this(symbol, side, quantity, entryPrice, markPrice, unrealizedPnl, liquidationPrice, margin, leverage, takeProfitPrice, stopLossPrice, null);
         }
     }
 
@@ -171,10 +169,12 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param updateTime       交易所事实更新时间
      * @param averagePrice     实际累计成交均价，未知时为空，不能用委托价格代替
      */
-    record OrderSnapshot(String symbol, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId, String clientOrderId, String side, String type, String status, BigDecimal price, BigDecimal originalQuantity,
-                         BigDecimal executedQuantity, Instant updateTime, BigDecimal averagePrice) {
-        public OrderSnapshot(String symbol, Long orderId, String clientOrderId, String side, String type, String status,
-                             BigDecimal price, BigDecimal originalQuantity, BigDecimal executedQuantity, Instant updateTime) {
+    record OrderSnapshot(String symbol,
+                         @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId,
+                         String clientOrderId, String side, String type, String status, BigDecimal price, BigDecimal originalQuantity, BigDecimal executedQuantity,
+                         Instant updateTime, BigDecimal averagePrice) {
+        public OrderSnapshot(String symbol, Long orderId, String clientOrderId, String side, String type, String status, BigDecimal price, BigDecimal originalQuantity,
+                             BigDecimal executedQuantity, Instant updateTime) {
             this(symbol, orderId, clientOrderId, side, type, status, price, originalQuantity, executedQuantity, updateTime, null);
         }
     }
@@ -192,14 +192,16 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param realizedPnl 已实现盈亏
      * @param time        交易所事实发生时间
      */
-    record TradeSnapshot(String symbol, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long tradeId, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId, String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl,
-                         Instant time, String commissionAsset) {
-        /** Legacy callers have unknown fee asset and MUST NOT project as settled PnL. */
-        public TradeSnapshot(String symbol, Long tradeId, Long orderId, String side,
-                             BigDecimal quantity, BigDecimal price, BigDecimal commission,
-                             BigDecimal realizedPnl, Instant time) {
-            this(symbol, tradeId, orderId, side, quantity, price,
-                commission, realizedPnl, time, null);
+    record TradeSnapshot(String symbol,
+                         @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long tradeId,
+                         @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId,
+                         String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl, Instant time, String commissionAsset) {
+        /**
+         * Legacy callers have unknown fee asset and MUST NOT project as settled PnL.
+         */
+        public TradeSnapshot(String symbol, Long tradeId, Long orderId, String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl,
+                             Instant time) {
+            this(symbol, tradeId, orderId, side, quantity, price, commission, realizedPnl, time, null);
         }
     }
 
@@ -242,8 +244,8 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      */
     record OrderRequest(Credential credential, String symbol, String side, String type, BigDecimal quantity, BigDecimal price, boolean reduceOnly, String positionSide,
                         String clientOrderId, boolean live, Instant validUntil) {
-        public OrderRequest(Credential credential, String symbol, String side, String type, BigDecimal quantity, BigDecimal price,
-                            boolean reduceOnly, String positionSide, String clientOrderId, boolean live) {
+        public OrderRequest(Credential credential, String symbol, String side, String type, BigDecimal quantity, BigDecimal price, boolean reduceOnly, String positionSide,
+                            String clientOrderId, boolean live) {
             this(credential, symbol, side, type, quantity, price, reduceOnly, positionSide, clientOrderId, live, null);
         }
     }
@@ -319,26 +321,30 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
     /**
      * ProtectionOrderSnapshot，量化交易模块领域/基础设施对象。
      *
-     * @param symbol       交易对，例如 BTCUSDT
-     * @param algoId       交易所条件/算法单主键
-     * @param clientAlgoId 客户端条件单标识
-     * @param status       当前状态
-     * @param side         订单买卖方向，例如 BUY/SELL
-     * @param positionSide 持仓方向，例如 LONG/SHORT/BOTH
-     * @param type         信号、事件或订单类型
-     * @param quantity     数量
-     * @param triggerPrice 条件单触发价格
-     * @param reduceOnly  是否仅减仓，用于区分单向持仓保护与开仓条件单
+     * @param symbol        交易对，例如 BTCUSDT
+     * @param algoId        交易所条件/算法单主键
+     * @param clientAlgoId  客户端条件单标识
+     * @param status        当前状态
+     * @param side          订单买卖方向，例如 BUY/SELL
+     * @param positionSide  持仓方向，例如 LONG/SHORT/BOTH
+     * @param type          信号、事件或订单类型
+     * @param quantity      数量
+     * @param triggerPrice  条件单触发价格
+     * @param reduceOnly    是否仅减仓，用于区分单向持仓保护与开仓条件单
      * @param closePosition 是否触发后平掉全部持仓
-     * @param updateTime   交易所事实更新时间
+     * @param updateTime    交易所事实更新时间
      */
-    record ProtectionOrderSnapshot(String symbol, @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
-                                   BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
-                                   @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long actualOrderId, BigDecimal actualPrice) {
+    record ProtectionOrderSnapshot(String symbol,
+                                   @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long algoId,
+                                   String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity, BigDecimal triggerPrice,
+                                   Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
+                                   @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long actualOrderId,
+                                   BigDecimal actualPrice) {
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition) {
             this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition, null, null);
         }
+
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity) {
             this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, null, null);
@@ -368,12 +374,19 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param keepAliveAction listenKey 保活回调
      * @param closeAction     关闭底层连接的回调
      */
-    record UserDataStreamSession(String listenKey, Instant startedAt, Runnable keepAliveAction, Runnable closeAction, java.util.function.BooleanSupplier connected) implements AutoCloseable {
+    record UserDataStreamSession(String listenKey, Instant startedAt, Runnable keepAliveAction, Runnable closeAction,
+                                 java.util.function.BooleanSupplier connected) implements AutoCloseable {
         public UserDataStreamSession(String listenKey, Instant startedAt, Runnable keepAliveAction, Runnable closeAction) {
             this(listenKey, startedAt, keepAliveAction, closeAction, () -> true);
         }
 
-        public boolean isConnected() { return connected.getAsBoolean(); }
+        /**
+         * 返回当前上游连接的健康状态。
+         */
+        public boolean isConnected() {
+            return connected.getAsBoolean();
+        }
+
         /**
          * 续期 UserData listenKey。
          */

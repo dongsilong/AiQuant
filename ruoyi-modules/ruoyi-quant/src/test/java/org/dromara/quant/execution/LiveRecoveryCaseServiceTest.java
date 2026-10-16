@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -29,8 +29,7 @@ class LiveRecoveryCaseServiceTest {
         String hash = "a".repeat(64);
         String detail = "b".repeat(64);
         when(cases.approve(123L, 2L, hash)).thenReturn(1);
-        when(audit.append(anyLong(), eq(123L), eq(2L), eq("APPROVE"), eq(hash), eq(detail)))
-            .thenReturn(1);
+        when(audit.append(anyLong(), eq(123L), eq(2L), eq("APPROVE"), eq(hash), eq(detail))).thenReturn(1);
         service.approve(123L, 2L, hash, detail);
         verify(manager).commit(transactionStatus);
     }
@@ -48,16 +47,14 @@ class LiveRecoveryCaseServiceTest {
     @Test
     void staleApprovalCannotWriteAudit() {
         String hash = "a".repeat(64);
-        assertThrows(IllegalStateException.class, () ->
-            service.approve(123L, 2L, hash, "b".repeat(64)));
+        assertThrows(IllegalStateException.class, () -> service.approve(123L, 2L, hash, "b".repeat(64)));
         verifyNoInteractions(audit);
         verify(manager).rollback(transactionStatus);
     }
 
     @Test
     void invalidDigestCannotReachDatabase() {
-        assertThrows(IllegalArgumentException.class, () ->
-            service.approve(123L, 2L, "untrusted", "b".repeat(64)));
+        assertThrows(IllegalArgumentException.class, () -> service.approve(123L, 2L, "untrusted", "b".repeat(64)));
         verifyNoInteractions(cases, audit);
     }
 }

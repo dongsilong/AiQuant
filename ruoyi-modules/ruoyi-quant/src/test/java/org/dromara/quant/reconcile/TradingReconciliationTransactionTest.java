@@ -43,10 +43,9 @@ class TradingReconciliationTransactionTest {
     private final StrategyPositionStateService state = mock(StrategyPositionStateService.class);
 
     private TradingReconciliationService service() {
-        var source = new DriverManagerDataSource(
-            "jdbc:h2:mem:reconciliation_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
-        return new TradingReconciliationService(gateway, accounts, positions, orders, trades,
-            protection, finance, records, errors, state, new DataSourceTransactionManager(source));
+        var source = new DriverManagerDataSource("jdbc:h2:mem:reconciliation_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+        return new TradingReconciliationService(gateway, accounts, positions, orders, trades, protection, finance, records, errors, state,
+            new DataSourceTransactionManager(source));
     }
 
     private QuantCredential credential() {
@@ -88,8 +87,7 @@ class TradingReconciliationTransactionTest {
     @Test
     void failedHistoryQueryCannotRollbackEarlierVerifiedAccountSnapshot() {
         stubCommonFacts();
-        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong()))
-            .thenThrow(new IllegalStateException("Binance unavailable"));
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenThrow(new IllegalStateException("Binance unavailable"));
         assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 48));
         verify(accounts).insert(any(org.dromara.quant.account.domain.QuantAccountSnapshot.class));
         verify(errors).record(eq(1L), anyString());
@@ -98,13 +96,11 @@ class TradingReconciliationTransactionTest {
     @Test
     void orphanProtectionDoesNotGetCanceledJustBecauseLocalPositionIsMissing() {
         stubCommonFacts();
-        var open = new ExchangeGateway.OrderSnapshot("BTCUSDT", 7L, "open7", "BUY", "MARKET", "NEW",
-            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, Instant.EPOCH);
+        var open = new ExchangeGateway.OrderSnapshot("BTCUSDT", 7L, "open7", "BUY", "MARKET", "NEW", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, Instant.EPOCH);
         when(gateway.queryOrders(any(), isNull())).thenReturn(List.of(open));
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
-        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(
-            new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 123L, "protect123", "NEW",
-                "SELL", "LONG", "STOP_MARKET", BigDecimal.ONE, BigDecimal.ONE, Instant.EPOCH)));
+        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 123L, "protect123", "NEW", "SELL",
+            "LONG", "STOP_MARKET", BigDecimal.ONE, BigDecimal.ONE, Instant.EPOCH)));
         service().reconcileCredential(credential(), 48);
         verify(gateway, never()).cancelProtectionOrder(any());
         verify(protection).insert(any(org.dromara.quant.protection.domain.QuantProtectionOrder.class));
@@ -113,6 +109,7 @@ class TradingReconciliationTransactionTest {
         assertEquals("DEGRADED", record.getValue().getResult());
         assertTrue(record.getValue().getDetailJson().contains("unmatchedLiveProtections"));
     }
+
     @Test
     void confirmedFlatAccountPositionIsNotRolledBackByLaterOrderFailure() {
         stubCommonFacts();
@@ -129,17 +126,33 @@ class TradingReconciliationTransactionTest {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive());
             return 1;
         }).when(positions).updateById(any(org.dromara.quant.position.domain.QuantPosition.class));
-        when(gateway.queryOrderHistory(any(),isNull(),any(),anyLong()))
-            .thenReturn(List.of(new ExchangeGateway.OrderSnapshot("BTCUSDT",78L,"filled78",
-                "SELL","MARKET","FILLED",BigDecimal.TEN,BigDecimal.ONE,
-                BigDecimal.ONE,Instant.EPOCH)));
-        when(gateway.queryTrades(any(),eq("BTCUSDT"),any())).thenReturn(List.of());
-        when(gateway.queryProtectionOrders(any(),eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of(new ExchangeGateway.OrderSnapshot("BTCUSDT", 78L, "filled78", "SELL", "MARKET",
+            "FILLED", BigDecimal.TEN, BigDecimal.ONE, BigDecimal.ONE, Instant.EPOCH)));
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
         when(orders.selectOne(any())).thenThrow(new IllegalStateException("order database write failed"));
-        assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(),48));
+        assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 48));
         verify(positions).updateById(stale);
         verify(state).markClosedByPositionId(501L);
-        verify(errors).record(eq(1L),anyString());
+        verify(errors).record(eq(1L), anyString());
+    }
+
+    @Test
+    void fullSnapshotClosesStaleStrategyStateForAlreadyZeroLocalPosition() {
+        stubCommonFacts();
+        var flat = new org.dromara.quant.position.domain.QuantPosition();
+        flat.setId(502L);
+        flat.setCredentialId(1L);
+        flat.setSymbol("PUMPUSDT");
+        flat.setPositionSide("LONG");
+        flat.setQuantity(BigDecimal.ZERO);
+        when(positions.selectList(any())).thenReturn(List.of(flat));
+
+        service().refreshPositionsOnly(credential());
+
+        verify(positions).selectList(any());
+        verify(state).markClosedByPositionId(502L);
+        verify(positions, never()).updateById(flat);
     }
 
     @Test
@@ -165,8 +178,7 @@ class TradingReconciliationTransactionTest {
         var fence = mock(org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper.class);
         org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "snapshotFence", fence);
         when(fence.lockAndRead(1L)).thenReturn(java.time.LocalDateTime.now().plusMinutes(5));
-        assertThrows(IllegalStateException.class,
-            () -> reconciliation.refreshPositionsOnly(credential()));
+        assertThrows(IllegalStateException.class, () -> reconciliation.refreshPositionsOnly(credential()));
         verify(fence).ensure(1L);
         verifyNoInteractions(positions);
         verify(accounts, never()).insert(any(org.dromara.quant.account.domain.QuantAccountSnapshot.class));
@@ -213,6 +225,41 @@ class TradingReconciliationTransactionTest {
         when(capacity.lockCredential(1L)).thenReturn(List.of());
         assertThrows(IllegalStateException.class, () -> reconciliation.refreshPositionsOnly(credential()));
         verifyNoInteractions(accounts, positions);
+    }
+
+    @Test
+    void olderSymbolSnapshotCannotRestorePositionAfterNewerFlatSnapshot() {
+        var reconciliation = service();
+        var fence = mock(org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "snapshotFence", fence);
+        when(fence.lockAndRead(1L)).thenReturn(java.time.LocalDateTime.now());
+        var staleOpen = new ExchangeGateway.PositionSnapshot("BTCUSDT", "LONG", new BigDecimal("0.25"), new BigDecimal("100"), new BigDecimal("101"), BigDecimal.ZERO,
+            BigDecimal.ZERO, BigDecimal.TEN, 10, null, null);
+
+        assertThrows(TradingReconciliationService.SnapshotSupersededException.class, () -> reconciliation.syncSymbolPositionSnapshot(credential(), "BTCUSDT", List.of(staleOpen),
+            java.time.LocalDateTime.now().minusMinutes(1), 0L));
+
+        verify(fence).ensure(1L);
+        verify(positions, never()).insert(any(org.dromara.quant.position.domain.QuantPosition.class));
+        verify(positions, never()).updateById(any(org.dromara.quant.position.domain.QuantPosition.class));
+    }
+
+    @Test
+    void symbolSnapshotOnlyZerosThatSymbolsLocalPositions() {
+        var reconciliation = service();
+        when(positions.selectList(any())).thenReturn(List.of());
+        var fence = mock(org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper.class);
+        var capacity = mock(org.dromara.quant.risk.mapper.OpenCapacityMapper.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "snapshotFence", fence);
+        org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "openCapacityMapper", capacity);
+        when(capacity.lockCredential(1L)).thenReturn(List.of(1L));
+        when(fence.advance(eq(1L), any())).thenReturn(1);
+
+        reconciliation.syncSymbolPositionSnapshot(credential(), "BTCUSDT", List.of(), java.time.LocalDateTime.now(), 0L);
+
+        verify(positions).selectList(any());
+        verify(capacity).lockCredential(1L);
+        verify(fence).advance(eq(1L), any());
     }
 
 }

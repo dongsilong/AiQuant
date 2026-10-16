@@ -28,15 +28,17 @@ import java.util.Set;
 @RequiredArgsConstructor
 @ConditionalOnProperty(prefix = "quant.live", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class LivePositionStreamTriggers implements org.springframework.boot.ApplicationRunner {
+    private static final int LEASE_SECONDS = 75;
     private final QuantCredentialMapper credentials;
     private final UserDataStreamHub hub;
     private final LivePositionEventCoordinator coordinator;
     private final LivePositionFreshness freshness;
     private final org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper lease;
     private final String ownerToken = java.util.UUID.randomUUID().toString();
-    private static final int LEASE_SECONDS = 75;
     private final Map<Long, AutoCloseable> subscriptions = new HashMap<>();
-    /** Avoid flooding WARN when an account is leased to a different LIVE node. */
+    /**
+     * Avoid flooding WARN when an account is leased to a different LIVE node.
+     */
     private final Map<Long, Long> nextLeaseConflictLogAt = new HashMap<>();
 
     /**
@@ -49,13 +51,15 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
         supervise();
     }
 
+    /**
+     * 检查活动账户的私有流状态并按需重建订阅。
+     */
     @Scheduled(fixedDelay = 30000, initialDelay = 0)
     public synchronized void supervise() {
         Set<Long> liveIds = new HashSet<>();
         final java.util.List<QuantCredential> enabledCredentials;
         try {
-            enabledCredentials = credentials.selectList(
-                new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"));
+            enabledCredentials = credentials.selectList(new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"));
             if (enabledCredentials == null) {
                 throw new IllegalStateException("LIVE credential discovery returned null");
             }
@@ -83,7 +87,8 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
             liveIds.add(id);
             try {
                 lease.ensure(id, ownerToken, LEASE_SECONDS);
-                if (lease.acquireOrRenew(id, ownerToken, LEASE_SECONDS) != 1) {
+                int leaseAcquired = lease.acquireOrRenew(id, ownerToken, LEASE_SECONDS);
+                if (leaseAcquired != 1) {
                     long now = System.currentTimeMillis();
                     if (now >= nextLeaseConflictLogAt.getOrDefault(id, 0L)) {
                         nextLeaseConflictLogAt.put(id, now + 60_000L);
@@ -93,8 +98,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                         } catch (RuntimeException diagnosticError) {
                             leaseState = "lease diagnostic unavailable: " + diagnosticError.getClass().getSimpleName();
                         }
-                        log.warn("LIVE私有流租约竞争 credentialId={} localOwner={} dbLease=[{}]；本节点禁止创建交易策略运行时",
-                            id, ownerToken, leaseState);
+                        log.warn("LIVE私有流租约竞争 credentialId={} localOwner={} dbLease=[{}]；本节点禁止创建交易策略运行时", id, ownerToken, leaseState);
                     }
                     closeSubscription(id);
                     freshness.invalidate(id);
@@ -163,6 +167,9 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
         }
     }
 
+    /**
+     * 停止监督任务并释放私有流订阅。
+     */
     @PreDestroy
     public synchronized void close() {
         for (Long id : Set.copyOf(subscriptions.keySet())) {

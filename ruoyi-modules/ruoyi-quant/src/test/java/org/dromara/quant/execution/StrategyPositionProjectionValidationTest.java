@@ -8,16 +8,18 @@ import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-import static org.dromara.quant.execution.StrategyPositionAccounting.*;
+
+import static org.dromara.quant.execution.StrategyPositionAccounting.PositionSide;
+import static org.dromara.quant.execution.StrategyPositionAccounting.Role;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @Tag("dev")
 class StrategyPositionProjectionValidationTest {
     private final StrategyPositionProjectionMapper mapper = mock(StrategyPositionProjectionMapper.class);
     private final PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
-    private final StrategyPositionProjectionService service =
-        new StrategyPositionProjectionService(mapper, manager);
+    private final StrategyPositionProjectionService service = new StrategyPositionProjectionService(mapper, manager);
 
     private QuantOrder order() {
         var o = new QuantOrder();
@@ -33,16 +35,14 @@ class StrategyPositionProjectionValidationTest {
     }
 
     private ExchangeGateway.TradeSnapshot fill() {
-        return new ExchangeGateway.TradeSnapshot("BTCUSDT",11L,9L,"BUY",
-            BigDecimal.ONE,BigDecimal.TEN,BigDecimal.ZERO,BigDecimal.ZERO,
-            Instant.parse("2026-10-14T02:00:00Z"));
+        return new ExchangeGateway.TradeSnapshot("BTCUSDT", 11L, 9L, "BUY", BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, Instant.parse("2026-10-14T02:00:00Z"
+        ));
     }
 
     @Test
     void rejectsAmbiguousCloseWithoutAnyDatabaseMutation() {
         var o = order();
-        assertThrows(IllegalStateException.class, () ->
-            service.project(5L,o,fill(),PositionSide.LONG,Role.CLOSE));
+        assertThrows(IllegalStateException.class, () -> service.project(5L, o, fill(), PositionSide.LONG, Role.CLOSE));
         verifyNoInteractions(mapper);
     }
 
@@ -50,12 +50,10 @@ class StrategyPositionProjectionValidationTest {
     void rejectsForeignTradeAndMissingHedgeSide() {
         var o = order();
         o.setExchangeOrderId(999L);
-        assertThrows(IllegalStateException.class, () ->
-            service.project(5L,o,fill(),PositionSide.LONG,Role.OPEN));
+        assertThrows(IllegalStateException.class, () -> service.project(5L, o, fill(), PositionSide.LONG, Role.OPEN));
         o.setExchangeOrderId(9L);
         o.setPositionSide("BOTH");
-        assertThrows(IllegalStateException.class, () ->
-            service.project(5L,o,fill(),PositionSide.LONG,Role.OPEN));
+        assertThrows(IllegalStateException.class, () -> service.project(5L, o, fill(), PositionSide.LONG, Role.OPEN));
         verifyNoInteractions(mapper);
     }
 }

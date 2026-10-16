@@ -30,16 +30,17 @@ public class TradeHistoryMapperTest {
         var parameters = new java.util.HashMap<String, Object>();
         parameters.put("ids", ids);
         parameters.put("symbol", symbol);
-        return new XMLLanguageDriver().createSqlSource(new Configuration(), annotation.value()[0], Map.class)
-            .getBoundSql(parameters).getSql();
+        return new XMLLanguageDriver().createSqlSource(new Configuration(), annotation.value()[0], Map.class).getBoundSql(parameters).getSql();
     }
 
     private Connection database() throws Exception {
         var connection = DriverManager.getConnection("jdbc:h2:mem:" + UUID.randomUUID() + ";MODE=MySQL");
         try (var statement = connection.createStatement()) {
             statement.execute("CREATE TABLE quant_trade (id BIGINT PRIMARY KEY, credential_id BIGINT, symbol VARCHAR(32), exchange_order_id BIGINT, trade_time TIMESTAMP)");
-            statement.execute("CREATE TABLE quant_order (id BIGINT PRIMARY KEY, credential_id BIGINT, symbol VARCHAR(32), exchange_order_id BIGINT, position_side VARCHAR(10), reduce_only BOOLEAN)");
-            statement.execute("CREATE TABLE quant_execution_record (id BIGINT PRIMARY KEY, credential_id BIGINT, symbol VARCHAR(32), exchange_order_id BIGINT, operation_type VARCHAR(20))");
+            statement.execute("CREATE TABLE quant_order (id BIGINT PRIMARY KEY, credential_id BIGINT, symbol VARCHAR(32), exchange_order_id BIGINT, position_side VARCHAR(10), " +
+                "reduce_only BOOLEAN)");
+            statement.execute("CREATE TABLE quant_execution_record (id BIGINT PRIMARY KEY, credential_id BIGINT, symbol VARCHAR(32), exchange_order_id BIGINT, operation_type " +
+                "VARCHAR(20))");
             statement.execute("CREATE INDEX idx_order_history ON quant_order(credential_id, symbol, exchange_order_id)");
             statement.execute("CREATE INDEX idx_execution_history ON quant_execution_record(credential_id, symbol, exchange_order_id, operation_type)");
         }
@@ -75,7 +76,8 @@ public class TradeHistoryMapperTest {
     @Test
     void preservesScopeMissingSourcesAndDuplicateSourceDetection() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
-            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00'),(2,10,'BTCUSDT',102,'2026-10-10 00:00:01'),(3,11,'BTCUSDT',101,'2026-10-10 00:00:02'),(4,10,'ETHUSDT',101,'2026-10-10 00:00:03')");
+            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00'),(2,10,'BTCUSDT',102,'2026-10-10 00:00:01'),(3,11,'BTCUSDT',101," +
+                "'2026-10-10 00:00:02'),(4,10,'ETHUSDT',101,'2026-10-10 00:00:03')");
             statement.execute("INSERT INTO quant_order VALUES (1,10,'BTCUSDT',101,'LONG',FALSE),(2,10,'BTCUSDT',101,'LONG',FALSE),(3,11,'BTCUSDT',102,'SHORT',TRUE)");
             statement.execute("INSERT INTO quant_execution_record VALUES (1,10,'BTCUSDT',101,'OPEN'),(2,10,'BTCUSDT',102,'CANCEL'),(3,11,'BTCUSDT',102,'CLOSE')");
             try (var prepared = connection.prepareStatement(sql(List.of(10L), "BTCUSDT"))) {
@@ -85,8 +87,9 @@ public class TradeHistoryMapperTest {
                     var ids = new ArrayList<Long>();
                     while (result.next()) {
                         ids.add(result.getLong("id"));
-                        if (result.getLong("id") == 1) assertEquals("OPEN", result.getString("operation_type"));
-                        else {
+                        if (result.getLong("id") == 1) {
+                            assertEquals("OPEN", result.getString("operation_type"));
+                        } else {
                             assertNull(result.getString("position_side"));
                             assertNull(result.getString("operation_type"));
                         }
@@ -96,19 +99,20 @@ public class TradeHistoryMapperTest {
             }
         }
     }
+
     @Test
     void matchesOriginalQueryForMultipleAccountsWithAndWithoutSymbol() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
-            statement.execute("INSERT INTO quant_trade SELECT X, CASE WHEN MOD(X,2)=0 THEN 10 ELSE 11 END, CASE WHEN MOD(X,3)=0 THEN 'ETHUSDT' ELSE 'BTCUSDT' END, X, DATEADD('SECOND', -FLOOR(X/2), TIMESTAMP '2026-10-10 00:00:00') FROM SYSTEM_RANGE(1,600)");
+            statement.execute("INSERT INTO quant_trade SELECT X, CASE WHEN MOD(X,2)=0 THEN 10 ELSE 11 END, CASE WHEN MOD(X,3)=0 THEN 'ETHUSDT' ELSE 'BTCUSDT' END, X, DATEADD" +
+                "('SECOND', -FLOOR(X/2), TIMESTAMP '2026-10-10 00:00:00') FROM SYSTEM_RANGE(1,600)");
             statement.execute("INSERT INTO quant_order SELECT id,credential_id,symbol,exchange_order_id,'BOTH',FALSE FROM quant_trade WHERE MOD(id,5)<>0");
             statement.execute("INSERT INTO quant_order SELECT id+1000,credential_id,symbol,exchange_order_id,'BOTH',FALSE FROM quant_trade WHERE MOD(id,10)=0");
-            statement.execute("INSERT INTO quant_execution_record SELECT id,credential_id,symbol,exchange_order_id,CASE WHEN MOD(id,3)=0 THEN 'CANCEL' WHEN MOD(id,2)=0 THEN 'OPEN' ELSE 'CLOSE' END FROM quant_trade");
+            statement.execute("INSERT INTO quant_execution_record SELECT id,credential_id,symbol,exchange_order_id,CASE WHEN MOD(id,3)=0 THEN 'CANCEL' WHEN MOD(id,2)=0 THEN " +
+                "'OPEN' ELSE 'CLOSE' END FROM quant_trade");
             for (String symbol : new String[]{null, "BTCUSDT"}) {
-                String original = "SELECT t.*, o.position_side, o.reduce_only, e.operation_type FROM quant_trade t "
-                    + "LEFT JOIN quant_order o ON o.credential_id=t.credential_id AND o.symbol=t.symbol AND o.exchange_order_id=t.exchange_order_id "
-                    + "LEFT JOIN quant_execution_record e ON e.credential_id=t.credential_id AND e.symbol=t.symbol AND e.exchange_order_id=t.exchange_order_id AND e.operation_type IN ('OPEN','CLOSE') "
-                    + "WHERE t.credential_id IN (?,?) " + (symbol == null ? "" : "AND t.symbol=? ")
-                    + "ORDER BY t.trade_time,t.id LIMIT 20001";
+                String original = "SELECT t.*, o.position_side, o.reduce_only, e.operation_type FROM quant_trade t " + "LEFT JOIN quant_order o ON o.credential_id=t" +
+                    ".credential_id AND o.symbol=t.symbol AND o.exchange_order_id=t.exchange_order_id " + "LEFT JOIN quant_execution_record e ON e.credential_id=t.credential_id " +
+                    "AND e.symbol=t.symbol AND e.exchange_order_id=t.exchange_order_id AND e.operation_type IN ('OPEN','CLOSE') " + "WHERE t.credential_id IN (?,?) " + (symbol == null ? "" : "AND t.symbol=? ") + "ORDER BY t.trade_time,t.id LIMIT 20001";
                 assertEquals(readRows(connection, original, symbol), readRows(connection, sql(List.of(10L, 11L), symbol), symbol));
             }
         }
@@ -118,12 +122,16 @@ public class TradeHistoryMapperTest {
         try (var prepared = connection.prepareStatement(query)) {
             prepared.setLong(1, 10L);
             prepared.setLong(2, 11L);
-            if (symbol != null) prepared.setString(3, symbol);
+            if (symbol != null) {
+                prepared.setString(3, symbol);
+            }
             try (var result = prepared.executeQuery()) {
                 var rows = new ArrayList<List<Object>>();
                 while (result.next()) {
                     var row = new ArrayList<Object>();
-                    for (int i = 1; i <= result.getMetaData().getColumnCount(); i++) row.add(result.getObject(i));
+                    for (int i = 1; i <= result.getMetaData().getColumnCount(); i++) {
+                        row.add(result.getObject(i));
+                    }
                     rows.add(row);
                 }
                 return rows;

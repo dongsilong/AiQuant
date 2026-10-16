@@ -28,10 +28,12 @@ public class LiveStartupPositionRefresh implements ApplicationRunner {
     private final QuantCredentialMapper credentials;
     private final TradingReconciliationService reconciliation;
 
+    /**
+     * 应用启动后刷新 LIVE 账户持仓，避免沿用进程外的旧快照。
+     */
     @Override
     public void run(ApplicationArguments args) {
-        var enabled = credentials.selectList(new LambdaQueryWrapper<QuantCredential>()
-            .eq(QuantCredential::getStatus, "0"));
+        var enabled = credentials.selectList(new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"));
         for (QuantCredential credential : enabled) {
             if ("PAPER".equalsIgnoreCase(credential.getRunMode())) {
                 continue;
@@ -43,13 +45,13 @@ public class LiveStartupPositionRefresh implements ApplicationRunner {
                 for (int attempt = 1; ; attempt++) {
                     try {
                         reconciliation.refreshPositionsOnly(credential);
-                        log.info("LIVE startup position snapshot verified credentialId={} attempt={}",
-                            credential.getId(), attempt);
+                        log.info("LIVE startup position snapshot verified credentialId={} attempt={}", credential.getId(), attempt);
                         break;
                     } catch (TradingReconciliationService.SnapshotSupersededException ex) {
-                        if (attempt >= 5) { throw ex; }
-                        log.warn("LIVE startup snapshot invalidated by newer account event, retrying credentialId={} attempt={}",
-                            credential.getId(), attempt);
+                        if (attempt >= 5) {
+                            throw ex;
+                        }
+                        log.warn("LIVE startup snapshot invalidated by newer account event, retrying credentialId={} attempt={}", credential.getId(), attempt);
                         try {
                             Thread.sleep(200L * attempt);
                         } catch (InterruptedException interrupted) {
@@ -59,11 +61,8 @@ public class LiveStartupPositionRefresh implements ApplicationRunner {
                     }
                 }
             } catch (RuntimeException ex) {
-                log.error("LIVE startup refused: account position snapshot unverified credentialId={}",
-                    credential.getId(), ex);
-                throw new IllegalStateException(
-                    "LIVE startup requires authenticated Binance position refresh for credentialId="
-                        + credential.getId(), ex);
+                log.error("LIVE startup refused: account position snapshot unverified credentialId={}", credential.getId(), ex);
+                throw new IllegalStateException("LIVE startup requires authenticated Binance position refresh for credentialId=" + credential.getId(), ex);
             }
         }
     }

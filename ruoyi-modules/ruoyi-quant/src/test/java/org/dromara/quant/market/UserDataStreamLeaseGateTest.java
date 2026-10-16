@@ -12,24 +12,23 @@ import org.springframework.test.util.ReflectionTestUtils;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-/** LIVE SSE must never create a second private stream on a non-owner node. */
+/**
+ * LIVE SSE must never create a second private stream on a non-owner node.
+ */
 @Tag("dev")
 class UserDataStreamLeaseGateTest {
     @Test
     void liveTerminalCannotSubscribeWithoutDatabaseLease() {
         var gateway = mock(ExchangeGateway.class);
         var lease = mock(LiveUserStreamLeaseMapper.class);
-        var hub = new UserDataStreamHub(gateway,
-            mock(TradeExecutionApplicationService.class),
-            mock(AccountPositionCache.class),
-            mock(AccountBalanceCache.class),
+        var hub = new UserDataStreamHub(gateway, mock(TradeExecutionApplicationService.class), mock(AccountPositionCache.class), mock(AccountBalanceCache.class),
             mock(TradingPreparationService.class));
         ReflectionTestUtils.setField(hub, "streamLease", lease);
         var credential = new QuantCredential();
         credential.setId(81L);
         credential.setRunMode("LIVE");
-        assertThrows(IllegalStateException.class,
-            () -> hub.subscribe(credential, ignored -> {}));
+        assertThrows(IllegalStateException.class, () -> hub.subscribe(credential, ignored -> {
+        }));
         verifyNoInteractions(gateway);
         hub.destroy();
     }
@@ -38,17 +37,14 @@ class UserDataStreamLeaseGateTest {
     void expiredOwnershipCannotBeRegistered() {
         var gateway = mock(ExchangeGateway.class);
         var lease = mock(LiveUserStreamLeaseMapper.class);
-        var hub = new UserDataStreamHub(gateway,
-            mock(TradeExecutionApplicationService.class),
-            mock(AccountPositionCache.class),
-            mock(AccountBalanceCache.class),
+        var hub = new UserDataStreamHub(gateway, mock(TradeExecutionApplicationService.class), mock(AccountPositionCache.class), mock(AccountBalanceCache.class),
             mock(TradingPreparationService.class));
         ReflectionTestUtils.setField(hub, "streamLease", lease);
-        assertThrows(IllegalStateException.class,
-            () -> hub.registerLeaseOwner(82L, "foreign-node"));
+        assertThrows(IllegalStateException.class, () -> hub.registerLeaseOwner(82L, "foreign-node"));
         verify(lease).owns(82L, "foreign-node");
         hub.destroy();
     }
+
     @Test
     void healthCheckClosesFormerOwnerConnectionAfterLeaseLoss() throws Exception {
         var gateway = mock(ExchangeGateway.class);
@@ -67,7 +63,8 @@ class UserDataStreamLeaseGateTest {
         credential.setId(93L);
         credential.setRunMode("LIVE");
         hub.registerLeaseOwner(93L, "node-a");
-        hub.subscribe(credential, event -> {});
+        hub.subscribe(credential, event -> {
+        });
         hub.healthCheck();
         verify(session).close();
         verify(positions).remove(93L);
@@ -92,15 +89,18 @@ class UserDataStreamLeaseGateTest {
         credential.setId(98L);
         credential.setRunMode("LIVE");
         hub.registerLeaseOwner(98L, "node-a");
-        var supervisor = hub.subscribe(credential, ignored -> {});
-        var browser = hub.subscribe(credential, ignored -> {});
+        var supervisor = hub.subscribe(credential, ignored -> {
+        });
+        var browser = hub.subscribe(credential, ignored -> {
+        });
         assertTrue(hub.hasLocalStream(98L));
         hub.unregisterLeaseOwner(98L, "node-a");
         assertFalse(hub.hasLocalStream(98L));
         verify(session).close();
         verify(positions).remove(98L);
         verify(balances).remove(98L);
-        assertThrows(IllegalStateException.class, () -> hub.subscribe(credential, ignored -> {}));
+        assertThrows(IllegalStateException.class, () -> hub.subscribe(credential, ignored -> {
+        }));
         supervisor.close();
         browser.close();
         hub.destroy();
@@ -116,15 +116,14 @@ class UserDataStreamLeaseGateTest {
         var session = mock(ExchangeGateway.UserDataStreamSession.class);
         when(lease.owns(eq(99L), eq("node-a"))).thenReturn(1L, 1L, 0L);
         when(gateway.subscribeUserData(any(), any())).thenReturn(session);
-        var hub = new UserDataStreamHub(gateway,
-            mock(TradeExecutionApplicationService.class),
-            positions, balances, preparation);
+        var hub = new UserDataStreamHub(gateway, mock(TradeExecutionApplicationService.class), positions, balances, preparation);
         ReflectionTestUtils.setField(hub, "streamLease", lease);
         var credential = new QuantCredential();
         credential.setId(99L);
         credential.setRunMode("LIVE");
         hub.registerLeaseOwner(99L, "node-a");
-        hub.subscribe(credential, ignored -> {});
+        hub.subscribe(credential, ignored -> {
+        });
         verify(session).close();
         verify(positions).disconnect(99L);
         verify(balances).disconnect(99L);
@@ -142,16 +141,15 @@ class UserDataStreamLeaseGateTest {
         var session = mock(ExchangeGateway.UserDataStreamSession.class);
         when(lease.owns(eq(103L), eq("node-a"))).thenReturn(1L);
         when(gateway.subscribeUserData(any(), any())).thenReturn(session);
-        doThrow(new IllegalStateException("initial cache unavailable"))
-            .when(positions).onEvent(eq(103L), any());
-        var hub = new UserDataStreamHub(gateway,
-            mock(TradeExecutionApplicationService.class), positions, balances, preparation);
+        doThrow(new IllegalStateException("initial cache unavailable")).when(positions).onEvent(eq(103L), any());
+        var hub = new UserDataStreamHub(gateway, mock(TradeExecutionApplicationService.class), positions, balances, preparation);
         ReflectionTestUtils.setField(hub, "streamLease", lease);
         var credential = new QuantCredential();
         credential.setId(103L);
         credential.setRunMode("LIVE");
         hub.registerLeaseOwner(103L, "node-a");
-        hub.subscribe(credential, ignored -> {});
+        hub.subscribe(credential, ignored -> {
+        });
         verify(session).close();
         verify(positions).disconnect(103L);
         verify(balances).disconnect(103L);

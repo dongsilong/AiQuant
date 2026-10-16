@@ -14,7 +14,6 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -24,15 +23,12 @@ class ExecutionRecoveryServiceTest {
     void scansUnresolvedOrdersWithoutDiscardingThoseOlderThanOneDay() {
         var records = mock(QuantExecutionRecordMapper.class);
         when(records.selectList(any())).thenReturn(List.of());
-        var service = new ExecutionRecoveryService(
-            records, mock(QuantCredentialMapper.class), mock(ExchangeGateway.class),
-            mock(ExecutionRecordService.class), mock(OrderLedgerService.class),
-            new QuantProperties());
+        var service = new ExecutionRecoveryService(records, mock(QuantCredentialMapper.class), mock(ExchangeGateway.class), mock(ExecutionRecordService.class),
+            mock(OrderLedgerService.class), new QuantProperties());
         service.recover();
         verify(records).selectList(argThat(wrapper -> {
             String sql = wrapper.getSqlSegment().toLowerCase(java.util.Locale.ROOT);
-            return sql.contains("last_recovery_at") && sql.contains("created_at")
-                && !sql.contains("updated_at") && sql.contains("limit 100");
+            return sql.contains("last_recovery_at") && sql.contains("created_at") && !sql.contains("updated_at") && sql.contains("limit 100");
         }));
     }
 
@@ -58,9 +54,8 @@ class ExecutionRecoveryServiceTest {
         credential.setSecretKey("test");
         credential.setRunMode("LIVE");
         when(credentials.selectById(1L)).thenReturn(credential);
-        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(123L), eq("correct-client")))
-            .thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 123L, "WRONG-client",
-                "BUY", "MARKET", "FILLED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now()));
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(123L), eq("correct-client"))).thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 123L, "WRONG-client", "BUY",
+            "MARKET", "FILLED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now()));
         var service = new ExecutionRecoveryService(records, credentials, gateway, recordService, ledger, new QuantProperties());
         service.setLiveOrderDispatcher(dispatcher);
         service.recover();
@@ -93,13 +88,10 @@ class ExecutionRecoveryServiceTest {
         credential.setSecretKey("test");
         credential.setRunMode("LIVE");
         when(credentials.selectById(1L)).thenReturn(credential);
-        var partial = new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "original-client",
-            "BUY", "LIMIT", "PARTIALLY_FILLED", BigDecimal.ONE, BigDecimal.ONE,
-            new BigDecimal("0.4"), Instant.now());
-        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("original-client")))
-            .thenReturn(partial);
-        var service = new ExecutionRecoveryService(records, credentials, gateway,
-            recovery, ledger, new QuantProperties());
+        var partial = new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "original-client", "BUY", "LIMIT", "PARTIALLY_FILLED", BigDecimal.ONE, BigDecimal.ONE, new BigDecimal("0" +
+            ".4"), Instant.now());
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("original-client"))).thenReturn(partial);
+        var service = new ExecutionRecoveryService(records, credentials, gateway, recovery, ledger, new QuantProperties());
         service.setLiveOrderDispatcher(dispatcher);
         service.recover();
         verify(ledger).syncSnapshot(1L, partial);
@@ -131,13 +123,14 @@ class ExecutionRecoveryServiceTest {
         credential.setSecretKey("test");
         credential.setRunMode("LIVE");
         when(credentials.selectById(1L)).thenReturn(credential);
-        var finished = new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "original-client",
-            "BUY", "LIMIT", "FILLED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now());
+        var finished = new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "original-client", "BUY", "LIMIT", "FILLED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
+            Instant.now());
         when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("original-client"))).thenReturn(finished);
-        doAnswer(i -> { record.setExecutionStatus("RECOVERED"); return null; })
-            .when(recovery).markRecovered(record, 99L, "FILLED");
-        var service = new ExecutionRecoveryService(records, credentials, gateway,
-            recovery, ledger, new QuantProperties());
+        doAnswer(i -> {
+            record.setExecutionStatus("RECOVERED");
+            return null;
+        }).when(recovery).markRecovered(record, 99L, "FILLED");
+        var service = new ExecutionRecoveryService(records, credentials, gateway, recovery, ledger, new QuantProperties());
         service.setLiveOrderDispatcher(dispatcher);
         service.recover();
         verify(recovery).markRecovered(record, 99L, "FILLED");
@@ -170,9 +163,8 @@ class ExecutionRecoveryServiceTest {
         credential.setRunMode("LIVE");
         when(credentials.selectById(1L)).thenReturn(credential);
 
-        var exchangeOrder = new ExchangeGateway.OrderSnapshot(
-            "BTCUSDT", 123L, "client-123", "BUY", "MARKET", "FILLED",
-            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now());
+        var exchangeOrder = new ExchangeGateway.OrderSnapshot("BTCUSDT", 123L, "client-123", "BUY", "MARKET", "FILLED", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
+            Instant.now());
         when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(exchangeOrder));
 
         var dispatcher = mock(LiveOrderDispatcher.class);

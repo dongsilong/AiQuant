@@ -8,11 +8,14 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.LongConsumer;
 
-/** 有界非阻塞投递；数据库、重试、告警均只在日志线程执行。 */
+/**
+ * 有界非阻塞投递；数据库、重试、告警均只在日志线程执行。
+ */
 public final class TradeDecisionWriter implements AutoCloseable {
     private final LinkedBlockingQueue<DecisionLogEvent> queue;
     private final Consumer<List<DecisionLogEvent>> sink;
     private final LongConsumer alarm;
+    private final Consumer<RuntimeException> writeFailure;
     private final AtomicLong dropped = new AtomicLong();
     private volatile boolean closing;
     private Thread worker;
@@ -20,11 +23,20 @@ public final class TradeDecisionWriter implements AutoCloseable {
     private long announced;
 
     public TradeDecisionWriter(int capacity, Consumer<List<DecisionLogEvent>> sink, LongConsumer alarm) {
+        this(capacity, sink, alarm, ignored -> {
+        });
+    }
+
+    public TradeDecisionWriter(int capacity, Consumer<List<DecisionLogEvent>> sink, LongConsumer alarm, Consumer<RuntimeException> writeFailure) {
         this.queue = new LinkedBlockingQueue<>(capacity);
         this.sink = sink;
         this.alarm = alarm;
+        this.writeFailure = writeFailure;
     }
 
+    /**
+     * 将事件放入有界队列；队列满时计数并拒收，不阻塞交易线程。
+     */
     public boolean offer(DecisionLogEvent event) {
         if (closing || !queue.offer(event)) {
             dropped.incrementAndGet();
@@ -37,8 +49,16 @@ public final class TradeDecisionWriter implements AutoCloseable {
         return true;
     }
 
-    public long dropped() { return dropped.get(); }
+    /**
+     * 返回队列溢出导致的累计丢弃事件数。
+     */
+    public long dropped() {
+        return dropped.get();
+    }
 
+    /**
+     * 启动唯一后台写入线程。
+     */
     public void start() {
         worker = Thread.ofPlatform().daemon().name("quant-trade-decision-log").start(this::run);
     }
@@ -53,9 +73,13 @@ public final class TradeDecisionWriter implements AutoCloseable {
                     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500);
                     while (batch.size() < 200 && !closing) {
                         long remaining = deadline - System.nanoTime();
-                        if (remaining <= 0) { break; }
+                        if (remaining <= 0) {
+                            break;
+                        }
                         DecisionLogEvent next = queue.poll(remaining, TimeUnit.NANOSECONDS);
-                        if (next == null) { break; }
+                        if (next == null) {
+                            break;
+                        }
                         batch.add(next);
                     }
                     persist(batch);
@@ -80,6 +104,10 @@ public final class TradeDecisionWriter implements AutoCloseable {
             } catch (RuntimeException ex) {
                 if (attempt == delay.length || closing) {
                     dropped.addAndGet(batch.size());
+                    try {
+                        writeFailure.accept(ex);
+                    } catch (RuntimeException ignored) {
+                    }
                     return;
                 }
                 try {
@@ -105,15 +133,22 @@ public final class TradeDecisionWriter implements AutoCloseable {
         }
     }
 
+    /**
+     * 停止接收事件并关闭后台写入线程。
+     */
     @Override
     public void close() {
         closing = true;
-        if (worker == null) { return; }
+        if (worker == null) {
+            return;
+        }
         try {
             worker.join(5000);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         }
-        if (worker.isAlive()) { worker.interrupt(); }
+        if (worker.isAlive()) {
+            worker.interrupt();
+        }
     }
 }

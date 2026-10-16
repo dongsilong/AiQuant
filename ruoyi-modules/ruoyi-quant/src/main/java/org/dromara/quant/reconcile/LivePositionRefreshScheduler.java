@@ -22,18 +22,19 @@ public class LivePositionRefreshScheduler {
     private final QuantCredentialMapper credentials;
     private final TradingReconciliationService reconciliation;
 
+    /**
+     * 定期触发活动 LIVE 账户的持仓事实刷新。
+     */
     @Scheduled(fixedDelay = 30000, initialDelay = 30000)
     public void refresh() {
-        for (QuantCredential credential : credentials.selectList(
-            new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"))) {
+        for (QuantCredential credential : credentials.selectList(new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"))) {
             if (!"LIVE".equalsIgnoreCase(credential.getRunMode())) {
                 continue;
             }
             try {
                 reconciliation.refreshPositionsOnly(credential);
             } catch (RuntimeException ex) {
-                log.warn("LIVE position heartbeat failed credentialId={}, new entries remain subject to snapshot TTL",
-                    credential.getId(), ex);
+                log.warn("LIVE position heartbeat failed credentialId={}, new entries remain subject to snapshot TTL", credential.getId(), ex);
             }
         }
     }

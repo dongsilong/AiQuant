@@ -20,12 +20,13 @@ public class StrategyFillAuditController {
         this.audit = audit;
     }
 
+    /**
+     * 查询指定账户、策略或交易对的成交归属审计摘要。
+     */
     @GetMapping("/summary")
     @SaCheckPermission("quant:allocation:view")
-    public R<StrategyFillAuditService.Summary> summary(
-        @RequestParam String credentialId, @RequestParam String strategyId,
-        @RequestParam String instanceId, @RequestParam String symbol) {
-        return R.ok(audit.summarize(Long.valueOf(credentialId),
-            Long.valueOf(strategyId), Long.valueOf(instanceId), symbol));
+    public R<StrategyFillAuditService.Summary> summary(@RequestParam String credentialId, @RequestParam String strategyId, @RequestParam String instanceId,
+                                                       @RequestParam String symbol) {
+        return R.ok(audit.summarize(Long.valueOf(credentialId), Long.valueOf(strategyId), Long.valueOf(instanceId), symbol));
     }
 }

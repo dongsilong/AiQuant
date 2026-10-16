@@ -20,12 +20,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Tag("dev")
 class StrategyFillAllocationServiceTest {
-    private record Fixture(StrategyFillAllocationService service, JdbcTemplate jdbc) {}
-
     private Fixture fixture() throws Exception {
-        var ds = new DriverManagerDataSource(
-            "jdbc:h2:mem:strategy_fill_" + UUID.randomUUID()
-                + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
+        var ds = new DriverManagerDataSource("jdbc:h2:mem:strategy_fill_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
         var jdbc = new JdbcTemplate(ds);
         jdbc.execute("""
             CREATE TABLE quant_strategy_fill_allocation (
@@ -36,7 +32,7 @@ class StrategyFillAllocationServiceTest {
               side VARCHAR(8) NOT NULL, allocated_qty DECIMAL(38,16),
               allocated_price DECIMAL(38,16), allocated_fee DECIMAL(38,16),
               allocated_fee_asset VARCHAR(20) NOT NULL,
-              realized_pnl DECIMAL(38,16), trade_time TIMESTAMP, created_at TIMESTAMP,
+              realized_pnl DECIMAL(38,16), trade_time DATETIME, created_at TIMESTAMP,
               UNIQUE(credential_id,symbol,exchange_trade_id))
             """);
         var config = new Configuration();
@@ -44,9 +40,8 @@ class StrategyFillAllocationServiceTest {
         var bean = new SqlSessionFactoryBean();
         bean.setDataSource(ds);
         bean.setConfiguration(config);
-        var mapper = new SqlSessionTemplate(Objects.requireNonNull(bean.getObject()))
-            .getMapper(StrategyFillAllocationMapper.class);
-        return new Fixture(new StrategyFillAllocationService(mapper), jdbc);
+        var mapper = new SqlSessionTemplate(Objects.requireNonNull(bean.getObject())).getMapper(StrategyFillAllocationMapper.class);
+        return new Fixture(new StrategyFillAllocationService(mapper), jdbc, mapper);
     }
 
     private QuantOrder order(Long instance) {
@@ -60,9 +55,8 @@ class StrategyFillAllocationServiceTest {
     }
 
     private ExchangeGateway.TradeSnapshot fill(String qty) {
-        return new ExchangeGateway.TradeSnapshot("BTCUSDT", 9007199254740993L,
-            99L, "BUY", new BigDecimal(qty), new BigDecimal("66000.25"),
-            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-14T02:00:00Z"), "USDT");
+        return new ExchangeGateway.TradeSnapshot("BTCUSDT", 9007199254740993L, 99L, "BUY", new BigDecimal(qty), new BigDecimal("66000.25"), new BigDecimal("0.01"),
+            BigDecimal.ZERO, Instant.parse("2026-10-14T02:00:00Z"), "USDT");
     }
 
     @Test
@@ -70,40 +64,53 @@ class StrategyFillAllocationServiceTest {
         var f = fixture();
         f.service().allocate(fill("1.25"), order(11L), 2L);
         f.service().allocate(fill("1.25000"), order(11L), 2L);
-        assertEquals(1L, f.jdbc().queryForObject(
-            "SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
-        assertEquals(9007199254740993L, f.jdbc().queryForObject(
-            "SELECT exchange_trade_id FROM quant_strategy_fill_allocation", Long.class));
+        assertEquals(1L, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
+        assertEquals(9007199254740993L, f.jdbc().queryForObject("SELECT exchange_trade_id FROM quant_strategy_fill_allocation", Long.class));
+    }
+
+    @Test
+    void exactReplayWithSubSecondExchangeTimeMatchesSecondPrecisionStorage() throws Exception {
+        var f = fixture();
+        var baseline = fill("1.25");
+        var subSecond = new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(), baseline.orderId(), baseline.side(), baseline.quantity(), baseline.price(),
+            baseline.commission(), baseline.realizedPnl(), Instant.parse("2026-10-14T02:00:00.789Z"), baseline.commissionAsset());
+
+        f.service().allocate(subSecond, order(11L), 2L);
+        f.jdbc().update("UPDATE quant_strategy_fill_allocation SET trade_time=? WHERE exchange_trade_id=?",
+            java.sql.Timestamp.valueOf(java.time.LocalDateTime.ofInstant(subSecond.time(), java.time.ZoneOffset.UTC).withNano(0)), subSecond.tradeId());
+        assertDoesNotThrow(() -> f.service().allocate(subSecond, order(11L), 2L));
+        assertEquals(1L, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
+    }
+
+    @Test
+    void allocationDatetimeIsReadAsWallClockTextWithoutJdbcTimezoneConversion() throws Exception {
+        var f = fixture();
+        var fill = fill("1.25");
+        f.service().allocate(fill, order(11L), 2L);
+
+        assertInstanceOf(String.class, f.mapper().getAllocation(2L, "BTCUSDT", fill.tradeId()).get("trade_time"));
     }
 
     @Test
     void mismatchedFillQuantityOrStrategyOwnershipFailsClosed() throws Exception {
         var f = fixture();
         f.service().allocate(fill("1.25"), order(11L), 2L);
-        assertThrows(IllegalStateException.class,
-            () -> f.service().allocate(fill("1.50"), order(11L), 2L));
-        assertThrows(IllegalStateException.class,
-            () -> f.service().allocate(fill("1.25"), order(12L), 2L));
+        var conflict = assertThrows(IllegalStateException.class, () -> f.service().allocate(fill("1.50"), order(11L), 2L));
+        assertTrue(conflict.getMessage().contains("allocated_qty"));
+        assertThrows(IllegalStateException.class, () -> f.service().allocate(fill("1.25"), order(12L), 2L));
     }
 
     @Test
     void missingFinancialFactsAndInvalidDirectionCannotBecomeImmutableZeroes() throws Exception {
         var f = fixture();
         var baseline = fill("1.25");
-        assertThrows(IllegalStateException.class, () -> f.service().allocate(
-            new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(),
-                baseline.orderId(), "BUY", baseline.quantity(), baseline.price(),
-                null, BigDecimal.ZERO, baseline.time()), order(11L), 2L));
-        assertThrows(IllegalStateException.class, () -> f.service().allocate(
-            new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(),
-                baseline.orderId(), "BUY", baseline.quantity(), baseline.price(),
-                baseline.commission(), null, baseline.time()), order(11L), 2L));
-        assertThrows(IllegalStateException.class, () -> f.service().allocate(
-            new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(),
-                baseline.orderId(), "UNKNOWN_SIDE", baseline.quantity(), baseline.price(),
-                baseline.commission(), baseline.realizedPnl(), baseline.time()), order(11L), 2L));
-        assertEquals(0L, f.jdbc().queryForObject(
-            "SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
+        assertThrows(IllegalStateException.class, () -> f.service().allocate(new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(), baseline.orderId(), "BUY",
+            baseline.quantity(), baseline.price(), null, BigDecimal.ZERO, baseline.time()), order(11L), 2L));
+        assertThrows(IllegalStateException.class, () -> f.service().allocate(new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(), baseline.orderId(), "BUY",
+            baseline.quantity(), baseline.price(), baseline.commission(), null, baseline.time()), order(11L), 2L));
+        assertThrows(IllegalStateException.class, () -> f.service().allocate(new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(), baseline.orderId(),
+            "UNKNOWN_SIDE", baseline.quantity(), baseline.price(), baseline.commission(), baseline.realizedPnl(), baseline.time()), order(11L), 2L));
+        assertEquals(0L, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
     }
 
     @Test
@@ -111,11 +118,11 @@ class StrategyFillAllocationServiceTest {
         var f = fixture();
         var foreign = order(11L);
         foreign.setExchangeOrderId(100L);
-        assertThrows(IllegalStateException.class,
-            () -> f.service().allocate(fill("1.25"), foreign, 2L));
-        assertThrows(IllegalStateException.class,
-            () -> f.service().allocate(fill("1.25"), order(null), 2L));
-        assertEquals(0L, f.jdbc().queryForObject(
-            "SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
+        assertThrows(IllegalStateException.class, () -> f.service().allocate(fill("1.25"), foreign, 2L));
+        assertThrows(IllegalStateException.class, () -> f.service().allocate(fill("1.25"), order(null), 2L));
+        assertEquals(0L, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
+    }
+
+    private record Fixture(StrategyFillAllocationService service, JdbcTemplate jdbc, StrategyFillAllocationMapper mapper) {
     }
 }

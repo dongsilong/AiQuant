@@ -26,7 +26,9 @@ public final class QuantityNormalizer {
      * 两个步长采用最小公倍数合并，不能仅选其中一个，否则可能被交易所拒单。
      */
     public static BigDecimal quantity(BigDecimal value, ExchangeGateway.SymbolRule rule, String orderType) {
-        if (rule == null || !"MARKET".equalsIgnoreCase(orderType)) { return quantity(value, rule); }
+        if (rule == null || !"MARKET".equalsIgnoreCase(orderType)) {
+            return quantity(value, rule);
+        }
         BigDecimal lot = rule.stepSize();
         BigDecimal market = rule.marketStepSize();
         if (lot == null || lot.signum() <= 0 || market == null || market.signum() <= 0) {
@@ -36,8 +38,8 @@ public final class QuantityNormalizer {
         var a = lot.movePointRight(scale).toBigIntegerExact();
         var b = market.movePointRight(scale).toBigIntegerExact();
         BigDecimal step = new BigDecimal(a.divide(a.gcd(b)).multiply(b), scale);
-        return quantity(value, new ExchangeGateway.SymbolRule(rule.symbol(), rule.quoteAsset(), rule.pricePrecision(), rule.quantityPrecision(),
-            rule.priceTickSize(), step, market, rule.minNotional(), rule.status()));
+        return quantity(value, new ExchangeGateway.SymbolRule(rule.symbol(), rule.quoteAsset(), rule.pricePrecision(), rule.quantityPrecision(), rule.priceTickSize(), step,
+            market, rule.minNotional(), rule.status()));
     }
 
     /**

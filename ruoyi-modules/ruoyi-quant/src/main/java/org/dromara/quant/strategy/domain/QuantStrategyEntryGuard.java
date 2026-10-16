@@ -38,6 +38,8 @@ public class QuantStrategyEntryGuard {
      * 交易所订单主键。
      */
     private Long orderId;
+    /** ENTRY 开仓尝试，CLOSE 已发生持仓减少的 K 线封锁。 */
+    private String guardType;
     /**
      * 创建时间。
      */

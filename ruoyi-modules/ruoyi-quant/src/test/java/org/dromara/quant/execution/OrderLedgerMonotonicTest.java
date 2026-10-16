@@ -15,15 +15,12 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @Tag("dev")
 class OrderLedgerMonotonicTest {
-    private record Fixture(QuantOrderMapper mapper, JdbcTemplate jdbc) {}
     private Fixture fixture() throws Exception {
-        var ds = new DriverManagerDataSource(
-            "jdbc:h2:mem:oms_order_" + UUID.randomUUID()
-                + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
+        var ds = new DriverManagerDataSource("jdbc:h2:mem:oms_order_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
         var jdbc = new JdbcTemplate(ds);
         jdbc.execute("""
             CREATE TABLE quant_order (
@@ -49,10 +46,10 @@ class OrderLedgerMonotonicTest {
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(ds);
         factory.setConfiguration(config);
-        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()))
-            .getMapper(QuantOrderMapper.class);
-        return new Fixture(mapper,jdbc);
+        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(QuantOrderMapper.class);
+        return new Fixture(mapper, jdbc);
     }
+
     private QuantOrder fact(String status, String filled) {
         var x = new QuantOrder();
         x.setId(1L);
@@ -70,44 +67,44 @@ class OrderLedgerMonotonicTest {
         x.setUpdatedAt(LocalDateTime.now());
         return x;
     }
+
     @Test
     void staleNewFactCannotDecreasePartiallyFilledQuantity() throws Exception {
-        var f=fixture();
-        assertEquals(0,f.mapper().mergeExchangeFactIfMonotonic(fact("NEW","0")));
-        assertEquals("PARTIALLY_FILLED",f.jdbc().queryForObject(
-            "SELECT status FROM quant_order WHERE id=1",String.class));
-        assertEquals(0,new BigDecimal("0.7").compareTo(f.jdbc().queryForObject(
-            "SELECT executed_quantity FROM quant_order WHERE id=1",BigDecimal.class)));
+        var f = fixture();
+        assertEquals(0, f.mapper().mergeExchangeFactIfMonotonic(fact("NEW", "0")));
+        assertEquals("PARTIALLY_FILLED", f.jdbc().queryForObject("SELECT status FROM quant_order WHERE id=1", String.class));
+        assertEquals(0, new BigDecimal("0.7").compareTo(f.jdbc().queryForObject("SELECT executed_quantity FROM quant_order WHERE id=1", BigDecimal.class)));
     }
 
     @Test
     void terminalCancellationAfterPartialFillIsPermanent() throws Exception {
-        var f=fixture();
-        assertEquals(1,f.mapper().mergeExchangeFactIfMonotonic(fact("CANCELED","0.7")));
-        assertEquals(0,f.mapper().mergeExchangeFactIfMonotonic(fact("NEW","0.7")));
-        assertEquals(0,f.mapper().mergeExchangeFactIfMonotonic(fact("PARTIALLY_FILLED","0.7")));
-        assertEquals("CANCELED",f.jdbc().queryForObject("SELECT status FROM quant_order",String.class));
+        var f = fixture();
+        assertEquals(1, f.mapper().mergeExchangeFactIfMonotonic(fact("CANCELED", "0.7")));
+        assertEquals(0, f.mapper().mergeExchangeFactIfMonotonic(fact("NEW", "0.7")));
+        assertEquals(0, f.mapper().mergeExchangeFactIfMonotonic(fact("PARTIALLY_FILLED", "0.7")));
+        assertEquals("CANCELED", f.jdbc().queryForObject("SELECT status FROM quant_order", String.class));
     }
 
     @Test
     void newerPartialFillCanIncreaseQuantityButNotDecreaseIt() throws Exception {
-        var f=fixture();
-        assertEquals(1,f.mapper().mergeExchangeFactIfMonotonic(fact("PARTIALLY_FILLED","0.9")));
-        assertEquals(0,f.mapper().mergeExchangeFactIfMonotonic(fact("PARTIALLY_FILLED","0.8")));
-        assertEquals(0,new BigDecimal("0.9").compareTo(f.jdbc().queryForObject(
-            "SELECT executed_quantity FROM quant_order",BigDecimal.class)));
+        var f = fixture();
+        assertEquals(1, f.mapper().mergeExchangeFactIfMonotonic(fact("PARTIALLY_FILLED", "0.9")));
+        assertEquals(0, f.mapper().mergeExchangeFactIfMonotonic(fact("PARTIALLY_FILLED", "0.8")));
+        assertEquals(0, new BigDecimal("0.9").compareTo(f.jdbc().queryForObject("SELECT executed_quantity FROM quant_order", BigDecimal.class)));
     }
 
     @Test
     void strategyOrderIdentityCannotBeReassignedByAnotherReconciler() throws Exception {
-        var f=fixture();
-        var other=fact("FILLED","1");
+        var f = fixture();
+        var other = fact("FILLED", "1");
         other.setStrategyInstanceId(21L);
-        assertEquals(0,f.mapper().mergeExchangeFactIfMonotonic(other));
-        var wrongExchange=fact("FILLED","1");
+        assertEquals(0, f.mapper().mergeExchangeFactIfMonotonic(other));
+        var wrongExchange = fact("FILLED", "1");
         wrongExchange.setExchangeOrderId(100L);
-        assertEquals(0,f.mapper().mergeExchangeFactIfMonotonic(wrongExchange));
-        assertEquals(20L,f.jdbc().queryForObject(
-            "SELECT strategy_instance_id FROM quant_order",Long.class));
+        assertEquals(0, f.mapper().mergeExchangeFactIfMonotonic(wrongExchange));
+        assertEquals(20L, f.jdbc().queryForObject("SELECT strategy_instance_id FROM quant_order", Long.class));
+    }
+
+    private record Fixture(QuantOrderMapper mapper, JdbcTemplate jdbc) {
     }
 }

@@ -141,7 +141,10 @@ public final class RealtimeKlineMomentumStrategy implements StrategyPlugin {
         }
         return List.of();
     }
-    /** 与本地退出使用相同价格涨跌幅，保留原策略语义。 */
+
+    /**
+     * 与本地退出使用相同价格涨跌幅，保留原策略语义。
+     */
     @Override
     public List<ProtectionSignal> evaluateProtection(StrategyContext context, Map<String, Object> params) {
         if (context == null || context.entryPrice() == null || context.entryPrice().signum() <= 0 || context.quantity() == null || context.quantity().signum() <= 0) {
@@ -152,7 +155,7 @@ public final class RealtimeKlineMomentumStrategy implements StrategyPlugin {
         boolean shortPosition = "SHORT".equalsIgnoreCase(context.direction());
         BigDecimal stop = context.entryPrice().multiply(shortPosition ? BigDecimal.ONE.add(stopLoss) : BigDecimal.ONE.subtract(stopLoss));
         BigDecimal profit = context.entryPrice().multiply(shortPosition ? BigDecimal.ONE.subtract(takeProfit) : BigDecimal.ONE.add(takeProfit));
-        return List.of(new ProtectionSignal("LOCAL_STOP", "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, stop, "Binance 动量止损镜像"),
-            new ProtectionSignal("FIRST_TP", "TAKE_PROFIT_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, profit, "Binance 动量止盈镜像"));
+        return List.of(new ProtectionSignal("LOCAL_STOP", "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, stop, "Binance 动量止损镜像"), new ProtectionSignal(
+            "FIRST_TP", "TAKE_PROFIT_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, profit, "Binance 动量止盈镜像"));
     }
 }

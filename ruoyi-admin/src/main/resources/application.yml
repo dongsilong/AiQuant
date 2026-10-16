@@ -276,8 +276,8 @@ mqtt.client:
   name: Mqtt-Client
   # 客户端Id（非常重要，一般为设备 sn，不可重复）
   client-id: 000001
-  username: ${AIQUANT_MQTT_USERNAME:}
-  password: ${AIQUANT_MQTT_PASSWORD:}
+  username: ruoyi
+  password: 123456
   # 超时时间，单位：秒，默认：5秒
   timeout: 5
   # 重连时间，默认 5000 毫秒

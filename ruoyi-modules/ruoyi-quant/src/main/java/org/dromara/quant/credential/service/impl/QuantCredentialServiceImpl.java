@@ -39,6 +39,12 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
      */
     private final ExchangeGateway exchangeGateway;
 
+    static void validateSingleBoundUser(Long ownerUserId) {
+        if (ownerUserId == null || ownerUserId <= 0) {
+            throw new ServiceException("交易凭证必须指定唯一所属用户");
+        }
+    }
+
     /**
      * 按条件分页查询。
      */
@@ -244,12 +250,6 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         Long userId = LoginHelper.getUserId();
         if (!LoginHelper.isSuperAdmin(userId) && !userId.equals(entity.getUserId())) {
             throw new ServiceException("无权访问该交易账户");
-        }
-    }
-
-    static void validateSingleBoundUser(Long ownerUserId) {
-        if (ownerUserId == null || ownerUserId <= 0) {
-            throw new ServiceException("交易凭证必须指定唯一所属用户");
         }
     }
 }

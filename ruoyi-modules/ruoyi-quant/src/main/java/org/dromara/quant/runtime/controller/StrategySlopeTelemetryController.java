@@ -3,9 +3,9 @@ package org.dromara.quant.runtime.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
-import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.runtime.StrategySlopeTelemetryHub;
 import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
@@ -33,6 +33,9 @@ public class StrategySlopeTelemetryController {
     private final QuantCredentialMapper credentialMapper;
     private final QuantStrategyService strategyService;
 
+    /**
+     * 校验策略与账户访问权限后建立实时斜率 SSE 连接。
+     */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping(value = "/slope/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(HttpServletResponse response, @RequestParam Long strategyId, @RequestParam Long credentialId) {
@@ -52,7 +55,10 @@ public class StrategySlopeTelemetryController {
         Runnable cleanup = () -> {
             AutoCloseable active = subscription.getAndSet(null);
             if (active != null) {
-                try { active.close(); } catch (Exception ignored) { }
+                try {
+                    active.close();
+                } catch (Exception ignored) {
+                }
             }
         };
         emitter.onCompletion(cleanup);

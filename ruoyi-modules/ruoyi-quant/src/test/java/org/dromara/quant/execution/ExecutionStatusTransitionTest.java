@@ -12,15 +12,13 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
-import static org.junit.jupiter.api.Assertions.*;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @Tag("dev")
 class ExecutionStatusTransitionTest {
-    private record TestDb(JdbcTemplate jdbc, QuantExecutionRecordMapper mapper) {}
-
     private TestDb db() throws Exception {
-        var source = new DriverManagerDataSource(
-            "jdbc:h2:mem:execution_cas_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+        var source = new DriverManagerDataSource("jdbc:h2:mem:execution_cas_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         var jdbc = new JdbcTemplate(source);
         jdbc.execute("""
             CREATE TABLE quant_execution_record (
@@ -34,8 +32,7 @@ class ExecutionStatusTransitionTest {
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setConfiguration(config);
-        return new TestDb(jdbc, new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()))
-            .getMapper(QuantExecutionRecordMapper.class));
+        return new TestDb(jdbc, new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(QuantExecutionRecordMapper.class));
     }
 
     @Test
@@ -47,10 +44,8 @@ class ExecutionStatusTransitionTest {
         assertEquals(0, db.mapper.markUnknownIfUnresolved(1L, "late timeout", now));
         assertEquals(0, db.mapper.markFailedBeforeSend(1L, "late rejection", now));
         assertEquals(0, db.mapper.markAccepted(1L, 100L, "NEW", now));
-        assertEquals("RECOVERED", db.jdbc.queryForObject(
-            "SELECT execution_status FROM quant_execution_record WHERE id=1", String.class));
-        assertEquals(99L, db.jdbc.queryForObject(
-            "SELECT exchange_order_id FROM quant_execution_record WHERE id=1", Long.class));
+        assertEquals("RECOVERED", db.jdbc.queryForObject("SELECT execution_status FROM quant_execution_record WHERE id=1", String.class));
+        assertEquals(99L, db.jdbc.queryForObject("SELECT exchange_order_id FROM quant_execution_record WHERE id=1", Long.class));
     }
 
     @Test
@@ -64,10 +59,8 @@ class ExecutionStatusTransitionTest {
         assertEquals(1, db.mapper.markFailedBeforeSend(2L, "not sent", now));
         assertEquals(0, db.mapper.markRecoveredAfterFact(2L, 77L, "FILLED", now));
         assertEquals(0, db.mapper.markAccepted(2L, 77L, "NEW", now));
-        assertEquals("CONFIRMED", db.jdbc.queryForObject(
-            "SELECT execution_status FROM quant_execution_record WHERE id=1", String.class));
-        assertEquals("FAILED", db.jdbc.queryForObject(
-            "SELECT execution_status FROM quant_execution_record WHERE id=2", String.class));
+        assertEquals("CONFIRMED", db.jdbc.queryForObject("SELECT execution_status FROM quant_execution_record WHERE id=1", String.class));
+        assertEquals("FAILED", db.jdbc.queryForObject("SELECT execution_status FROM quant_execution_record WHERE id=2", String.class));
     }
 
     @Test
@@ -79,12 +72,9 @@ class ExecutionStatusTransitionTest {
         assertEquals(0, db.mapper.annotateRecoveredCancelFill(1L, 98L, "PARTIALLY_FILLED", "stale event", now));
         assertEquals(0, db.mapper.annotateRecoveredCancelFill(1L, 99L, "FILLED", "stale status", now));
         assertEquals(1, db.mapper.annotateRecoveredCancelFill(1L, 99L, "PARTIALLY_FILLED", "cancel raced with fill", now));
-        assertEquals("cancel raced with fill", db.jdbc.queryForObject(
-            "SELECT error_message FROM quant_execution_record WHERE id=1", String.class));
-        assertEquals("RECOVERED", db.jdbc.queryForObject(
-            "SELECT execution_status FROM quant_execution_record WHERE id=1", String.class));
-        assertEquals(99L, db.jdbc.queryForObject(
-            "SELECT exchange_order_id FROM quant_execution_record WHERE id=1", Long.class));
+        assertEquals("cancel raced with fill", db.jdbc.queryForObject("SELECT error_message FROM quant_execution_record WHERE id=1", String.class));
+        assertEquals("RECOVERED", db.jdbc.queryForObject("SELECT execution_status FROM quant_execution_record WHERE id=1", String.class));
+        assertEquals(99L, db.jdbc.queryForObject("SELECT exchange_order_id FROM quant_execution_record WHERE id=1", Long.class));
     }
 
     @Test
@@ -108,9 +98,11 @@ class ExecutionStatusTransitionTest {
         var now = LocalDateTime.now();
         assertEquals(1, db.mapper.recordRecoveryAttempt(1L, now));
         assertEquals(1, db.mapper.recordRecoveryAttempt(1L, now));
-        assertEquals(2, db.jdbc.queryForObject(
-            "SELECT recovery_attempts FROM quant_execution_record WHERE id=1", Integer.class));
+        assertEquals(2, db.jdbc.queryForObject("SELECT recovery_attempts FROM quant_execution_record WHERE id=1", Integer.class));
         assertEquals(1, db.mapper.markRecoveredAfterFact(1L, 12L, "FILLED", now));
         assertEquals(0, db.mapper.recordRecoveryAttempt(1L, now));
+    }
+
+    private record TestDb(JdbcTemplate jdbc, QuantExecutionRecordMapper mapper) {
     }
 }

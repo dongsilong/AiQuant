@@ -14,7 +14,9 @@ import java.time.LocalDateTime;
 @Data
 @TableName("quant_position")
 public class QuantPosition {
-    /** 运行时保护协调标识，不写入持仓事实表。 */
+    /**
+     * 运行时保护协调标识，不写入持仓事实表。
+     */
     @com.baomidou.mybatisplus.annotation.TableField(exist = false)
     private String protectionCycleKey;
 

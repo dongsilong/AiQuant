@@ -17,12 +17,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 @Tag("dev")
 class LiveOrderDispatcherTest {
-    private record Fixture(LiveOrderDispatcher first, LiveOrderDispatcher other,
-                           LiveOrderDispatchMapper mapper, JdbcTemplate jdbc) {}
-
     private Fixture fixture() throws Exception {
-        var source = new DriverManagerDataSource(
-            "jdbc:h2:mem:live_dispatch_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+        var source = new DriverManagerDataSource("jdbc:h2:mem:live_dispatch_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         var jdbc = new JdbcTemplate(source);
         jdbc.execute("""
             CREATE TABLE quant_live_dispatch_guard (
@@ -52,11 +48,9 @@ class LiveOrderDispatcherTest {
         var bean = new SqlSessionFactoryBean();
         bean.setConfiguration(config);
         bean.setDataSource(source);
-        var mapper = new SqlSessionTemplate(Objects.requireNonNull(bean.getObject()))
-            .getMapper(LiveOrderDispatchMapper.class);
+        var mapper = new SqlSessionTemplate(Objects.requireNonNull(bean.getObject())).getMapper(LiveOrderDispatchMapper.class);
         var manager = new DataSourceTransactionManager(source);
-        return new Fixture(new LiveOrderDispatcher(mapper, manager),
-            new LiveOrderDispatcher(mapper, manager), mapper, jdbc);
+        return new Fixture(new LiveOrderDispatcher(mapper, manager), new LiveOrderDispatcher(mapper, manager), mapper, jdbc);
     }
 
     @Test
@@ -64,8 +58,7 @@ class LiveOrderDispatcherTest {
         var f = fixture();
         var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-run-1", "ISOLATED", 10);
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "config-run-1"));
-        assertThrows(IllegalStateException.class, () ->
-            f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null));
+        assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null));
         f.first().configurationApplied(setup);
         assertEquals("CONFIG_APPLIED", f.mapper().ticketStatus(1L, "config-run-1"));
         var next = f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null);
@@ -78,31 +71,23 @@ class LiveOrderDispatcherTest {
         var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-timeout", "CROSSED", 20);
         f.first().unknown(setup);
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "config-timeout"));
-        assertThrows(IllegalStateException.class, () ->
-            f.other().begin(1L, "BTCUSDT", "any-order", "OPEN", "cid-next", null, null));
-        assertThrows(IllegalStateException.class, () ->
-            f.other().beginConfiguration(1L, "BTCUSDT", "new-config", "CROSSED", 25));
-        assertEquals("config-timeout", f.jdbc().queryForObject(
-            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
+        assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "any-order", "OPEN", "cid-next", null, null));
+        assertThrows(IllegalStateException.class, () -> f.other().beginConfiguration(1L, "BTCUSDT", "new-config", "CROSSED", 25));
+        assertEquals("config-timeout", f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
             String.class));
     }
 
     @Test
     void anotherNodeCannotChangeAnApprovedLeverageEvenAfterConfigAck() throws Exception {
-        var f=fixture();
-        var approved=f.first().beginConfiguration(1L,"BTCUSDT","initial-settings","ISOLATED",10);
+        var f = fixture();
+        var approved = f.first().beginConfiguration(1L, "BTCUSDT", "initial-settings", "ISOLATED", 10);
         f.first().configurationApplied(approved);
-        assertThrows(IllegalStateException.class, () ->
-            f.other().beginConfiguration(1L,"BTCUSDT","conflicting-settings","ISOLATED",20));
-        assertThrows(IllegalStateException.class, () ->
-            f.other().beginConfiguration(1L,"BTCUSDT","cross-settings","CROSSED",10));
-        assertNull(f.jdbc().queryForObject(
-            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
-            String.class), "Rejected configuration must roll back the dispatch claim");
-        assertEquals(10, f.jdbc().queryForObject(
-            "SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'",
-            Integer.class));
-        var same=f.other().beginConfiguration(1L,"BTCUSDT","same-settings","ISOLATED",10);
+        assertThrows(IllegalStateException.class, () -> f.other().beginConfiguration(1L, "BTCUSDT", "conflicting-settings", "ISOLATED", 20));
+        assertThrows(IllegalStateException.class, () -> f.other().beginConfiguration(1L, "BTCUSDT", "cross-settings", "CROSSED", 10));
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class), "Rejected " +
+            "configuration must roll back the dispatch claim");
+        assertEquals(10, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+        var same = f.other().beginConfiguration(1L, "BTCUSDT", "same-settings", "ISOLATED", 10);
         f.other().configurationApplied(same);
     }
 
@@ -119,17 +104,14 @@ class LiveOrderDispatcherTest {
     void noConcurrentAccountSymbolDispatchAcrossServiceInstances() throws Exception {
         var f = fixture();
         var first = f.first().begin(1L, "btcusdt", "a", "OPEN", "cid-a", null, null);
-        assertThrows(IllegalStateException.class,
-            () -> f.other().begin(1L, "BTCUSDT", "b", "CLOSE", "cid-b", null, null));
+        assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "b", "CLOSE", "cid-b", null, null));
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "a"));
         f.first().acknowledged(first, 991L);
         assertEquals("ACKED", f.mapper().ticketStatus(1L, "a"));
         var next = f.other().begin(1L, "BTCUSDT", "b", "CLOSE", "cid-b", null, null);
         f.other().notSent(next);
         assertEquals("FAILED_NOT_SENT", f.mapper().ticketStatus(1L, "b"));
-        assertNull(f.jdbc().queryForObject(
-            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
-            String.class));
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
     }
 
     @Test
@@ -138,11 +120,8 @@ class LiveOrderDispatcherTest {
         var ticket = f.first().begin(1L, "BTCUSDT", "uncertain", "OPEN", "cid-uncertain", null, null);
         f.first().unknown(ticket);
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "uncertain"));
-        assertThrows(IllegalStateException.class,
-            () -> f.other().begin(1L, "BTCUSDT", "new-signal", "OPEN", "cid-new", null, null));
-        assertEquals("uncertain", f.jdbc().queryForObject(
-            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
-            String.class));
+        assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "new-signal", "OPEN", "cid-new", null, null));
+        assertEquals("uncertain", f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
     }
 
     @Test
@@ -151,8 +130,7 @@ class LiveOrderDispatcherTest {
         var ticket = f.first().begin(1L, "BTCUSDT", "uncertain", "OPEN", "cid-correct", null, null);
         f.first().unknown(ticket);
         assertFalse(f.other().recoveredFromExchange(1L, "BTCUSDT", "uncertain", "cid-wrong", 40L));
-        assertThrows(IllegalStateException.class,
-            () -> f.other().begin(1L, "BTCUSDT", "another", "OPEN", "cid-another", null, null));
+        assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "another", "OPEN", "cid-another", null, null));
         assertTrue(f.other().recoveredFromExchange(1L, "BTCUSDT", "uncertain", "cid-correct", 40L));
         assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "uncertain"));
         assertFalse(f.other().recoveredFromExchange(1L, "BTCUSDT", "uncertain", "cid-correct", 40L));
@@ -166,8 +144,7 @@ class LiveOrderDispatcherTest {
         var ticket = f.first().begin(1L, "BTCUSDT", "ack-no-id", "OPEN", "cid-ack", null, null);
         assertThrows(IllegalStateException.class, () -> f.first().acknowledged(ticket, null));
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "ack-no-id"));
-        assertThrows(IllegalStateException.class,
-            () -> f.other().begin(1L, "BTCUSDT", "next", "OPEN", "cid-next", null, null));
+        assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "next", "OPEN", "cid-next", null, null));
         f.first().unknown(ticket);
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "ack-no-id"));
     }
@@ -181,8 +158,7 @@ class LiveOrderDispatcherTest {
             UPDATE quant_order_dispatch_ticket SET exchange_order_id=33
             WHERE credential_id=1 AND idempotency_key='unknown-identity'
             """);
-        assertFalse(f.other().recoveredFromExchange(1L, "BTCUSDT", "unknown-identity",
-            "cid-original", 44L));
+        assertFalse(f.other().recoveredFromExchange(1L, "BTCUSDT", "unknown-identity", "cid-original", 44L));
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "unknown-identity"));
         assertEquals("unknown-identity", f.jdbc().queryForObject("""
             SELECT active_dispatch_key FROM quant_live_dispatch_guard
@@ -195,20 +171,19 @@ class LiveOrderDispatcherTest {
         var f = fixture();
         var first = f.first().begin(1L, "BTCUSDT", "same-key", "OPEN", "same-cid", null, null);
         f.first().acknowledged(first, 8L);
-        assertThrows(RuntimeException.class,
-            () -> f.other().begin(1L, "BTCUSDT", "same-key", "OPEN", "same-cid", null, null));
-        assertNull(f.jdbc().queryForObject(
-            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
-            String.class), "Failed duplicate INSERT must roll back the claim");
+        assertThrows(RuntimeException.class, () -> f.other().begin(1L, "BTCUSDT", "same-key", "OPEN", "same-cid", null, null));
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class), "Failed " +
+            "duplicate INSERT must roll back the claim");
     }
 
     @Test
     void invalidLeaseEpochAndIdentifiersFailClosed() throws Exception {
         var f = fixture();
-        assertThrows(IllegalArgumentException.class,
-            () -> f.first().begin(1L, "BTCUSDT", "bad", "OPEN", "cid", 12L, null));
-        assertThrows(IllegalArgumentException.class,
-            () -> f.first().begin(1L, "BTCUSDT", "bad", "OPEN", "cid", 12L, 0L));
+        assertThrows(IllegalArgumentException.class, () -> f.first().begin(1L, "BTCUSDT", "bad", "OPEN", "cid", 12L, null));
+        assertThrows(IllegalArgumentException.class, () -> f.first().begin(1L, "BTCUSDT", "bad", "OPEN", "cid", 12L, 0L));
         assertEquals(0L, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_order_dispatch_ticket", Long.class));
+    }
+
+    private record Fixture(LiveOrderDispatcher first, LiveOrderDispatcher other, LiveOrderDispatchMapper mapper, JdbcTemplate jdbc) {
     }
 }

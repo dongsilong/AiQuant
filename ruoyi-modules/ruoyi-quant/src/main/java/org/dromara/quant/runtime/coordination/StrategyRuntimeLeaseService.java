@@ -14,7 +14,9 @@ import java.util.UUID;
 @Slf4j
 @Service
 public class StrategyRuntimeLeaseService {
-    /** MyBatis 原子 SQL Mapper。 */
+    /**
+     * MyBatis 原子 SQL Mapper。
+     */
     private final StrategyRuntimeLeaseMapper mapper;
     /**
      * 量化模块配置。
@@ -48,7 +50,7 @@ public class StrategyRuntimeLeaseService {
             int updated = mapper.acquireOrRenew(instanceId, credentialId, normalized, ownerToken, leaseSeconds);
             return updated == 1;
         } catch (Exception ex) {
-            log.error( "策略运行租约 SQL 执行失败 instanceId={} credentialId={} symbol={}", instanceId, credentialId, normalized, ex);
+            log.error("策略运行租约 SQL 执行失败 instanceId={} credentialId={} symbol={}", instanceId, credentialId, normalized, ex);
             return false;
         }
     }
@@ -72,8 +74,7 @@ public class StrategyRuntimeLeaseService {
             throw new IllegalStateException("策略最终下单缺少租约所有权上下文");
         }
         try {
-            Long epoch = mapper.currentEpoch(instanceId, credentialId,
-                symbol.toUpperCase(Locale.ROOT), ownerToken(instanceId));
+            Long epoch = mapper.currentEpoch(instanceId, credentialId, symbol.toUpperCase(Locale.ROOT), ownerToken(instanceId));
             if (epoch == null || epoch <= 0) {
                 throw new IllegalStateException("策略运行租约已失效或转移，拒绝最终交易所下单");
             }

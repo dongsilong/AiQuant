@@ -10,33 +10,31 @@ import java.util.Arrays;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 无需账户、无需网络的官方 Java Connector 契约检查。
- * 项目固定使用 io.github.binance:binance-derivatives-trading-usds-futures:12.0.3。
+ * 项目固定使用 io.github.binance:binance-derivatives-trading-usds-futures:12.1.1。
  * 新增直连 REST/WS 前必须核实 SDK 是否已有该接口。
  */
 @Tag("dev")
 class BinanceSdkContractTest {
     @Test
     void officialRestSdkProvidesAllRequiredTradingAndAccountOperations() {
-        Set<String> methods = Arrays.stream(DerivativesTradingUsdsFuturesRestApi.class.getMethods())
-            .map(Method::getName).collect(Collectors.toSet());
-        for (String required : new String[] {
-            "newOrder", "newAlgoOrder", "queryOrder", "accountTradeList",
-            "positionInformationV3", "currentAllOpenOrders",
-            "startUserDataStream", "keepaliveUserDataStream", "closeUserDataStream"
-        }) {
-            assertTrue(methods.contains(required), "SDK 12.0.3 lacks required REST method: " + required);
+        Set<String> methods = Arrays.stream(DerivativesTradingUsdsFuturesRestApi.class.getMethods()).map(Method::getName).collect(Collectors.toSet());
+        for (String required : new String[]{"symbolPriceTickerV2", "markPrice", "klineCandlestickData", "compressedAggregateTradesList", "checkServerTime", "newOrder",
+            "newAlgoOrder", "queryOrder", "accountTradeList", "positionInformationV3", "currentAllOpenOrders", "startUserDataStream", "keepaliveUserDataStream",
+            "closeUserDataStream"}) {
+            assertTrue(methods.contains(required), "SDK 12.1.1 lacks required REST method: " + required);
         }
     }
 
     @Test
     void officialWebSocketSdkExposesKlineAndUserDataStreams() {
-        Set<String> methods = Arrays.stream(DerivativesTradingUsdsFuturesWebSocketStreams.class.getMethods())
-            .map(Method::getName).collect(Collectors.toSet());
+        Set<String> methods = Arrays.stream(DerivativesTradingUsdsFuturesWebSocketStreams.class.getMethods()).map(Method::getName).collect(Collectors.toSet());
         assertTrue(methods.contains("klineCandlestickStreams"));
+        assertTrue(methods.contains("aggregateTradeStreams"));
+        assertTrue(methods.contains("markPriceStream"));
         assertTrue(methods.contains("userData"));
         // SDK API 存在不等于证明消息队列、重连、原始事件兼容性满足实盘要求。
     }

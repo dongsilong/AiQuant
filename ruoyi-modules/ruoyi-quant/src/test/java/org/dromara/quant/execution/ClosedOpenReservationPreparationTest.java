@@ -16,7 +16,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.*;
 
 @Tag("dev")
@@ -26,9 +26,8 @@ class ClosedOpenReservationPreparationTest {
     private final ExchangeGateway gateway = mock(ExchangeGateway.class);
 
     private TradeExecutionApplicationService service() {
-        var service = new TradeExecutionApplicationService(mock(QuantCredentialMapper.class), mock(QuantSymbolMapper.class),
-            mock(QuantRiskConfigMapper.class), mock(RiskDecisionService.class), mock(TradeExecutionPort.class),
-            new QuantProperties(), gateway, mock(QuantPositionMapper.class), mock(PaperTradingService.class),
+        var service = new TradeExecutionApplicationService(mock(QuantCredentialMapper.class), mock(QuantSymbolMapper.class), mock(QuantRiskConfigMapper.class),
+            mock(RiskDecisionService.class), mock(TradeExecutionPort.class), new QuantProperties(), gateway, mock(QuantPositionMapper.class), mock(PaperTradingService.class),
             mock(TradingPreparationService.class));
         ReflectionTestUtils.setField(service, "positionCache", positions);
         ReflectionTestUtils.setField(service, "openCapacityService", capacity);
@@ -47,8 +46,7 @@ class ClosedOpenReservationPreparationTest {
     @Test
     void unavailableCacheCannotReleaseHistoricalCapacity() {
         when(positions.requirePositions(1L)).thenThrow(new OpenCapacityService.CapacityBlockedException("snapshot stale"));
-        assertThrows(OpenCapacityService.CapacityBlockedException.class,
-            () -> service().releaseClosedOpenReservationsForRuntime(1L, 100L, "ENAUSDT", "LIVE"));
+        assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> service().releaseClosedOpenReservationsForRuntime(1L, 100L, "ENAUSDT", "LIVE"));
         verifyNoInteractions(capacity, gateway);
     }
 

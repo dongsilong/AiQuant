@@ -8,7 +8,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
 /**
- * 同一账户凭证、同一交易对、同一根 K 线最多开仓一次。
+ * 同一账户凭证、同一交易对、同一根 K 线最多开仓一次；持仓减少/平仓的 K 线也会被封锁。
  *
  * <p><b>数据库约束要求（重要）：</b>必须在 quant_strategy_entry_guard 上建立
  * <pre>
@@ -19,7 +19,9 @@ import java.time.ZoneOffset;
  */
 @Service
 public class StrategyEntryGuardService {
-    /** MyBatis Mapper preserves the database unique-key and conditional-write semantics. */
+    /**
+     * MyBatis Mapper preserves the database unique-key and conditional-write semantics.
+     */
     private final StrategyEntryGuardMapper mapper;
 
     public StrategyEntryGuardService(StrategyEntryGuardMapper mapper) {
@@ -49,6 +51,17 @@ public class StrategyEntryGuardService {
     public void bindOrder(Long instanceId, Long credentialId, String symbol, Instant klineOpenTime, Long orderId) {
         LocalDateTime openTime = LocalDateTime.ofInstant(klineOpenTime, ZoneOffset.UTC);
         mapper.bindOrder(instanceId, credentialId, symbol.toUpperCase(java.util.Locale.ROOT), openTime, orderId);
+    }
+
+    /**
+     * 持仓在指定 K 线上发生确认减仓/平仓后，将账户与交易对的该根 K 线永久封锁。
+     */
+    public void blockClosedCandle(Long instanceId, Long credentialId, String symbol, Instant klineOpenTime) {
+        if (instanceId == null || credentialId == null || symbol == null || symbol.isBlank() || klineOpenTime == null) {
+            throw new IllegalArgumentException("缺少封锁平仓 K 线所需的账户、实例、交易对或时间");
+        }
+        LocalDateTime openTime = LocalDateTime.ofInstant(klineOpenTime, ZoneOffset.UTC);
+        mapper.blockClosedCandle(credentialId, symbol.toUpperCase(java.util.Locale.ROOT), instanceId, openTime);
     }
 
     /**

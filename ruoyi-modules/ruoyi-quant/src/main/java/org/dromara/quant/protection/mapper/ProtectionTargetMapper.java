@@ -1,11 +1,6 @@
 package org.dromara.quant.protection.mapper;
 
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Options;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.*;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -24,9 +19,9 @@ public interface ProtectionTargetMapper {
            protection_type,target_version,step_index,confirmed_step,updated_at)
         VALUES (#{key},#{credentialId},#{positionId},#{cycleKey},#{side},
                 #{type},0,0,0,CURRENT_TIMESTAMP)
+        ON DUPLICATE KEY UPDATE target_key=target_key
         """)
-    int insertTarget(@Param("key") String key, @Param("credentialId") Long credentialId,
-                     @Param("positionId") Long positionId, @Param("cycleKey") String cycleKey,
+    int insertTarget(@Param("key") String key, @Param("credentialId") Long credentialId, @Param("positionId") Long positionId, @Param("cycleKey") String cycleKey,
                      @Param("side") String side, @Param("type") String type);
 
     @Options(timeout = 3)
@@ -43,8 +38,7 @@ public interface ProtectionTargetMapper {
         WHERE credential_id=#{credentialId} AND position_cycle_key=#{cycleKey}
           AND position_side=#{side} AND protection_type='STEP_TP'
         """)
-    List<Integer> confirmedSteps(@Param("credentialId") Long credentialId,
-                                 @Param("cycleKey") String cycleKey, @Param("side") String side);
+    List<Integer> confirmedSteps(@Param("credentialId") Long credentialId, @Param("cycleKey") String cycleKey, @Param("side") String side);
 
     @Options(timeout = 3)
     @Update("""
@@ -63,11 +57,11 @@ public interface ProtectionTargetMapper {
 
     @Options(timeout = 3)
     @Select("SELECT * FROM quant_protection_target WHERE target_key=#{key}")
-    Map<String,Object> getTarget(@Param("key") String key);
+    Map<String, Object> getTarget(@Param("key") String key);
 
     @Options(timeout = 3)
     @Select("SELECT * FROM quant_protection_target WHERE target_key=#{key} FOR UPDATE")
-    Map<String,Object> lockTarget(@Param("key") String key);
+    Map<String, Object> lockTarget(@Param("key") String key);
 
     @Options(timeout = 3)
     @Update("""
@@ -77,11 +71,9 @@ public interface ProtectionTargetMapper {
             pending_order_id=#{pendingId},previous_order_id=#{previousId},updated_at=CURRENT_TIMESTAMP
         WHERE target_key=#{key} AND owner_token=#{owner} AND lease_until>CURRENT_TIMESTAMP
         """)
-    int prepareTarget(@Param("key") String key, @Param("owner") String owner,
-                      @Param("version") long version, @Param("stepIndex") int stepIndex,
-                      @Param("quantity") BigDecimal quantity, @Param("triggerPrice") BigDecimal triggerPrice,
-                      @Param("orderType") String orderType, @Param("pendingId") Long pendingId,
-                      @Param("previousId") Long previousId);
+    int prepareTarget(@Param("key") String key, @Param("owner") String owner, @Param("version") long version, @Param("stepIndex") int stepIndex,
+                      @Param("quantity") BigDecimal quantity, @Param("triggerPrice") BigDecimal triggerPrice, @Param("orderType") String orderType,
+                      @Param("pendingId") Long pendingId, @Param("previousId") Long previousId);
 
     @Options(timeout = 3)
     @Update("""
@@ -91,10 +83,9 @@ public interface ProtectionTargetMapper {
             order_type=#{orderType},updated_at=CURRENT_TIMESTAMP
         WHERE target_key=#{key} AND owner_token=#{owner} AND lease_until>CURRENT_TIMESTAMP
         """)
-    int confirmTarget(@Param("key") String key, @Param("owner") String owner,
-                      @Param("currentId") Long currentId, @Param("stepIndex") int stepIndex,
-                      @Param("confirmedStep") int confirmedStep, @Param("quantity") BigDecimal quantity,
-                      @Param("triggerPrice") BigDecimal triggerPrice, @Param("orderType") String orderType);
+    int confirmTarget(@Param("key") String key, @Param("owner") String owner, @Param("currentId") Long currentId, @Param("stepIndex") int stepIndex,
+                      @Param("confirmedStep") int confirmedStep, @Param("quantity") BigDecimal quantity, @Param("triggerPrice") BigDecimal triggerPrice,
+                      @Param("orderType") String orderType);
 
     @Options(timeout = 3)
     @Update("""

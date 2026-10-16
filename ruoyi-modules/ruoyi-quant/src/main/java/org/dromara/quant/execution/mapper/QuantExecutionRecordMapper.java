@@ -6,6 +6,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
 import org.dromara.common.mybatis.core.mapper.BaseMapperPlus;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
+
 import java.time.LocalDateTime;
 
 /**
@@ -23,8 +24,7 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
           AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
           AND #{orderId} IS NOT NULL AND #{orderId}>0
         """)
-    int markAccepted(@Param("id") Long id, @Param("orderId") Long orderId,
-                     @Param("exchangeStatus") String exchangeStatus, @Param("now") LocalDateTime now);
+    int markAccepted(@Param("id") Long id, @Param("orderId") Long orderId, @Param("exchangeStatus") String exchangeStatus, @Param("now") LocalDateTime now);
 
     @Options(timeout = 3)
     @Update("""
@@ -32,8 +32,7 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
         SET execution_status='FAILED', error_message=#{message}, updated_at=#{now}
         WHERE id=#{id} AND execution_status='PENDING'
         """)
-    int markFailedBeforeSend(@Param("id") Long id, @Param("message") String message,
-                             @Param("now") LocalDateTime now);
+    int markFailedBeforeSend(@Param("id") Long id, @Param("message") String message, @Param("now") LocalDateTime now);
 
     @Options(timeout = 3)
     @Update("""
@@ -41,8 +40,7 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
         SET execution_status='UNKNOWN', error_message=#{message}, updated_at=#{now}
         WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN')
         """)
-    int markUnknownIfUnresolved(@Param("id") Long id, @Param("message") String message,
-                                 @Param("now") LocalDateTime now);
+    int markUnknownIfUnresolved(@Param("id") Long id, @Param("message") String message, @Param("now") LocalDateTime now);
 
     @Options(timeout = 3)
     @Update("""
@@ -53,9 +51,7 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
           AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
           AND #{orderId} IS NOT NULL AND #{orderId}>0
         """)
-    int markRecoveredAfterFact(@Param("id") Long id, @Param("orderId") Long orderId,
-                               @Param("exchangeStatus") String exchangeStatus,
-                               @Param("now") LocalDateTime now);
+    int markRecoveredAfterFact(@Param("id") Long id, @Param("orderId") Long orderId, @Param("exchangeStatus") String exchangeStatus, @Param("now") LocalDateTime now);
 
     /**
      * A CANCEL may race with a fill. Annotate only the exact recovered exchange fact;
@@ -69,9 +65,8 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
           AND execution_status='RECOVERED' AND exchange_order_status=#{exchangeStatus}
           AND exchange_order_id=#{orderId}
         """)
-    int annotateRecoveredCancelFill(@Param("id") Long id, @Param("orderId") Long orderId,
-                                    @Param("exchangeStatus") String exchangeStatus,
-                                    @Param("message") String message, @Param("now") LocalDateTime now);
+    int annotateRecoveredCancelFill(@Param("id") Long id, @Param("orderId") Long orderId, @Param("exchangeStatus") String exchangeStatus, @Param("message") String message,
+                                    @Param("now") LocalDateTime now);
 
     /**
      * Crash-recovery gap: the execution record may already be RECOVERED while

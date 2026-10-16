@@ -12,15 +12,13 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import java.util.Objects;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @Tag("dev")
 class RecoveredDispatchSqlTest {
     @Test
     void onlyExactRecoveredExecutionHoldingMatchingDispatchSlotIsRevisited() throws Exception {
-        var data = new DriverManagerDataSource(
-            "jdbc:h2:mem:stranded_dispatch_" + UUID.randomUUID()
-                + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
+        var data = new DriverManagerDataSource("jdbc:h2:mem:stranded_dispatch_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
         var db = new JdbcTemplate(data);
         db.execute("""
             CREATE TABLE quant_execution_record (
@@ -66,8 +64,7 @@ class RecoveredDispatchSqlTest {
         var factory = new SqlSessionFactoryBean();
         factory.setConfiguration(cfg);
         factory.setDataSource(data);
-        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()))
-            .getMapper(QuantExecutionRecordMapper.class);
+        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(QuantExecutionRecordMapper.class);
         var records = mapper.strandedRecoveredDispatches();
         assertEquals(1, records.size());
         assertEquals(1L, records.getFirst().getId());

@@ -1,12 +1,6 @@
 package org.dromara.quant.paper.mapper;
 
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Options;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Result;
-import org.apache.ibatis.annotations.Results;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.*;
 import org.dromara.quant.paper.domain.QuantPaperAccount;
 
 import java.math.BigDecimal;
@@ -21,14 +15,9 @@ import java.math.BigDecimal;
 public interface PaperAtomicMapper {
     @Options(timeout = 3)
     @Select("SELECT * FROM quant_paper_account WHERE credential_id=#{credentialId} FOR UPDATE")
-    @Results({
-        @Result(property = "id", column = "id", id = true),
-        @Result(property = "credentialId", column = "credential_id"),
-        @Result(property = "balance", column = "balance"),
-        @Result(property = "availableBalance", column = "available_balance"),
-        @Result(property = "realizedPnl", column = "realized_pnl"),
-        @Result(property = "unrealizedPnl", column = "unrealized_pnl")
-    })
+    @Results({@Result(property = "id", column = "id", id = true), @Result(property = "credentialId", column = "credential_id"), @Result(property = "balance", column = "balance")
+        , @Result(property = "availableBalance", column = "available_balance"), @Result(property = "realizedPnl", column = "realized_pnl"), @Result(property = "unrealizedPnl",
+        column = "unrealized_pnl")})
     QuantPaperAccount lockAccount(@Param("credentialId") Long credentialId);
 
     @Options(timeout = 3)
@@ -61,9 +50,7 @@ public interface PaperAtomicMapper {
             updated_at=NOW()
         WHERE id=#{accountId}
         """)
-    int settleClose(@Param("accountId") Long accountId,
-                    @Param("realized") BigDecimal realized,
-                    @Param("releasedMargin") BigDecimal releasedMargin,
+    int settleClose(@Param("accountId") Long accountId, @Param("realized") BigDecimal realized, @Param("releasedMargin") BigDecimal releasedMargin,
                     @Param("oldPnl") BigDecimal oldPnl);
 
     @Options(timeout = 3)
@@ -79,9 +66,7 @@ public interface PaperAtomicMapper {
         SET unrealized_pnl=unrealized_pnl+#{pnl}-#{oldPnl}, updated_at=NOW()
         WHERE credential_id=#{credentialId}
         """)
-    int adjustUnrealized(@Param("credentialId") Long credentialId,
-                         @Param("pnl") BigDecimal pnl,
-                         @Param("oldPnl") BigDecimal oldPnl);
+    int adjustUnrealized(@Param("credentialId") Long credentialId, @Param("pnl") BigDecimal pnl, @Param("oldPnl") BigDecimal oldPnl);
 
     @Options(timeout = 3)
     @Select("""

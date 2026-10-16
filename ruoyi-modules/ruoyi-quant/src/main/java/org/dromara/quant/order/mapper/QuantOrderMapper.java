@@ -1,10 +1,10 @@
 package org.dromara.quant.order.mapper;
 
-import org.dromara.common.mybatis.core.mapper.BaseMapperPlus;
-import org.dromara.quant.order.domain.QuantOrder;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
+import org.dromara.common.mybatis.core.mapper.BaseMapperPlus;
+import org.dromara.quant.order.domain.QuantOrder;
 
 /**
  * QuantOrderMapper，负责对应实体的 MyBatis-Plus 持久化操作。

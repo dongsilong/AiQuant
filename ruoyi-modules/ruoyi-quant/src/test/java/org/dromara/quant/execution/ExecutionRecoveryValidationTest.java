@@ -13,7 +13,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
-import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -44,18 +45,14 @@ class ExecutionRecoveryValidationTest {
         credential.setSecretKey("test");
         credential.setRunMode("LIVE");
         when(credentials.selectById(1L)).thenReturn(credential);
-        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("original")))
-            .thenReturn(response);
-        var service = new ExecutionRecoveryService(records, credentials, gateway, recovery,
-            ledger, new QuantProperties());
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("original"))).thenReturn(response);
+        var service = new ExecutionRecoveryService(records, credentials, gateway, recovery, ledger, new QuantProperties());
         service.setLiveOrderDispatcher(dispatcher);
         service.recover();
     }
 
-    private ExchangeGateway.OrderSnapshot snapshot(String symbol, String status,
-                                                   BigDecimal executed, BigDecimal original) {
-        return new ExchangeGateway.OrderSnapshot(symbol, 99L, "original", "BUY", "LIMIT",
-            status, BigDecimal.ONE, original, executed, Instant.now());
+    private ExchangeGateway.OrderSnapshot snapshot(String symbol, String status, BigDecimal executed, BigDecimal original) {
+        return new ExchangeGateway.OrderSnapshot(symbol, 99L, "original", "BUY", "LIMIT", status, BigDecimal.ONE, original, executed, Instant.now());
     }
 
     @Test

@@ -1,12 +1,15 @@
 package org.dromara.quant.execution;
 
 import org.dromara.quant.exchange.ExchangeGateway;
-import org.dromara.quant.risk.LiveTradingGate;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
+import org.dromara.quant.risk.LiveTradingGate;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+
 import java.math.BigDecimal;
-import static org.junit.jupiter.api.Assertions.*;
+
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -14,10 +17,8 @@ import static org.mockito.Mockito.*;
 class UnifiedTradeExecutionServiceTest {
     private static LiveOrderDispatcher validDispatcher() {
         var dispatcher = mock(LiveOrderDispatcher.class);
-        when(dispatcher.begin(anyLong(), anyString(), anyString(), anyString(), anyString(),
-            org.mockito.ArgumentMatchers.<Long>nullable(Long.class),
-            org.mockito.ArgumentMatchers.<Long>nullable(Long.class)))
-            .thenAnswer(inv -> new LiveOrderDispatcher.Ticket(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
+        when(dispatcher.begin(anyLong(), anyString(), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.<Long>nullable(Long.class),
+            org.mockito.ArgumentMatchers.<Long>nullable(Long.class))).thenAnswer(inv -> new LiveOrderDispatcher.Ticket(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
         return dispatcher;
     }
 
@@ -38,9 +39,8 @@ class UnifiedTradeExecutionServiceTest {
     private static TradingPreparationService preparation(ExchangeGateway gateway) {
         var preparation = mock(TradingPreparationService.class);
         var tokens = new java.util.HashMap<String, TradingPreparationService.Prepared>();
-        when(preparation.requireReady(any(), anyString(), anyInt(), any())).thenAnswer(call ->
-            tokens.computeIfAbsent(call.getArgument(1), symbol -> new TradingPreparationService.Prepared(
-                new ExchangeGateway.PositionMode(false), gateway.queryTradingRule(null, symbol),
+        when(preparation.requireReady(any(), anyString(), anyInt(), any())).thenAnswer(call -> tokens.computeIfAbsent(call.getArgument(1),
+            symbol -> new TradingPreparationService.Prepared(new ExchangeGateway.PositionMode(false), gateway.queryTradingRule(null, symbol),
                 System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60))));
         return preparation;
     }
@@ -53,10 +53,10 @@ class UnifiedTradeExecutionServiceTest {
         when(gateway.placeOrder(any())).thenReturn(new ExchangeGateway.OrderResult(1L, "test", "FILLED"));
         var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
         var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class),
-            mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), mock(TradingPreparationService.class));
-        assertThrows(org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException.class,
-            () -> service.open(new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE,
-                BigDecimal.TEN, null, "not-prepared", "TESTNET", rule, 1, "ISOLATED", null)));
+            mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(),
+            mock(TradingPreparationService.class));
+        assertThrows(org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException.class, () -> service.open(new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY",
+            "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, "not-prepared", "TESTNET", rule, 1, "ISOLATED", null)));
         verify(gateway, never()).setMarginType(any(), any(), any());
         verify(gateway, never()).setLeverage(any(), any(), anyInt());
         verify(gateway, never()).placeOrder(any());
@@ -71,29 +71,36 @@ class UnifiedTradeExecutionServiceTest {
         when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(new QuantExecutionRecord());
         when(gateway.placeOrder(any())).thenReturn(new ExchangeGateway.OrderResult(1L, "test", "FILLED"));
         var rule = new ExchangeGateway.SymbolRule("ONDOUSDT", "USDT", 2, 1, new BigDecimal("0.01"), new BigDecimal("0.2"), new BigDecimal("0.3"), BigDecimal.ONE, "TRADING");
-        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
-        service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"),
-            "ONDOUSDT", "BUY", "MARKET", new BigDecimal("3.5"), BigDecimal.TEN, null, "test", "TESTNET", rule, null, null, null));
+        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class),
+            mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"), "ONDOUSDT", "BUY", "MARKET", new BigDecimal("3.5"),
+            BigDecimal.TEN, null, "test", "TESTNET", rule, null, null, null));
         verify(gateway).placeOrder(argThat(request -> new BigDecimal("3.0").compareTo(request.quantity()) == 0));
     }
+
     @Test
     void explicitRejectionIsFailedButTimeoutRemainsUnknown() {
-        for (boolean rejected : new boolean[] {true, false}) {
+        for (boolean rejected : new boolean[]{true, false}) {
             ExchangeGateway gateway = mock(ExchangeGateway.class);
-        when(gateway.queryPrice(any())).thenReturn(new ExchangeGateway.PriceSnapshot("ONDOUSDT", BigDecimal.TEN, BigDecimal.TEN, java.time.Instant.now()));
+            when(gateway.queryPrice(any())).thenReturn(new ExchangeGateway.PriceSnapshot("ONDOUSDT", BigDecimal.TEN, BigDecimal.TEN, java.time.Instant.now()));
             ExecutionRecordService records = mock(ExecutionRecordService.class);
             QuantExecutionRecord record = new QuantExecutionRecord();
             when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(record);
-            RuntimeException failure = rejected ? new org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException(-4023, "step size")
-                : new IllegalStateException("timeout", new java.net.SocketTimeoutException());
+            RuntimeException failure = rejected ? new org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException(-4023, "step size") : new IllegalStateException(
+                "timeout", new java.net.SocketTimeoutException());
             when(gateway.placeOrder(any())).thenThrow(failure);
             var rule = new ExchangeGateway.SymbolRule("ONDOUSDT", "USDT", 2, 1, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
-            var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
-            assertThrows(RuntimeException.class, () -> service.open(new OpenPositionCommand(1L, 2L, 3L,
-                new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"), "ONDOUSDT", "BUY", "MARKET", BigDecimal.TEN,
-                BigDecimal.TEN, null, "test", "TESTNET", rule, null, null, null)));
-            if (rejected) { verify(records).failed(eq(record), any()); verify(records, never()).markUnknown(any(), any()); }
-            else { verify(records).markUnknown(eq(record), any()); verify(records, never()).failed(any(), any()); }
+            var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class),
+                mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+            assertThrows(RuntimeException.class, () -> service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"),
+                "ONDOUSDT", "BUY", "MARKET", BigDecimal.TEN, BigDecimal.TEN, null, "test", "TESTNET", rule, null, null, null)));
+            if (rejected) {
+                verify(records).failed(eq(record), any());
+                verify(records, never()).markUnknown(any(), any());
+            } else {
+                verify(records).markUnknown(eq(record), any());
+                verify(records, never()).failed(any(), any());
+            }
         }
     }
 
@@ -108,9 +115,8 @@ class UnifiedTradeExecutionServiceTest {
         var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
         var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), capacity,
             mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
-        assertThrows(org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException.class, () -> service.open(
-            new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE, BigDecimal.TEN, null,
-                "unsent", "TESTNET", rule, 1, "ISOLATED", null)));
+        assertThrows(org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException.class, () -> service.open(new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY",
+            "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, "unsent", "TESTNET", rule, 1, "ISOLATED", null)));
         verify(records).failed(eq(record), any());
         verify(records, never()).markUnknown(any(), any());
         verify(capacity).releaseFailed(1L, "unsent");
@@ -126,9 +132,10 @@ class UnifiedTradeExecutionServiceTest {
         var actual = new ExchangeGateway.SymbolRule("ONDOUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
         when(gateway.queryTradingRule(any(), eq("ONDOUSDT"))).thenReturn(actual);
         when(gateway.placeOrder(any())).thenReturn(new ExchangeGateway.OrderResult(1L, "test", "FILLED"));
-        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
-        service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"), "ONDOUSDT", "BUY", "MARKET",
-            new BigDecimal("3.45"), BigDecimal.TEN, null, "test", "TESTNET", local, null, null, null));
+        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class),
+            mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"), "ONDOUSDT", "BUY", "MARKET", new BigDecimal("3.45"),
+            BigDecimal.TEN, null, "test", "TESTNET", local, null, null, null));
         verify(gateway).placeOrder(argThat(request -> new BigDecimal("3").compareTo(request.quantity()) == 0));
     }
 
@@ -139,11 +146,10 @@ class UnifiedTradeExecutionServiceTest {
         var capacity = mock(org.dromara.quant.risk.OpenCapacityService.class);
         var record = new QuantExecutionRecord();
         when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(record);
-        doThrow(new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("策略最大持仓数已达到"))
-            .when(capacity).reserve(any(), any(), any(), any());
-        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), capacity, mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
-        var command = new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE,
-            BigDecimal.TEN, null, "blocked", "TESTNET", null, 1, "ISOLATED", null);
+        doThrow(new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("策略最大持仓数已达到")).when(capacity).reserve(any(), any(), any(), any());
+        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), capacity,
+            mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        var command = new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, "blocked", "TESTNET", null, 1, "ISOLATED", null);
         assertThrows(org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException.class, () -> service.open(command));
         verify(gateway, never()).placeOrder(any());
         verify(gateway, never()).setLeverage(any(), any(), anyInt());
@@ -155,9 +161,10 @@ class UnifiedTradeExecutionServiceTest {
         var gateway = mock(ExchangeGateway.class);
         var records = mock(ExecutionRecordService.class);
         when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(new QuantExecutionRecord());
-        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
-        var command = new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE,
-            null, null, "expired", "TESTNET", null, 1, "ISOLATED", null, BigDecimal.TEN, java.time.Instant.now().minusSeconds(1));
+        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class),
+            mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        var command = new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE, null, null, "expired", "TESTNET", null, 1, "ISOLATED", null,
+            BigDecimal.TEN, java.time.Instant.now().minusSeconds(1));
         assertThrows(org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException.class, () -> service.open(command));
         verify(gateway, never()).queryPrice(any());
         verify(gateway, never()).placeOrder(any());
@@ -170,11 +177,10 @@ class UnifiedTradeExecutionServiceTest {
         when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(new QuantExecutionRecord());
         var cache = mock(org.dromara.quant.market.AccountPositionCache.class);
         when(cache.requirePositions(1L)).thenReturn(java.util.List.of());
-        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records,
-            mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class), cache, balanceCache(), preparation(gateway));
+        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class),
+            mock(org.dromara.quant.risk.OpenCapacityService.class), cache, balanceCache(), preparation(gateway));
         when(gateway.placeOrder(any())).thenReturn(new ExchangeGateway.OrderResult(1L, "test", "FILLED"));
-        service.open(new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE,
-            BigDecimal.TEN, null, "stream", "TESTNET",
+        service.open(new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, "stream", "TESTNET",
             new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING"), null, null, null));
         verify(cache, times(2)).requirePositions(1L);
         verify(gateway, never()).queryPositions(any(), any());
@@ -189,10 +195,10 @@ class UnifiedTradeExecutionServiceTest {
         var cache = mock(org.dromara.quant.market.AccountPositionCache.class);
         when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(new QuantExecutionRecord());
         when(cache.requirePositions(1L)).thenThrow(new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("账户持仓流未就绪"));
-        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), capacity, cache, balanceCache(), preparation(gateway));
-        assertThrows(org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException.class,
-            () -> service.open(new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE,
-                BigDecimal.TEN, null, "offline", "TESTNET", null, null, null, null)));
+        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), capacity, cache, balanceCache(),
+            preparation(gateway));
+        assertThrows(org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException.class, () -> service.open(new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY",
+            "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, "offline", "TESTNET", null, null, null, null)));
         verify(capacity, never()).reserve(any(), any(), any(), any());
         verify(gateway, never()).placeOrder(any());
         verify(gateway, never()).queryPositions(any(), any());
@@ -206,18 +212,18 @@ class UnifiedTradeExecutionServiceTest {
         var cache = mock(org.dromara.quant.market.AccountPositionCache.class);
         var record = new QuantExecutionRecord();
         when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(record);
-        when(cache.requirePositions(1L)).thenReturn(java.util.List.of())
-            .thenThrow(new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("账户持仓流断线"));
-        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), capacity, cache, balanceCache(), preparation(gateway));
+        when(cache.requirePositions(1L)).thenReturn(java.util.List.of()).thenThrow(new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("账户持仓流断线"));
+        var service = new UnifiedTradeExecutionService(gateway, mock(LiveTradingGate.class), records, mock(OrderLedgerService.class), capacity, cache, balanceCache(),
+            preparation(gateway));
         var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
-        assertThrows(org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException.class,
-            () -> service.open(new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE,
-                BigDecimal.TEN, null, "lost", "TESTNET", rule, null, null, null)));
+        assertThrows(org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException.class, () -> service.open(new OpenPositionCommand(1L, 2L, 3L, null, "BTCUSDT", "BUY",
+            "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, "lost", "TESTNET", rule, null, null, null)));
         verify(capacity).reserve(any(), any(), any(), any());
         verify(capacity).releaseFailed(1L, "lost");
         verify(records).failed(eq(record), contains("断线"));
         verify(gateway, never()).placeOrder(any());
     }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"TESTNET", "LIVE"})
     void entrySwitchMustNotBlockReduceOnlyClose(String mode) {
@@ -233,8 +239,8 @@ class UnifiedTradeExecutionServiceTest {
         service.setLiveDispatcher(validDispatcher());
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
         var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
-        service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", mode),
-            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "close", mode, rule, safety));
+        service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", mode), "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH"
+            , "close", mode, rule, safety));
         verify(gateway).placeOrder(argThat(r -> r.reduceOnly() && r.live() && r.quantity().compareTo(BigDecimal.ONE) == 0));
     }
 
@@ -245,13 +251,12 @@ class UnifiedTradeExecutionServiceTest {
         var records = mock(ExecutionRecordService.class);
         when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(new QuantExecutionRecord());
         var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
-        var safety = new ExecutionSafetyContext(false, !failure.equals("accountDisabled"), !failure.equals("noPermission"), true,
-            !failure.equals("offline"), !failure.equals("unauthorized"), false, false);
+        var safety = new ExecutionSafetyContext(false, !failure.equals("accountDisabled"), !failure.equals("noPermission"), true, !failure.equals("offline"), !failure.equals(
+            "unauthorized"), false, false);
         var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
             mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
-        assertThrows(LiveTradingGate.LiveTradingBlockedException.class, () -> service.close(new ClosePositionCommand(1L, 2L, 3L,
-            new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"), "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE,
-            null, "BOTH", "close", "LIVE", rule, safety)));
+        assertThrows(LiveTradingGate.LiveTradingBlockedException.class, () -> service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test",
+            "HMAC", "LIVE"), "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "close", "LIVE", rule, safety)));
         verify(gateway, never()).placeOrder(any());
     }
 
@@ -269,10 +274,9 @@ class UnifiedTradeExecutionServiceTest {
         service.setLiveDispatcher(validDispatcher());
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
         var safety = new ExecutionSafetyContext(true, true, true, true, true, true, true, true);
-        service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", mode),
-            "BTCUSDT", "BUY", "MARKET", new BigDecimal("3.5"), BigDecimal.TEN, null, "open", mode, rule, 10, "ISOLATED", safety));
-        verify(gateway).placeOrder(argThat(r -> r.live() && !r.reduceOnly() && "BOTH".equals(r.positionSide())
-            && r.quantity().compareTo(new BigDecimal("3")) == 0));
+        service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", mode), "BTCUSDT", "BUY", "MARKET", new BigDecimal("3.5"),
+            BigDecimal.TEN, null, "open", mode, rule, 10, "ISOLATED", safety));
+        verify(gateway).placeOrder(argThat(r -> r.live() && !r.reduceOnly() && "BOTH".equals(r.positionSide()) && r.quantity().compareTo(new BigDecimal("3")) == 0));
         verify(gateway, never()).setMarginType(any(), any(), any());
         verify(gateway, never()).setLeverage(any(), any(), anyInt());
     }
@@ -291,11 +295,10 @@ class UnifiedTradeExecutionServiceTest {
         service.setRuntimeLease(validLease());
         service.setLiveDispatcher(validDispatcher());
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
-        var imported = "missing".equals(localRule) ? null : new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0,
-            new BigDecimal("0.01"), new BigDecimal("0.1"), new BigDecimal("0.1"), null, "TRADING");
+        var imported = "missing".equals(localRule) ? null : new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), new BigDecimal("0.1"),
+            new BigDecimal("0.1"), null, "TRADING");
         var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
-        var result = service.close(new ClosePositionCommand(1L, 2L, 3L,
-            new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"), "BTCUSDT", "SELL", "MARKET",
+        var result = service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"), "BTCUSDT", "SELL", "MARKET",
             new BigDecimal("1.5"), null, "BOTH", "close-actual-rule", "LIVE", imported, safety));
         assertTrue(result.accepted());
         verify(gateway).placeOrder(argThat(request -> request.reduceOnly() && request.quantity().compareTo(BigDecimal.ONE) == 0));
@@ -305,21 +308,16 @@ class UnifiedTradeExecutionServiceTest {
     void liveCannotBypassMissingDurableDispatchGate() {
         var gateway = mock(ExchangeGateway.class);
         var records = mock(ExecutionRecordService.class);
-        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any()))
-            .thenReturn(new QuantExecutionRecord());
-        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0,
-            new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
+        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(new QuantExecutionRecord());
+        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
         when(gateway.queryTradingRule(any(), any())).thenReturn(rule);
-        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records,
-            mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class),
-            mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
+            mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
         service.setRuntimeLease(validLease());
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
         var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
-        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(
-            1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
-            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "no-dispatcher",
-            "LIVE", rule, safety)));
+        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
+            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "no-dispatcher", "LIVE", rule, safety)));
         verify(gateway, never()).placeOrder(any());
     }
 
@@ -327,23 +325,18 @@ class UnifiedTradeExecutionServiceTest {
     void liveRuntimeCloseWithoutCurrentLeaseCannotReachBinance() {
         var gateway = mock(ExchangeGateway.class);
         var records = mock(ExecutionRecordService.class);
-        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any()))
-            .thenReturn(new QuantExecutionRecord());
-        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0,
-            new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
+        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(new QuantExecutionRecord());
+        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
         when(gateway.queryTradingRule(any(), any())).thenReturn(rule);
-        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records,
-            mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class),
-            mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
+            mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
         var lease = mock(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService.class);
         service.setRuntimeLease(lease);
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
         doThrow(new IllegalStateException("lease moved")).when(lease).requireCurrentEpoch(3L, 1L, "BTCUSDT");
         var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
-        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(
-            1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
-            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "stale-worker",
-            "LIVE", rule, safety)));
+        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
+            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "stale-worker", "LIVE", rule, safety)));
         verify(gateway, never()).placeOrder(any());
         verify(lease).requireCurrentEpoch(3L, 1L, "BTCUSDT");
     }
@@ -352,23 +345,18 @@ class UnifiedTradeExecutionServiceTest {
     void epochChangeDuringOrderPreparationRejectsStaleLiveClose() {
         var gateway = mock(ExchangeGateway.class);
         var records = mock(ExecutionRecordService.class);
-        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any()))
-            .thenReturn(new QuantExecutionRecord());
-        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0,
-            new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
+        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(new QuantExecutionRecord());
+        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
         when(gateway.queryTradingRule(any(), any())).thenReturn(rule);
-        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records,
-            mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class),
-            mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
+            mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
         var lease = mock(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService.class);
         when(lease.requireCurrentEpoch(3L, 1L, "BTCUSDT")).thenReturn(11L, 12L);
         service.setRuntimeLease(lease);
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
         var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
-        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(
-            1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
-            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "epoch-changed",
-            "LIVE", rule, safety)));
+        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
+            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "epoch-changed", "LIVE", rule, safety)));
         verify(lease, times(2)).requireCurrentEpoch(3L, 1L, "BTCUSDT");
         verify(gateway, never()).placeOrder(any());
     }
@@ -377,14 +365,11 @@ class UnifiedTradeExecutionServiceTest {
     void leaseTakenOverWhileWaitingForDurableDispatchIsNeverSent() {
         var gateway = mock(ExchangeGateway.class);
         var records = mock(ExecutionRecordService.class);
-        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any()))
-            .thenReturn(new QuantExecutionRecord());
-        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0,
-            new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
+        when(records.tryCreatePending(any(), any(), any(), any(), any(), any(), any())).thenReturn(new QuantExecutionRecord());
+        var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
         when(gateway.queryTradingRule(any(), any())).thenReturn(rule);
-        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records,
-            mock(OrderLedgerService.class), mock(org.dromara.quant.risk.OpenCapacityService.class),
-            mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
+        var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
+            mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
         var lease = mock(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService.class);
         when(lease.requireCurrentEpoch(3L, 1L, "BTCUSDT")).thenReturn(11L, 11L, 12L);
         var dispatcher = validDispatcher();
@@ -392,10 +377,8 @@ class UnifiedTradeExecutionServiceTest {
         service.setLiveDispatcher(dispatcher);
         service.setCloseOwnershipGuard(mock(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard.class));
         var safety = new ExecutionSafetyContext(false, true, true, true, true, true, false, false);
-        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(
-            1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
-            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "lease-shifted",
-            "LIVE", rule, safety)));
+        assertThrows(IllegalStateException.class, () -> service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
+            "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, null, "BOTH", "lease-shifted", "LIVE", rule, safety)));
         verify(lease, times(3)).requireCurrentEpoch(3L, 1L, "BTCUSDT");
         verify(dispatcher).notSent(any(LiveOrderDispatcher.Ticket.class));
         verify(gateway, never()).placeOrder(any());
@@ -409,10 +392,9 @@ class UnifiedTradeExecutionServiceTest {
         var rule = new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "TRADING");
         var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), records, mock(OrderLedgerService.class),
             mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
-        assertThrows(LiveTradingGate.LiveTradingBlockedException.class, () -> service.open(new OpenPositionCommand(1L, 2L, 3L,
-            new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"), "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE,
-            BigDecimal.TEN, null, "blocked-live", "LIVE", rule, 10, "ISOLATED",
-            new ExecutionSafetyContext(false, true, true, true, true, true, true, true))));
+        assertThrows(LiveTradingGate.LiveTradingBlockedException.class, () -> service.open(new OpenPositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test",
+            "HMAC", "LIVE"), "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, "blocked-live", "LIVE", rule, 10, "ISOLATED", new ExecutionSafetyContext(false,
+            true, true, true, true, true, true, true))));
         verify(gateway, never()).placeOrder(any());
     }
 
@@ -422,9 +404,8 @@ class UnifiedTradeExecutionServiceTest {
         var gateway = mock(ExchangeGateway.class);
         var service = new UnifiedTradeExecutionService(gateway, new LiveTradingGate(), mock(ExecutionRecordService.class), mock(OrderLedgerService.class),
             mock(org.dromara.quant.risk.OpenCapacityService.class), mock(org.dromara.quant.market.AccountPositionCache.class), balanceCache(), preparation(gateway));
-        assertThrows(IllegalArgumentException.class, () -> service.close(new ClosePositionCommand(1L, 2L, 3L,
-            new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"), "BTCUSDT", "SHORT".equals(positionSide) ? "SELL" : "BUY",
-            "MARKET", BigDecimal.ONE, null, positionSide, "invalid-close", "LIVE", null, null)));
+        assertThrows(IllegalArgumentException.class, () -> service.close(new ClosePositionCommand(1L, 2L, 3L, new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"),
+            "BTCUSDT", "SHORT".equals(positionSide) ? "SELL" : "BUY", "MARKET", BigDecimal.ONE, null, positionSide, "invalid-close", "LIVE", null, null)));
         verify(gateway, never()).placeOrder(any());
     }
 

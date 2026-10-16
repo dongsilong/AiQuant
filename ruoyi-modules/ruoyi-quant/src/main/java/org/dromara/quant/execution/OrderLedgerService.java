@@ -1,9 +1,11 @@
 package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -13,13 +15,12 @@ import java.time.LocalDateTime;
  */
 @Service
 public class OrderLedgerService {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
     /**
      * 当前领域 Mapper。
      */
     private final QuantOrderMapper mapper;
+    @Autowired
+    private TradeDecisionLogService decisionLogs;
 
     /**
      * 创建 OrderLedgerService 实例并初始化其依赖。
@@ -35,7 +36,9 @@ public class OrderLedgerService {
         if (snapshot == null) {
             return null;
         }
-        if (decisionLogs != null) { decisionLogs.order(credentialId, snapshot); }
+        if (decisionLogs != null) {
+            decisionLogs.order(credentialId, snapshot);
+        }
         String clientOrderId = snapshot.clientOrderId() == null ? "EXCHANGE:" + snapshot.orderId() : snapshot.clientOrderId();
         QuantOrder entity = snapshot.orderId() == null ? null :
             mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getExchangeOrderId, snapshot.orderId()));
@@ -94,6 +97,7 @@ public class OrderLedgerService {
         entity.setUpdatedAt(LocalDateTime.now());
         return persistMonotonic(entity);
     }
+
     /**
      * Never let a stale Binance event regress terminal order status, cumulative
      * executed quantity, confirmed order identity or strategy ownership.
@@ -113,10 +117,7 @@ public class OrderLedgerService {
         if (current == null) {
             throw new IllegalStateException("订单对账期间本地订单消失，等待重试");
         }
-        if (entity.getExchangeOrderId() != null && current.getExchangeOrderId() != null
-            && !entity.getExchangeOrderId().equals(current.getExchangeOrderId())
-            || entity.getStrategyInstanceId() != null && current.getStrategyInstanceId() != null
-            && !entity.getStrategyInstanceId().equals(current.getStrategyInstanceId())) {
+        if (entity.getExchangeOrderId() != null && current.getExchangeOrderId() != null && !entity.getExchangeOrderId().equals(current.getExchangeOrderId()) || entity.getStrategyInstanceId() != null && current.getStrategyInstanceId() != null && !entity.getStrategyInstanceId().equals(current.getStrategyInstanceId())) {
             throw new IllegalStateException("交易所订单身份或策略归属冲突，禁止覆盖");
         }
         // Returning the freshest DB state (rather than the stale in-memory entity)

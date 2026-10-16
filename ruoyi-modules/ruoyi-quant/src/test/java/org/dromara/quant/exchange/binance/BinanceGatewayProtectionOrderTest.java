@@ -22,8 +22,7 @@ class BinanceGatewayProtectionOrderTest {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             boolean time = exchange.getRequestURI().getPath().contains("time");
-            String response = time ? "{\"serverTime\":" + System.currentTimeMillis() + "}"
-                : "{\"code\":-4023,\"msg\":\"Qty not increased by step size.\"}";
+            String response = time ? "{\"serverTime\":" + System.currentTimeMillis() + "}" : "{\"code\":-4023,\"msg\":\"Qty not increased by step size.\"}";
             byte[] data = response.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(time ? 200 : status, data.length);
             exchange.getResponseBody().write(data);
@@ -34,11 +33,13 @@ class BinanceGatewayProtectionOrderTest {
             var properties = new QuantProperties();
             properties.getBinance().setTestnetUrl("http://127.0.0.1:" + server.getAddress().getPort());
             var gateway = new BinanceGatewayAdapter(properties);
-            var request = new ExchangeGateway.ProtectionOrderRequest(new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"),
-                "ONDOUSDT", "SELL", "BOTH", "STOP_MARKET", new BigDecimal("5616.5"), new BigDecimal("0.4961"), "QFTP_test", true);
+            var request = new ExchangeGateway.ProtectionOrderRequest(new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"), "ONDOUSDT", "SELL", "BOTH", "STOP_MARKET"
+                , new BigDecimal("5616.5"), new BigDecimal("0.4961"), "QFTP_test", true);
             var failure = assertThrows(ExchangeTradingPort.ExchangeRequestException.class, () -> gateway.placeProtectionOrder(request));
             assertEquals(status == 400, failure instanceof ExchangeTradingPort.OrderRejectedException);
             assertFalse(failure.getMessage().contains("signature="));
-        } finally { server.stop(0); }
+        } finally {
+            server.stop(0);
+        }
     }
 }

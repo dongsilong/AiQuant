@@ -1,11 +1,6 @@
 package org.dromara.quant.risk.mapper;
 
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Options;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.*;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -77,21 +72,15 @@ public interface OpenCapacityMapper {
         VALUES (#{credentialId}, #{key}, #{strategyId}, #{instanceId}, #{symbol},
                 #{direction}, #{margin}, 'RESERVED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """)
-    int insertReservation(@Param("credentialId") Long credentialId,
-                          @Param("key") String key,
-                          @Param("strategyId") Long strategyId,
-                          @Param("instanceId") Long instanceId,
-                          @Param("symbol") String symbol,
-                          @Param("direction") String direction,
-                          @Param("margin") BigDecimal margin);
+    int insertReservation(@Param("credentialId") Long credentialId, @Param("key") String key, @Param("strategyId") Long strategyId, @Param("instanceId") Long instanceId, @Param(
+        "symbol") String symbol, @Param("direction") String direction, @Param("margin") BigDecimal margin);
 
     @Options(timeout = 3)
     @Select("""
         SELECT COUNT(*) FROM quant_position WHERE credential_id=#{credentialId}
           AND symbol=#{symbol} AND (quantity<>0 OR quantity IS NULL)
         """)
-    Long countActiveLocalPositions(@Param("credentialId") Long credentialId,
-                                   @Param("symbol") String symbol);
+    Long countActiveLocalPositions(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
     @Options(timeout = 3)
     @Select("""
@@ -105,9 +94,7 @@ public interface OpenCapacityMapper {
           AND e.exchange_order_status IN ('FILLED','CANCELED','EXPIRED','REJECTED')
           AND s.status='CLOSED' AND s.pending_action IS NULL AND s.updated_at>=r.created_at
         """)
-    List<String> closedKeys(@Param("credentialId") Long credentialId,
-                            @Param("instanceId") Long instanceId,
-                            @Param("symbol") String symbol);
+    List<String> closedKeys(@Param("credentialId") Long credentialId, @Param("instanceId") Long instanceId, @Param("symbol") String symbol);
 
     @Options(timeout = 3)
     @Select("""

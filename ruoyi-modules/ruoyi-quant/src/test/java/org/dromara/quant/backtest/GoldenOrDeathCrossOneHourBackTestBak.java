@@ -130,6 +130,20 @@ public class GoldenOrDeathCrossOneHourBackTestBak {
 
     // ==================== 程序入口 ====================
 
+    public static BarSeries aggregateToHourly(BarSeries oneMinuteSeries) {
+        // 1. 创建目标周期为1小时的聚合器
+        //    onlyFinalBars = true 表示只输出已完成的完整1小时K线
+        DurationBarAggregator hourlyAggregator = new DurationBarAggregator(Duration.ofHours(1), true);
+
+        // 2. 创建序列聚合器
+        BaseBarSeriesAggregator seriesAggregator = new BaseBarSeriesAggregator(hourlyAggregator);
+
+        // 3. 执行聚合，返回新的1小时周期序列
+        BarSeries hourlySeries = seriesAggregator.aggregate(oneMinuteSeries, "BTCUSDT_1h");
+
+        return hourlySeries;
+    }
+
     /**
      * 分析趋势
      */
@@ -142,9 +156,9 @@ public class GoldenOrDeathCrossOneHourBackTestBak {
         }
 
         BaseBarSeries series = buildBarSeries(allData);
-//        SMAIndicator ma5 = new SMAIndicator(new ClosePriceIndicator(series), 5);
-//        SMAIndicator ma30 = new SMAIndicator(new ClosePriceIndicator(series), 30);
-//        SMAIndicator ma60 = new SMAIndicator(new ClosePriceIndicator(series), 60);
+        //        SMAIndicator ma5 = new SMAIndicator(new ClosePriceIndicator(series), 5);
+        //        SMAIndicator ma30 = new SMAIndicator(new ClosePriceIndicator(series), 30);
+        //        SMAIndicator ma60 = new SMAIndicator(new ClosePriceIndicator(series), 60);
 
         BarSeries barSeriesHour = aggregateToHourly(series);
         SMAIndicator ma5 = new SMAIndicator(new ClosePriceIndicator(barSeriesHour), 5);
@@ -187,22 +201,6 @@ public class GoldenOrDeathCrossOneHourBackTestBak {
 
         printTradeStatistics();
         exportToExcel();
-    }
-
-    public static BarSeries aggregateToHourly(BarSeries oneMinuteSeries) {
-        // 1. 创建目标周期为1小时的聚合器
-        //    onlyFinalBars = true 表示只输出已完成的完整1小时K线
-        DurationBarAggregator hourlyAggregator = new DurationBarAggregator(
-            Duration.ofHours(1), true
-        );
-
-        // 2. 创建序列聚合器
-        BaseBarSeriesAggregator seriesAggregator = new BaseBarSeriesAggregator(hourlyAggregator);
-
-        // 3. 执行聚合，返回新的1小时周期序列
-        BarSeries hourlySeries = seriesAggregator.aggregate(oneMinuteSeries, "BTCUSDT_1h");
-
-        return hourlySeries;
     }
 
     /**
@@ -297,8 +295,8 @@ public class GoldenOrDeathCrossOneHourBackTestBak {
         double margin = capital * POSITION_RATIO;   // 保证金 = 总仓位 × 10%
         positionNotional = margin * LEVERAGE;          // 名义仓位 = 保证金 × 10
 
-        log.info("{}  [开仓] {}  价格={}  名义仓位={}  保证金={}  原因={}",
-            DateUtils.date(entryTime), direction == 1 ? "多" : "空", DF.format(price), DF.format(positionNotional), DF.format(margin), reason);
+        log.info("{}  [开仓] {}  价格={}  名义仓位={}  保证金={}  原因={}", DateUtils.date(entryTime), direction == 1 ? "多" : "空", DF.format(price), DF.format(positionNotional),
+            DF.format(margin), reason);
     }
 
     /**
@@ -337,8 +335,8 @@ public class GoldenOrDeathCrossOneHourBackTestBak {
         tr.exitTime = barCloseTime;
         tradeRecords.add(tr);
 
-        log.info("{}  [平仓] {}  开仓价={}  平仓价={}  盈亏={}  当前资金={}  持仓K线={}  原因={}",
-            DateUtils.date(entryTime), position == 1 ? "多" : "空", DF.format(entryPrice), DF.format(price), DF.format(pnl), DF.format(capital), barsHeld, reason);
+        log.info("{}  [平仓] {}  开仓价={}  平仓价={}  盈亏={}  当前资金={}  持仓K线={}  原因={}", DateUtils.date(entryTime), position == 1 ? "多" : "空", DF.format(entryPrice), DF.format(price),
+            DF.format(pnl), DF.format(capital), barsHeld, reason);
 
         // 复位
         position = 0;
@@ -389,7 +387,7 @@ public class GoldenOrDeathCrossOneHourBackTestBak {
             }
         });
 
-        if(!allData.isEmpty()){
+        if (!allData.isEmpty()) {
             allData.sort(Comparator.comparingLong(KlineData::getOpenTime));
         }
         log.info("全部加载完成，总 K 线数：{}", allData.size());
@@ -410,7 +408,8 @@ public class GoldenOrDeathCrossOneHourBackTestBak {
                 Instant beginTime = Instant.ofEpochMilli(kline.getOpenTime());
                 Instant endTime = Instant.ofEpochMilli(kline.getCloseTime());
 
-                Bar bar = series.barBuilder().beginTime(beginTime).endTime(endTime).openPrice(kline.getOpen()).highPrice(kline.getHigh()).lowPrice(kline.getLow()).closePrice(kline.getClose()).volume(kline.getVolume()).build();
+                Bar bar =
+                    series.barBuilder().beginTime(beginTime).endTime(endTime).openPrice(kline.getOpen()).highPrice(kline.getHigh()).lowPrice(kline.getLow()).closePrice(kline.getClose()).volume(kline.getVolume()).build();
 
                 series.addBar(bar);
             } catch (Exception e) {

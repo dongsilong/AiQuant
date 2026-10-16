@@ -5,11 +5,11 @@ import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.dromara.quant.paper.domain.QuantPaperAccount;
+import org.dromara.quant.paper.mapper.PaperAtomicMapper;
 import org.dromara.quant.paper.mapper.QuantPaperAccountMapper;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.springframework.dao.DuplicateKeyException;
-import org.dromara.quant.paper.mapper.PaperAtomicMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -117,7 +117,9 @@ public class PaperTradingService {
         }
         ensure(credentialId);
         QuantPaperAccount account = atomicMapper.lockAccount(credentialId);
-        if (account == null) { throw new IllegalStateException("PAPER 账户不存在"); }
+        if (account == null) {
+            throw new IllegalStateException("PAPER 账户不存在");
+        }
         if (account.getAvailableBalance().compareTo(margin) < 0) {
             throw new IllegalStateException("PAPER 可用余额不足");
         }
@@ -132,7 +134,9 @@ public class PaperTradingService {
      */
     @Transactional
     public void refundReservedMargin(Long credentialId, BigDecimal margin) {
-        if (margin == null || margin.signum() <= 0) { return; }
+        if (margin == null || margin.signum() <= 0) {
+            return;
+        }
         ensure(credentialId);
         QuantPaperAccount account = atomicMapper.lockAccount(credentialId);
         if (account == null || atomicMapper.refundMargin(account.getId(), margin) != 1) {
@@ -151,7 +155,9 @@ public class PaperTradingService {
         }
         ensure(credentialId);
         QuantPaperAccount account = atomicMapper.lockAccount(credentialId);
-        if (account == null) { throw new IllegalStateException("PAPER 账户不存在"); }
+        if (account == null) {
+            throw new IllegalStateException("PAPER 账户不存在");
+        }
         BigDecimal refund = reservedMargin == null || reservedMargin.signum() <= 0 ? BigDecimal.ZERO : reservedMargin;
         if (refund.signum() > 0) {
             if (atomicMapper.refundMargin(account.getId(), refund) != 1) {
@@ -235,7 +241,9 @@ public class PaperTradingService {
         BigDecimal remain = oldQty.subtract(closeQty).max(BigDecimal.ZERO);
         ensure(credentialId);
         QuantPaperAccount lockedAccount = atomicMapper.lockAccount(credentialId);
-        if (lockedAccount == null) { throw new IllegalStateException("PAPER 账户不存在"); }
+        if (lockedAccount == null) {
+            throw new IllegalStateException("PAPER 账户不存在");
+        }
         if (remain.signum() == 0) {
             positionMapper.deleteById(positionId);
         } else {
@@ -312,7 +320,9 @@ public class PaperTradingService {
      */
     private QuantExecutionRecord lockExecution(Long credentialId, String idempotencyKey) {
         Long id = atomicMapper.lockExecution(credentialId, idempotencyKey);
-        if (id == null) { throw new IllegalStateException("PAPER 执行记录不存在: " + idempotencyKey); }
+        if (id == null) {
+            throw new IllegalStateException("PAPER 执行记录不存在: " + idempotencyKey);
+        }
         QuantExecutionRecord record = executionRecordMapper.selectById(id);
         if (record == null) {
             throw new IllegalStateException("PAPER 执行记录不存在: " + idempotencyKey);

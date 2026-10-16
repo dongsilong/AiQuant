@@ -11,15 +11,21 @@ final class EntryRetryGate {
     private int failures;
     private boolean waitForChange;
 
-    boolean due(long now) { return now >= nextCheckAt; }
+    boolean due(long now) {
+        return now >= nextCheckAt;
+    }
 
     /**
      * 仅在退避到期时尝试继续；等待条件变化时须先重新执行容量检查。
      * 容量检查抛出异常则不会调用 reset，下一轮仍需经过退避时间。
      */
     boolean allow(long now, Runnable capacityCheck) {
-        if (!due(now)) { return false; }
-        if (!waitForChange) { return true; }
+        if (!due(now)) {
+            return false;
+        }
+        if (!waitForChange) {
+            return true;
+        }
         // 校验失败也必须退避，不能由下一条行情立即触发重查。
         nextCheckAt = now + 5000;
         capacityCheck.run();

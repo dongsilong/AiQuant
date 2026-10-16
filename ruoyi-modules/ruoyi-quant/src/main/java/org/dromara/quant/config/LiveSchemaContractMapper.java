@@ -26,6 +26,7 @@ public interface LiveSchemaContractMapper {
         GROUP BY table_name,index_name
         """)
     List<String> uniqueContracts();
+
     @Options(timeout = 3)
     @Select("""
         SELECT CONCAT(table_name,'|',column_name)
@@ -34,5 +35,14 @@ public interface LiveSchemaContractMapper {
           AND column_name='lease_epoch' AND data_type='bigint' AND is_nullable='NO'
         """)
     List<String> leaseEpochColumns();
+
+    @Options(timeout = 3)
+    @Select("""
+        SELECT CONCAT(table_name,'|',column_name)
+        FROM information_schema.columns
+        WHERE table_schema=DATABASE() AND table_name='quant_strategy_entry_guard'
+          AND column_name='guard_type' AND data_type='varchar' AND is_nullable='NO'
+        """)
+    List<String> entryGuardColumns();
 
 }

@@ -3,8 +3,12 @@ package org.dromara.quant.market;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
+import org.dromara.quant.execution.TradingPreparationService;
+import org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -19,9 +23,6 @@ import java.util.function.Consumer;
 @Component
 @Slf4j
 public class UserDataStreamHub {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
     /**
      * 交易所统一网关。
      */
@@ -32,7 +33,7 @@ public class UserDataStreamHub {
     private final TradeExecutionApplicationService executionService;
     private final AccountPositionCache positionCache;
     private final AccountBalanceCache balanceCache;
-    private final org.dromara.quant.execution.TradingPreparationService preparationService;
+    private final TradingPreparationService preparationService;
     /**
      * 账户用户数据流保活与健康检查调度器。
      */
@@ -45,11 +46,29 @@ public class UserDataStreamHub {
      * 共享底层流连接缓存。
      */
     private final Map<Long, SharedUserStream> streams = new ConcurrentHashMap<>();
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper streamLease;
     private final Map<Long, String> localLeaseOwners = new ConcurrentHashMap<>();
+    @Autowired
+    private TradeDecisionLogService decisionLogs;
+    @Autowired
+    private LiveUserStreamLeaseMapper streamLease;
+    @Autowired(required = false)
+    private org.dromara.quant.reconcile.LivePositionEventCoordinator positionEvents;
 
-    /** Called only after the resident subscriber acquired the DB lease. */
+    /**
+     * 创建 UserDataStreamHub 实例并初始化其依赖。
+     */
+    public UserDataStreamHub(ExchangeGateway gateway, TradeExecutionApplicationService executionService, AccountPositionCache positionCache, AccountBalanceCache balanceCache,
+                             org.dromara.quant.execution.TradingPreparationService preparationService) {
+        this.gateway = gateway;
+        this.executionService = executionService;
+        this.positionCache = positionCache;
+        this.balanceCache = balanceCache;
+        this.preparationService = preparationService;
+    }
+
+    /**
+     * Called only after the resident subscriber acquired the DB lease.
+     */
     public void registerLeaseOwner(Long credentialId, String token) {
         if (streamLease.owns(credentialId, token) != 1) {
             throw new IllegalStateException("LIVE user stream lease is not owned by this node");
@@ -57,6 +76,9 @@ public class UserDataStreamHub {
         localLeaseOwners.put(credentialId, token);
     }
 
+    /**
+     * 注销指定账户的用户流租约持有者。
+     */
     public void unregisterLeaseOwner(Long credentialId, String token) {
         if (!localLeaseOwners.remove(credentialId, token)) {
             return;
@@ -72,8 +94,7 @@ public class UserDataStreamHub {
             return stream;
         });
         if (positionEvents != null) {
-            positionEvents.onUserDataEvent(credentialId,
-                new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
+            positionEvents.onUserDataEvent(credentialId, new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
         }
     }
 
@@ -87,7 +108,9 @@ public class UserDataStreamHub {
         return stream != null && !stream.closed;
     }
 
-    /** Only the node holding the current LIVE private-stream DB lease may start a strategy subscription. */
+    /**
+     * Only the node holding the current LIVE private-stream DB lease may start a strategy subscription.
+     */
     public boolean hasLiveStreamOwnership(Long credentialId) {
         return credentialId != null && ownsLiveStream(credentialId);
     }
@@ -95,21 +118,6 @@ public class UserDataStreamHub {
     private boolean ownsLiveStream(Long credentialId) {
         String token = localLeaseOwners.get(credentialId);
         return token != null && streamLease.owns(credentialId, token) == 1;
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private org.dromara.quant.reconcile.LivePositionEventCoordinator positionEvents;
-
-
-    /**
-     * 创建 UserDataStreamHub 实例并初始化其依赖。
-     */
-    public UserDataStreamHub(ExchangeGateway gateway, TradeExecutionApplicationService executionService, AccountPositionCache positionCache, AccountBalanceCache balanceCache, org.dromara.quant.execution.TradingPreparationService preparationService) {
-        this.gateway = gateway;
-        this.executionService = executionService;
-        this.positionCache = positionCache;
-        this.balanceCache = balanceCache;
-        this.preparationService = preparationService;
     }
 
     /**
@@ -151,8 +159,7 @@ public class UserDataStreamHub {
                     if (streams.remove(id, stream)) {
                         stream.close();
                         if (positionEvents != null) {
-                            positionEvents.onUserDataEvent(id,
-                                new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
+                            positionEvents.onUserDataEvent(id, new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
                         }
                         log.warn("Closed obsolete LIVE private stream after lease loss credentialId={}", id);
                     }
@@ -211,24 +218,27 @@ public class UserDataStreamHub {
             if (closed) {
                 throw new IllegalStateException("用户数据流已关闭");
             }
-            StreamEventConsumer<ExchangeGateway.UserDataEvent> consumer = new StreamEventConsumer<>(2048, listener,
-                ex -> {
-                    positionCache.disconnect(credential.getId());
-                    balanceCache.disconnect(credential.getId());
-                    preparationService.invalidate(credential.getId());
-                    log.warn("用户事件消费者失败 credentialId={}", credential.getId(), ex);
-                    scheduler.execute(() -> onEvent(new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null)));
-                },
-                () -> scheduler.execute(() -> onEvent(new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null))));
+            StreamEventConsumer<ExchangeGateway.UserDataEvent> consumer = new StreamEventConsumer<>(2048, listener, ex -> {
+                positionCache.disconnect(credential.getId());
+                balanceCache.disconnect(credential.getId());
+                preparationService.invalidate(credential.getId());
+                log.warn("用户事件消费者失败 credentialId={}", credential.getId(), ex);
+                scheduler.execute(() -> onEvent(new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null)));
+            }, () -> scheduler.execute(() -> onEvent(new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null))));
             listeners.add(consumer);
             if (session == null) {
                 start();
             }
             return () -> streams.computeIfPresent(credential.getId(), (id, stream) -> {
-                if (stream != this) { return stream; }
+                if (stream != this) {
+                    return stream;
+                }
                 listeners.remove(consumer);
                 consumer.close();
-                if (listeners.isEmpty()) { close(); return null; }
+                if (listeners.isEmpty()) {
+                    close();
+                    return null;
+                }
                 return stream;
             });
         }
@@ -243,17 +253,14 @@ public class UserDataStreamHub {
             try {
                 long attempt = ++generation;
                 ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
-                positionCache.begin(credential.getId(), exchangeCredential,
-                    () -> {
-                        ExchangeGateway.UserDataStreamSession currentSession = session;
-                        return !closed && attempt == generation && currentSession != null && currentSession.isConnected();
-                    });
-                balanceCache.begin(credential.getId(), exchangeCredential,
-                    () -> !closed && attempt == generation && session != null && session.isConnected());
+                positionCache.begin(credential.getId(), exchangeCredential, () -> {
+                    ExchangeGateway.UserDataStreamSession currentSession = session;
+                    return !closed && attempt == generation && currentSession != null && currentSession.isConnected();
+                });
+                balanceCache.begin(credential.getId(), exchangeCredential, () -> !closed && attempt == generation && session != null && session.isConnected());
                 session = gateway.subscribeUserData(exchangeCredential, event -> {
                     synchronized (this) {
-                        if (!closed && attempt == generation
-                            && (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || ownsLiveStream(credential.getId()))) {
+                        if (!closed && attempt == generation && (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || ownsLiveStream(credential.getId()))) {
                             onEvent(event);
                         }
                     }
@@ -304,7 +311,9 @@ public class UserDataStreamHub {
             if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && positionEvents != null) {
                 positionEvents.onUserDataEvent(credential.getId(), event);
             }
-            if (decisionLogs != null) { decisionLogs.privateEvent(credential.getId(), event); }
+            if (decisionLogs != null) {
+                decisionLogs.privateEvent(credential.getId(), event);
+            }
             lastEventAt = Instant.now();
             positionCache.onEvent(credential.getId(), event);
             balanceCache.onEvent(credential.getId(), event);

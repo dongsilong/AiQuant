@@ -44,18 +44,23 @@ class MySqlAtomicConcurrencyTest {
         if (url == null || !url.matches("(?i)^jdbc:mysql://[^/]+/aiquant_ci_test(?:\\?.*)?$")) {
             throw new IllegalStateException("MySQL concurrency tests must use the disposable aiquant_ci_test database only");
         }
-        return new DriverManagerDataSource(url,
-            System.getenv().getOrDefault("AIQUANT_MYSQL_USERNAME", "root"),
-            System.getenv().getOrDefault("AIQUANT_MYSQL_PASSWORD", "only_for_ci"));
+        return new DriverManagerDataSource(url, System.getenv().getOrDefault("AIQUANT_MYSQL_USERNAME", "root"), System.getenv().getOrDefault("AIQUANT_MYSQL_PASSWORD",
+            "only_for_ci"));
     }
 
     private static SqlSessionTemplate session(DriverManagerDataSource source, Class<?>... mappers) throws Exception {
         var cfg = new Configuration();
-        for (var mapper : mappers) { cfg.addMapper(mapper); }
+        for (var mapper : mappers) {
+            cfg.addMapper(mapper);
+        }
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setConfiguration(cfg);
         return new SqlSessionTemplate(java.util.Objects.requireNonNull(factory.getObject()));
+    }
+
+    private static OpenPositionCommand order(String symbol, String key) {
+        return new OpenPositionCommand(1L, 10L, 100L, null, symbol, "BUY", "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, key, "TESTNET", null, 1, "ISOLATED", null);
     }
 
     @Test
@@ -93,52 +98,48 @@ class MySqlAtomicConcurrencyTest {
         var second = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
         var start = new CountDownLatch(1);
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
-            var a = pool.submit(() -> { start.await(); return first.acquireOrRenew(10L, 1L, "BTCUSDT"); });
-            var b = pool.submit(() -> { start.await(); return second.acquireOrRenew(20L, 1L, "BTCUSDT"); });
+            var a = pool.submit(() -> {
+                start.await();
+                return first.acquireOrRenew(10L, 1L, "BTCUSDT");
+            });
+            var b = pool.submit(() -> {
+                start.await();
+                return second.acquireOrRenew(20L, 1L, "BTCUSDT");
+            });
             start.countDown();
             boolean firstWon = a.get(15, TimeUnit.SECONDS);
             boolean secondWon = b.get(15, TimeUnit.SECONDS);
             assertNotEquals(firstWon, secondWon, "Exactly one owner is required");
             if (firstWon) {
                 assertEquals(1L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"));
-                assertThrows(IllegalStateException.class,
-                    () -> second.requireCurrentOwner(20L, 1L, "BTCUSDT"));
+                assertThrows(IllegalStateException.class, () -> second.requireCurrentOwner(20L, 1L, "BTCUSDT"));
                 second.release(20L, 1L, "BTCUSDT");
                 assertFalse(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
                 first.release(10L, 1L, "BTCUSDT");
                 assertTrue(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
-                assertEquals(2L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"),
-                    "Takeover must increment the persistent fencing epoch");
-                assertThrows(IllegalStateException.class,
-                    () -> first.requireCurrentOwner(10L, 1L, "BTCUSDT"));
+                assertEquals(2L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"), "Takeover must increment the persistent fencing epoch");
+                assertThrows(IllegalStateException.class, () -> first.requireCurrentOwner(10L, 1L, "BTCUSDT"));
                 assertEquals(2L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"));
                 assertTrue(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
-                assertEquals(2L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"),
-                    "Renewal by the same active owner must not increment epoch");
+                assertEquals(2L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"), "Renewal by the same active owner must not increment epoch");
                 second.release(20L, 1L, "BTCUSDT");
                 assertTrue(second.acquireOrRenew(20L, 1L, "BTCUSDT"));
-                assertEquals(3L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"),
-                    "Reacquiring an expired/released lease increments epoch even on the same node");
+                assertEquals(3L, second.requireCurrentEpoch(20L, 1L, "BTCUSDT"), "Reacquiring an expired/released lease increments epoch even on the same node");
             } else {
                 assertTrue(second.requireCurrentEpoch(20L, 1L, "BTCUSDT") >= 1);
-                assertThrows(IllegalStateException.class,
-                    () -> first.requireCurrentOwner(10L, 1L, "BTCUSDT"));
+                assertThrows(IllegalStateException.class, () -> first.requireCurrentOwner(10L, 1L, "BTCUSDT"));
                 first.release(10L, 1L, "BTCUSDT");
                 assertFalse(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
                 second.release(20L, 1L, "BTCUSDT");
                 assertTrue(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
-                assertEquals(2L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"),
-                    "Takeover must increment the persistent fencing epoch");
-                assertThrows(IllegalStateException.class,
-                    () -> second.requireCurrentOwner(20L, 1L, "BTCUSDT"));
+                assertEquals(2L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"), "Takeover must increment the persistent fencing epoch");
+                assertThrows(IllegalStateException.class, () -> second.requireCurrentOwner(20L, 1L, "BTCUSDT"));
                 first.requireCurrentOwner(10L, 1L, "BTCUSDT");
                 assertTrue(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
-                assertEquals(2L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"),
-                    "Same-owner renewal must keep the epoch");
+                assertEquals(2L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"), "Same-owner renewal must keep the epoch");
                 first.release(10L, 1L, "BTCUSDT");
                 assertTrue(first.acquireOrRenew(10L, 1L, "BTCUSDT"));
-                assertEquals(3L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"),
-                    "Same-owner reacquisition must increment the epoch");
+                assertEquals(3L, first.requireCurrentEpoch(10L, 1L, "BTCUSDT"), "Same-owner reacquisition must increment the epoch");
             }
         }
         var entry = session.getMapper(StrategyEntryGuardMapper.class);
@@ -147,8 +148,14 @@ class MySqlAtomicConcurrencyTest {
         var candle = Instant.parse("2026-10-14T00:00:00Z");
         var gate = new CountDownLatch(1);
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
-            var x = pool.submit(() -> { gate.await(); return firstGuard.tryClaim(1L, 1L, "BTCUSDT", candle); });
-            var y = pool.submit(() -> { gate.await(); return secondGuard.tryClaim(2L, 1L, "BTCUSDT", candle); });
+            var x = pool.submit(() -> {
+                gate.await();
+                return firstGuard.tryClaim(1L, 1L, "BTCUSDT", candle);
+            });
+            var y = pool.submit(() -> {
+                gate.await();
+                return secondGuard.tryClaim(2L, 1L, "BTCUSDT", candle);
+            });
             gate.countDown();
             assertNotEquals(x.get(15, TimeUnit.SECONDS), y.get(15, TimeUnit.SECONDS));
             assertEquals(1L, db.queryForObject("SELECT COUNT(*) FROM quant_strategy_entry_guard", Long.class));
@@ -159,9 +166,8 @@ class MySqlAtomicConcurrencyTest {
     void realInnoDbAccountLockSerializesConcurrentCapacityReservations() throws Exception {
         var source = source();
         var jdbc = new JdbcTemplate(source);
-        for (var name : List.of("quant_open_capacity", "quant_execution_record", "quant_strategy_position_state",
-                "quant_strategy_instance", "quant_strategy_symbol", "quant_symbol", "quant_position",
-                "quant_risk_config", "quant_strategy", "quant_credential")) {
+        for (var name : List.of("quant_open_capacity", "quant_execution_record", "quant_strategy_position_state", "quant_strategy_instance", "quant_strategy_symbol",
+            "quant_symbol", "quant_position", "quant_risk_config", "quant_strategy", "quant_credential")) {
             jdbc.execute("DROP TABLE IF EXISTS " + name);
         }
         jdbc.execute("CREATE TABLE quant_credential (id BIGINT PRIMARY KEY) ENGINE=InnoDB");
@@ -171,8 +177,10 @@ class MySqlAtomicConcurrencyTest {
         jdbc.execute("CREATE TABLE quant_strategy_instance (id BIGINT, strategy_id BIGINT, credential_id BIGINT, strategy_symbol_id BIGINT) ENGINE=InnoDB");
         jdbc.execute("CREATE TABLE quant_strategy_symbol (id BIGINT, symbol_id BIGINT) ENGINE=InnoDB");
         jdbc.execute("CREATE TABLE quant_symbol (id BIGINT, symbol VARCHAR(32)) ENGINE=InnoDB");
-        jdbc.execute("CREATE TABLE quant_strategy_position_state (instance_id BIGINT, status VARCHAR(32), position_qty DECIMAL(30,16), direction VARCHAR(8), updated_at DATETIME, pending_action VARCHAR(32)) ENGINE=InnoDB");
-        jdbc.execute("CREATE TABLE quant_execution_record (credential_id BIGINT, idempotency_key VARCHAR(160), execution_status VARCHAR(16), exchange_order_status VARCHAR(32)) ENGINE=InnoDB");
+        jdbc.execute("CREATE TABLE quant_strategy_position_state (instance_id BIGINT, status VARCHAR(32), position_qty DECIMAL(30,16), direction VARCHAR(8), updated_at DATETIME," +
+            " pending_action VARCHAR(32)) ENGINE=InnoDB");
+        jdbc.execute("CREATE TABLE quant_execution_record (credential_id BIGINT, idempotency_key VARCHAR(160), execution_status VARCHAR(16), exchange_order_status VARCHAR(32)) " +
+            "ENGINE=InnoDB");
         jdbc.execute("""
             CREATE TABLE quant_open_capacity (credential_id BIGINT, idempotency_key VARCHAR(160), strategy_id BIGINT,
             instance_id BIGINT, symbol VARCHAR(32), position_side VARCHAR(8), reserved_margin DECIMAL(38,16),
@@ -187,29 +195,30 @@ class MySqlAtomicConcurrencyTest {
         var a = new OpenCapacityService(mapper, manager, mock(RiskDecisionService.class));
         var b = new OpenCapacityService(mapper, manager, mock(RiskDecisionService.class));
         var gate = new CountDownLatch(1);
-        var balance = new AccountBalanceSnapshot(1L, new BigDecimal("100"), Set.of(),
-            System.nanoTime() + TimeUnit.SECONDS.toNanos(30));
+        var balance = new AccountBalanceSnapshot(1L, new BigDecimal("100"), Set.of(), System.nanoTime() + TimeUnit.SECONDS.toNanos(30));
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             var x = pool.submit(() -> {
                 gate.await();
                 try {
                     a.reserve(order("BTCUSDT", "first"), BigDecimal.TEN, List.of(), balance);
                     return true;
-                } catch (OpenCapacityService.CapacityBlockedException blocked) { return false; }
+                } catch (OpenCapacityService.CapacityBlockedException blocked) {
+                    return false;
+                }
             });
             var y = pool.submit(() -> {
                 gate.await();
                 try {
                     b.reserve(order("ETHUSDT", "second"), BigDecimal.TEN, List.of(), balance);
                     return true;
-                } catch (OpenCapacityService.CapacityBlockedException blocked) { return false; }
+                } catch (OpenCapacityService.CapacityBlockedException blocked) {
+                    return false;
+                }
             });
             gate.countDown();
-            assertNotEquals(x.get(15, TimeUnit.SECONDS), y.get(15, TimeUnit.SECONDS),
-                "InnoDB account FOR UPDATE must serialize capacity admission");
+            assertNotEquals(x.get(15, TimeUnit.SECONDS), y.get(15, TimeUnit.SECONDS), "InnoDB account FOR UPDATE must serialize capacity admission");
         }
-        assertEquals(1L, jdbc.queryForObject(
-            "SELECT COUNT(*) FROM quant_open_capacity WHERE status='RESERVED'", Long.class));
+        assertEquals(1L, jdbc.queryForObject("SELECT COUNT(*) FROM quant_open_capacity WHERE status='RESERVED'", Long.class));
     }
 
     @Test
@@ -243,8 +252,7 @@ class MySqlAtomicConcurrencyTest {
               PRIMARY KEY (credential_id,symbol)
             ) ENGINE=InnoDB
             """);
-        var mapper = session(source, org.dromara.quant.execution.mapper.LiveOrderDispatchMapper.class)
-            .getMapper(org.dromara.quant.execution.mapper.LiveOrderDispatchMapper.class);
+        var mapper = session(source, org.dromara.quant.execution.mapper.LiveOrderDispatchMapper.class).getMapper(org.dromara.quant.execution.mapper.LiveOrderDispatchMapper.class);
         var txManager = new DataSourceTransactionManager(source);
         var first = new org.dromara.quant.execution.LiveOrderDispatcher(mapper, txManager);
         var second = new org.dromara.quant.execution.LiveOrderDispatcher(mapper, txManager);
@@ -252,13 +260,19 @@ class MySqlAtomicConcurrencyTest {
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             var one = pool.submit(() -> {
                 gate.await();
-                try { return first.begin(1L, "BTCUSDT", "node1", "OPEN", "cid-node1", 10L, 4L); }
-                catch (IllegalStateException blocked) { return null; }
+                try {
+                    return first.begin(1L, "BTCUSDT", "node1", "OPEN", "cid-node1", 10L, 4L);
+                } catch (IllegalStateException blocked) {
+                    return null;
+                }
             });
             var two = pool.submit(() -> {
                 gate.await();
-                try { return second.begin(1L, "BTCUSDT", "node2", "OPEN", "cid-node2", 20L, 5L); }
-                catch (IllegalStateException blocked) { return null; }
+                try {
+                    return second.begin(1L, "BTCUSDT", "node2", "OPEN", "cid-node2", 20L, 5L);
+                } catch (IllegalStateException blocked) {
+                    return null;
+                }
             });
             gate.countDown();
             var ticket1 = one.get(15, TimeUnit.SECONDS);
@@ -266,30 +280,22 @@ class MySqlAtomicConcurrencyTest {
             assertNotEquals(ticket1 == null, ticket2 == null);
             var winning = ticket1 == null ? ticket2 : ticket1;
             (ticket1 == null ? second : first).unknown(winning);
-            assertEquals(1L, jdbc.queryForObject(
-                "SELECT COUNT(*) FROM quant_order_dispatch_ticket WHERE dispatch_status='UNKNOWN'", Long.class));
-            assertThrows(IllegalStateException.class,
-                () -> first.begin(1L, "BTCUSDT", "restarted", "OPEN", "cid-restart", 10L, 6L));
+            assertEquals(1L, jdbc.queryForObject("SELECT COUNT(*) FROM quant_order_dispatch_ticket WHERE dispatch_status='UNKNOWN'", Long.class));
+            assertThrows(IllegalStateException.class, () -> first.begin(1L, "BTCUSDT", "restarted", "OPEN", "cid-restart", 10L, 6L));
             assertFalse(first.recoveredFromExchange(1L, "BTCUSDT", winning.key(), "wrong-client", 990L));
             String expectedClient = ticket1 == null ? "cid-node2" : "cid-node1";
             assertTrue(second.recoveredFromExchange(1L, "BTCUSDT", winning.key(), expectedClient, 990L));
             var resumed = first.begin(1L, "BTCUSDT", "new-key", "OPEN", "cid-new", 10L, 6L);
             first.notSent(resumed);
             var config = first.beginConfiguration(1L, "BTCUSDT", "config-first", "ISOLATED", 10);
-            assertThrows(IllegalStateException.class, () ->
-                second.begin(1L, "BTCUSDT", "during-config", "OPEN", "cid-during", 20L, 6L));
+            assertThrows(IllegalStateException.class, () -> second.begin(1L, "BTCUSDT", "during-config", "OPEN", "cid-during", 20L, 6L));
             first.configurationApplied(config);
-            assertEquals("CONFIG_APPLIED", mapper.ticketStatus(1L, "config-first"),
-                "Both account settings ACKs must atomically clear the dispatch slot");
-            assertThrows(IllegalStateException.class, () ->
-                second.beginConfiguration(1L, "BTCUSDT", "wrong-leverage", "ISOLATED", 20));
-            assertEquals(10, jdbc.queryForObject(
-                "SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'",
-                Integer.class));
+            assertEquals("CONFIG_APPLIED", mapper.ticketStatus(1L, "config-first"), "Both account settings ACKs must atomically clear the dispatch slot");
+            assertThrows(IllegalStateException.class, () -> second.beginConfiguration(1L, "BTCUSDT", "wrong-leverage", "ISOLATED", 20));
+            assertEquals(10, jdbc.queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
             var badConfig = second.beginConfiguration(1L, "BTCUSDT", "config-unknown", "ISOLATED", 10);
             second.unknown(badConfig);
-            assertThrows(IllegalStateException.class, () ->
-                first.begin(1L, "BTCUSDT", "after-unknown-config", "CLOSE", "cid-after", 10L, 6L));
+            assertThrows(IllegalStateException.class, () -> first.begin(1L, "BTCUSDT", "after-unknown-config", "CLOSE", "cid-after", 10L, 6L));
         }
     }
 
@@ -311,8 +317,8 @@ class MySqlAtomicConcurrencyTest {
               UNIQUE KEY uk_strategy_exchange_fill(credential_id,symbol,exchange_trade_id)
             ) ENGINE=InnoDB
             """);
-        var mapper = session(source, org.dromara.quant.execution.mapper.StrategyFillAllocationMapper.class)
-            .getMapper(org.dromara.quant.execution.mapper.StrategyFillAllocationMapper.class);
+        var mapper =
+            session(source, org.dromara.quant.execution.mapper.StrategyFillAllocationMapper.class).getMapper(org.dromara.quant.execution.mapper.StrategyFillAllocationMapper.class);
         var allocations = new org.dromara.quant.execution.StrategyFillAllocationService(mapper);
         var order = new org.dromara.quant.order.domain.QuantOrder();
         order.setCredentialId(1L);
@@ -320,16 +326,13 @@ class MySqlAtomicConcurrencyTest {
         order.setExchangeOrderId(500L);
         order.setStrategyId(10L);
         order.setStrategyInstanceId(20L);
-        var fill = new org.dromara.quant.exchange.ExchangeGateway.TradeSnapshot(
-            "BTCUSDT", 9007199254740993L, 500L, "BUY",
-            new BigDecimal("1.25"), new BigDecimal("100"), new BigDecimal("0.01"),
-            BigDecimal.ZERO, Instant.parse("2026-10-14T03:00:00Z"));
+        var fill = new org.dromara.quant.exchange.ExchangeGateway.TradeSnapshot("BTCUSDT", 9007199254740993L, 500L, "BUY", new BigDecimal("1.25"), new BigDecimal("100"),
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-14T03:00:00Z"));
         allocations.allocate(fill, order, 1L);
         allocations.allocate(fill, order, 1L);
         order.setStrategyInstanceId(21L);
         assertThrows(IllegalStateException.class, () -> allocations.allocate(fill, order, 1L));
-        assertEquals(1L, db.queryForObject(
-            "SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
+        assertEquals(1L, db.queryForObject("SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
     }
 
     @Test
@@ -354,9 +357,8 @@ class MySqlAtomicConcurrencyTest {
               exchange_order_id,client_order_id,side,order_type,status,executed_quantity,updated_at)
             VALUES (1,1,10,20,'BTCUSDT',99,'cid-99','BUY','LIMIT','PARTIALLY_FILLED',0.7,NOW())
             """);
-        var mapper = session(source, org.dromara.quant.order.mapper.QuantOrderMapper.class)
-            .getMapper(org.dromara.quant.order.mapper.QuantOrderMapper.class);
-        java.util.function.BiFunction<String,String,org.dromara.quant.order.domain.QuantOrder> fact = (status,qty) -> {
+        var mapper = session(source, org.dromara.quant.order.mapper.QuantOrderMapper.class).getMapper(org.dromara.quant.order.mapper.QuantOrderMapper.class);
+        java.util.function.BiFunction<String, String, org.dromara.quant.order.domain.QuantOrder> fact = (status, qty) -> {
             var order = new org.dromara.quant.order.domain.QuantOrder();
             order.setId(1L);
             order.setCredentialId(1L);
@@ -376,23 +378,17 @@ class MySqlAtomicConcurrencyTest {
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             var filled = pool.submit(() -> {
                 start.await();
-                return mapper.mergeExchangeFactIfMonotonic(fact.apply("FILLED","1"));
+                return mapper.mergeExchangeFactIfMonotonic(fact.apply("FILLED", "1"));
             });
             var lateNew = pool.submit(() -> {
                 start.await();
-                return mapper.mergeExchangeFactIfMonotonic(fact.apply("NEW","0.9"));
+                return mapper.mergeExchangeFactIfMonotonic(fact.apply("NEW", "0.9"));
             });
             start.countDown();
             assertEquals(1, filled.get(15, TimeUnit.SECONDS));
             assertEquals(0, lateNew.get(15, TimeUnit.SECONDS));
         }
         assertEquals("FILLED", db.queryForObject("SELECT status FROM quant_order WHERE id=1", String.class));
-        assertEquals(0, BigDecimal.ONE.compareTo(db.queryForObject(
-            "SELECT executed_quantity FROM quant_order WHERE id=1", BigDecimal.class)));
-    }
-
-    private static OpenPositionCommand order(String symbol, String key) {
-        return new OpenPositionCommand(1L, 10L, 100L, null, symbol, "BUY", "MARKET",
-            BigDecimal.ONE, BigDecimal.TEN, null, key, "TESTNET", null, 1, "ISOLATED", null);
+        assertEquals(0, BigDecimal.ONE.compareTo(db.queryForObject("SELECT executed_quantity FROM quant_order WHERE id=1", BigDecimal.class)));
     }
 }

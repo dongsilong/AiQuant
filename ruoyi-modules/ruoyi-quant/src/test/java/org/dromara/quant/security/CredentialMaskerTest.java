@@ -1,9 +1,9 @@
 package org.dromara.quant.security;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @Tag("dev")
 class CredentialMaskerTest {

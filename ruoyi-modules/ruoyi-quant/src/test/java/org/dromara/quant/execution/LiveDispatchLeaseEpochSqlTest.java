@@ -12,14 +12,15 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.util.Objects;
 import java.util.UUID;
-import static org.junit.jupiter.api.Assertions.*;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Tag("dev")
 class LiveDispatchLeaseEpochSqlTest {
     @Test
     void rejectsStaleEpochAndExpiredLeaseAtAtomicClaim() throws Exception {
-        var ds = new DriverManagerDataSource(
-            "jdbc:h2:mem:live_lease_claim_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+        var ds = new DriverManagerDataSource("jdbc:h2:mem:live_lease_claim_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         var jdbc = new JdbcTemplate(ds);
         jdbc.execute("""
             CREATE TABLE quant_live_dispatch_guard (
@@ -46,21 +47,17 @@ class LiveDispatchLeaseEpochSqlTest {
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(ds);
         factory.setConfiguration(config);
-        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()))
-            .getMapper(LiveOrderDispatchMapper.class);
+        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(LiveOrderDispatchMapper.class);
         var dispatcher = new LiveOrderDispatcher(mapper, new DataSourceTransactionManager(ds));
         jdbc.update("INSERT INTO quant_strategy_runtime_lease VALUES (1,'BTCUSDT',50,7,'node-a',DATEADD('MINUTE',5,CURRENT_TIMESTAMP))");
-        assertThrows(IllegalStateException.class, () ->
-            dispatcher.begin(1L, "BTCUSDT", "stale", "OPEN", "c-stale", 50L, 6L));
+        assertThrows(IllegalStateException.class, () -> dispatcher.begin(1L, "BTCUSDT", "stale", "OPEN", "c-stale", 50L, 6L));
         assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM quant_order_dispatch_ticket", Long.class));
         jdbc.update("UPDATE quant_strategy_runtime_lease SET lease_epoch=8, instance_id=51, owner_token='node-b'");
-        assertThrows(IllegalStateException.class, () ->
-            dispatcher.begin(1L, "BTCUSDT", "old-owner", "OPEN", "c-old", 50L, 7L));
+        assertThrows(IllegalStateException.class, () -> dispatcher.begin(1L, "BTCUSDT", "old-owner", "OPEN", "c-old", 50L, 7L));
         var ticket = dispatcher.begin(1L, "BTCUSDT", "current", "OPEN", "c-current", 51L, 8L);
         assertEquals("DISPATCHING", mapper.ticketStatus(1L, "current"));
         dispatcher.unknown(ticket);
-        assertThrows(IllegalStateException.class, () ->
-            dispatcher.begin(1L, "BTCUSDT", "new", "OPEN", "c-new", 51L, 8L));
+        assertThrows(IllegalStateException.class, () -> dispatcher.begin(1L, "BTCUSDT", "new", "OPEN", "c-new", 51L, 8L));
         assertEquals("current", jdbc.queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
     }
 }

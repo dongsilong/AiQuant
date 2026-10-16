@@ -13,15 +13,13 @@ import java.math.BigDecimal;
 import java.util.Objects;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Tag("dev")
 class StrategyCloseOwnershipMapperTest {
     @Test
     void databaseJoinRejectsForeignAccountStrategyAndSymbol() throws Exception {
-        var source = new DriverManagerDataSource(
-            "jdbc:h2:mem:close_owner_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE",
-            "sa", "");
+        var source = new DriverManagerDataSource("jdbc:h2:mem:close_owner_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE", "sa", "");
         var jdbc = new JdbcTemplate(source);
         jdbc.execute("CREATE TABLE quant_strategy_instance(id BIGINT,credential_id BIGINT,strategy_id BIGINT,strategy_symbol_id BIGINT)");
         jdbc.execute("CREATE TABLE quant_strategy_symbol(id BIGINT,symbol_id BIGINT)");
@@ -45,16 +43,12 @@ class StrategyCloseOwnershipMapperTest {
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setConfiguration(config);
-        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()))
-            .getMapper(StrategyCloseOwnershipMapper.class);
+        var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(StrategyCloseOwnershipMapper.class);
         var guard = new StrategyCloseOwnershipGuard(mapper);
 
         guard.requireOwnedClose(11L, 12L, 13L, "BTCUSDT", "SELL", new BigDecimal("1.25"), "exit-1");
-        assertThrows(IllegalStateException.class, () ->
-            guard.requireOwnedClose(99L, 12L, 13L, "BTCUSDT", "SELL", BigDecimal.ONE, "exit-1"));
-        assertThrows(IllegalStateException.class, () ->
-            guard.requireOwnedClose(11L, 99L, 13L, "BTCUSDT", "SELL", BigDecimal.ONE, "exit-1"));
-        assertThrows(IllegalStateException.class, () ->
-            guard.requireOwnedClose(11L, 12L, 13L, "ETHUSDT", "SELL", BigDecimal.ONE, "exit-1"));
+        assertThrows(IllegalStateException.class, () -> guard.requireOwnedClose(99L, 12L, 13L, "BTCUSDT", "SELL", BigDecimal.ONE, "exit-1"));
+        assertThrows(IllegalStateException.class, () -> guard.requireOwnedClose(11L, 99L, 13L, "BTCUSDT", "SELL", BigDecimal.ONE, "exit-1"));
+        assertThrows(IllegalStateException.class, () -> guard.requireOwnedClose(11L, 12L, 13L, "ETHUSDT", "SELL", BigDecimal.ONE, "exit-1"));
     }
 }

@@ -6,6 +6,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -13,14 +14,18 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.*;
 
-/** 日志线程专用数据库访问；所有查询只读取交易系统已经取得的事实。 */
+/**
+ * 日志线程专用数据库访问；所有查询只读取交易系统已经取得的事实。
+ */
 @Repository
 public class TradeDecisionLogRepository {
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+    private static final String COLUMNS = "event_key,record_type,credential_id,account_name,run_mode,strategy_id,strategy_instance_id,strategy_name,symbol,operation,direction," +
+        "status,reason_code,reason,angle,threshold,kline_time,quantity,price,margin,idempotency_key,order_id,client_order_id,event_time,trade_time,repeat_count,last_time";
+    private static final String VALUES = ":eventKey,:recordType,:credentialId,:accountName,:runMode,:strategyId,:strategyInstanceId,:strategyName,:symbol,:operation,:direction," +
+        ":status,:reasonCode,:reason,:angle,:threshold,:klineTime,:quantity,:price,:margin,:idempotencyKey,:orderId,:clientOrderId,:eventTime,:tradeTime,1,:eventTime";
     private final JdbcTemplate jdbc;
     private final NamedParameterJdbcTemplate named;
-    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
-    private static final String COLUMNS = "event_key,record_type,credential_id,account_name,run_mode,strategy_id,strategy_instance_id,strategy_name,symbol,operation,direction,status,reason_code,reason,angle,threshold,kline_time,quantity,price,margin,idempotency_key,order_id,client_order_id,event_time,trade_time,repeat_count,last_time";
-    private static final String VALUES = ":eventKey,:recordType,:credentialId,:accountName,:runMode,:strategyId,:strategyInstanceId,:strategyName,:symbol,:operation,:direction,:status,:reasonCode,:reason,:angle,:threshold,:klineTime,:quantity,:price,:margin,:idempotencyKey,:orderId,:clientOrderId,:eventTime,:tradeTime,1,:eventTime";
 
     public TradeDecisionLogRepository(JdbcTemplate shared) {
         jdbc = new JdbcTemplate(Objects.requireNonNull(shared.getDataSource()));
@@ -28,19 +33,103 @@ public class TradeDecisionLogRepository {
         named = new NamedParameterJdbcTemplate(jdbc);
     }
 
+    private static void add(StringBuilder sql, List<Object> args, String column, Object value, boolean like) {
+        if (value == null || value.toString().isBlank()) {
+            return;
+        }
+        sql.append(" AND ").append(column).append(like ? " LIKE ?" : "=?");
+        args.add(like ? "%" + value + "%" : value);
+    }
+
+    /**
+     * 生成执行事件的稳定去重标识。
+     */
+    public static String executionKey(Long credentialId, String key) {
+        return "X:" + credentialId + ":" + key;
+    }
+
+    static String key(String value) {
+        if (value == null) {
+            throw new IllegalArgumentException("日志事件键为空");
+        }
+        try {
+            return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
+    static String direction(String operation, String side) {
+        if (side == null || !("BUY".equalsIgnoreCase(side) || "SELL".equalsIgnoreCase(side))) {
+            return "UNKNOWN";
+        }
+        if (!"OPEN".equals(operation) && !"CLOSE".equals(operation)) {
+            return "UNKNOWN";
+        }
+        return "OPEN".equals(operation) ? ("BUY".equalsIgnoreCase(side) ? "LONG" : "SHORT") : ("BUY".equalsIgnoreCase(side) ? "SHORT" : "LONG");
+    }
+
+    private static BigDecimal decimal(String value) {
+        return value == null || value.isBlank() ? null : new BigDecimal(value);
+    }
+
+    private static BigDecimal asDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof BigDecimal decimal) {
+            return decimal;
+        }
+        if (value instanceof Number number) {
+            return new BigDecimal(number.toString());
+        }
+        return new BigDecimal(value.toString());
+    }
+
+    private static Timestamp asTimestamp(Object value) {
+        if (value instanceof Timestamp timestamp) {
+            return timestamp;
+        }
+        if (value instanceof LocalDateTime time) {
+            return Timestamp.valueOf(time);
+        }
+        if (value instanceof Instant instant) {
+            return Timestamp.from(instant);
+        }
+        throw new IllegalArgumentException("数据库返回了不支持的日期类型: " + (value == null ? "null" : value.getClass().getName()));
+    }
+
+    private static String text(Map<String, Object> row, String key) {
+        return Objects.toString(row.get(key), null);
+    }
+
+    private static Long number(Map<String, Object> row, String key) {
+        Object v = row.get(key);
+        return v == null ? null : Long.valueOf(v.toString());
+    }
+
+    private static Timestamp timestamp(Instant instant) {
+        return instant == null ? null : Timestamp.valueOf(LocalDateTime.ofInstant(instant, ZoneId.systemDefault()));
+    }
+
+    /**
+     * 在单个批次中写入已脱敏的决策日志事件。
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void writeBatch(List<DecisionLogEvent> batch) {
-        Map<List<Object>,List<Map<String,Object>>> lookupCache=new HashMap<>();
+        Map<List<Object>, List<Map<String, Object>>> lookupCache = new HashMap<>();
         writeEvaluations(batch);
         for (DecisionLogEvent original : batch) {
-            if ("EVALUATION".equals(original.recordType())) { continue; }
+            if ("EVALUATION".equals(original.recordType())) {
+                continue;
+            }
             DecisionLogEvent event = "PRIVATE".equals(original.recordType()) ? privateEvent(original) : original;
-            if (event == null) { continue; }
-            event = enrich(event,lookupCache);
-            if ("ORDER".equals(event.recordType()) && event.cumulativeQuantity()!=null && event.cumulativeQuantity().signum()>0
-                && event.averagePrice()!=null && event.averagePrice().signum()>0) {
-                event=event.toBuilder().quantity(event.cumulativeQuantity()).price(event.averagePrice()).tradeTime(event.eventTime())
-                    .status(event.orderStatus()).build();
+            if (event == null) {
+                continue;
+            }
+            event = enrich(event, lookupCache);
+            if ("ORDER".equals(event.recordType()) && event.cumulativeQuantity() != null && event.cumulativeQuantity().signum() > 0 && event.averagePrice() != null && event.averagePrice().signum() > 0) {
+                event = event.toBuilder().quantity(event.cumulativeQuantity()).price(event.averagePrice()).tradeTime(event.eventTime()).status(event.orderStatus()).build();
             }
             if ("FILL".equals(event.recordType())) {
                 writeFill(event);
@@ -52,47 +141,44 @@ public class TradeDecisionLogRepository {
     }
 
     private void writeEvaluations(List<DecisionLogEvent> batch) {
-        Map<String,Map<String,Object>> groups = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> groups = new LinkedHashMap<>();
         for (DecisionLogEvent e : batch) {
-            if (!"EVALUATION".equals(e.recordType())) { continue; }
-            Map<String,Object> values = parameters(e);
-            Map<String,Object> previous = groups.get(e.eventKey());
+            if (!"EVALUATION".equals(e.recordType())) {
+                continue;
+            }
+            Map<String, Object> values = parameters(e);
+            Map<String, Object> previous = groups.get(e.eventKey());
             values.put("count", previous == null ? 1L : (Long) previous.get("count") + 1);
             values.put("firstTime", previous == null ? values.get("eventTime") : previous.get("firstTime"));
-            groups.put(e.eventKey(),values);
+            groups.put(e.eventKey(), values);
         }
-        if (groups.isEmpty()) { return; }
+        if (groups.isEmpty()) {
+            return;
+        }
         String values = VALUES.replace(":eventTime,:tradeTime,1,:eventTime", ":firstTime,:tradeTime,:count,:eventTime");
-        named.batchUpdate("INSERT INTO quant_trade_decision_log ("+COLUMNS+") VALUES ("+values+") ON DUPLICATE KEY UPDATE repeat_count=repeat_count+VALUES(repeat_count),last_time=GREATEST(last_time,VALUES(last_time)),price=VALUES(price),angle=VALUES(angle),reason=VALUES(reason)",
-            groups.values().toArray(Map[]::new));
+        named.batchUpdate("INSERT INTO quant_trade_decision_log (" + COLUMNS + ") VALUES (" + values + ") ON DUPLICATE KEY UPDATE repeat_count=repeat_count+VALUES(repeat_count)," +
+            "last_time=GREATEST(last_time,VALUES(last_time)),price=VALUES(price),angle=VALUES(angle),reason=VALUES(reason)", groups.values().toArray(Map[]::new));
     }
 
     private DecisionLogEvent privateEvent(DecisionLogEvent original) {
         try {
             var json = JSON.readTree(original.rawEvent());
             var o = json.path("o");
-            if (o.isMissingNode()) { return null; }
+            if (o.isMissingNode()) {
+                return null;
+            }
             String status = o.path("X").asText();
             boolean fill = "TRADE".equals(o.path("x").asText()) && o.path("t").asLong(-1) >= 0;
-            return original.toBuilder().recordType(fill ? "FILL" : "ORDER").symbol(o.path("s").asText())
-                .orderId(o.path("i").asLong()).clientOrderId(o.path("c").asText()).orderStatus(status)
-                .status(status).cumulativeQuantity(decimal(o.path("z").asText(null))).averagePrice(decimal(o.path("ap").asText(null)))
-                .direction(o.path("S").asText()).reduceOnly(o.path("R").asBoolean(false))
-                .tradeId(fill ? o.path("t").asLong() : null)
-                .quantity(fill ? decimal(o.path("l").asText(null)) : null)
-                .price(fill ? decimal(o.path("L").asText(null)) : null)
-                .tradeTime(fill ? Instant.ofEpochMilli(o.path("T").asLong(json.path("T").asLong())) : null)
-                .eventTime(Instant.ofEpochMilli(json.path("E").asLong(System.currentTimeMillis())))
-                .rawEvent(null).build();
+            return original.toBuilder().recordType(fill ? "FILL" : "ORDER").symbol(o.path("s").asText()).orderId(o.path("i").asLong()).clientOrderId(o.path("c").asText()).orderStatus(status).status(status).cumulativeQuantity(decimal(o.path("z").asText(null))).averagePrice(decimal(o.path("ap").asText(null))).direction(o.path("S").asText()).reduceOnly(o.path("R").asBoolean(false)).tradeId(fill ? o.path("t").asLong() : null).quantity(fill ? decimal(o.path("l").asText(null)) : null).price(fill ? decimal(o.path("L").asText(null)) : null).tradeTime(fill ? Instant.ofEpochMilli(o.path("T").asLong(json.path("T").asLong())) : null).eventTime(Instant.ofEpochMilli(json.path("E").asLong(System.currentTimeMillis()))).rawEvent(null).build();
         } catch (java.io.IOException | IllegalArgumentException ex) {
             throw new IllegalArgumentException("无法解析订单日志事件", ex);
         }
     }
 
-    private DecisionLogEvent enrich(DecisionLogEvent e, Map<List<Object>,List<Map<String,Object>>> lookupCache) {
+    private DecisionLogEvent enrich(DecisionLogEvent e, Map<List<Object>, List<Map<String, Object>>> lookupCache) {
         var builder = e.toBuilder();
-        List<Map<String, Object>> previous = e.eventKey() == null ? List.of() : jdbc.queryForList(
-            "SELECT account_name,strategy_name,run_mode FROM quant_trade_decision_log WHERE event_key=?", key(e.eventKey()));
+        List<Map<String, Object>> previous = e.eventKey() == null ? List.of() : jdbc.queryForList("SELECT account_name,strategy_name,run_mode FROM quant_trade_decision_log WHERE" +
+            " event_key=?", key(e.eventKey()));
         String account = e.accountName();
         String strategy = e.strategyName();
         String mode = e.runMode();
@@ -102,10 +188,14 @@ public class TradeDecisionLogRepository {
             mode = text(previous.getFirst(), "run_mode");
         }
         if (account == null || mode == null) {
-            var credential = cached(lookupCache,"SELECT account_name,run_mode FROM quant_credential WHERE id=?", e.credentialId());
+            var credential = cached(lookupCache, "SELECT account_name,run_mode FROM quant_credential WHERE id=?", e.credentialId());
             if (!credential.isEmpty()) {
-                if (account == null) { account = text(credential.getFirst(), "account_name"); }
-                if (mode == null) { mode = text(credential.getFirst(), "run_mode"); }
+                if (account == null) {
+                    account = text(credential.getFirst(), "account_name");
+                }
+                if (mode == null) {
+                    mode = text(credential.getFirst(), "run_mode");
+                }
             }
         }
         Long strategyId = e.strategyId();
@@ -117,8 +207,8 @@ public class TradeDecisionLogRepository {
         String reasonCode = e.reasonCode();
         String eventKey = e.eventKey();
         if ("FILL".equals(e.recordType()) || "ORDER".equals(e.recordType())) {
-            var records = cached(lookupCache,"SELECT * FROM quant_execution_record WHERE credential_id=? AND symbol=? AND operation_type IN ('OPEN','CLOSE') AND (exchange_order_id=? OR client_order_id=?) ORDER BY created_at DESC LIMIT 1",
-                e.credentialId(), e.symbol(), e.orderId(), e.clientOrderId());
+            var records = cached(lookupCache, "SELECT * FROM quant_execution_record WHERE credential_id=? AND symbol=? AND operation_type IN ('OPEN','CLOSE') AND " +
+                "(exchange_order_id=? OR client_order_id=?) ORDER BY created_at DESC LIMIT 1", e.credentialId(), e.symbol(), e.orderId(), e.clientOrderId());
             if (!records.isEmpty()) {
                 var record = records.getFirst();
                 strategyId = number(record, "strategy_id");
@@ -127,18 +217,21 @@ public class TradeDecisionLogRepository {
                 executionKey = text(record, "idempotency_key");
                 eventKey = executionKey(e.credentialId(), executionKey);
             } else {
-                var orders = cached(lookupCache,"SELECT strategy_id,strategy_instance_id,reduce_only,position_side,status FROM quant_order WHERE credential_id=? AND symbol=? AND exchange_order_id=? LIMIT 1",
-                    e.credentialId(), e.symbol(), e.orderId());
+                var orders = cached(lookupCache, "SELECT strategy_id,strategy_instance_id,reduce_only,position_side,status FROM quant_order WHERE credential_id=? AND symbol=? " +
+                    "AND exchange_order_id=? LIMIT 1", e.credentialId(), e.symbol(), e.orderId());
                 if (!orders.isEmpty()) {
                     var order = orders.getFirst();
                     strategyId = number(order, "strategy_id");
                     instanceId = number(order, "strategy_instance_id");
                     Object reducing = order.get("reduce_only");
-                    if (reducing != null) { operation = (Boolean.TRUE.equals(reducing) || "1".equals(reducing.toString())) ? "CLOSE" : "OPEN"; }
+                    if (reducing != null) {
+                        operation = (Boolean.TRUE.equals(reducing) || "1".equals(reducing.toString())) ? "CLOSE" : "OPEN";
+                    }
                 }
                 // 保护单通过本地账本和持仓关联策略；绝不按交易对猜测实例归属。
-                var protections = cached(lookupCache,"SELECT p.protection_type,s.instance_id,i.strategy_id FROM quant_protection_order p LEFT JOIN quant_strategy_position_state s ON s.position_id=p.position_id LEFT JOIN quant_strategy_instance i ON i.id=s.instance_id WHERE p.credential_id=? AND p.symbol=? AND (p.exchange_order_id=? OR p.client_order_id=?) LIMIT 1",
-                    e.credentialId(), e.symbol(), e.orderId(), e.clientOrderId());
+                var protections = cached(lookupCache, "SELECT p.protection_type,s.instance_id,i.strategy_id FROM quant_protection_order p LEFT JOIN quant_strategy_position_state" +
+                    " s ON s.position_id=p.position_id LEFT JOIN quant_strategy_instance i ON i.id=s.instance_id WHERE p.credential_id=? AND p.symbol=? AND (p" +
+                    ".exchange_order_id=? OR p.client_order_id=?) LIMIT 1", e.credentialId(), e.symbol(), e.orderId(), e.clientOrderId());
                 if (!protections.isEmpty()) {
                     var protection = protections.getFirst();
                     strategyId = number(protection, "strategy_id");
@@ -147,7 +240,9 @@ public class TradeDecisionLogRepository {
                     reasonCode = "EXCHANGE_PROTECTION";
                     reason = "交易所保护单触发：" + text(protection, "protection_type");
                 }
-                if (operation == null && e.reduceOnly() != null) { operation = e.reduceOnly() ? "CLOSE" : "UNKNOWN"; }
+                if (operation == null && e.reduceOnly() != null) {
+                    operation = e.reduceOnly() ? "CLOSE" : "UNKNOWN";
+                }
                 eventKey = "O:" + e.credentialId() + ":" + e.symbol() + ":" + e.orderId();
             }
             var existing = jdbc.queryForList("SELECT * FROM quant_trade_decision_log WHERE event_key=?", key(eventKey));
@@ -155,39 +250,51 @@ public class TradeDecisionLogRepository {
                 var row = existing.getFirst();
                 account = text(row, "account_name");
                 mode = text(row, "run_mode");
-                if (!"EXTERNAL_UNKNOWN".equals(text(row,"reason_code"))) {
+                if (!"EXTERNAL_UNKNOWN".equals(text(row, "reason_code"))) {
                     strategy = text(row, "strategy_name");
-                    strategyId = number(row, "strategy_id"); instanceId = number(row, "strategy_instance_id");
-                    operation = text(row, "operation"); direction = text(row, "direction");
-                    reason = text(row, "reason"); reasonCode = text(row, "reason_code");
-                } else { direction = direction(operation,direction); }
+                    strategyId = number(row, "strategy_id");
+                    instanceId = number(row, "strategy_instance_id");
+                    operation = text(row, "operation");
+                    direction = text(row, "direction");
+                    reason = text(row, "reason");
+                    reasonCode = text(row, "reason_code");
+                } else {
+                    direction = direction(operation, direction);
+                }
             } else {
                 direction = direction(operation, direction);
             }
-            if (reason == null) { reason = "外部交易，触发原因未确认"; reasonCode = "EXTERNAL_UNKNOWN"; }
+            if (reason == null) {
+                reason = "外部交易，触发原因未确认";
+                reasonCode = "EXTERNAL_UNKNOWN";
+            }
         }
         if ("PROTECTION".equals(e.recordType())) {
-            var rows = cached(lookupCache,"SELECT i.strategy_id,i.id instance_id FROM quant_protection_order p JOIN quant_strategy_position_state s ON s.position_id=p.position_id JOIN quant_strategy_instance i ON i.id=s.instance_id WHERE p.credential_id=? AND p.symbol=? AND p.client_order_id=? LIMIT 1",
-                e.credentialId(),e.symbol(),e.clientOrderId());
-            if (!rows.isEmpty()) { strategyId=number(rows.getFirst(),"strategy_id"); instanceId=number(rows.getFirst(),"instance_id"); }
+            var rows = cached(lookupCache, "SELECT i.strategy_id,i.id instance_id FROM quant_protection_order p JOIN quant_strategy_position_state s ON s.position_id=p" +
+                ".position_id JOIN quant_strategy_instance i ON i.id=s.instance_id WHERE p.credential_id=? AND p.symbol=? AND p.client_order_id=? LIMIT 1", e.credentialId(),
+                e.symbol(), e.clientOrderId());
+            if (!rows.isEmpty()) {
+                strategyId = number(rows.getFirst(), "strategy_id");
+                instanceId = number(rows.getFirst(), "instance_id");
+            }
             builder.recordType("EXECUTION");
         }
         if (strategy == null) {
             if (strategyId != null) {
-                var names = cached(lookupCache,"SELECT strategy_name FROM quant_strategy WHERE id=?", strategyId);
+                var names = cached(lookupCache, "SELECT strategy_name FROM quant_strategy WHERE id=?", strategyId);
                 strategy = names.isEmpty() ? "策略已删除（" + strategyId + "）" : text(names.getFirst(), "strategy_name");
             } else {
                 strategy = executionKey != null ? "手动操作" : "外部交易／策略未确认";
             }
         }
-        return builder.accountName(account).runMode(mode).strategyId(strategyId).strategyInstanceId(instanceId).strategyName(strategy)
-            .operation(operation).direction(direction).idempotencyKey(executionKey).eventKey(eventKey)
-            .reason(reason).reasonCode(reasonCode).eventTime(e.eventTime() == null ? Instant.now() : e.eventTime()).build();
+        return builder.accountName(account).runMode(mode).strategyId(strategyId).strategyInstanceId(instanceId).strategyName(strategy).operation(operation).direction(direction).idempotencyKey(executionKey).eventKey(eventKey).reason(reason).reasonCode(reasonCode).eventTime(e.eventTime() == null ? Instant.now() : e.eventTime()).build();
     }
 
-    private List<Map<String,Object>> cached(Map<List<Object>,List<Map<String,Object>>> cache,String sql,Object... args) {
-        List<Object> cacheKey=new ArrayList<>(); cacheKey.add(sql); cacheKey.addAll(Arrays.asList(args));
-        return cache.computeIfAbsent(cacheKey,ignored -> jdbc.queryForList(sql,args));
+    private List<Map<String, Object>> cached(Map<List<Object>, List<Map<String, Object>>> cache, String sql, Object... args) {
+        List<Object> cacheKey = new ArrayList<>();
+        cacheKey.add(sql);
+        cacheKey.addAll(Arrays.asList(args));
+        return cache.computeIfAbsent(cacheKey, ignored -> jdbc.queryForList(sql, args));
     }
 
     private void write(DecisionLogEvent e) {
@@ -200,159 +307,195 @@ public class TradeDecisionLogRepository {
         }
         var old = rows.getFirst();
         boolean actual = old.get("trade_time") != null;
-        boolean terminal = Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH").contains(Objects.toString(old.get("status"),""));
-        boolean incomingTerminal = Set.of("CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH").contains(Objects.toString(e.status(),""));
-        boolean newer = timestamp(e.eventTime()).compareTo((Timestamp)old.get("last_time")) >= 0;
-        String status = e.tradeTime() != null || (!terminal && incomingTerminal && newer)
-            || (!actual && !terminal && newer) ? e.status() : text(old,"status");
-        if (terminal && !"FILLED".equals(e.status())) { status = text(old,"status"); }
-        boolean olderFill = actual && e.quantity()!=null && old.get("quantity") instanceof BigDecimal oldQuantity
-            && e.quantity().compareTo(oldQuantity)<0;
-        if (olderFill) { status=text(old,"status"); }
-        if ("EXTERNAL_UNKNOWN".equals(text(old,"reason_code")) && !"EXTERNAL_UNKNOWN".equals(e.reasonCode())) {
-            jdbc.update("UPDATE quant_trade_decision_log SET strategy_id=?,strategy_instance_id=?,strategy_name=?,operation=? WHERE event_key=?",
-                e.strategyId(),e.strategyInstanceId(),e.strategyName(),e.operation(),key(e.eventKey()));
+        boolean terminal = Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH").contains(Objects.toString(old.get("status"), ""));
+        boolean incomingTerminal = Set.of("CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH").contains(Objects.toString(e.status(), ""));
+        boolean newer = timestamp(e.eventTime()).compareTo(asTimestamp(old.get("last_time"))) >= 0;
+        String status = e.tradeTime() != null || (!terminal && incomingTerminal && newer) || (!actual && !terminal && newer) ? e.status() : text(old, "status");
+        if (terminal && !"FILLED".equals(e.status())) {
+            status = text(old, "status");
+        }
+        boolean olderFill = actual && e.quantity() != null && old.get("quantity") instanceof BigDecimal oldQuantity && e.quantity().compareTo(oldQuantity) < 0;
+        if (olderFill) {
+            status = text(old, "status");
+        }
+        if ("EXTERNAL_UNKNOWN".equals(text(old, "reason_code")) && !"EXTERNAL_UNKNOWN".equals(e.reasonCode())) {
+            jdbc.update("UPDATE quant_trade_decision_log SET strategy_id=?,strategy_instance_id=?,strategy_name=?,operation=? WHERE event_key=?", e.strategyId(),
+                e.strategyInstanceId(), e.strategyName(), e.operation(), key(e.eventKey()));
         }
         boolean preserveReason = "EXECUTION_RESULT".equals(e.reasonCode());
         // 首次确认成交时清除计划数值；缺少成交均价时留空，不能把参考价标为实际成交价。
         boolean firstActual = !actual && e.tradeTime() != null;
         Object quantity = firstActual ? e.quantity() : (olderFill || actual && e.tradeTime() == null || e.quantity() == null) ? old.get("quantity") : e.quantity();
         // 累计数量增加但均价未知时，旧均价不能代表新的累计成交。
-        boolean growingActual = actual && e.tradeTime() != null && e.quantity() != null
-            && (!(old.get("quantity") instanceof BigDecimal oldQuantity) || e.quantity().compareTo(oldQuantity) > 0);
-        Object price = firstActual || growingActual ? e.price()
-            : (olderFill || actual && e.tradeTime() == null || e.price() == null) ? old.get("price") : e.price();
-        jdbc.update("UPDATE quant_trade_decision_log SET status=?,reason=?,reason_code=?,order_id=COALESCE(?,order_id),client_order_id=COALESCE(?,client_order_id),quantity=?,price=?,trade_time=COALESCE(?,trade_time),direction=COALESCE(?,direction),margin=COALESCE(?,margin),last_time=GREATEST(last_time,?) WHERE event_key=?",
-            status, preserveReason ? old.get("reason") : e.reason(), preserveReason ? old.get("reason_code") : e.reasonCode(),
-            e.orderId(),e.clientOrderId(), quantity, price, olderFill ? null : timestamp(e.tradeTime()),e.direction(),e.margin(),timestamp(e.eventTime()),key(e.eventKey()));
+        boolean growingActual =
+            actual && e.tradeTime() != null && e.quantity() != null && (!(old.get("quantity") instanceof BigDecimal oldQuantity) || e.quantity().compareTo(oldQuantity) > 0);
+        Object price = firstActual || growingActual ? e.price() : (olderFill || actual && e.tradeTime() == null || e.price() == null) ? old.get("price") : e.price();
+        jdbc.update("UPDATE quant_trade_decision_log SET status=?,reason=?,reason_code=?,order_id=COALESCE(?,order_id),client_order_id=COALESCE(?,client_order_id),quantity=?," +
+            "price=?,trade_time=COALESCE(?,trade_time),direction=COALESCE(?,direction),margin=COALESCE(?,margin),last_time=GREATEST(last_time,?) WHERE event_key=?", status,
+            preserveReason ? old.get("reason") : e.reason(), preserveReason ? old.get("reason_code") : e.reasonCode(), e.orderId(), e.clientOrderId(), quantity, price,
+            olderFill ? null : timestamp(e.tradeTime()), e.direction(), e.margin(), timestamp(e.eventTime()), key(e.eventKey()));
     }
 
     private void migrateOrderFacts(DecisionLogEvent e) {
-        if (e.idempotencyKey() == null || e.orderId() == null) { return; }
-        String source=key("O:"+e.credentialId()+":"+e.symbol()+":"+e.orderId());
-        String target=key(e.eventKey());
-        if (source.equals(target)) { return; }
-        var sources=jdbc.queryForList("SELECT * FROM quant_trade_decision_log WHERE event_key=?",source);
+        if (e.idempotencyKey() == null || e.orderId() == null) {
+            return;
+        }
+        String source = key("O:" + e.credentialId() + ":" + e.symbol() + ":" + e.orderId());
+        String target = key(e.eventKey());
+        if (source.equals(target)) {
+            return;
+        }
+        var sources = jdbc.queryForList("SELECT * FROM quant_trade_decision_log WHERE event_key=?", source);
         if (!sources.isEmpty()) {
-            var row=sources.getFirst();
-            if (row.get("trade_time")!=null) {
-                write(e.toBuilder().recordType("EXECUTION").quantity((BigDecimal)row.get("quantity"))
-                    .price((BigDecimal)row.get("price")).tradeTime(((Timestamp)row.get("trade_time")).toInstant())
-                    .status(text(row,"status")).build());
+            var row = sources.getFirst();
+            if (row.get("trade_time") != null) {
+                write(e.toBuilder().recordType("EXECUTION").quantity(asDecimal(row.get("quantity"))).price(asDecimal(row.get("price"))).tradeTime(asTimestamp(row.get("trade_time"
+                )).toInstant()).status(text(row, "status")).build());
             }
         }
-        jdbc.update("UPDATE quant_trade_decision_log SET parent_key=? WHERE parent_key=? AND record_type='FILL'",target,source);
+        jdbc.update("UPDATE quant_trade_decision_log SET parent_key=? WHERE parent_key=? AND record_type='FILL'", target, source);
         // Only remove the old display row after its facts have been transferred.
-        jdbc.update("DELETE FROM quant_trade_decision_log WHERE event_key=? AND record_type<>'FILL'",source);
+        jdbc.update("DELETE FROM quant_trade_decision_log WHERE event_key=? AND record_type<>'FILL'", source);
         aggregateFills(e);
     }
 
     private void writeFill(DecisionLogEvent e) {
-        if (e.tradeId() == null || e.quantity() == null || e.quantity().signum() <= 0 || e.price() == null || e.price().signum() <= 0) { return; }
+        if (e.tradeId() == null || e.quantity() == null || e.quantity().signum() <= 0 || e.price() == null || e.price().signum() <= 0) {
+            return;
+        }
         String parent = key(e.eventKey());
         DecisionLogEvent fill = e.toBuilder().eventKey("F:" + e.credentialId() + ":" + e.symbol() + ":" + e.tradeId()).build();
         Map<String, Object> values = parameters(fill);
         values.put("parentKey", parent);
-        named.update("INSERT INTO quant_trade_decision_log (" + COLUMNS + ",parent_key) VALUES (" + VALUES + ",:parentKey) ON DUPLICATE KEY UPDATE parent_key=VALUES(parent_key)", values);
+        named.update("INSERT INTO quant_trade_decision_log (" + COLUMNS + ",parent_key) VALUES (" + VALUES + ",:parentKey) ON DUPLICATE KEY UPDATE parent_key=VALUES(parent_key)"
+            , values);
         // 创建/补充执行主行，成交明细仅供聚合，不在列表中重复显示。
-        boolean cumulative = e.cumulativeQuantity()!=null && e.cumulativeQuantity().signum()>0
-            && e.averagePrice()!=null && e.averagePrice().signum()>0;
-        write(e.toBuilder().recordType("EXECUTION").tradeTime(cumulative ? e.tradeTime() : null)
-            .quantity(cumulative ? e.cumulativeQuantity() : null).price(cumulative ? e.averagePrice() : null)
-            .status(cumulative ? Objects.toString(e.orderStatus(),"PARTIALLY_FILLED") : "ACCEPTED").build());
+        boolean cumulative = e.cumulativeQuantity() != null && e.cumulativeQuantity().signum() > 0 && e.averagePrice() != null && e.averagePrice().signum() > 0;
+        write(e.toBuilder().recordType("EXECUTION").tradeTime(cumulative ? e.tradeTime() : null).quantity(cumulative ? e.cumulativeQuantity() : null).price(cumulative ?
+            e.averagePrice() : null).status(cumulative ? Objects.toString(e.orderStatus(), "PARTIALLY_FILLED") : "ACCEPTED").build());
         migrateOrderFacts(e);
         aggregateFills(e);
     }
 
     private void aggregateFills(DecisionLogEvent e) {
-        String parent=key(e.eventKey());
-        var totals = jdbc.queryForMap("SELECT SUM(quantity) qty,SUM(quantity*price) amount,MAX(trade_time) last_fill FROM quant_trade_decision_log WHERE parent_key=? AND record_type='FILL'", parent);
-        BigDecimal quantity = (BigDecimal) totals.get("qty");
-        BigDecimal amount = (BigDecimal) totals.get("amount");
-        if (quantity == null || amount == null || quantity.signum() <= 0) { return; }
+        String parent = key(e.eventKey());
+        var totals = jdbc.queryForMap("SELECT SUM(quantity) qty,SUM(quantity*price) amount,MAX(trade_time) last_fill FROM quant_trade_decision_log WHERE parent_key=? AND " +
+            "record_type='FILL'", parent);
+        BigDecimal quantity = asDecimal(totals.get("qty"));
+        BigDecimal amount = asDecimal(totals.get("amount"));
+        if (quantity == null || amount == null || quantity.signum() <= 0) {
+            return;
+        }
         BigDecimal avg = amount.divide(quantity, 16, java.math.RoundingMode.HALF_UP);
         String status = "FILLED".equals(e.orderStatus()) ? "FILLED" : "PARTIALLY_FILLED";
         // REST 成交列表没有订单终态时使用已存在的本地订单状态；不能凭一次成交推断全部成交。
         if (e.orderStatus() == null) {
-            var orders = jdbc.queryForList("SELECT status FROM quant_order WHERE credential_id=? AND symbol=? AND exchange_order_id=? LIMIT 1", e.credentialId(), e.symbol(), e.orderId());
-            if (!orders.isEmpty() && "FILLED".equals(text(orders.getFirst(), "status"))) { status = "FILLED"; }
+            var orders = jdbc.queryForList("SELECT status FROM quant_order WHERE credential_id=? AND symbol=? AND exchange_order_id=? LIMIT 1", e.credentialId(), e.symbol(),
+                e.orderId());
+            if (!orders.isEmpty() && "FILLED".equals(text(orders.getFirst(), "status"))) {
+                status = "FILLED";
+            }
         }
-        jdbc.update("UPDATE quant_trade_decision_log SET quantity=?,price=?,trade_time=?,status=CASE WHEN status IN ('FILLED','CANCELED','EXPIRED','REJECTED','EXPIRED_IN_MATCH') THEN status ELSE ? END,last_time=GREATEST(last_time,?) WHERE event_key=? AND (trade_time IS NULL OR quantity IS NULL OR quantity<=?)",
-            quantity, avg, totals.get("last_fill"), status, timestamp(e.eventTime()), parent, quantity);
+        jdbc.update("UPDATE quant_trade_decision_log SET quantity=?,price=?,trade_time=?,status=CASE WHEN status IN ('FILLED','CANCELED','EXPIRED','REJECTED','EXPIRED_IN_MATCH')" +
+            " THEN status ELSE ? END,last_time=GREATEST(last_time,?) WHERE event_key=? AND (trade_time IS NULL OR quantity IS NULL OR quantity<=?)", quantity, avg, totals.get(
+                "last_fill"), status, timestamp(e.eventTime()), parent, quantity);
     }
 
     private Map<String, Object> parameters(DecisionLogEvent e) {
         Map<String, Object> m = new HashMap<>();
-        m.put("eventKey", key(e.eventKey())); m.put("recordType", e.recordType()); m.put("credentialId", e.credentialId());
-        m.put("accountName", e.accountName()); m.put("runMode", e.runMode()); m.put("strategyId", e.strategyId());
-        m.put("strategyInstanceId", e.strategyInstanceId()); m.put("strategyName", e.strategyName()); m.put("symbol", e.symbol());
-        m.put("operation", e.operation()); m.put("direction", e.direction()); m.put("status", e.status());
-        m.put("reasonCode", e.reasonCode()); m.put("reason", e.reason()); m.put("angle", e.angle()); m.put("threshold", e.threshold());
-        m.put("klineTime", timestamp(e.klineTime())); m.put("quantity", e.quantity()); m.put("price", e.price());
-        m.put("margin", e.margin()); m.put("idempotencyKey", e.idempotencyKey()); m.put("orderId", e.orderId());
-        m.put("clientOrderId", e.clientOrderId()); m.put("eventTime", timestamp(e.eventTime())); m.put("tradeTime", timestamp(e.tradeTime()));
+        m.put("eventKey", key(e.eventKey()));
+        m.put("recordType", e.recordType());
+        m.put("credentialId", e.credentialId());
+        m.put("accountName", e.accountName());
+        m.put("runMode", e.runMode());
+        m.put("strategyId", e.strategyId());
+        m.put("strategyInstanceId", e.strategyInstanceId());
+        m.put("strategyName", e.strategyName());
+        m.put("symbol", e.symbol());
+        m.put("operation", e.operation());
+        m.put("direction", e.direction());
+        m.put("status", e.status());
+        m.put("reasonCode", e.reasonCode());
+        m.put("reason", e.reason());
+        m.put("angle", e.angle());
+        m.put("threshold", e.threshold());
+        m.put("klineTime", timestamp(e.klineTime()));
+        m.put("quantity", e.quantity());
+        m.put("price", e.price());
+        m.put("margin", e.margin());
+        m.put("idempotencyKey", e.idempotencyKey());
+        m.put("orderId", e.orderId());
+        m.put("clientOrderId", e.clientOrderId());
+        m.put("eventTime", timestamp(e.eventTime()));
+        m.put("tradeTime", timestamp(e.tradeTime()));
         return m;
     }
 
+    /**
+     * 按查询条件分页读取决策日志。
+     */
     public PageResult<Map<String, Object>> list(TradeDecisionQuery q) {
         List<Object> args = new ArrayList<>();
         StringBuilder where = new StringBuilder(" WHERE record_type<>'FILL'");
-        add(where,args,"credential_id",q.getCredentialId(),false); add(where,args,"strategy_name",q.getStrategyName(),true);
-        add(where,args,"strategy_instance_id",q.getStrategyInstanceId(),false); add(where,args,"symbol",q.getSymbol(),false);
-        add(where,args,"run_mode",q.getRunMode(),false); add(where,args,"operation",q.getOperation(),false);
-        add(where,args,"status",q.getStatus(),false); add(where,args,"reason",q.getReason(),true);
+        add(where, args, "credential_id", q.getCredentialId(), false);
+        add(where, args, "strategy_name", q.getStrategyName(), true);
+        add(where, args, "strategy_instance_id", q.getStrategyInstanceId(), false);
+        add(where, args, "symbol", q.getSymbol(), false);
+        add(where, args, "run_mode", q.getRunMode(), false);
+        add(where, args, "operation", q.getOperation(), false);
+        add(where, args, "status", q.getStatus(), false);
+        add(where, args, "reason", q.getReason(), true);
         LocalDateTime to = q.getTo() == null ? LocalDateTime.now() : q.getTo();
         LocalDateTime from = q.getFrom() == null ? to.minusHours(24) : q.getFrom();
-        if (from.isAfter(to)) { throw new org.dromara.common.core.exception.ServiceException("开始时间不能晚于结束时间"); }
-        where.append(" AND event_time>=? AND event_time<=?"); args.add(Timestamp.valueOf(from)); args.add(Timestamp.valueOf(to));
+        if (from.isAfter(to)) {
+            throw new org.dromara.common.core.exception.ServiceException("开始时间不能晚于结束时间");
+        }
+        where.append(" AND event_time>=? AND event_time<=?");
+        args.add(Timestamp.valueOf(from));
+        args.add(Timestamp.valueOf(to));
         Long total = jdbc.queryForObject("SELECT COUNT(*) FROM quant_trade_decision_log" + where, Long.class, args.toArray());
         int size = Math.clamp(q.getPageSize() == null ? 20 : q.getPageSize(), 1, 100);
         long page = Math.max(1, q.getPageNum() == null ? 1 : q.getPageNum());
-        args.add(size); args.add((page-1)*size);
+        args.add(size);
+        args.add((page - 1) * size);
         var rows = jdbc.queryForList("SELECT * FROM quant_trade_decision_log" + where + " ORDER BY event_time DESC,id DESC LIMIT ? OFFSET ?", args.toArray());
         return PageResult.build(rows.stream().map(this::display).toList(), total == null ? 0 : total);
     }
 
+    /**
+     * 查询单条决策日志及其可用关联记录。
+     */
     public Map<String, Object> detail(Long id) {
         var rows = jdbc.queryForList("SELECT * FROM quant_trade_decision_log WHERE id=? AND record_type<>'FILL'", id);
         return rows.isEmpty() ? null : display(rows.getFirst());
     }
 
     private Map<String, Object> display(Map<String, Object> row) {
-        Map<String,Object> result = new LinkedHashMap<>();
-        row.forEach((column,value) -> {
-            String[] parts = column.split("_"); StringBuilder name = new StringBuilder(parts[0]);
-            for (int i=1;i<parts.length;i++) { name.append(Character.toUpperCase(parts[i].charAt(0))).append(parts[i].substring(1)); }
-            if (value instanceof Number && (column.equals("id") || column.endsWith("_id"))) { value = value.toString(); }
-            if (value instanceof BigDecimal) { value = value.toString(); }
-            if (value instanceof Timestamp t) { value = t.toLocalDateTime().toString().replace('T',' '); }
-            if (value instanceof LocalDateTime t) { value = t.toString().replace('T',' '); }
+        Map<String, Object> result = new LinkedHashMap<>();
+        row.forEach((column, value) -> {
+            String[] parts = column.split("_");
+            StringBuilder name = new StringBuilder(parts[0]);
+            for (int i = 1; i < parts.length; i++) {
+                name.append(Character.toUpperCase(parts[i].charAt(0))).append(parts[i].substring(1));
+            }
+            if (value instanceof Number && (column.equals("id") || column.endsWith("_id"))) {
+                value = value.toString();
+            }
+            if (value instanceof BigDecimal) {
+                value = value.toString();
+            }
+            if (value instanceof Timestamp t) {
+                value = t.toLocalDateTime().toString().replace('T', ' ');
+            }
+            if (value instanceof LocalDateTime t) {
+                value = t.toString().replace('T', ' ');
+            }
             result.put(name.toString(), value);
         });
-        BigDecimal qty = decimal(Objects.toString(row.get("quantity"),null));
-        BigDecimal price = decimal(Objects.toString(row.get("price"),null));
-        result.put("amount",qty == null || price == null ? null : qty.multiply(price).stripTrailingZeros().toPlainString());
-        result.put("priceKind",row.get("trade_time") == null ? "REFERENCE" : "ACTUAL");
+        BigDecimal qty = decimal(Objects.toString(row.get("quantity"), null));
+        BigDecimal price = decimal(Objects.toString(row.get("price"), null));
+        result.put("amount", qty == null || price == null ? null : qty.multiply(price).stripTrailingZeros().toPlainString());
+        result.put("priceKind", row.get("trade_time") == null ? "REFERENCE" : "ACTUAL");
         return result;
     }
-
-    private static void add(StringBuilder sql,List<Object> args,String column,Object value,boolean like) {
-        if (value == null || value.toString().isBlank()) { return; }
-        sql.append(" AND ").append(column).append(like ? " LIKE ?" : "=?"); args.add(like ? "%"+value+"%" : value);
-    }
-    public static String executionKey(Long credentialId, String key) { return "X:"+credentialId+":"+key; }
-    static String key(String value) {
-        if (value == null) { throw new IllegalArgumentException("日志事件键为空"); }
-        try { return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
-        catch (java.security.NoSuchAlgorithmException ex) { throw new IllegalStateException(ex); }
-    }
-    static String direction(String operation,String side) {
-        if (side == null || !("BUY".equalsIgnoreCase(side) || "SELL".equalsIgnoreCase(side))) { return "UNKNOWN"; }
-        if (!"OPEN".equals(operation) && !"CLOSE".equals(operation)) { return "UNKNOWN"; }
-        return "OPEN".equals(operation) ? ("BUY".equalsIgnoreCase(side) ? "LONG" : "SHORT") : ("BUY".equalsIgnoreCase(side) ? "SHORT" : "LONG");
-    }
-    private static BigDecimal decimal(String value) { return value == null || value.isBlank() ? null : new BigDecimal(value); }
-    private static String text(Map<String,Object> row,String key) { return Objects.toString(row.get(key),null); }
-    private static Long number(Map<String,Object> row,String key) { Object v=row.get(key); return v==null ? null : Long.valueOf(v.toString()); }
-    private static Timestamp timestamp(Instant instant) { return instant == null ? null : Timestamp.valueOf(LocalDateTime.ofInstant(instant,ZoneId.systemDefault())); }
 }

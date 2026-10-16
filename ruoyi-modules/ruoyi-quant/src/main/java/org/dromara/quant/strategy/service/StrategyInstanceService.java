@@ -70,8 +70,7 @@ public class StrategyInstanceService {
         // 交易对或账户绑定被删除/停用后保留实例记录用于审计，但不得继续保持可运行状态。
         List<QuantStrategyInstance> instances = instanceMapper.selectList(new LambdaQueryWrapper<QuantStrategyInstance>().eq(QuantStrategyInstance::getStrategyId, strategyId));
         for (QuantStrategyInstance instance : instances) {
-            if (!activeBindings.contains(bindingKey(instance.getStrategySymbolId(), instance.getCredentialId()))
-                && !"STOPPED".equals(instance.getStatus())) {
+            if (!activeBindings.contains(bindingKey(instance.getStrategySymbolId(), instance.getCredentialId())) && !"STOPPED".equals(instance.getStatus())) {
                 instance.setStatus("STOPPED");
                 instance.setLastError("策略交易对或账户绑定已失效");
                 instanceMapper.updateById(instance);

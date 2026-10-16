@@ -1,18 +1,23 @@
 package org.dromara.quant.exchange.binance;
 
+import com.binance.connector.client.common.websocket.adapter.stream.StreamConnectionInterface;
+import com.binance.connector.client.common.websocket.adapter.stream.StreamConnectionWrapper;
 import com.binance.connector.client.common.websocket.configuration.WebSocketClientConfiguration;
 import com.binance.connector.client.common.websocket.service.StreamBlockingQueueWrapper;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.DerivativesTradingUsdsFuturesWebSocketStreamsUtil;
+import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.JSON;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.api.DerivativesTradingUsdsFuturesWebSocketStreams;
+import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.api.MarketApi;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.model.AggregateTradeStreamsRequest;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.model.Interval;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.model.KlineCandlestickStreamsRequest;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.model.MarkPriceStreamRequest;
 import lombok.extern.slf4j.Slf4j;
-
-import java.util.List;
 import org.dromara.quant.config.QuantProperties;
 import org.eclipse.jetty.client.HttpProxy;
+
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -27,8 +32,8 @@ import java.util.function.Consumer;
  */
 @Slf4j
 final class BinanceSdkStreamTransport implements AutoCloseable {
-    private final DerivativesTradingUsdsFuturesWebSocketStreams client;
-    private final List<StreamBlockingQueueWrapper<?>> queues;
+    private final StreamConnectionInterface connection;
+    private final List<? extends BlockingQueue<String>> rawQueues;
     private final Consumer<String> events;
     private final Runnable disconnected;
     private final int backlogLimit;
@@ -36,33 +41,66 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
     private final AtomicBoolean connected = new AtomicBoolean();
     private final Thread consumer;
 
-    static BinanceSdkStreamTransport market(String url, String symbol, String interval,
-                                             Consumer<String> events, Runnable disconnected, int backlogLimit, QuantProperties.Proxy proxy) {
+    private BinanceSdkStreamTransport(StreamConnectionInterface connection, List<StreamBlockingQueueWrapper<?>> queues, Consumer<String> events, Runnable disconnected,
+                                      int backlogLimit) {
+        this.connection = connection;
+        this.rawQueues = queues.stream().map(StreamBlockingQueueWrapper::getInnerQueue).toList();
+        this.events = events;
+        this.disconnected = disconnected;
+        this.backlogLimit = Math.max(64, backlogLimit);
+        this.consumer = Thread.ofVirtual().name("binance-sdk-stream-ingress").start(this::consume);
+    }
+
+    static BinanceSdkStreamTransport market(String url, String symbol, String interval, Consumer<String> events, Runnable disconnected, int backlogLimit,
+                                            QuantProperties.Proxy proxy) {
         WebSocketClientConfiguration config = configuration(url, proxy);
-        var client = new DerivativesTradingUsdsFuturesWebSocketStreams(config);
+        // 与 SDK getMarketApi() 保持相同路由；先持有连接，再让 MarketApi 执行握手。
+        // 否则构造 MarketApi 时握手失败，连接无法返回给调用方，其 Jetty 客户端和重连定时器会泄漏。
+        if (!config.getUrl().endsWith("/market/stream")) {
+            config.setUrl(config.getUrl().replace("/stream", "/market/stream"));
+        }
+        return market(new StreamConnectionWrapper(config, JSON.getGson()), symbol, interval, events, disconnected, backlogLimit);
+    }
+
+    static BinanceSdkStreamTransport market(StreamConnectionInterface connection, String symbol, String interval,
+                                            Consumer<String> events, Runnable disconnected, int backlogLimit) {
         try {
-            var trades = client.aggregateTradeStreams(new AggregateTradeStreamsRequest().symbol(symbol));
-            var marks = client.markPriceStream(new MarkPriceStreamRequest().symbol(symbol));
-            var klines = client.klineCandlestickStreams(
-                new KlineCandlestickStreamsRequest().symbol(symbol).interval(Interval.fromValue(interval)));
-            return new BinanceSdkStreamTransport(client, List.of(trades, marks, klines),
-                events, disconnected, backlogLimit);
+            var api = new MarketApi(connection);
+            ensureConnected(connection);
+            var trades = api.aggregateTradeStreams(new AggregateTradeStreamsRequest().symbol(symbol));
+            var marks = api.markPriceStream(new MarkPriceStreamRequest().symbol(symbol));
+            var klines = api.klineCandlestickStreams(new KlineCandlestickStreamsRequest().symbol(symbol).interval(Interval.fromValue(interval)));
+            return new BinanceSdkStreamTransport(connection, List.of(trades, marks, klines), events, disconnected, backlogLimit);
         } catch (RuntimeException ex) {
-            stop(client);
+            // 未连通也必须 stop，SDK stop() 会禁止重连、取消定时器并释放客户端线程。
+            stop(connection);
             throw ex;
         }
     }
 
-    static BinanceSdkStreamTransport user(String url, String listenKey,
-                                           Consumer<String> events, Runnable disconnected, int backlogLimit, QuantProperties.Proxy proxy) {
+    static BinanceSdkStreamTransport user(String url, String listenKey, Consumer<String> events, Runnable disconnected, int backlogLimit, QuantProperties.Proxy proxy) {
         WebSocketClientConfiguration config = configuration(url, proxy);
         var client = new DerivativesTradingUsdsFuturesWebSocketStreams(config);
+        StreamConnectionInterface connection = null;
         try {
+            connection = client.getConnection();
+            ensureConnected(connection);
             var queue = client.userData(listenKey);
-            return new BinanceSdkStreamTransport(client, List.of(queue), events, disconnected, backlogLimit);
+            return new BinanceSdkStreamTransport(connection, List.of(queue), events, disconnected, backlogLimit);
         } catch (RuntimeException ex) {
-            stop(client);
+            if (connection != null) {
+                stop(connection);
+            }
             throw ex;
+        }
+    }
+
+    static void ensureConnected(StreamConnectionInterface connection) {
+        if (!connection.isConnected()) {
+            connection.connect();
+        }
+        if (!connection.isConnected()) {
+            throw new IllegalStateException("Binance SDK WebSocket 订阅前未能建立连接");
         }
     }
 
@@ -84,22 +122,21 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
         return config;
     }
 
-    private BinanceSdkStreamTransport(DerivativesTradingUsdsFuturesWebSocketStreams client,
-                                       List<StreamBlockingQueueWrapper<?>> queues,
-                                       Consumer<String> events, Runnable disconnected, int backlogLimit) {
-        this.client = client;
-        this.queues = queues;
-        this.events = events;
-        this.disconnected = disconnected;
-        this.backlogLimit = Math.max(64, backlogLimit);
-        this.consumer = Thread.ofVirtual().name("binance-sdk-stream-ingress").start(this::consume);
+    private static void stop(StreamConnectionInterface connection) {
+        try {
+            connection.stop();
+        } catch (Exception ex) {
+            log.debug("Binance SDK stream close: {}", ex.getClass().getSimpleName());
+        }
     }
 
     boolean connected() {
-        if (closed.get()) { return false; }
+        if (closed.get()) {
+            return false;
+        }
         // User-data streams may legitimately have no events for long periods.
         try {
-            return connected.get() || client.getConnection().isConnected();
+            return connected.get() || connection.isConnected();
         } catch (RuntimeException ex) {
             return connected.get();
         }
@@ -108,25 +145,26 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
     private void consume() {
         try {
             while (!closed.get()) {
-                boolean handled = false;
-                for (var queue : queues) {
-                    if (closed.get()) { break; }
-                    var raw = queue.getInnerQueue();
+                for (BlockingQueue<String> raw : rawQueues) {
+                    if (closed.get()) {
+                        return;
+                    }
                     // Fail before parsing the next message; no stale decision may be made from an overloaded queue.
                     if (raw.size() >= backlogLimit) {
                         log.error("Binance SDK stream backlog reached threshold {}, force reconnect and replay", backlogLimit);
                         fail();
                         return;
                     }
-                    String event = raw.poll(50, TimeUnit.MILLISECONDS);
-                    if (event != null) {
-                        connected.set(true);
-                        handled = true;
-                        events.accept(event);
-                    }
                 }
-                // The higher-level market/user-data hubs also implement idle/reconnect supervision.
-                if (!handled && Thread.currentThread().isInterrupted()) { return; }
+                int handled = drainAvailable(rawQueues, event -> {
+                    connected.set(true);
+                    events.accept(event);
+                }, 256);
+                if (handled == 0) {
+                    // Avoid waiting on each empty SDK queue in turn; that serialized wait caused
+                    // the hot aggregate-trade queue to fall behind when sibling streams were idle.
+                    TimeUnit.MILLISECONDS.sleep(1);
+                }
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -136,26 +174,49 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
         }
     }
 
+    static int drainAvailable(List<? extends BlockingQueue<String>> queues, Consumer<String> events, int maxEvents) {
+        int handled = 0;
+        while (handled < maxEvents) {
+            boolean found = false;
+            for (BlockingQueue<String> queue : queues) {
+                if (handled >= maxEvents) {
+                    break;
+                }
+                String event = queue.poll();
+                if (event != null) {
+                    events.accept(event);
+                    handled++;
+                    found = true;
+                }
+            }
+            if (!found) {
+                break;
+            }
+        }
+        return handled;
+    }
+
     private void fail() {
         if (closed.compareAndSet(false, true)) {
             connected.set(false);
-            stop(client);
-            try { disconnected.run(); }
-            catch (RuntimeException ex) { log.warn("Binance Streams disconnected callback failed"); }
+            stop(connection);
+            try {
+                disconnected.run();
+            } catch (RuntimeException ex) {
+                log.warn("Binance Streams disconnected callback failed");
+            }
         }
     }
 
+    /**
+     * 关闭 SDK 流并释放传输资源。
+     */
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
             connected.set(false);
             consumer.interrupt();
-            stop(client);
+            stop(connection);
         }
-    }
-
-    private static void stop(DerivativesTradingUsdsFuturesWebSocketStreams client) {
-        try { client.stop(); }
-        catch (Exception ex) { log.debug("Binance SDK stream close: {}", ex.getClass().getSimpleName()); }
     }
 }

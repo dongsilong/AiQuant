@@ -27,13 +27,14 @@ public record StrategyContext(String symbol, String direction, BigDecimal entryP
                               Instant klineOpenTime, boolean klineClosed, Instant eventTime, BigDecimal quantity, BigDecimal initialPositionQuantity, BigDecimal initialMargin,
                               Integer leverage, BigDecimal highestPriceSinceEntry, BigDecimal lowestPriceSinceEntry, boolean firstTakeProfitTriggered, int highestStep) {
 
-    /** 兼容原完整构造器。 */
-    public StrategyContext(String symbol, String direction, BigDecimal entryPrice, BigDecimal currentPrice, BigDecimal referencePrice,
-                           BigDecimal previousKlineOpenPrice, Instant klineOpenTime, boolean klineClosed, Instant eventTime,
-                           BigDecimal quantity, BigDecimal initialPositionQuantity, BigDecimal initialMargin, Integer leverage,
-                           BigDecimal highestPriceSinceEntry, BigDecimal lowestPriceSinceEntry, boolean firstTakeProfitTriggered) {
-        this(symbol, direction, entryPrice, currentPrice, referencePrice, previousKlineOpenPrice, klineOpenTime, klineClosed, eventTime,
-            quantity, initialPositionQuantity, initialMargin, leverage, highestPriceSinceEntry, lowestPriceSinceEntry, firstTakeProfitTriggered, 0);
+    /**
+     * 兼容原完整构造器。
+     */
+    public StrategyContext(String symbol, String direction, BigDecimal entryPrice, BigDecimal currentPrice, BigDecimal referencePrice, BigDecimal previousKlineOpenPrice,
+                           Instant klineOpenTime, boolean klineClosed, Instant eventTime, BigDecimal quantity, BigDecimal initialPositionQuantity, BigDecimal initialMargin,
+                           Integer leverage, BigDecimal highestPriceSinceEntry, BigDecimal lowestPriceSinceEntry, boolean firstTakeProfitTriggered) {
+        this(symbol, direction, entryPrice, currentPrice, referencePrice, previousKlineOpenPrice, klineOpenTime, klineClosed, eventTime, quantity, initialPositionQuantity,
+            initialMargin, leverage, highestPriceSinceEntry, lowestPriceSinceEntry, firstTakeProfitTriggered, 0);
     }
 
     /**

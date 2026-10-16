@@ -6,7 +6,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.linpeilie.annotations.AutoMapper;
 import lombok.Data;
 import org.dromara.quant.account.domain.QuantTrade;
-import org.springframework.format.annotation.DateTimeFormat;
 
 import java.io.Serial;
 import java.io.Serializable;

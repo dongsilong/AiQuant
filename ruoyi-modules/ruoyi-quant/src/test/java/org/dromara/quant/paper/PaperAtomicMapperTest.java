@@ -15,14 +15,14 @@ import java.math.BigDecimal;
 import java.util.Objects;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 @Tag("dev")
 class PaperAtomicMapperTest {
     @Test
     void balanceReservationIsAtomicAndFailsClosedWhenFundsRunOut() throws Exception {
-        var dataSource = new DriverManagerDataSource(
-            "jdbc:h2:mem:paper_mapper_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
+        var dataSource = new DriverManagerDataSource("jdbc:h2:mem:paper_mapper_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         var jdbc = new JdbcTemplate(dataSource);
         jdbc.execute("""
             CREATE TABLE quant_paper_account (
@@ -59,7 +59,6 @@ class PaperAtomicMapperTest {
             assertEquals(0, mapper.reserveMargin(account.getId(), new BigDecimal("20")));
             assertEquals(1, mapper.refundMargin(account.getId(), new BigDecimal("2")));
         });
-        assertEquals(0, new BigDecimal("12").compareTo(
-            jdbc.queryForObject("SELECT available_balance FROM quant_paper_account WHERE id=1", BigDecimal.class)));
+        assertEquals(0, new BigDecimal("12").compareTo(jdbc.queryForObject("SELECT available_balance FROM quant_paper_account WHERE id=1", BigDecimal.class)));
     }
 }

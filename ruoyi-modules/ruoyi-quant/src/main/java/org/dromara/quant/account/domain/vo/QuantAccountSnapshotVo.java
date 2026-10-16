@@ -2,11 +2,9 @@ package org.dromara.quant.account.domain.vo;
 
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
 import io.github.linpeilie.annotations.AutoMapper;
 import lombok.Data;
 import org.dromara.quant.account.domain.QuantAccountSnapshot;
-import org.dromara.quant.account.domain.QuantTrade;
 
 import java.io.Serial;
 import java.io.Serializable;

@@ -1,11 +1,6 @@
 package org.dromara.quant.execution.mapper;
 
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Options;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.*;
 
 /**
  * Durable account+symbol dispatch fence. A claimed guard has NO TTL takeover.
@@ -32,10 +27,7 @@ public interface LiveOrderDispatchMapper {
             (credential_id, symbol, margin_mode, leverage, created_at)
         VALUES (#{credentialId}, #{symbol}, #{marginMode}, #{leverage}, NOW())
         """)
-    int ensureSettingsIntent(@Param("credentialId") Long credentialId,
-                             @Param("symbol") String symbol,
-                             @Param("marginMode") String marginMode,
-                             @Param("leverage") int leverage);
+    int ensureSettingsIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("marginMode") String marginMode, @Param("leverage") int leverage);
 
     @Options(timeout = 3)
     @Select("""
@@ -43,10 +35,7 @@ public interface LiveOrderDispatchMapper {
         WHERE credential_id=#{credentialId} AND symbol=#{symbol}
           AND margin_mode=#{marginMode} AND leverage=#{leverage}
         """)
-    long matchingSettingsIntent(@Param("credentialId") Long credentialId,
-                                @Param("symbol") String symbol,
-                                @Param("marginMode") String marginMode,
-                                @Param("leverage") int leverage);
+    long matchingSettingsIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("marginMode") String marginMode, @Param("leverage") int leverage);
 
     @Options(timeout = 3)
     @Update("""
@@ -55,8 +44,7 @@ public interface LiveOrderDispatchMapper {
         WHERE credential_id=#{credentialId} AND symbol=#{symbol}
           AND active_dispatch_key IS NULL
         """)
-    int claim(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
-              @Param("key") String key);
+    int claim(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
     /**
      * Strategy dispatch claim requires a simultaneously visible, unexpired lease
@@ -76,9 +64,8 @@ public interface LiveOrderDispatchMapper {
                 AND l.lease_until>NOW() AND l.owner_token IS NOT NULL
           )
         """)
-    int claimWithLease(@Param("credentialId") Long credentialId,
-                       @Param("symbol") String symbol, @Param("key") String key,
-                       @Param("instanceId") Long instanceId, @Param("epoch") Long epoch);
+    int claimWithLease(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("instanceId") Long instanceId,
+                       @Param("epoch") Long epoch);
 
     @Options(timeout = 3)
     @Insert("""
@@ -88,10 +75,8 @@ public interface LiveOrderDispatchMapper {
         VALUES (#{credentialId}, #{symbol}, #{key}, #{operation}, #{clientOrderId},
                 #{instanceId}, #{epoch}, 'DISPATCHING', NOW(), NOW())
         """)
-    int insertTicket(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
-                     @Param("key") String key, @Param("operation") String operation,
-                     @Param("clientOrderId") String clientOrderId, @Param("instanceId") Long instanceId,
-                     @Param("epoch") Long epoch);
+    int insertTicket(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("operation") String operation, @Param(
+        "clientOrderId") String clientOrderId, @Param("instanceId") Long instanceId, @Param("epoch") Long epoch);
 
     /**
      * Pre-send strategy provenance is inserted in the SAME transaction as
@@ -107,16 +92,9 @@ public interface LiveOrderDispatchMapper {
                 #{instanceId},#{operation},#{positionSide},#{exchangeSide},
                 #{epoch},NOW(6))
         """)
-    int insertPreDispatchIntent(@Param("credentialId") Long credentialId,
-                                @Param("symbol") String symbol,
-                                @Param("key") String key,
-                                @Param("clientOrderId") String clientOrderId,
-                                @Param("strategyId") Long strategyId,
-                                @Param("instanceId") Long instanceId,
-                                @Param("operation") String operation,
-                                @Param("positionSide") String positionSide,
-                                @Param("exchangeSide") String exchangeSide,
-                                @Param("epoch") Long epoch);
+    int insertPreDispatchIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("clientOrderId") String clientOrderId,
+                                @Param("strategyId") Long strategyId, @Param("instanceId") Long instanceId, @Param("operation") String operation,
+                                @Param("positionSide") String positionSide, @Param("exchangeSide") String exchangeSide, @Param("epoch") Long epoch);
 
     @Options(timeout = 3)
     @Update("""
@@ -125,8 +103,7 @@ public interface LiveOrderDispatchMapper {
         WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
           AND dispatch_status='DISPATCHING'
         """)
-    int acknowledge(@Param("credentialId") Long credentialId, @Param("key") String key,
-                    @Param("orderId") Long orderId);
+    int acknowledge(@Param("credentialId") Long credentialId, @Param("key") String key, @Param("orderId") Long orderId);
 
     /**
      * Account trading settings have no exchange order ID. Complete the
@@ -141,9 +118,7 @@ public interface LiveOrderDispatchMapper {
           AND symbol=#{symbol} AND operation_type='CONFIG_SETTINGS'
           AND dispatch_status='DISPATCHING' AND exchange_order_id IS NULL
         """)
-    int acknowledgeConfiguration(@Param("credentialId") Long credentialId,
-                                 @Param("symbol") String symbol,
-                                 @Param("key") String key);
+    int acknowledgeConfiguration(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
     @Options(timeout = 3)
     @Update("""
@@ -169,8 +144,7 @@ public interface LiveOrderDispatchMapper {
         WHERE credential_id=#{credentialId} AND symbol=#{symbol}
           AND active_dispatch_key=#{key}
         """)
-    int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
-                @Param("key") String key);
+    int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
     @Options(timeout = 3)
     @Update("""
@@ -186,10 +160,8 @@ public interface LiveOrderDispatchMapper {
               AND g.active_dispatch_key=#{key}
           )
         """)
-    int recoverVerified(@Param("credentialId") Long credentialId,
-                        @Param("symbol") String symbol, @Param("key") String key,
-                        @Param("clientOrderId") String clientOrderId,
-                        @Param("orderId") Long orderId);
+    int recoverVerified(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("clientOrderId") String clientOrderId, @Param(
+        "orderId") Long orderId);
 
     /**
      * Only the active account-symbol slot is eligible for fact-proven protection recovery.
@@ -205,9 +177,7 @@ public interface LiveOrderDispatchMapper {
           AND t.client_order_id=#{clientOrderId} AND t.operation_type=#{operation}
           AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
         """)
-    String activeProtectionTicket(@Param("credentialId") Long credentialId,
-                                  @Param("symbol") String symbol,
-                                  @Param("clientOrderId") String clientOrderId,
+    String activeProtectionTicket(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("clientOrderId") String clientOrderId,
                                   @Param("operation") String operation);
 
     @Options(timeout = 3)
@@ -216,7 +186,10 @@ public interface LiveOrderDispatchMapper {
         WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
         """)
     String ticketStatus(@Param("credentialId") Long credentialId, @Param("key") String key);
-    /** Read-only operator queue, intentionally no TTL-based recovery or unlock. */
+
+    /**
+     * Read-only operator queue, intentionally no TTL-based recovery or unlock.
+     */
     @Options(timeout = 3)
     @Select("""
         SELECT g.credential_id AS credential_id, g.symbol AS symbol,
@@ -232,6 +205,6 @@ public interface LiveOrderDispatchMapper {
         ORDER BY g.updated_at ASC
         LIMIT 100
         """)
-    java.util.List<java.util.Map<String,Object>> unresolvedDispatches();
+    java.util.List<java.util.Map<String, Object>> unresolvedDispatches();
 
 }
