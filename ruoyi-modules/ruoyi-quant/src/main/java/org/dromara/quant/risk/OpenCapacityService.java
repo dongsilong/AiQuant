@@ -268,14 +268,9 @@ public class OpenCapacityService {
                 continue;
             }
 
-            LocalDateTime createdAt = localTime(row.get("created_at"));
             Instant sevenDaysAgo = now.minus(Duration.ofDays(7));
-            Instant from = createdAt == null ? sevenDaysAgo
-                : createdAt.atZone(java.time.ZoneId.systemDefault()).toInstant().isAfter(sevenDaysAgo)
-                    ? createdAt.atZone(java.time.ZoneId.systemDefault()).toInstant() : sevenDaysAgo;
-
             List<ExchangeGateway.OrderSnapshot> history =
-                historyCache.computeIfAbsent(symbol, x -> safeQueryHistory(credential, x, from, now));
+                historyCache.computeIfAbsent(symbol, x -> safeQueryHistory(credential, x, sevenDaysAgo, now));
             if (history == null) {
                 continue;
             }
