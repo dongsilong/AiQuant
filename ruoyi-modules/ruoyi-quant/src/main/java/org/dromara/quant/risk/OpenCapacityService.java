@@ -249,10 +249,11 @@ public class OpenCapacityService {
             }
             String clientOrderId = firstText(row.get("client_order_id"), row.get("ledger_client_order_id"));
             List<ExchangeGateway.OrderSnapshot> openOrders = currentCache.computeIfAbsent(symbol, x -> safeQueryOrders(credential, x));
+            if (openOrders == null) continue;
             if (matches(openOrders, clientOrderId, row.get("exchange_order_id"))) continue;
             LocalDateTime createdAt = localTime(row.get("created_at"));
             Instant from = createdAt == null ? now.minus(Duration.ofDays(7))
-                : createdAt.toInstant(java.time.ZoneOffset.UTC).isAfter(now.minus(Duration.ofDays(7)))
+                : createdAt.atZone(java.time.ZoneId.systemDefault()).toInstant().isAfter(now.minus(Duration.ofDays(7)))
                     ? createdAt.toInstant(java.time.ZoneOffset.UTC) : now.minus(Duration.ofDays(7));
             List<ExchangeGateway.OrderSnapshot> history = historyCache.computeIfAbsent(symbol, x -> safeQueryHistory(credential, x, from, now));
             if (history == null) continue;
