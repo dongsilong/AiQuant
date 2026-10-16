@@ -3,6 +3,7 @@ package org.dromara.quant.risk;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.OpenPositionCommand;
 import org.dromara.quant.market.AccountBalanceSnapshot;
+import org.dromara.quant.exchange.ExchangeGateway;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -11,6 +12,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.*;
 
 /**
@@ -22,8 +26,9 @@ public class OpenCapacityService {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final RiskDecisionService risk;
+    private final ExchangeGateway gateway;
 
-    public OpenCapacityService(JdbcTemplate jdbc, PlatformTransactionManager manager, RiskDecisionService risk) {
+    public OpenCapacityService(JdbcTemplate jdbc, PlatformTransactionManager manager, RiskDecisionService risk, ExchangeGateway gateway) {
         this.jdbc = new JdbcTemplate(Objects.requireNonNull(jdbc.getDataSource()));
         this.jdbc.setQueryTimeout(3);
         this.transaction = new TransactionTemplate(manager);
@@ -31,6 +36,7 @@ public class OpenCapacityService {
         this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         this.transaction.setTimeout(5);
         this.risk = risk;
+        this.gateway = gateway;
     }
 
     /** 拒绝原因可直接用于业务提示，不包含凭证。 */
@@ -65,6 +71,9 @@ public class OpenCapacityService {
 
     private void checkCapacity(OpenPositionCommand command, BigDecimal notional, List<ExchangeGateway.PositionSnapshot> freshPositions,
                                AccountBalanceSnapshot balance, boolean reserve) {
+        if (reserve && command.credential() != null && !"PAPER".equalsIgnoreCase(command.runMode())) {
+            repairLegacyReservations(command.credentialId(), command.credential(), freshPositions);
+        }
         if (command.credentialId() == null || command.idempotencyKey() == null || command.symbol() == null
             || notional == null || notional.signum() <= 0 || (!"PAPER".equalsIgnoreCase(command.runMode()) && freshPositions == null)) {
             throw new CapacityBlockedException("开仓容量检查缺少有效账户、金额或持仓事实");
@@ -124,7 +133,8 @@ public class OpenCapacityService {
                     && Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(orderStatus);
                 java.time.LocalDateTime updated = localTime(slot.get("state_updated"));
                 java.time.LocalDateTime created = localTime(slot.get("created_at"));
-                boolean closed = "CLOSED".equals(slot.get("state_status")) && updated != null && created != null && !updated.isBefore(created);
+                boolean closed = slot.get("state_status") == null || "CLOSED".equals(slot.get("state_status"))
+                    || ("FILLED".equalsIgnoreCase(orderStatus) && !accountKeys.contains(positionKey));
                 // 必须同时确认执行终态、持仓归零和此次开仓之后的关闭事实；不能因初始空仓释放名额。
                 if (failed || terminal && closed && !accountKeys.contains(positionKey)) {
                     releasable.add(Objects.toString(slot.get("idempotency_key")));
@@ -193,13 +203,107 @@ public class OpenCapacityService {
                 + "WHERE r.credential_id=? AND r.instance_id=? AND r.symbol=? AND r.status='RESERVED' "
                 + "AND e.execution_status IN ('CONFIRMED','RECOVERED') "
                 + "AND e.exchange_order_status IN ('FILLED','CANCELED','EXPIRED','REJECTED') "
-                + "AND s.status='CLOSED' AND s.pending_action IS NULL AND s.updated_at>=r.created_at",
+                + "AND s.status='CLOSED' AND s.pending_action IS NULL",
                 (rs, row) -> rs.getString(1), credentialId, instanceId, symbol);
             for (String closedKey : closedKeys) {
                 jdbc.update("UPDATE quant_open_capacity SET status='RELEASED',updated_at=CURRENT_TIMESTAMP "
                     + "WHERE credential_id=? AND idempotency_key=? AND status='RESERVED'", credentialId, closedKey);
             }
         });
+    }
+
+    /**
+     * 修复历史版本留下的 RESERVED 占位。只有确认无当前持仓且无交易所活动/历史订单，
+     * 或已有本地终态事实时才释放；网络核实失败保持阻断。
+     */
+    private void repairLegacyReservations(Long credentialId, ExchangeGateway.Credential credential,
+                                          List<ExchangeGateway.PositionSnapshot> freshPositions) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT r.idempotency_key,r.symbol,r.created_at,r.reserved_margin,
+                + "e.execution_status,e.exchange_order_status,e.client_order_id,e.exchange_order_id,
+                + "q.client_order_id AS ledger_client_order_id,q.status AS ledger_status 
+                + "FROM quant_open_capacity r 
+                + "LEFT JOIN quant_execution_record e ON e.credential_id=r.credential_id AND e.idempotency_key=r.idempotency_key 
+                + "LEFT JOIN quant_order q ON q.credential_id=r.credential_id AND q.idempotency_key=r.idempotency_key 
+                + "WHERE r.credential_id=? AND r.status='RESERVED' 
+                + "AND (r.reserved_margin IS NULL OR e.idempotency_key IS NULL)", credentialId);
+        if (rows.isEmpty()) return;
+        Map<String, List<ExchangeGateway.OrderSnapshot>> currentCache = new HashMap<>();
+        Map<String, List<ExchangeGateway.OrderSnapshot>> historyCache = new HashMap<>();
+        Instant now = Instant.now();
+        int released = 0;
+        for (Map<String, Object> row : rows) {
+            String symbol = Objects.toString(row.get("symbol"), "");
+            String key = Objects.toString(row.get("idempotency_key"), "");
+            if (symbol.isBlank() || key.isBlank()) continue;
+            boolean hasPosition = freshPositions.stream().anyMatch(pos -> symbol.equalsIgnoreCase(pos.symbol())
+                && pos.quantity() != null && pos.quantity().signum() != 0);
+            if (hasPosition) continue;
+            String executionStatus = Objects.toString(row.get("execution_status"), "");
+            String orderStatus = Objects.toString(row.get("exchange_order_status"), "");
+            String ledgerStatus = Objects.toString(row.get("ledger_status"), "");
+            if ("FAILED".equalsIgnoreCase(executionStatus) || terminalExecution(executionStatus, orderStatus) || terminalOrderStatus(ledgerStatus)) {
+                releaseReservation(credentialId, key, "LOCAL_TERMINAL");
+                released++;
+                continue;
+            }
+            String clientOrderId = firstText(row.get("client_order_id"), row.get("ledger_client_order_id"));
+            List<ExchangeGateway.OrderSnapshot> openOrders = currentCache.computeIfAbsent(symbol, x -> safeQueryOrders(credential, x));
+            if (matches(openOrders, clientOrderId, row.get("exchange_order_id"))) continue;
+            LocalDateTime createdAt = localTime(row.get("created_at"));
+            Instant from = createdAt == null ? now.minus(Duration.ofDays(7))
+                : createdAt.toInstant(java.time.ZoneOffset.UTC).isAfter(now.minus(Duration.ofDays(7)))
+                    ? createdAt.toInstant(java.time.ZoneOffset.UTC) : now.minus(Duration.ofDays(7));
+            List<ExchangeGateway.OrderSnapshot> history = historyCache.computeIfAbsent(symbol, x -> safeQueryHistory(credential, x, from, now));
+            if (history == null) continue;
+            ExchangeGateway.OrderSnapshot matched = findMatch(history, clientOrderId, row.get("exchange_order_id"));
+            if (matched != null) {
+                if (terminalOrderStatus(matched.status())) { releaseReservation(credentialId, key, "EXCHANGE_TERMINAL"); released++; }
+                continue;
+            }
+            // 当前挂单和可查询的订单历史都没有对应订单，同时交易所当前没有持仓，释放孤立遗留占位。
+            releaseReservation(credentialId, key, "NO_EXCHANGE_ORDER");
+            released++;
+        }
+        if (released > 0) log.info("遗留开仓占位恢复完成 credentialId={} released={}", credentialId, released);
+    }
+
+    private void releaseReservation(Long credentialId, String key, String reason) {
+        int count = jdbc.update("UPDATE quant_open_capacity SET status='RELEASED',updated_at=CURRENT_TIMESTAMP WHERE credential_id=? AND idempotency_key=? AND status='RESERVED'", credentialId, key);
+        if (count > 0) log.info("释放遗留开仓占位 credentialId={} key={} reason={}", credentialId, key, reason);
+    }
+
+    private List<ExchangeGateway.OrderSnapshot> safeQueryOrders(ExchangeGateway.Credential credential, String symbol) {
+        try { return Optional.ofNullable(gateway.queryOrders(credential, symbol)).orElse(List.of()); }
+        catch (RuntimeException ex) { log.warn("遗留开仓占位查询当前订单失败 symbol={} reason={}", symbol, ex.getMessage()); return null; }
+    }
+
+    private List<ExchangeGateway.OrderSnapshot> safeQueryHistory(ExchangeGateway.Credential credential, String symbol, Instant from, Instant to) {
+        try { return Optional.ofNullable(gateway.queryOrderHistory(credential, symbol, new ExchangeGateway.TimeRange(from, to), 1000L)).orElse(List.of()); }
+        catch (RuntimeException ex) { log.warn("遗留开仓占位查询订单历史失败 symbol={} reason={}", symbol, ex.getMessage()); return null; }
+    }
+
+    private static ExchangeGateway.OrderSnapshot findMatch(List<ExchangeGateway.OrderSnapshot> orders, String clientOrderId, Object exchangeOrderId) {
+        if (orders == null) return null;
+        return orders.stream().filter(o -> clientOrderId != null && clientOrderId.equals(o.clientOrderId())
+            || exchangeOrderId instanceof Number n && n.longValue() == (o.orderId() == null ? Long.MIN_VALUE : o.orderId())).findFirst().orElse(null);
+    }
+
+    private static boolean matches(List<ExchangeGateway.OrderSnapshot> orders, String clientOrderId, Object exchangeOrderId) {
+        return findMatch(orders, clientOrderId, exchangeOrderId) != null;
+    }
+
+    private static boolean terminalExecution(String executionStatus, String orderStatus) {
+        return ("CONFIRMED".equalsIgnoreCase(executionStatus) || "RECOVERED".equalsIgnoreCase(executionStatus)) && terminalOrderStatus(orderStatus);
+    }
+
+    private static boolean terminalOrderStatus(String status) {
+        return Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED", "EXPIRED_IN_MATCH").contains(Objects.toString(status, "").toUpperCase(Locale.ROOT));
+    }
+
+    private static String firstText(Object a, Object b) {
+        String x = Objects.toString(a, "");
+        return x.isBlank() ? Objects.toString(b, null) : x;
     }
 
     /** 仅在余额请求发出前采集；UNKNOWN 和部分成交不得计入已覆盖集合。 */
@@ -226,7 +330,7 @@ public class OpenCapacityService {
             String key = Objects.toString(row.get("idempotency_key"));
             if (releasable.contains(key) || snapshot.coveredExecutions().contains(key) || "FAILED".equals(row.get("execution_status"))) { continue; }
             if (!(row.get("reserved_margin") instanceof BigDecimal amount) || amount.signum() <= 0) {
-                throw new CapacityBlockedException("遗留待确认开仓缺少保证金金额，必须恢复核实后才能新增开仓");
+                throw new CapacityBlockedException("遗留待确认开仓缺少保证金金额，必须恢复核实后才能新增开仓: idempotencyKey=" + key);
             }
             reserved = reserved.add(amount);
         }
