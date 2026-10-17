@@ -523,6 +523,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 QuantPosition previousPosition = runtime.position;
                 runtime.position = refreshed;
                 if (runtime.position != null) {
+                    // 交易所确认当前仍有持仓时，不能继续沿用“空仓后的保护单清理”状态。
+                    runtime.protectionCleanupPending = false;
                     if (previousPosition != null && previousPosition.getQuantity() != null && runtime.position.getQuantity() != null && runtime.position.getQuantity().compareTo(previousPosition.getQuantity()) < 0) {
                         BigDecimal closedQty = previousPosition.getQuantity().subtract(runtime.position.getQuantity());
                         recordPositionDecrease(runtime, previousPosition, closedQty, firstTpFilled ? "交易所首次止盈保护已确认减仓" : "交易所保护单或外部操作导致部分减仓，具体触发原因待确认");
@@ -556,9 +558,9 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                     // 无条件将 state 归零：status=CLOSED + position_qty=0，从"最大持仓数"统计中排除。
                     stateService.markClosed(runtime.state);
                     runtime.state = stateService.findByInstance(runtime.instance.getId());
+                    // 清理成功必须同时解除运行时阻断；失败则保留重试标志，避免遗留保护单误触发。
+                    runtime.protectionCleanupPending = !protectionCleaned;
                     if (!protectionCleaned) {
-                        // 保护单未清理干净：保留阻断开仓标志，避免残留 STOP/TP 在后续触发时造成意外减仓。
-                        runtime.protectionCleanupPending = true;
                         log.warn("交易所已空仓但保护单未完全清理，已阻断开新仓 instanceId={} positionId={}", runtime.instance.getId(), previousPosition == null ? null : previousPosition.getId());
                     }
                 }
@@ -660,6 +662,7 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                 current.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
             }
             prepareTrading(current);
+            resumeRecoveryIfNeeded(current);
             return true;
         }
         if (current != null) {
@@ -682,6 +685,12 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
         }
         runtime.state = stateService.findByInstance(instance.getId());
         runtime.position = loadPosition(credential, symbol.getSymbol(), executionService.toCredential(credential));
+        if (runtime.position == null && runtime.state != null && !runtime.hasPendingAction()
+            && (Boolean.TRUE.equals(runtime.state.getRecoveryRequired()) || Boolean.TRUE.equals(runtime.state.getUnsafeRecovery())
+                || "PROTECTION_CLEANUP".equals(runtime.state.getStatus()))) {
+            // protectionCleanupPending 是内存字段；从持久化状态重建，防止重启后丢失保护单清理重试。
+            runtime.protectionCleanupPending = true;
+        }
         if (runtime.position != null && runtime.state == null) {
             runtime.state = recoverState(runtime);
         }
@@ -722,9 +731,32 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
             throw ex;
         }
         runtime.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
+        resumeRecoveryIfNeeded(runtime);
         log.info("策略运行时已启动 instanceId={} strategy={} plugin={} symbol={} interval={} mode={} protectionOnly={}", instance.getId(), strategy.getStrategyName(),
                 strategy.getPluginCode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), credential.getRunMode(), protectionOnly);
         return true;
+    }
+
+    /**
+     * 对持久化的恢复阻断立即触发账户事实对账，不能只等待后续行情事件。
+     * 空仓时恢复内存中的保护单清理重试标志；真正解除阻断仍须通过交易所核实。
+     */
+    private void resumeRecoveryIfNeeded(ActiveRuntime runtime) {
+        boolean recoveryNeeded;
+        synchronized (runtime) {
+            if (runtime.closed || runtime.state == null) {
+                return;
+            }
+            recoveryNeeded = Boolean.TRUE.equals(runtime.state.getRecoveryRequired())
+                || Boolean.TRUE.equals(runtime.state.getUnsafeRecovery())
+                || "PROTECTION_CLEANUP".equals(runtime.state.getStatus());
+            if (recoveryNeeded && runtime.position == null && !runtime.hasPendingAction()) {
+                runtime.protectionCleanupPending = true;
+            }
+        }
+        if (recoveryNeeded) {
+            requestReconciliation(runtime);
+        }
     }
 
     /**
@@ -2758,32 +2790,82 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
      * 撤销与当前持仓状态不再匹配的过期保护单。
      */
     private boolean cancelStaleProtection(ActiveRuntime runtime) {
-        if (runtime.state == null || runtime.state.getPositionId() == null) {
-            return true;
-        }
-        Long positionId = runtime.state.getPositionId();
-        boolean live = !"PAPER".equalsIgnoreCase(runtime.credential.getRunMode());
-        boolean success = protectionOrderService.cancelActiveProtectionOrders(runtime.credential.getId(), positionId, live);
-
-        // FIXED: 交易所已空仓时 state 必须归零；
-        // "保护单未撤掉" 单独作为阻断开仓的标志，不阻塞主事实推进。
-        runtime.protectionCleanupPending = !success;
-        runtime.state.setStatus("CLOSED");
-        runtime.state.setPositionQty(BigDecimal.ZERO);
-        runtime.state.setPendingAction(null);
-        runtime.state.setPendingClientOrderId(null);
-        runtime.state.setPendingOrderId(null);
-        runtime.state.setPendingOrderTime(null);
-        runtime.state.setPendingIdempotencyKey(null);
-        runtime.state.setRecoveryRequired(true);           // 保留：仍需继续尝试清理保护单
-        runtime.state.setUnsafeRecovery(!success);         // 只有撤销失败时才 unsafe
-        stateService.save(runtime.state);
-        if (!success) {
-            log.error("持仓保护单撤销失败，state 已归零但阻塞新开仓 instanceId={} positionId={}", runtime.instance.getId(), positionId);
+        if (runtime == null) {
             return false;
         }
-        log.info("持仓保护单已全部撤销 instanceId={} positionId={} live={}", runtime.instance.getId(), positionId, live);
+        QuantStrategyPositionState state = runtime.state;
+        boolean live = !"PAPER".equalsIgnoreCase(runtime.credential.getRunMode());
+        Long positionId = state == null ? null : state.getPositionId();
+        boolean success;
+
+        if (positionId != null) {
+            success = protectionOrderService.cancelActiveProtectionOrders(runtime.credential.getId(), positionId, live);
+        } else {
+            // 旧状态缺少 positionId 时，不能直接当作“没有保护单”放行。
+            // LIVE/TESTNET 必须先确认交易所该交易对空仓，再按交易对清理所有活动保护单。
+            if (live) {
+                List<ExchangeGateway.PositionSnapshot> snapshots;
+                try {
+                    snapshots = gateway.queryPositions(executionService.toCredential(runtime.credential), runtime.symbol.getSymbol());
+                } catch (RuntimeException ex) {
+                    markProtectionCleanupUnresolved(runtime, state, "缺少 positionId 且无法核实交易所持仓");
+                    log.warn("缺少 positionId，无法确认交易所空仓，保留开仓阻断 instanceId={} symbol={} errorType={}",
+                        runtime.instance.getId(), runtime.symbol.getSymbol(), ex.getClass().getSimpleName());
+                    return false;
+                }
+                boolean exchangeFlat = snapshots != null && snapshots.stream()
+                    .allMatch(snapshot -> snapshot.quantity() != null && snapshot.quantity().signum() == 0);
+                if (!exchangeFlat) {
+                    markProtectionCleanupUnresolved(runtime, state, "缺少 positionId 且交易所持仓非空或未知");
+                    log.warn("缺少 positionId，交易所持仓非空或结果不完整，保留开仓阻断 instanceId={} symbol={}",
+                        runtime.instance.getId(), runtime.symbol.getSymbol());
+                    return false;
+                }
+            }
+            success = protectionOrderService.cancelActiveProtectionOrdersForSymbol(
+                runtime.credential.getId(), runtime.symbol.getSymbol(), live);
+        }
+
+        runtime.protectionCleanupPending = !success;
+        if (state != null) {
+            // 只有保护单清理已确认成功才清除恢复标志；失败时继续 fail-closed。
+            state.setStatus("CLOSED");
+            state.setPositionQty(BigDecimal.ZERO);
+            state.setPendingAction(null);
+            state.setPendingClientOrderId(null);
+            state.setPendingOrderId(null);
+            state.setPendingOrderTime(null);
+            state.setPendingIdempotencyKey(null);
+            state.setRecoveryRequired(!success);
+            state.setUnsafeRecovery(!success);
+            stateService.save(state);
+        }
+        if (!success) {
+            log.error("持仓保护单清理未确认，已保留恢复阻断 instanceId={} positionId={} symbol={}",
+                runtime.instance.getId(), positionId, runtime.symbol.getSymbol());
+            return false;
+        }
+        log.info("持仓保护单已确认清理 instanceId={} positionId={} symbol={} live={}",
+            runtime.instance.getId(), positionId, runtime.symbol.getSymbol(), live);
         return true;
+    }
+
+    private void markProtectionCleanupUnresolved(ActiveRuntime runtime, QuantStrategyPositionState state, String reason) {
+        runtime.protectionCleanupPending = true;
+        if (state != null) {
+            state.setStatus("CLOSED");
+            state.setPositionQty(BigDecimal.ZERO);
+            state.setPendingAction(null);
+            state.setPendingClientOrderId(null);
+            state.setPendingOrderId(null);
+            state.setPendingOrderTime(null);
+            state.setPendingIdempotencyKey(null);
+            state.setRecoveryRequired(true);
+            state.setUnsafeRecovery(true);
+            stateService.save(state);
+        }
+        runtime.instance.setLastError(reason + "，已暂停新开仓并等待再次核实");
+        instanceMapper.updateById(runtime.instance);
     }
 
     /**
