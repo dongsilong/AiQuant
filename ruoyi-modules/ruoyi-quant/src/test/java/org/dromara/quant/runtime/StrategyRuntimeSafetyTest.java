@@ -943,6 +943,65 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void persistedRecoveryFlagsRehydrateProtectionCleanupRetryAfterRestart() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("CLOSED");
+            state.setPositionQty(BigDecimal.ZERO);
+            state.setPendingAction(null);
+            state.setRecoveryRequired(true);
+            state.setUnsafeRecovery(true);
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            ((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "reconciling")).set(true);
+
+            ReflectionTestUtils.invokeMethod(f.service, "resumeRecoveryIfNeeded", f.runtime);
+
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "protectionCleanupPending"));
+            assertTrue(((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "reconcileRequested")).get());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
+    void failedProtectionCleanupKeepsRecoveryFlagsPersistedAfterFlatReconciliation() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("OPEN");
+            state.setRecoveryRequired(false);
+            state.setUnsafeRecovery(false);
+            state.setPendingAction(null);
+
+            var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+            var states = (org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService");
+            var reconciliation = (org.dromara.quant.reconcile.TradingReconciliationService) ReflectionTestUtils.getField(f.service, "reconciliationService");
+            when(mapper.selectList(any())).thenReturn(List.of());
+            when(reconciliation.refreshSymbolPosition(any(), eq("BTCUSDT"), nullable(ExchangeGateway.Credential.class))).thenReturn(List.of());
+            when(f.protection.cancelActiveProtectionOrders(3L, 4L, true)).thenReturn(false);
+            when(states.findByInstance(1L)).thenReturn(state);
+            doAnswer(invocation -> {
+                state.setStatus("CLOSED");
+                state.setPositionQty(BigDecimal.ZERO);
+                state.setPendingAction(null);
+                state.setRecoveryRequired(false);
+                state.setUnsafeRecovery(false);
+                return null;
+            }).when(states).markClosed(state);
+
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePosition", f.runtime);
+
+            assertEquals("CLOSED", state.getStatus());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "protectionCleanupPending"));
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void missingPositionIdRequiresFlatExchangeProofAndCancelsProtectionOrdersBySymbol() throws Exception {
         Fixture f = fixture();
         try {
