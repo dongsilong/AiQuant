@@ -561,6 +561,10 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                     // 清理成功必须同时解除运行时阻断；失败则保留重试标志，避免遗留保护单误触发。
                     runtime.protectionCleanupPending = !protectionCleaned;
                     if (!protectionCleaned) {
+                        // markClosed 会清除恢复位；保护单未清理时必须重新持久化阻断，确保重启后能继续恢复。
+                        runtime.state.setRecoveryRequired(true);
+                        runtime.state.setUnsafeRecovery(true);
+                        stateService.save(runtime.state);
                         log.warn("交易所已空仓但保护单未完全清理，已阻断开新仓 instanceId={} positionId={}", runtime.instance.getId(), previousPosition == null ? null : previousPosition.getId());
                     }
                 }
@@ -2853,13 +2857,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private void markProtectionCleanupUnresolved(ActiveRuntime runtime, QuantStrategyPositionState state, String reason) {
         runtime.protectionCleanupPending = true;
         if (state != null) {
-            state.setStatus("CLOSED");
-            state.setPositionQty(BigDecimal.ZERO);
-            state.setPendingAction(null);
-            state.setPendingClientOrderId(null);
-            state.setPendingOrderId(null);
-            state.setPendingOrderTime(null);
-            state.setPendingIdempotencyKey(null);
+            // 只记录“需恢复”，不能在交易所事实未知时伪造 CLOSED 或清除待执行身份。
             state.setRecoveryRequired(true);
             state.setUnsafeRecovery(true);
             stateService.save(state);
