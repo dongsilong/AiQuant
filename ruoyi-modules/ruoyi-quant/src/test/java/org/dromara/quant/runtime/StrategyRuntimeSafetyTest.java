@@ -943,6 +943,60 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void missingPositionIdRequiresFlatExchangeProofAndCancelsProtectionOrdersBySymbol() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPositionId(null);
+            state.setStatus("CLOSED");
+            state.setPositionQty(BigDecimal.ZERO);
+            state.setRecoveryRequired(true);
+            state.setUnsafeRecovery(true);
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            when(gateway.queryPositions(nullable(ExchangeGateway.Credential.class), eq("BTCUSDT"))).thenReturn(List.of());
+            when(f.protection.cancelActiveProtectionOrdersForSymbol(3L, "BTCUSDT", true)).thenReturn(true);
+
+            assertTrue((boolean) ReflectionTestUtils.invokeMethod(f.service, "cancelStaleProtection", f.runtime));
+            verify(f.protection).cancelActiveProtectionOrdersForSymbol(3L, "BTCUSDT", true);
+            assertFalse(state.getRecoveryRequired());
+            assertFalse(state.getUnsafeRecovery());
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "protectionCleanupPending"));
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
+    void missingPositionIdAndUnknownExchangePositionMustKeepRecoveryBlocked() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPositionId(null);
+            state.setStatus("EXIT_PENDING");
+            state.setPendingAction("CLOSE");
+            state.setRecoveryRequired(false);
+            state.setUnsafeRecovery(false);
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            when(gateway.queryPositions(nullable(ExchangeGateway.Credential.class), eq("BTCUSDT")))
+                .thenThrow(new IllegalStateException("REST unavailable"));
+
+            assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "cancelStaleProtection", f.runtime));
+            verify(f.protection, never()).cancelActiveProtectionOrdersForSymbol(any(), anyString(), anyBoolean());
+            assertEquals("EXIT_PENDING", state.getStatus());
+            assertEquals("CLOSE", state.getPendingAction());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "protectionCleanupPending"));
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void confirmedFlatClosedStateClearsStaleRecoveryFlags() throws Exception {
         Fixture f = fixture();
         try {
