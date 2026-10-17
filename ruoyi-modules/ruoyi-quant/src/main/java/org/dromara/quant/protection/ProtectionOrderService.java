@@ -914,6 +914,27 @@ public class ProtectionOrderService {
     }
 
     /**
+     * 在交易所已确认指定交易对空仓后，撤销该交易对所有遗留保护单。
+     * 用于旧状态缺少 positionId 的恢复场景；限定 credential + symbol，避免影响其他交易对。
+     */
+    public boolean cancelActiveProtectionOrdersForSymbol(Long credentialId, String symbol, boolean live) {
+        if (credentialId == null || symbol == null || symbol.isBlank()) {
+            return false;
+        }
+        List<QuantProtectionOrder> orders = mapper.selectList(
+            new LambdaQueryWrapper<QuantProtectionOrder>()
+                .eq(QuantProtectionOrder::getCredentialId, credentialId)
+                .eq(QuantProtectionOrder::getSymbol, symbol)
+                .in(QuantProtectionOrder::getProtectionType, "HARD_STOP", "LOCAL_STOP", "SYMBOL_STOP", "FIRST_TP", "STEP_TP")
+                .in(QuantProtectionOrder::getStatus, ACTIVE_STATUSES));
+        boolean success = true;
+        for (QuantProtectionOrder order : orders) {
+            success &= cancelOne(credentialId, order, live);
+        }
+        return success;
+    }
+
+    /**
      * 撤销无法关联有效持仓的孤儿保护单。
      */
     public boolean cancelOrphanProtectionOrders(Long credentialId, boolean live) {
