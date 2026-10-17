@@ -973,6 +973,7 @@ class StrategyRuntimeSafetyTest {
             state.setRecoveryRequired(false);
             state.setUnsafeRecovery(false);
             state.setPendingAction(null);
+            ReflectionTestUtils.setField(f.runtime, "position", null);
 
             var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
             var states = (org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService");
