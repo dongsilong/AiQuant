@@ -6,7 +6,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.linpeilie.annotations.AutoMapper;
 import lombok.Data;
 import org.dromara.quant.account.domain.QuantTrade;
-import org.springframework.format.annotation.DateTimeFormat;
 
 import java.io.Serial;
 import java.io.Serializable;
@@ -27,10 +26,12 @@ public class QuantTradeVo implements Serializable {
     /**
      * 主键。
      */
+    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
     private Long id;
     /**
      * 交易凭证主键。
      */
+    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
     private Long credentialId;
     /**
      * 客户名称。
@@ -39,6 +40,7 @@ public class QuantTradeVo implements Serializable {
     /**
      * 用户主键。
      */
+    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
     private Long userId;
     /**
      * 用户名称。
@@ -76,10 +78,12 @@ public class QuantTradeVo implements Serializable {
     /**
      * 交易所成交主键。
      */
+    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
     private Long exchangeTradeId;
     /**
      * 交易所订单主键。
      */
+    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
     private Long exchangeOrderId;
 
     /**

@@ -21,6 +21,9 @@ public class ReconciliationFailureRecorder {
         this.mapper = mapper;
     }
 
+    /**
+     * 记录本轮事实对账失败并保持账户持仓状态为未核验。
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(Long credentialId, String message) {
         QuantReconcileRecord record = new QuantReconcileRecord();

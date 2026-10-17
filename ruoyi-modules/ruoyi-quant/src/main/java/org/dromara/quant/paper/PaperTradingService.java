@@ -1,16 +1,15 @@
 package org.dromara.quant.paper;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.dromara.quant.paper.domain.QuantPaperAccount;
+import org.dromara.quant.paper.mapper.PaperAtomicMapper;
 import org.dromara.quant.paper.mapper.QuantPaperAccountMapper;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,7 +21,6 @@ import java.util.List;
 /**
  * PAPER 虚拟撮合账本。PAPER 不访问交易所私有账户，也不发送真实订单。
  */
-@Slf4j
 @Service
 public class PaperTradingService {
     /**
@@ -44,18 +42,18 @@ public class PaperTradingService {
     /**
      * 用于执行需要数据库原子语义的 SQL 操作。
      */
-    private final JdbcTemplate jdbcTemplate;
+    private final PaperAtomicMapper atomicMapper;
 
     /**
      * 创建 PaperTradingService 实例并初始化其依赖。
      */
     public PaperTradingService(QuantProperties properties, QuantPaperAccountMapper accountMapper, QuantPositionMapper positionMapper,
-                               QuantExecutionRecordMapper executionRecordMapper, JdbcTemplate jdbcTemplate) {
+                               QuantExecutionRecordMapper executionRecordMapper, PaperAtomicMapper atomicMapper) {
         this.properties = properties;
         this.accountMapper = accountMapper;
         this.positionMapper = positionMapper;
         this.executionRecordMapper = executionRecordMapper;
-        this.jdbcTemplate = jdbcTemplate;
+        this.atomicMapper = atomicMapper;
     }
 
     /**
@@ -118,20 +116,32 @@ public class PaperTradingService {
             throw new IllegalArgumentException("PAPER 保证金必须大于零");
         }
         ensure(credentialId);
-        QuantPaperAccount account = jdbcTemplate.queryForObject("SELECT * FROM quant_paper_account WHERE credential_id=? FOR UPDATE", (rs, rowNum) -> {
-            QuantPaperAccount a = new QuantPaperAccount();
-            a.setId(rs.getLong("id"));
-            a.setCredentialId(rs.getLong("credential_id"));
-            a.setAvailableBalance(rs.getBigDecimal("available_balance"));
-            a.setBalance(rs.getBigDecimal("balance"));
-            a.setRealizedPnl(rs.getBigDecimal("realized_pnl"));
-            a.setUnrealizedPnl(rs.getBigDecimal("unrealized_pnl"));
-            return a;
-        }, credentialId);
+        QuantPaperAccount account = atomicMapper.lockAccount(credentialId);
+        if (account == null) {
+            throw new IllegalStateException("PAPER 账户不存在");
+        }
         if (account.getAvailableBalance().compareTo(margin) < 0) {
             throw new IllegalStateException("PAPER 可用余额不足");
         }
-        jdbcTemplate.update("UPDATE quant_paper_account SET available_balance=available_balance-?, updated_at=NOW() WHERE id=?", margin, account.getId());
+        if (atomicMapper.reserveMargin(account.getId(), margin) != 1) {
+            throw new IllegalStateException("PAPER 可用余额不足或账户状态已变化");
+        }
+    }
+
+    /**
+     * 对尚未形成持仓且已被业务执行流程明确确认失败的 PAPER 保证金做原子退款。
+     * LIVE/TESTNET 订单不得调用此方法；仅当订单明确未发送时由策略协调层调用。
+     */
+    @Transactional
+    public void refundReservedMargin(Long credentialId, BigDecimal margin) {
+        if (margin == null || margin.signum() <= 0) {
+            return;
+        }
+        ensure(credentialId);
+        QuantPaperAccount account = atomicMapper.lockAccount(credentialId);
+        if (account == null || atomicMapper.refundMargin(account.getId(), margin) != 1) {
+            throw new IllegalStateException("PAPER 预留保证金退款失败");
+        }
     }
 
     /**
@@ -144,16 +154,15 @@ public class PaperTradingService {
             return false;
         }
         ensure(credentialId);
-        QuantPaperAccount account = jdbcTemplate.queryForObject("SELECT * FROM quant_paper_account WHERE credential_id=? FOR UPDATE", (rs, rowNum) -> {
-            QuantPaperAccount a = new QuantPaperAccount();
-            a.setId(rs.getLong("id"));
-            a.setCredentialId(rs.getLong("credential_id"));
-            a.setAvailableBalance(rs.getBigDecimal("available_balance"));
-            return a;
-        }, credentialId);
+        QuantPaperAccount account = atomicMapper.lockAccount(credentialId);
+        if (account == null) {
+            throw new IllegalStateException("PAPER 账户不存在");
+        }
         BigDecimal refund = reservedMargin == null || reservedMargin.signum() <= 0 ? BigDecimal.ZERO : reservedMargin;
         if (refund.signum() > 0) {
-            jdbcTemplate.update("UPDATE quant_paper_account SET available_balance=available_balance+?, updated_at=NOW() WHERE id=?", refund, account.getId());
+            if (atomicMapper.refundMargin(account.getId(), refund) != 1) {
+                throw new IllegalStateException("PAPER 保证金退款失败");
+            }
         }
         record.setRecoveryAttempts((record.getRecoveryAttempts() == null ? 0 : record.getRecoveryAttempts()) + 1);
         record.setLastRecoveryAt(LocalDateTime.now());
@@ -170,6 +179,7 @@ public class PaperTradingService {
     @Transactional
     public QuantPosition recordOpenFill(Long credentialId, String idempotencyKey, String symbol, String direction, BigDecimal quantity, BigDecimal entryPrice, int leverage) {
         QuantExecutionRecord record = lockExecution(credentialId, idempotencyKey);
+        // 重放相同成交事件时只返回既有结果，不重复生成持仓或扣减保证金。
         if (Boolean.TRUE.equals(record.getPaperSettled())) {
             return positionMapper.selectOne(new LambdaQueryWrapper<QuantPosition>().eq(QuantPosition::getCredentialId, credentialId).eq(QuantPosition::getSymbol, symbol).eq(QuantPosition::getPositionSide, direction));
         }
@@ -193,7 +203,6 @@ public class PaperTradingService {
         record.setPaperSettled(true);
         record.setExecutionStatus("CONFIRMED");
         record.setExchangeOrderStatus("FILLED");
-        record.setExchangeOrderId(record.getExchangeOrderId());
         record.setUpdatedAt(LocalDateTime.now());
         executionRecordMapper.updateById(record);
         return position;
@@ -205,6 +214,7 @@ public class PaperTradingService {
     @Transactional
     public PaperCloseSettlement settlePaperExecution(Long credentialId, String idempotencyKey, Long positionId, BigDecimal quantity, BigDecimal fillPrice) {
         QuantExecutionRecord record = lockExecution(credentialId, idempotencyKey);
+        // 幂等保护：已结算的平仓不得再次释放保证金或累计已实现盈亏。
         if (Boolean.TRUE.equals(record.getPaperSettled())) {
             QuantPosition current = positionId == null ? null : positionMapper.selectById(positionId);
             return new PaperCloseSettlement(current, BigDecimal.ZERO, BigDecimal.ZERO);
@@ -212,7 +222,9 @@ public class PaperTradingService {
         if (positionId == null || quantity == null || quantity.signum() <= 0 || fillPrice == null || fillPrice.signum() <= 0) {
             throw new IllegalArgumentException("PAPER 平仓参数无效");
         }
-        jdbcTemplate.queryForObject("SELECT id FROM quant_position WHERE id=? FOR UPDATE", (rs, rowNum) -> rs.getLong(1), positionId);
+        if (atomicMapper.lockPosition(positionId) == null) {
+            throw new IllegalStateException("PAPER 持仓不存在");
+        }
         QuantPosition position = positionMapper.selectById(positionId);
         if (position == null || position.getQuantity() == null || position.getQuantity().signum() <= 0) {
             throw new IllegalStateException("PAPER 持仓不存在");
@@ -228,14 +240,10 @@ public class PaperTradingService {
         BigDecimal releasedMargin = (position.getMargin() == null ? BigDecimal.ZERO : position.getMargin()).multiply(closeQty).divide(oldQty, 16, RoundingMode.HALF_UP);
         BigDecimal remain = oldQty.subtract(closeQty).max(BigDecimal.ZERO);
         ensure(credentialId);
-        QuantPaperAccount lockedAccount = jdbcTemplate.queryForObject("SELECT * FROM quant_paper_account WHERE credential_id=? FOR UPDATE", (rs, rowNum) -> {
-            QuantPaperAccount a = new QuantPaperAccount();
-            a.setId(rs.getLong("id"));
-            a.setBalance(rs.getBigDecimal("balance"));
-            a.setAvailableBalance(rs.getBigDecimal("available_balance"));
-            a.setRealizedPnl(rs.getBigDecimal("realized_pnl"));
-            return a;
-        }, credentialId);
+        QuantPaperAccount lockedAccount = atomicMapper.lockAccount(credentialId);
+        if (lockedAccount == null) {
+            throw new IllegalStateException("PAPER 账户不存在");
+        }
         if (remain.signum() == 0) {
             positionMapper.deleteById(positionId);
         } else {
@@ -246,8 +254,9 @@ public class PaperTradingService {
             position.setUpdatedAt(LocalDateTime.now());
             positionMapper.updateById(position);
         }
-        jdbcTemplate.update("UPDATE quant_paper_account SET balance=balance+?, available_balance=available_balance+?+?, realized_pnl=realized_pnl+?, " + "unrealized_pnl" +
-            "=unrealized_pnl-?, updated_at=NOW() WHERE id=?", realized, releasedMargin, realized, realized, oldUnrealizedPnl, lockedAccount.getId());
+        if (atomicMapper.settleClose(lockedAccount.getId(), realized, releasedMargin, oldUnrealizedPnl) != 1) {
+            throw new IllegalStateException("PAPER 平仓资金结算失败");
+        }
         record.setPaperSettled(true);
         record.setExecutionStatus("CONFIRMED");
         record.setExchangeOrderStatus("FILLED");
@@ -277,7 +286,9 @@ public class PaperTradingService {
             positionMapper.updateById(p);
             total = total.add(pnl);
         }
-        jdbcTemplate.update("UPDATE quant_paper_account SET unrealized_pnl=?, updated_at=NOW() WHERE credential_id=?", total, credentialId);
+        if (atomicMapper.updateUnrealized(credentialId, total) != 1) {
+            throw new IllegalStateException("PAPER 未实现盈亏更新失败");
+        }
     }
 
     /**
@@ -297,15 +308,21 @@ public class PaperTradingService {
         position.setUnrealizedPnl(pnl);
         position.setUpdatedAt(LocalDateTime.now());
         positionMapper.updateById(position);
-        jdbcTemplate.update("UPDATE quant_paper_account SET unrealized_pnl=unrealized_pnl+?-?, updated_at=NOW() WHERE credential_id=?", pnl, oldPnl, position.getCredentialId());
+        if (atomicMapper.adjustUnrealized(position.getCredentialId(), pnl, oldPnl) != 1) {
+            throw new IllegalStateException("PAPER 标记盈亏更新失败");
+        }
     }
 
     /**
-     * 对 PAPER 账户加数据库锁，串行化关键结算。
+     * 锁定对应执行记录，保证同一幂等键的成交确认和资金结算串行执行。
+     * <p>数据库锁与 {@code @Transactional} 必须处于同一事务；调用方须先确认执行模式为 PAPER。
+     * 找不到记录时直接失败，避免在资金状态不明时重复结算。
      */
     private QuantExecutionRecord lockExecution(Long credentialId, String idempotencyKey) {
-        Long id = jdbcTemplate.queryForObject("SELECT id FROM quant_execution_record WHERE credential_id=? AND idempotency_key=? FOR UPDATE", Long.class, credentialId,
-            idempotencyKey);
+        Long id = atomicMapper.lockExecution(credentialId, idempotencyKey);
+        if (id == null) {
+            throw new IllegalStateException("PAPER 执行记录不存在: " + idempotencyKey);
+        }
         QuantExecutionRecord record = executionRecordMapper.selectById(id);
         if (record == null) {
             throw new IllegalStateException("PAPER 执行记录不存在: " + idempotencyKey);

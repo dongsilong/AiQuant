@@ -1,14 +1,10 @@
 package org.dromara.quant.finance.domain.vo;
 
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.linpeilie.annotations.AutoMapper;
 import lombok.Data;
-import org.dromara.quant.account.domain.QuantAccountSnapshot;
 import org.dromara.quant.finance.domain.QuantFinancialEvent;
 
 import java.io.Serial;

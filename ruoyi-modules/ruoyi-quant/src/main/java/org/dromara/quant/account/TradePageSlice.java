@@ -7,7 +7,7 @@ import java.util.List;
  */
 public record TradePageSlice<T>(List<T> rows, long total) {
     /**
-     * 构建分页切片结果。
+     * 从内存列表按页切片，同时保留总记录数。
      */
     public static <T> TradePageSlice<T> of(List<T> source, int pageNum, int pageSize) {
         if (pageNum < 1 || pageSize < 1) {

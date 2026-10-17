@@ -4,12 +4,14 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.risk.OpenCapacityService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -19,6 +21,10 @@ class AccountBalanceCacheTest {
     private final OpenCapacityService capacity = mock(OpenCapacityService.class);
     private final ExchangeGateway.Credential credential = new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET");
 
+    private static ExchangeGateway.AccountSnapshot account() {
+        return new ExchangeGateway.AccountSnapshot(new BigDecimal("200"), new BigDecimal("100"), new BigDecimal("200"), BigDecimal.ZERO);
+    }
+
     @Test
     void congestionNeverExtendsExpiredSnapshot() throws Exception {
         when(capacity.balanceCoverage(1L)).thenReturn(Set.of());
@@ -27,8 +33,7 @@ class AccountBalanceCacheTest {
         cache.begin(1L, credential, () -> true);
         cache.refresh(1L).get(2, TimeUnit.SECONDS);
         var accounts = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(cache, "accounts");
-        org.springframework.test.util.ReflectionTestUtils.setField(accounts.get(1L), "snapshot",
-            new AccountBalanceSnapshot(1L, BigDecimal.TEN, Set.of(), System.nanoTime() - 1));
+        org.springframework.test.util.ReflectionTestUtils.setField(accounts.get(1L), "snapshot", new AccountBalanceSnapshot(1L, BigDecimal.TEN, Set.of(), System.nanoTime() - 1));
         org.springframework.test.util.ReflectionTestUtils.setField(accounts.get(1L), "retryAt", 0L);
         when(gateway.queryAccountFresh(credential)).thenThrow(new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException());
         cache.refresh(1L).get(2, TimeUnit.SECONDS);
@@ -88,7 +93,9 @@ class AccountBalanceCacheTest {
         var snapshot = cache.requireSnapshot(1L);
         assertEquals(new BigDecimal("100"), snapshot.availableBalance());
         assertEquals(Set.of("filled-before-query"), snapshot.coveredExecutions());
-        for (int i = 0; i < 20; i++) { assertSame(snapshot, cache.requireSnapshot(1L)); }
+        for (int i = 0; i < 20; i++) {
+            assertSame(snapshot, cache.requireSnapshot(1L));
+        }
         verify(gateway, times(1)).queryAccountFresh(credential);
     }
 
@@ -158,9 +165,5 @@ class AccountBalanceCacheTest {
         cache.begin(1L, credential, () -> true);
         cache.refresh(1L).get(2, TimeUnit.SECONDS);
         assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> cache.requireSnapshot(1L));
-    }
-
-    private static ExchangeGateway.AccountSnapshot account() {
-        return new ExchangeGateway.AccountSnapshot(new BigDecimal("200"), new BigDecimal("100"), new BigDecimal("200"), BigDecimal.ZERO);
     }
 }

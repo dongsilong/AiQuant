@@ -14,10 +14,12 @@ import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+
 import java.time.LocalDateTime;
 import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @Tag("dev")
@@ -31,10 +33,17 @@ class ExecutionLedgerQueryTest {
         ReflectionTestUtils.setField(controller, "executionMapper", executions);
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new Configuration(), "test"), QuantExecutionRecord.class);
         TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new Configuration(), "test"), QuantCredential.class);
-        var account = new QuantCredential(); account.setId(1L); account.setAccountName("test");
+        var account = new QuantCredential();
+        account.setId(1L);
+        account.setAccountName("test");
         when(credentials.selectList(any(Wrapper.class))).thenReturn(List.of(account));
-        var record = new QuantExecutionRecord(); record.setCredentialId(1L); record.setSymbol("BTCUSDT"); record.setExchangeOrderStatus("FILLED");
-        var page = new Page<QuantExecutionRecord>(); page.setRecords(List.of(record)); page.setTotal(1);
+        var record = new QuantExecutionRecord();
+        record.setCredentialId(1L);
+        record.setSymbol("BTCUSDT");
+        record.setExchangeOrderStatus("FILLED");
+        var page = new Page<QuantExecutionRecord>();
+        page.setRecords(List.of(record));
+        page.setTotal(1);
         when(executions.selectPage(any(), any())).thenReturn(page);
         try (var login = mockStatic(LoginHelper.class)) {
             login.when(LoginHelper::getUserId).thenReturn(1L);
@@ -56,10 +65,8 @@ class ExecutionLedgerQueryTest {
             filters.getValue().getSqlSegment();
             params = ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) filters.getValue()).getParamNameValuePairs().values();
             assertTrue(params.containsAll(List.of("RECOVERED", "BTCUSDT", "FILLED", from, to)));
-            assertThrows(org.dromara.common.core.exception.ServiceException.class,
-                () -> controller.execution(new PageQuery(), 1L, null, null, null, to, from));
-            assertThrows(org.dromara.common.core.exception.ServiceException.class,
-                () -> controller.execution(new PageQuery(), 2L, null, null, null, from, to));
+            assertThrows(org.dromara.common.core.exception.ServiceException.class, () -> controller.execution(new PageQuery(), 1L, null, null, null, to, from));
+            assertThrows(org.dromara.common.core.exception.ServiceException.class, () -> controller.execution(new PageQuery(), 2L, null, null, null, from, to));
         }
     }
 }

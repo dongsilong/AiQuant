@@ -1,0 +1,218 @@
+# Architecture-review recommendations: status against LIVE hardening branch
+
+Source: user-provided AiQuant source review originally scoped to
+`ai-quant-dev` and `ai-quant-ui-dev`. This checklist compares selected
+recommendations to the different, evolving hardening branch. Existence of
+code is not production acceptance.
+
+| Recommendation | Current assessment | Required closure |
+| --- | --- | --- |
+| Keep StrategyPlugin and ExchangeGateway abstraction | Present | API contract / plugin compatibility regression |
+| Refactor StrategyRuntimeService into coordinators | Incomplete | Extract session, event, signal, state and protection responsibilities with tests |
+| Version strategy configs and persistent state | Not verified | Versioned schema, replay/idempotency migration, restart regression |
+| Canonical market-event protocol and stream dedupe | Partial | Event identity / per-feed recovery tests and bounded replay |
+| Two-level execution-command vs exchange-order states | Partial | Explicit independent state machines and illegal-transition tests |
+| Lease epoch and account-symbol durable dispatch | Implemented in branch | Multi-node and in-flight HTTP crash acceptance |
+| Signed-short position count | Corrected in current branch | CI and full integration results for RiskSignedPositionCountTest |
+| Account capacity atomic reservation | Present | Concurrent opening, timeout, crash, partial-fill MySQL tests |
+| Recovery scan fixed 24h window | Corrected in branch | Fairness/claim behavior under backlog and multi-node chaos |
+| Entry signal idempotency vs account conflict separate keys | Incomplete | Versioned key migration, strategy-instance/interval-aware replay tests |
+| Strategy-level signed positions and realized PnL | Incomplete, P0 | Fill-to-position event ledger, fees, cycles, manual trades, hedge checks |
+| LIVE operator recovery workflow | Partial, P0 | Authenticated endpoints, Binance exact-fact execution, WORM evidence, rehearsal |
+| Real database migrations V01-V05 | Draft only, P0 | Verify deployed schema and restore-tested additive migrations |
+| Binance fault injection and multi-node fencing | Unverified, P0 | Isolated exchange test credentials and observed trade/order facts |
+| LIVE release alerts, rollback, handover | Unverified, P0 | Actual staging deployment drills and approval evidence |
+| Front-end trade terminal decomposition | Not re-audited | Review actual ai-quant-ui-dev tree before change |
+| Financial decimal handling in UI | Not re-audited | Exact strings for money/order inputs, BigDecimal backend contract |
+| Backtest engine | Deferred if LIVE-only scope | Do not block LIVE-only release; keep explicit scope decision |
+| Portfolio Engine and research-plane architecture | Not complete | Design guarded limits before enabling strategy sharing |
+
+## Release policy
+
+Keep `QUANT_RUNTIME_ENABLED=false` until all true P0 execution gates pass.
+LIVE feature default does not grant production trade permission.
+Do not mark a P0 complete on the basis of a class, mapper, migration draft,
+mocked test or GitHub CI alone. Record both repository commit and isolated
+environment observations. No force-unlock of unknown Binance outcomes.
+
+## Current round: fail-closed immutable fill attribution
+
+`StrategyFillAllocationService` now requires a positive exchange trade/order
+ID, known BUY/SELL side, non-null commission and non-null realized PnL.
+Missing financial fields are no longer silently stored as zero, because a
+unique fill attribution becomes immutable after commit. Regression coverage
+asserts no allocation row is written on missing financial data. This does
+not supply per-position signed quantity, cost basis, cycle tracking, or
+shared account-symbol strategy isolation; position/PnL P0 remains OPEN.
+CI results and real Binance reconciliation must be checked at release SHA.
+
+## Position accounting work in this round
+
+`StrategyPositionAccounting` provides deterministic BigDecimal bookkeeping
+for explicitly verified LONG/SHORT plus OPEN/CLOSE fill facts. It tracks
+position cycle, outstanding quantity, proportional average cost basis,
+signed Binance realized PnL and commissions; it fails closed on reversal,
+invalid side and over-close. `StrategyPositionAccountingTest` covers
+multi-fill cost, partial close, new cycles and shorts.
+
+`V20261014_07__strategy_position_cycles.sql` is a **review-only**
+InnoDB schema for immutable position-cycle/event facts, with uniqueness by
+the exact Binance trade ID. **No online projector currently writes the new
+tables.** The current ExchangeGateway.TradeSnapshot carries BUY/SELL but no
+authenticated OPEN/CLOSE intent or positionSide; deriving either from trade
+side, current aggregate position or client order status is unsafe for hedge,
+one-way reversals and external/manual fills.
+
+P0 position/PnL allocation remains OPEN until a durable, order-identified,
+transactionally serialized projector consumes authenticated fill role,
+persists cycle transitions exactly once, quarantines unknown manual/legacy
+activity, reconciles with Binance position and fees, and passes MySQL
+concurrency, restart and exchange-staging acceptance. Do not use the new
+calculator for live sizing or release approvals yet.
+
+## Durable position projector scaffold (not yet LIVE connected)
+
+V08 adds a per-strategy, per-position-side inventory table with a composite
+primary key for InnoDB row locking. `StrategyPositionProjectionMapper` and
+`StrategyPositionProjectionService` provide a transactionally locked path
+that checks the exact exchange trade ID, strategy ownership, strictly
+monotonic trade-time/trade-ID sequence and explicitly supplied OPEN/CLOSE
+role. They write a unique fill event, cycle open/close and quantity/cost/PnL
+inventory together; an invalid close, conflicting replay, missing origin or
+out-of-order fill causes rollback. Numeric decimals compare by value even
+when the exchange provides a different scale.
+
+**This is deliberately NOT called by automatic Binance reconciliation.**
+The current order metadata cannot prove immutable OPEN/CLOSE intent for
+all one-way/hedge/manual/reversal cases; treating reduceOnly=false as proof of
+OPEN is unsafe. No automation should invoke the projector until the trusted
+order-intent origin, gap handling, backfill replay and exchange-side position
+reconciliation are implemented and validated. V07 and V08 remain design-only
+migrations awaiting actual MySQL schema review and restore rehearsal.
+
+P0-04 remains OPEN.
+
+## Immutable order-intent projection gate
+
+V09 adds a review-only `quant_strategy_order_intent` table with unique
+credential/symbol/exchange-order and client-order identities. The projector
+now refuses every fill unless an exact persisted intent independently
+matches strategy, instance, position side, OPEN/CLOSE role, exchange BUY/SELL
+and client order ID. The mere presence of a mutable QuantOrder or a
+reduceOnly flag is insufficient. No automatic insertion or backfill into
+V09 has been enabled; until the execution service transactionally captures
+authenticated strategy intent, the projector fails closed.
+
+This is a security/correctness gate, **not completion of P0-04**. Still
+required: trusted intent creation tied to exchange acceptance, V07-V09
+schema rehearsal, serialized complete trade history replay, robust fee
+asset accounting, account position/protection reconciliation, and
+multi-node MySQL acceptance.
+
+## Strategy order intent writer (current iteration)
+
+`StrategyOrderIntentService` and `StrategyOrderIntentMapper` now support
+insert-once exact-order immutable provenance from a verified ExchangeGateway
+OrderRequest and OrderResult. They reject missing/mismatched ClientOrderId,
+ambiguous BOTH position mode, contradictory LONG/SHORT and OPEN/CLOSE sides,
+and conflicting database duplicate keys. CI includes focused regression.
+The service is **not connected to automated LIVE execution** pending approved
+V09 schema installation and a proven atomic linkage of order ledger and
+intent provenance. An accepted Binance order followed by a local SQL failure
+must remain recoverable and cannot silently be labeled NOT_SENT. The
+projection remains disabled when such immutable provenance is unavailable.
+P0 strategy PnL remains OPEN pending end-to-end wired test and reconciliation.
+
+## Accepted-order local atomicity
+
+LIVE strategy orders now route local accepted-order persistence through
+`StrategyOrderAcceptanceJournal.persist`, a Spring transaction that writes
+`QuantOrder` and the immutable exchange-order intent for explicit LONG/SHORT
+position modes. If the intent insert fails, the local order-ledger write
+rolls back. This method runs **after** the Binance HTTP response; the
+previously reserved dispatch guard continues to block further sends if
+the journal fails. No remote-order rollback is implied. In BOTH mode the
+journal does not fabricate OPEN/CLOSE intent, so those fills cannot project.
+
+IMPORTANT: this does not yet guarantee accepted-order crash recovery fills
+missing intent: a post-HTTP process crash needs order/intent replay based
+on preserved execution command facts. Also required are V07-V09 deployment,
+consistent fee-asset accounting, a correctly ordered exchange fill projector,
+full account position reconciliation and staging failure injection. P0-04
+remains OPEN.
+
+## Six P0-04 exit criteria — additional implementation in this round
+
+1. **Crash-recovered order intent:** still OPEN. The acceptance journal
+   is locally atomic only AFTER Binance has acknowledged the order. There is
+   no durable pre-send OPEN/CLOSE+position-side provenance surviving a crash
+   before the returned order ID is journaled. Do not backfill by guessing.
+2. **Automatic Binance fill projection:** still OPEN. Added
+   `StrategyFillReplayService` as an explicit bounded upstream-fed replay
+   coordinator, not an enabled automatic exchange poller.
+3. **Ordered historical replay and quarantine:** PARTIAL. The coordinator
+   sorts a complete caller-verified window by trade time / trade ID, checks
+   exact immutable order provenance, and halts at the first unattributed
+   fill with its TradeId. The transactional projector rejects stale, duplicate
+   conflicting and over-close facts. Pagination-completeness evidence,
+   durable checkpointing and delayed-fill gap recovery are still OPEN.
+4. **Fee asset and funding:** OPEN. The current `TradeSnapshot` carries
+   commission amount but not commission asset or funding allocation.
+   Reporting those as settled strategy-level money without fee currency and
+   separate funding facts would be unsafe.
+5. **Binance-account vs strategy inventory:** PARTIAL. New
+   `StrategyPositionReconciliation` fails closed unless LONG and SHORT
+   inventory agree using exact BigDecimal comparisons AND complete history,
+   no unattributed manual fills and common watermark are proven. Live
+   Binance account/position snapshot wiring is not enabled.
+6. **Migration and fault drills:** PARTIAL. CI now executes V03/V07/V08/V09
+   DDL on a disposable MySQL 8.4 container. This is NOT verified canonical
+   production schema migration, backup/restore, cross-node crash injection
+   or Binance environment acceptance.
+
+The runtime remains disabled for unattended LIVE operation. Do not mark
+P0-04 closed until all external validations and missing source-fact plumbing
+are completed on a staging clone.
+
+## 2026-10-14: Crash-window, fee-asset and page-completeness repairs
+
+- **Durable pre-HTTP order origin:** V10 `quant_strategy_pre_dispatch_intent`
+  now persists an immutable strategy OPEN/CLOSE, LONG/SHORT, client order ID,
+  strategy ID and lease epoch in the **same transaction** as the durable
+  account-symbol outbound ticket. Only explicit hedge-side strategy orders use
+  `LiveOrderDispatcher.beginStrategy`. This intent survives a process crash
+  after the Binance HTTP request is sent.
+- **Exact-order crash promotion:** `StrategyOrderCrashRecoveryService`
+  transactionally reconciles an exact Binance order, promotes the immutable
+  pre-send intent into V09, and binds the strategy fields to the local order
+  only if every identity agrees. `ExecutionRecoveryService` refuses fallback
+  open-order-list matches for LIVE strategy recovery. Missing/conflicting
+  provenance retains the guard; it never sends the Binance order again.
+- **Commission asset:** Binance account trade snapshots now retain
+  `commissionAsset`. V03/V07/V08 and allocation/projector paths persist and
+  verify the fee asset, reject unknown/mixed inventory currencies, and reject
+  multi-currency totals. **This is NOT a funding-fee attribution engine.**
+  Historical rows without fee-asset facts need supervised reconciliation.
+- **History truncation:** `StrictBinanceTradeCollector` requests bounded
+  six-day slices (at most 180 days in one call), checks TradeId collisions,
+  and rejects a full 1000-row Binance response instead of treating it as an
+  exhaustive page. Exact completeness outside the requested window and
+  the true strategy inception boundary remain to be established.
+- **Schema verification:** CI applies V02/V03/V07/V08/V09/V10 on a disposable
+  MySQL 8.4 container, validating table creation. Real deployed schema
+  compatibility, migration rollback, backup restore, cross-node HTTP chaos
+  and exchange trade/position reconciliation remain external release gates.
+
+**Status by requested item:**
+(1) Crash provenance path implemented for explicit LONG/SHORT, but not
+production fault-injection accepted. (2) Automatic projector scheduling
+remains deliberately disabled: no authenticated historical watermark.
+(3) Ordered bounded replay with quarantine implemented, but no durable
+per-account/symbol checkpoint. (4) Commission currency guarded, funding
+still requires exact attribution over historical positions. (5) Quantity
+comparison guard implemented, actual Binance-vs-ledger proof not accepted.
+(6) Disposable MySQL DDL smoke now tested; production-clone migration,
+backup/restore and staged fault drills remain unperformed.
+
+No one-way BOTH position ownership is fabricated, and no historical
+external/manual fill is attributed without verified provenance.

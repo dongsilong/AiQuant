@@ -3,8 +3,12 @@ package org.dromara.quant.market;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
+import org.dromara.quant.execution.TradingPreparationService;
+import org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -19,9 +23,6 @@ import java.util.function.Consumer;
 @Component
 @Slf4j
 public class UserDataStreamHub {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
     /**
      * 交易所统一网关。
      */
@@ -32,7 +33,7 @@ public class UserDataStreamHub {
     private final TradeExecutionApplicationService executionService;
     private final AccountPositionCache positionCache;
     private final AccountBalanceCache balanceCache;
-    private final org.dromara.quant.execution.TradingPreparationService preparationService;
+    private final TradingPreparationService preparationService;
     /**
      * 账户用户数据流保活与健康检查调度器。
      */
@@ -45,11 +46,19 @@ public class UserDataStreamHub {
      * 共享底层流连接缓存。
      */
     private final Map<Long, SharedUserStream> streams = new ConcurrentHashMap<>();
+    private final Map<Long, String> localLeaseOwners = new ConcurrentHashMap<>();
+    @Autowired
+    private TradeDecisionLogService decisionLogs;
+    @Autowired
+    private LiveUserStreamLeaseMapper streamLease;
+    @Autowired(required = false)
+    private org.dromara.quant.reconcile.LivePositionEventCoordinator positionEvents;
 
     /**
      * 创建 UserDataStreamHub 实例并初始化其依赖。
      */
-    public UserDataStreamHub(ExchangeGateway gateway, TradeExecutionApplicationService executionService, AccountPositionCache positionCache, AccountBalanceCache balanceCache, org.dromara.quant.execution.TradingPreparationService preparationService) {
+    public UserDataStreamHub(ExchangeGateway gateway, TradeExecutionApplicationService executionService, AccountPositionCache positionCache, AccountBalanceCache balanceCache,
+                             org.dromara.quant.execution.TradingPreparationService preparationService) {
         this.gateway = gateway;
         this.executionService = executionService;
         this.positionCache = positionCache;
@@ -58,11 +67,68 @@ public class UserDataStreamHub {
     }
 
     /**
+     * Called only after the resident subscriber acquired the DB lease.
+     */
+    public void registerLeaseOwner(Long credentialId, String token) {
+        if (streamLease.owns(credentialId, token) != 1) {
+            throw new IllegalStateException("LIVE user stream lease is not owned by this node");
+        }
+        localLeaseOwners.put(credentialId, token);
+    }
+
+    /**
+     * 注销指定账户的用户流租约持有者。
+     */
+    public void unregisterLeaseOwner(Long credentialId, String token) {
+        if (!localLeaseOwners.remove(credentialId, token)) {
+            return;
+        }
+        // Closing only the supervisor's subscription is insufficient when an
+        // SSE browser still has a listener: the Binance socket would survive.
+        // A revoked LIVE lease invalidates every local consumer of this stream.
+        streams.computeIfPresent(credentialId, (id, stream) -> {
+            if ("LIVE".equalsIgnoreCase(stream.credential.getRunMode())) {
+                stream.close();
+                return null;
+            }
+            return stream;
+        });
+        if (positionEvents != null) {
+            positionEvents.onUserDataEvent(credentialId, new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
+        }
+    }
+
+    /**
+     * Whether the local Hub still retains the shared stream. A connection that
+     * is temporarily reconnecting is still retained and must not be duplicated.
+     * A stream forcibly removed after lease loss is no longer a valid enrollment.
+     */
+    public boolean hasLocalStream(Long credentialId) {
+        SharedUserStream stream = streams.get(credentialId);
+        return stream != null && !stream.closed;
+    }
+
+    /**
+     * Only the node holding the current LIVE private-stream DB lease may start a strategy subscription.
+     */
+    public boolean hasLiveStreamOwnership(Long credentialId) {
+        return credentialId != null && ownsLiveStream(credentialId);
+    }
+
+    private boolean ownsLiveStream(Long credentialId) {
+        String token = localLeaseOwners.get(credentialId);
+        return token != null && streamLease.owns(credentialId, token) == 1;
+    }
+
+    /**
      * 订阅指定事件流。
      */
     public AutoCloseable subscribe(QuantCredential credential, Consumer<ExchangeGateway.UserDataEvent> listener) {
         if (credential == null || credential.getId() == null) {
             throw new IllegalArgumentException("用户数据流缺少凭证");
+        }
+        if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && !ownsLiveStream(credential.getId())) {
+            throw new IllegalStateException("LIVE private stream belongs to another node or no lease owner is active");
         }
         final AutoCloseable[] subscription = new AutoCloseable[1];
         streams.compute(credential.getId(), (id, current) -> {
@@ -78,7 +144,30 @@ public class UserDataStreamHub {
      */
     @Scheduled(fixedDelay = 15000, initialDelay = 20000)
     public void healthCheck() {
-        streams.values().forEach(SharedUserStream::checkHealth);
+        streams.forEach((id, stream) -> {
+            if ("LIVE".equalsIgnoreCase(stream.credential.getRunMode())) {
+                boolean currentOwner;
+                try {
+                    currentOwner = ownsLiveStream(id);
+                } catch (RuntimeException ex) {
+                    // A missing/failed lease verification is not permission
+                    // to keep a Binance private connection alive.
+                    currentOwner = false;
+                    log.warn("LIVE user-stream lease health verification failed credentialId={}", id, ex);
+                }
+                if (!currentOwner) {
+                    if (streams.remove(id, stream)) {
+                        stream.close();
+                        if (positionEvents != null) {
+                            positionEvents.onUserDataEvent(id, new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
+                        }
+                        log.warn("Closed obsolete LIVE private stream after lease loss credentialId={}", id);
+                    }
+                    return;
+                }
+            }
+            stream.checkHealth();
+        });
     }
 
     /**
@@ -129,24 +218,27 @@ public class UserDataStreamHub {
             if (closed) {
                 throw new IllegalStateException("用户数据流已关闭");
             }
-            StreamEventConsumer<ExchangeGateway.UserDataEvent> consumer = new StreamEventConsumer<>(2048, listener,
-                ex -> {
-                    positionCache.disconnect(credential.getId());
-                    balanceCache.disconnect(credential.getId());
-                    preparationService.invalidate(credential.getId());
-                    log.warn("用户事件消费者失败 credentialId={}", credential.getId(), ex);
-                    scheduler.execute(() -> onEvent(new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null)));
-                },
-                () -> scheduler.execute(() -> onEvent(new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null))));
+            StreamEventConsumer<ExchangeGateway.UserDataEvent> consumer = new StreamEventConsumer<>(2048, listener, ex -> {
+                positionCache.disconnect(credential.getId());
+                balanceCache.disconnect(credential.getId());
+                preparationService.invalidate(credential.getId());
+                log.warn("用户事件消费者失败 credentialId={}", credential.getId(), ex);
+                scheduler.execute(() -> onEvent(new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null)));
+            }, () -> scheduler.execute(() -> onEvent(new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null))));
             listeners.add(consumer);
             if (session == null) {
                 start();
             }
             return () -> streams.computeIfPresent(credential.getId(), (id, stream) -> {
-                if (stream != this) { return stream; }
+                if (stream != this) {
+                    return stream;
+                }
                 listeners.remove(consumer);
                 consumer.close();
-                if (listeners.isEmpty()) { close(); return null; }
+                if (listeners.isEmpty()) {
+                    close();
+                    return null;
+                }
                 return stream;
             });
         }
@@ -155,21 +247,35 @@ public class UserDataStreamHub {
             if (closed || session != null) {
                 return;
             }
+            if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && !ownsLiveStream(credential.getId())) {
+                return;
+            }
             try {
                 long attempt = ++generation;
                 ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
-                positionCache.begin(credential.getId(), exchangeCredential,
-                    () -> {
-                        ExchangeGateway.UserDataStreamSession currentSession = session;
-                        return !closed && attempt == generation && currentSession != null && currentSession.isConnected();
-                    });
-                balanceCache.begin(credential.getId(), exchangeCredential,
-                    () -> !closed && attempt == generation && session != null && session.isConnected());
+                positionCache.begin(credential.getId(), exchangeCredential, () -> {
+                    ExchangeGateway.UserDataStreamSession currentSession = session;
+                    return !closed && attempt == generation && currentSession != null && currentSession.isConnected();
+                });
+                balanceCache.begin(credential.getId(), exchangeCredential, () -> !closed && attempt == generation && session != null && session.isConnected());
                 session = gateway.subscribeUserData(exchangeCredential, event -> {
                     synchronized (this) {
-                        if (!closed && attempt == generation) { onEvent(event); }
+                        if (!closed && attempt == generation && (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || ownsLiveStream(credential.getId()))) {
+                            onEvent(event);
+                        }
                     }
                 });
+                // Opening a Binance connection can block longer than the DB
+                // lease. Never publish CONNECTED or retain a session if another
+                // node took ownership while the network request was in flight.
+                if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && !ownsLiveStream(credential.getId())) {
+                    ExchangeGateway.UserDataStreamSession obsolete = session;
+                    session = null;
+                    if (obsolete != null) {
+                        obsolete.close();
+                    }
+                    throw new IllegalStateException("LIVE private stream lease lost during connection establishment");
+                }
                 lastEventAt = Instant.now();
                 onEvent(new ExchangeGateway.UserDataEvent("CONNECTED", lastEventAt, null));
                 if (keepaliveTask != null) {
@@ -178,7 +284,23 @@ public class UserDataStreamHub {
                 keepaliveTask = scheduler.scheduleAtFixedRate(this::keepAlive, 30, 30, TimeUnit.MINUTES);
             } catch (RuntimeException ex) {
                 log.error("用户数据流启动失败 credentialId={}: {}", credential.getId(), ex.getMessage(), ex);
+                // The socket may already have been created when initial event
+                // processing or keepalive scheduling fails. Never discard the
+                // reference without closing the underlying private connection.
+                ExchangeGateway.UserDataStreamSession failedSession = session;
                 session = null;
+                ++generation;
+                if (keepaliveTask != null) {
+                    keepaliveTask.cancel(false);
+                    keepaliveTask = null;
+                }
+                if (failedSession != null) {
+                    try {
+                        failedSession.close();
+                    } catch (RuntimeException closeError) {
+                        log.warn("用户数据流启动失败后的连接关闭异常 credentialId={}", credential.getId(), closeError);
+                    }
+                }
                 positionCache.disconnect(credential.getId());
                 balanceCache.disconnect(credential.getId());
                 preparationService.invalidate(credential.getId());
@@ -186,7 +308,12 @@ public class UserDataStreamHub {
         }
 
         private void onEvent(ExchangeGateway.UserDataEvent event) {
-            if (decisionLogs != null) { decisionLogs.privateEvent(credential.getId(), event); }
+            if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && positionEvents != null) {
+                positionEvents.onUserDataEvent(credential.getId(), event);
+            }
+            if (decisionLogs != null) {
+                decisionLogs.privateEvent(credential.getId(), event);
+            }
             lastEventAt = Instant.now();
             positionCache.onEvent(credential.getId(), event);
             balanceCache.onEvent(credential.getId(), event);

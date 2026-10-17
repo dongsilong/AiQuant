@@ -29,18 +29,20 @@ class BinanceGatewayUserDataEventTest {
 
     @Test
     void combinedMarketEventPreservesSequenceAndPrice() {
-        ExchangeGateway.MarketEvent event = ReflectionTestUtils.invokeMethod(adapter, "parseMarketEvent",
-            "{\"stream\":\"pumpusdt@aggTrade\",\"data\":{\"e\":\"aggTrade\",\"s\":\"PUMPUSDT\",\"E\":1000,\"a\":42,\"p\":\"0.00412\"}}", "PUMPUSDT", "1m");
-        assertEquals("TRADE", event.type()); assertEquals(42L, event.sequenceId());
+        ExchangeGateway.MarketEvent event = ReflectionTestUtils.invokeMethod(adapter, "parseMarketEvent", "{\"stream\":\"pumpusdt@aggTrade\",\"data\":{\"e\":\"aggTrade\"," +
+            "\"s\":\"PUMPUSDT\",\"E\":1000,\"a\":42,\"p\":\"0.00412\"}}", "PUMPUSDT", "1m");
+        assertEquals("TRADE", event.type());
+        assertEquals(42L, event.sequenceId());
         assertEquals(new java.math.BigDecimal("0.00412"), event.price());
         assertFalse(event.replay());
     }
 
     @Test
     void rawKlineRetainsClosedCandleAndOhlc() {
-        ExchangeGateway.MarketEvent event = ReflectionTestUtils.invokeMethod(adapter, "parseMarketEvent",
-            "{\"e\":\"kline\",\"s\":\"BTCUSDT\",\"E\":1000,\"k\":{\"s\":\"BTCUSDT\",\"i\":\"1m\",\"t\":0,\"T\":59999,\"o\":\"100\",\"h\":\"110\",\"l\":\"90\",\"c\":\"105\",\"v\":\"2\",\"x\":true}}", "BTCUSDT", "1m");
-        assertEquals("KLINE", event.type()); assertTrue(event.kline().closed());
+        ExchangeGateway.MarketEvent event = ReflectionTestUtils.invokeMethod(adapter, "parseMarketEvent", "{\"e\":\"kline\",\"s\":\"BTCUSDT\",\"E\":1000," +
+            "\"k\":{\"s\":\"BTCUSDT\",\"i\":\"1m\",\"t\":0,\"T\":59999,\"o\":\"100\",\"h\":\"110\",\"l\":\"90\",\"c\":\"105\",\"v\":\"2\",\"x\":true}}", "BTCUSDT", "1m");
+        assertEquals("KLINE", event.type());
+        assertTrue(event.kline().closed());
         assertEquals(new java.math.BigDecimal("110"), event.kline().high());
     }
 }

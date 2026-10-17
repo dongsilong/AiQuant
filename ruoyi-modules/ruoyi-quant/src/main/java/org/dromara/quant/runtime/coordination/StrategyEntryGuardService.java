@@ -1,6 +1,6 @@
 package org.dromara.quant.runtime.coordination;
 
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.dromara.quant.runtime.coordination.mapper.StrategyEntryGuardMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -8,7 +8,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
 /**
- * 同一账户凭证、同一交易对、同一根 K 线最多开仓一次。
+ * 同一账户凭证、同一交易对、同一根 K 线最多开仓一次；持仓减少/平仓的 K 线也会被封锁。
  *
  * <p><b>数据库约束要求（重要）：</b>必须在 quant_strategy_entry_guard 上建立
  * <pre>
@@ -20,15 +20,12 @@ import java.time.ZoneOffset;
 @Service
 public class StrategyEntryGuardService {
     /**
-     * 用于执行需要数据库原子语义的 SQL 操作。
+     * MyBatis Mapper preserves the database unique-key and conditional-write semantics.
      */
-    private final JdbcTemplate jdbcTemplate;
+    private final StrategyEntryGuardMapper mapper;
 
-    /**
-     * 创建 StrategyEntryGuardService 实例并初始化其依赖。
-     */
-    public StrategyEntryGuardService(JdbcTemplate jdbcTemplate) {
-        this.jdbcTemplate = jdbcTemplate;
+    public StrategyEntryGuardService(StrategyEntryGuardMapper mapper) {
+        this.mapper = mapper;
     }
 
     /**
@@ -40,11 +37,7 @@ public class StrategyEntryGuardService {
         }
         LocalDateTime openTime = LocalDateTime.ofInstant(klineOpenTime, ZoneOffset.UTC);
         try {
-            int affected = jdbcTemplate.update(
-                "INSERT IGNORE INTO quant_strategy_entry_guard "
-                    + "(credential_id, symbol, instance_id, kline_open_time, created_at) "
-                    + "VALUES (?, ?, ?, ?, NOW())",
-                credentialId, symbol.toUpperCase(), instanceId, openTime);
+            int affected = mapper.tryClaim(credentialId, symbol.toUpperCase(java.util.Locale.ROOT), instanceId, openTime);
             return affected == 1;
         } catch (Exception ex) {
             // 数据库异常与"已占用"在返回值上不可区分，调用方需以业务日志判断。
@@ -57,8 +50,18 @@ public class StrategyEntryGuardService {
      */
     public void bindOrder(Long instanceId, Long credentialId, String symbol, Instant klineOpenTime, Long orderId) {
         LocalDateTime openTime = LocalDateTime.ofInstant(klineOpenTime, ZoneOffset.UTC);
-        jdbcTemplate.update("UPDATE quant_strategy_entry_guard SET order_id=? WHERE instance_id=? AND credential_id=? AND symbol=? AND kline_open_time=? AND (order_id IS NULL OR order_id=?)",
-            orderId, instanceId, credentialId, symbol.toUpperCase(), openTime, orderId);
+        mapper.bindOrder(instanceId, credentialId, symbol.toUpperCase(java.util.Locale.ROOT), openTime, orderId);
+    }
+
+    /**
+     * 持仓在指定 K 线上发生确认减仓/平仓后，将账户与交易对的该根 K 线永久封锁。
+     */
+    public void blockClosedCandle(Long instanceId, Long credentialId, String symbol, Instant klineOpenTime) {
+        if (instanceId == null || credentialId == null || symbol == null || symbol.isBlank() || klineOpenTime == null) {
+            throw new IllegalArgumentException("缺少封锁平仓 K 线所需的账户、实例、交易对或时间");
+        }
+        LocalDateTime openTime = LocalDateTime.ofInstant(klineOpenTime, ZoneOffset.UTC);
+        mapper.blockClosedCandle(credentialId, symbol.toUpperCase(java.util.Locale.ROOT), instanceId, openTime);
     }
 
     /**
@@ -66,9 +69,6 @@ public class StrategyEntryGuardService {
      */
     public void release(Long instanceId, Long credentialId, String symbol, Instant klineOpenTime) {
         LocalDateTime openTime = LocalDateTime.ofInstant(klineOpenTime, ZoneOffset.UTC);
-        jdbcTemplate.update(
-            "DELETE FROM quant_strategy_entry_guard "
-                + "WHERE instance_id=? AND credential_id=? AND symbol=? AND kline_open_time=? AND order_id IS NULL",
-            instanceId, credentialId, symbol.toUpperCase(), openTime);
+        mapper.release(instanceId, credentialId, symbol.toUpperCase(java.util.Locale.ROOT), openTime);
     }
 }

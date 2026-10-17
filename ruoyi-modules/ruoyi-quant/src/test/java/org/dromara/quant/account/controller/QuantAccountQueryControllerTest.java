@@ -35,7 +35,7 @@ class QuantAccountQueryControllerTest {
             verify(gateway).queryProtectionOrders(argThat(value -> "TESTNET".equals(value.runMode())), eq("PUMPUSDT"));
         }
         var permission = QuantAccountQueryController.class.getMethod("protectionOrders", Long.class, String.class).getAnnotation(SaCheckPermission.class);
-        assertArrayEquals(new String[] {"quant:order:list"}, permission.value());
+        assertArrayEquals(new String[]{"quant:order:list"}, permission.value());
     }
 
     @Test

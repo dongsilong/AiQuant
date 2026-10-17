@@ -2,8 +2,11 @@ package org.dromara.quant.market.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import jakarta.annotation.PreDestroy;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.dromara.common.satoken.utils.LoginHelper;
+import org.dromara.quant.config.BeijingTime;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
@@ -16,17 +19,15 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import lombok.extern.slf4j.Slf4j;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 将账户私有事件转发给交易终端。底层连接复用 UserDataStreamHub，避免每个浏览器重复建立交易所连接。
@@ -46,6 +47,9 @@ public class QuantAccountStreamController {
         return thread;
     });
 
+    /**
+     * 为有权访问的账户建立持仓与余额事件的 SSE 连接。
+     */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(HttpServletResponse response, @RequestParam Long credentialId) {
@@ -78,9 +82,7 @@ public class QuantAccountStreamController {
         emitter.onTimeout(cleanup);
         emitter.onError(error -> cleanup.run());
         try {
-            emitter.send(SseEmitter.event().name("quant.account").data(Map.of(
-                "type", "CONNECTING", "credentialId", credentialId
-            )));
+            emitter.send(SseEmitter.event().name("quant.account").data(Map.of("type", "CONNECTING", "credentialId", credentialId.toString())));
             heartbeat.set(heartbeatScheduler.scheduleAtFixedRate(() -> {
                 try {
                     emitter.send(SseEmitter.event().comment("keepalive"));
@@ -96,20 +98,23 @@ public class QuantAccountStreamController {
         return emitter;
     }
 
+    /**
+     * 关闭控制器持有的 SSE 连接和清理任务。
+     */
     @PreDestroy
     public void destroy() {
         heartbeatScheduler.shutdownNow();
     }
 
     private void send(SseEmitter emitter, Runnable cleanup, QuantCredential credential, ExchangeGateway.UserDataEvent event) {
-        if (event == null || !("ACCOUNT_UPDATE".equals(event.eventType()) || "ORDER_TRADE_UPDATE".equals(event.eventType())
-            || "ALGO_UPDATE".equals(event.eventType()) || "CONNECTED".equals(event.eventType()) || "SNAPSHOT".equals(event.eventType()) || "DISCONNECTED".equals(event.eventType()))) {
+        if (event == null || !("ACCOUNT_UPDATE".equals(event.eventType()) || "ORDER_TRADE_UPDATE".equals(event.eventType()) || "ALGO_UPDATE".equals(event.eventType()) ||
+            "CONNECTED".equals(event.eventType()) || "SNAPSHOT".equals(event.eventType()) || "DISCONNECTED".equals(event.eventType()))) {
             return;
         }
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", event.eventType());
-        payload.put("credentialId", credential.getId());
-        payload.put("eventTime", event.eventTime() == null ? Instant.now().toString() : event.eventTime().toString());
+        payload.put("credentialId", credential.getId().toString());
+        payload.put("eventTime", BeijingTime.format(event.eventTime() == null ? Instant.now() : event.eventTime()));
         if ("SNAPSHOT".equals(event.eventType())) {
             ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
             boolean available = false;

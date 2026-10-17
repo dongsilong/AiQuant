@@ -14,22 +14,26 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @Tag("dev")
 class QuantAccountStreamControllerTest {
     @Test
     void forwardsAlgoUpdatesWithoutRestQueries() {
         ExchangeGateway gateway = mock(ExchangeGateway.class);
-        QuantAccountStreamController controller = new QuantAccountStreamController(mock(UserDataStreamHub.class),
-            mock(QuantCredentialMapper.class), gateway, mock(TradeExecutionApplicationService.class));
+        QuantAccountStreamController controller = new QuantAccountStreamController(mock(UserDataStreamHub.class), mock(QuantCredentialMapper.class), gateway,
+            mock(TradeExecutionApplicationService.class));
         AtomicReference<Map<?, ?>> payload = new AtomicReference<>();
         SseEmitter emitter = new SseEmitter() {
             @Override
             public void send(SseEventBuilder builder) {
                 builder.build().forEach(item -> {
-                    if (item.getData() instanceof Map<?, ?> value) payload.set(value);
+                    if (item.getData() instanceof Map<?, ?> value) {
+                        payload.set(value);
+                    }
                 });
             }
         };
@@ -37,8 +41,8 @@ class QuantAccountStreamControllerTest {
         credential.setId(1L);
         String raw = "{\"e\":\"ALGO_UPDATE\"}";
         try {
-            ReflectionTestUtils.invokeMethod(controller, "send", emitter, (Runnable) () -> {}, credential,
-                new ExchangeGateway.UserDataEvent("ALGO_UPDATE", Instant.now(), raw));
+            ReflectionTestUtils.invokeMethod(controller, "send", emitter, (Runnable) () -> {
+            }, credential, new ExchangeGateway.UserDataEvent("ALGO_UPDATE", Instant.now(), raw));
             assertNotNull(payload.get());
             assertEquals("ALGO_UPDATE", payload.get().get("type"));
             assertEquals(raw, payload.get().get("rawJson"));

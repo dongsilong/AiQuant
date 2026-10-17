@@ -54,49 +54,65 @@ public class GoldenOrDeathCrossOneHourBackTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final DecimalFormat DF = new DecimalFormat("0.00");
 
-    /** 聚合周期（毫秒）：1 小时 = 60 × 60 × 1000 */
+    /**
+     * 聚合周期（毫秒）：1 小时 = 60 × 60 × 1000
+     */
     private static final long AGGREGATION_MS = 3_600_000L;
 
-    /** 周期名称，用于日志和 reason */
+    /**
+     * 周期名称，用于日志和 reason
+     */
     private static final String PERIOD_NAME = "1 小时";
 
     // ==================== 交易参数 ====================
-    /** 初始资金 */
+    /**
+     * 初始资金
+     */
     private static final double INITIAL_CAPITAL = 10_000.0;
-    /** 开仓占总资金的比例（10%） */
+    /**
+     * 开仓占总资金的比例（10%）
+     */
     private static final double POSITION_RATIO = 0.10;
-    /** 杠杆倍数（策略要求 10 倍） */
+    /**
+     * 杠杆倍数（策略要求 10 倍）
+     */
     private static final double LEVERAGE = 10.0;
-    /** 止损：价格反向 3% */
+    /**
+     * 止损：价格反向 3%
+     */
     private static final double STOP_LOSS_PCT = 0.03;
-    /** MA60 保护的有效 K 线范围：开仓后第 2 ~ 3 根完整 1 小时 K 线 */
+    /**
+     * MA60 保护的有效 K 线范围：开仓后第 2 ~ 3 根完整 1 小时 K 线
+     */
     private static final int EARLY_EXIT_BAR_START = 2;
     private static final int EARLY_EXIT_BAR_END = 3;
 
     // ==================== 小时 K 线序列（最后一根为正在形成） ====================
     private final List<KlineData> periodBars = new ArrayList<>();
+    private final List<TradeRecord> tradeRecords = new ArrayList<>();
     private long currentBucket = Long.MIN_VALUE;
-
     // ==================== 上一分钟的 MA 值（用于判断分钟级交叉） ====================
     private double prevMa5 = Double.NaN;
     private double prevMa30 = Double.NaN;
     private double prevMa60 = Double.NaN;
-
     // ==================== 账户与持仓 ====================
     private double capital = INITIAL_CAPITAL;
     private double peakCapital = INITIAL_CAPITAL;
     private double maxDrawdown = 0.0;
-
-    /** 持仓方向：1=多，-1=空，0=空仓 */
+    /**
+     * 持仓方向：1=多，-1=空，0=空仓
+     */
     private int position = 0;
     private double entryPrice = 0.0;
     private double positionNotional = 0.0;
-    /** 已持有完整 1 小时 K 线的根数，开仓时=0，每跨一个整点 +1 */
+    /**
+     * 已持有完整 1 小时 K 线的根数，开仓时=0，每跨一个整点 +1
+     */
     private int barsHeld = 0;
-    /** 开仓时间戳（分钟级） */
+    /**
+     * 开仓时间戳（分钟级）
+     */
     private long entryTime = 0L;
-
-    private final List<TradeRecord> tradeRecords = new ArrayList<>();
 
     public static void main(String[] args) {
         try {
@@ -157,8 +173,7 @@ public class GoldenOrDeathCrossOneHourBackTest {
             }
 
             // ==================== 空仓中：分钟级开仓信号 ====================
-            if (position == 0
-                && !Double.isNaN(prevMa5) && !Double.isNaN(prevMa30) && !Double.isNaN(prevMa60)) {
+            if (position == 0 && !Double.isNaN(prevMa5) && !Double.isNaN(prevMa30) && !Double.isNaN(prevMa60)) {
                 checkEntry(m1, curMa5, curMa30, curMa60);
             }
 
@@ -221,21 +236,19 @@ public class GoldenOrDeathCrossOneHourBackTest {
 
         double closePrice = m1.getClose();
 
-    // 做多：金叉，且交叉前 MA30 在 MA60 下方
-    if (crossUpMa60 && prevMa30 < prevMa60) {
-        String reason = String.format(
-            "MA5 上穿 MA60（金叉开多） | 触发前 MA5=%s, MA30=%s, MA60=%s, 现价=%s",
-            DF.format(prevMa5), DF.format(prevMa30), DF.format(prevMa60), DF.format(closePrice));
-        openPosition(1, closePrice, reason, m1.getCloseTime());
+        // 做多：金叉，且交叉前 MA30 在 MA60 下方
+        if (crossUpMa60 && prevMa30 < prevMa60) {
+            String reason = String.format("MA5 上穿 MA60（金叉开多） | 触发前 MA5=%s, MA30=%s, MA60=%s, 现价=%s", DF.format(prevMa5), DF.format(prevMa30), DF.format(prevMa60),
+                DF.format(closePrice));
+            openPosition(1, closePrice, reason, m1.getCloseTime());
+        }
+        // 做空：死叉，且交叉前 MA30 在 MA60 上方
+        else if (crossDownMa60 && prevMa30 > prevMa60) {
+            String reason = String.format("MA5 下穿 MA60（死叉开空） | 触发前 MA5=%s, MA30=%s, MA60=%s, 现价=%s", DF.format(prevMa5), DF.format(prevMa30), DF.format(prevMa60),
+                DF.format(closePrice));
+            openPosition(-1, closePrice, reason, m1.getCloseTime());
+        }
     }
-    // 做空：死叉，且交叉前 MA30 在 MA60 上方
-    else if (crossDownMa60 && prevMa30 > prevMa60) {
-        String reason = String.format(
-            "MA5 下穿 MA60（死叉开空） | 触发前 MA5=%s, MA30=%s, MA60=%s, 现价=%s",
-            DF.format(prevMa5), DF.format(prevMa30), DF.format(prevMa60), DF.format(closePrice));
-        openPosition(-1, closePrice, reason, m1.getCloseTime());
-    }
-}
 
     // ==================== 平仓判断（每分钟，不含 MA60 保护） ====================
 
@@ -252,8 +265,7 @@ public class GoldenOrDeathCrossOneHourBackTest {
                 return;
             }
             // 2) 止盈：MA5 实时下穿 MA30
-            if (!Double.isNaN(prevMa5) && !Double.isNaN(prevMa30)
-                && prevMa5 >= prevMa30 && curMa5 < curMa30) {
+            if (!Double.isNaN(prevMa5) && !Double.isNaN(prevMa30) && prevMa5 >= prevMa30 && curMa5 < curMa30) {
                 closePosition(close, "止盈：MA5 下穿 MA30", m1.getCloseTime());
             }
 
@@ -265,8 +277,7 @@ public class GoldenOrDeathCrossOneHourBackTest {
                 return;
             }
             // 2) 止盈：MA5 实时上穿 MA30
-            if (!Double.isNaN(prevMa5) && !Double.isNaN(prevMa30)
-                && prevMa5 <= prevMa30 && curMa5 > curMa30) {
+            if (!Double.isNaN(prevMa5) && !Double.isNaN(prevMa30) && prevMa5 <= prevMa30 && curMa5 > curMa30) {
                 closePosition(close, "止盈：MA5 上穿 MA30", m1.getCloseTime());
             }
         }
@@ -329,10 +340,8 @@ public class GoldenOrDeathCrossOneHourBackTest {
         double margin = capital * POSITION_RATIO;
         positionNotional = margin * LEVERAGE;
         log.info("");
-        log.info("[开仓] {}  开仓时间={}  价格={}  名义仓位={}  保证金={}  原因={}",
-            direction == 1 ? "多" : "空",
-            DateUtils.date(entryTime),
-            DF.format(price), DF.format(positionNotional), DF.format(margin), reason);
+        log.info("[开仓] {}  开仓时间={}  价格={}  名义仓位={}  保证金={}  原因={}", direction == 1 ? "多" : "空", DateUtils.date(entryTime), DF.format(price), DF.format(positionNotional),
+            DF.format(margin), reason);
     }
 
     private void closePosition(double price, String reason, long exitTime) {
@@ -369,12 +378,8 @@ public class GoldenOrDeathCrossOneHourBackTest {
         tr.exitTime = exitTime;
         tradeRecords.add(tr);
 
-        log.info("[平仓] {}  开仓时间={}  平仓时间={}  开仓价={}  平仓价={}  盈亏={}  当前资金={}  持仓K线={}  原因={}",
-            dir == 1 ? "多" : "空",
-            DateUtils.date(openTime),
-            DateUtils.date(exitTime),
-            DF.format(openPrice), DF.format(price), DF.format(pnl),
-            DF.format(capital), held, reason);
+        log.info("[平仓] {}  开仓时间={}  平仓时间={}  开仓价={}  平仓价={}  盈亏={}  当前资金={}  持仓K线={}  原因={}", dir == 1 ? "多" : "空", DateUtils.date(openTime), DateUtils.date(exitTime),
+            DF.format(openPrice), DF.format(price), DF.format(pnl), DF.format(capital), held, reason);
 
         position = 0;
         entryPrice = 0;
@@ -394,32 +399,29 @@ public class GoldenOrDeathCrossOneHourBackTest {
 
         List<KlineData> allData = new ArrayList<>();
 
-        Files.list(dataDir)
-            .filter(path -> path.getFileName().toString().toLowerCase().endsWith(".json"))
-            .sorted()
-            .forEach(path -> {
-                int fileCount = 0;
-                int lineNo = 0;
-                try (BufferedReader reader = Files.newBufferedReader(path)) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        lineNo++;
-                        line = line.trim();
-                        if (line.isEmpty()) {
-                            continue;
-                        }
-                        try {
-                            allData.add(MAPPER.readValue(line, KlineData.class));
-                            fileCount++;
-                        } catch (Exception e) {
-                            log.error("解析失败 {} 第 {} 行：{}", path.getFileName(), lineNo, e.getMessage());
-                        }
+        Files.list(dataDir).filter(path -> path.getFileName().toString().toLowerCase().endsWith(".json")).sorted().forEach(path -> {
+            int fileCount = 0;
+            int lineNo = 0;
+            try (BufferedReader reader = Files.newBufferedReader(path)) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    lineNo++;
+                    line = line.trim();
+                    if (line.isEmpty()) {
+                        continue;
                     }
-                    log.info("已加载 {}，共 {} 条", path.getFileName(), fileCount);
-                } catch (IOException e) {
-                    log.error("读取文件失败：{}", path.getFileName(), e);
+                    try {
+                        allData.add(MAPPER.readValue(line, KlineData.class));
+                        fileCount++;
+                    } catch (Exception e) {
+                        log.error("解析失败 {} 第 {} 行：{}", path.getFileName(), lineNo, e.getMessage());
+                    }
                 }
-            });
+                log.info("已加载 {}，共 {} 条", path.getFileName(), fileCount);
+            } catch (IOException e) {
+                log.error("读取文件失败：{}", path.getFileName(), e);
+            }
+        });
 
         if (!allData.isEmpty()) {
             allData.sort(Comparator.comparingLong(KlineData::getOpenTime));
@@ -481,5 +483,5 @@ public class GoldenOrDeathCrossOneHourBackTest {
         private Integer numberOfTrades;
         private Double takerBuyBaseAssetVolume;
         private Double takerBuyQuoteAssetVolume;
-        }
+    }
 }

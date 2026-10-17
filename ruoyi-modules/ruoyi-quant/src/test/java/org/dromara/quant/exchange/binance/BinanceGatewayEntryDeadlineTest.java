@@ -6,12 +6,15 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.ExchangeTradingPort;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
-import static org.junit.jupiter.api.Assertions.*;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @Tag("dev")
 class BinanceGatewayEntryDeadlineTest {
@@ -22,7 +25,11 @@ class BinanceGatewayEntryDeadlineTest {
         server.createContext("/", exchange -> {
             String response;
             if (exchange.getRequestURI().getPath().contains("time")) {
-                try { Thread.sleep(300); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); }
+                try {
+                    Thread.sleep(300);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
                 response = "{\"serverTime\":" + System.currentTimeMillis() + "}";
             } else {
                 orders.incrementAndGet();
@@ -38,10 +45,12 @@ class BinanceGatewayEntryDeadlineTest {
             var properties = new QuantProperties();
             properties.getBinance().setTestnetUrl("http://127.0.0.1:" + server.getAddress().getPort());
             var gateway = new BinanceGatewayAdapter(properties);
-            var request = new ExchangeGateway.OrderRequest(new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"),
-                "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE, null, false, "BOTH", "deadline", true, Instant.now().plusMillis(100));
+            var request = new ExchangeGateway.OrderRequest(new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"), "BTCUSDT", "BUY", "MARKET", BigDecimal.ONE, null,
+                false, "BOTH", "deadline", true, Instant.now().plusMillis(100));
             assertThrows(ExchangeTradingPort.OrderNotSentException.class, () -> gateway.placeOrder(request));
             assertEquals(0, orders.get());
-        } finally { server.stop(0); }
+        } finally {
+            server.stop(0);
+        }
     }
 }

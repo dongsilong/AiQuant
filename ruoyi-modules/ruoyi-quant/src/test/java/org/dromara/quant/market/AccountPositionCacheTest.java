@@ -20,6 +20,15 @@ class AccountPositionCacheTest {
     private final ExchangeGateway gateway = mock(ExchangeGateway.class);
     private final ExchangeGateway.Credential credential = new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET");
 
+    private static ExchangeGateway.PositionSnapshot position(String symbol) {
+        return new ExchangeGateway.PositionSnapshot(symbol, "LONG", BigDecimal.ONE, null, null, null, null, null, null, null, null, Instant.ofEpochMilli(30));
+    }
+
+    private static ExchangeGateway.UserDataEvent update(String symbol, String side, String quantity, long time) {
+        return new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(time), "{\"T\":" + time + ",\"a\":{\"P\":[{\"s\":\"" + symbol + "\",\"ps\":\"" + side +
+            "\",\"pa\":\"" + quantity + "\"}]}}");
+    }
+
     @Test
     void initializationIsRequiredAndHealthyReadsNeverQueryRestAgain() throws Exception {
         var cache = new AccountPositionCache(gateway);
@@ -28,7 +37,9 @@ class AccountPositionCacheTest {
         assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> cache.requirePositions(1L));
         when(gateway.queryPositions(credential, null)).thenReturn(List.of());
         cache.refresh(1L).get(2, TimeUnit.SECONDS);
-        for (int i = 0; i < 20; i++) { assertTrue(cache.requirePositions(1L).isEmpty()); }
+        for (int i = 0; i < 20; i++) {
+            assertTrue(cache.requirePositions(1L).isEmpty());
+        }
         verify(gateway, times(1)).queryPositions(credential, null);
     }
 
@@ -127,8 +138,7 @@ class AccountPositionCacheTest {
     void snapshotOlderThanSafetyDeadlineBlocksEvenWithConnectedSocket() throws Exception {
         var cache = ready();
         var accounts = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(cache, "accounts");
-        org.springframework.test.util.ReflectionTestUtils.setField(accounts.get(1L), "snapshotAt",
-            System.nanoTime() - TimeUnit.SECONDS.toNanos(91));
+        org.springframework.test.util.ReflectionTestUtils.setField(accounts.get(1L), "snapshotAt", System.nanoTime() - TimeUnit.SECONDS.toNanos(91));
         assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> cache.requirePositions(1L));
     }
 
@@ -147,8 +157,8 @@ class AccountPositionCacheTest {
     @Test
     void nonzeroSnapshotWithoutExchangeUpdateTimeIsUntrusted() throws Exception {
         var cache = new AccountPositionCache(gateway);
-        when(gateway.queryPositions(credential, null)).thenReturn(List.of(new ExchangeGateway.PositionSnapshot(
-            "PUMPUSDT", "LONG", BigDecimal.ONE, null, null, null, null, null, null, null, null)));
+        when(gateway.queryPositions(credential, null)).thenReturn(List.of(new ExchangeGateway.PositionSnapshot("PUMPUSDT", "LONG", BigDecimal.ONE, null, null, null, null, null,
+            null, null, null)));
         cache.begin(1L, credential, () -> true);
         cache.refresh(1L).get(2, TimeUnit.SECONDS);
         assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> cache.requirePositions(1L));
@@ -160,8 +170,8 @@ class AccountPositionCacheTest {
         when(gateway.queryPositions(credential, null)).thenReturn(List.of(position("PUMPUSDT")));
         cache.begin(1L, credential, () -> true);
         cache.refresh(1L).get(2, TimeUnit.SECONDS);
-        when(gateway.queryPositions(credential, null)).thenReturn(List.of(new ExchangeGateway.PositionSnapshot(
-            "PUMPUSDT", "LONG", BigDecimal.ONE, null, null, null, null, null, null, null, null, Instant.ofEpochMilli(40))));
+        when(gateway.queryPositions(credential, null)).thenReturn(List.of(new ExchangeGateway.PositionSnapshot("PUMPUSDT", "LONG", BigDecimal.ONE, null, null, null, null, null,
+            null, null, null, Instant.ofEpochMilli(40))));
         cache.refresh(1L).get(2, TimeUnit.SECONDS);
         cache.onEvent(1L, update("PUMPUSDT", "LONG", "0", 35));
         assertEquals(1, cache.requirePositions(1L).size());
@@ -173,14 +183,5 @@ class AccountPositionCacheTest {
         when(gateway.queryPositions(credential, null)).thenReturn(List.of());
         cache.refresh(1L).get(2, TimeUnit.SECONDS);
         return cache;
-    }
-
-    private static ExchangeGateway.PositionSnapshot position(String symbol) {
-        return new ExchangeGateway.PositionSnapshot(symbol, "LONG", BigDecimal.ONE, null, null, null, null, null, null, null, null, Instant.ofEpochMilli(30));
-    }
-
-    private static ExchangeGateway.UserDataEvent update(String symbol, String side, String quantity, long time) {
-        return new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(time),
-            "{\"T\":" + time + ",\"a\":{\"P\":[{\"s\":\"" + symbol + "\",\"ps\":\"" + side + "\",\"pa\":\"" + quantity + "\"}]}}");
     }
 }

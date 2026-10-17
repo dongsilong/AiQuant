@@ -12,11 +12,9 @@ import com.binance.connector.client.common.configuration.SignatureConfiguration;
 import com.binance.connector.client.common.sign.SignatureGenerator;
 import com.binance.connector.client.derivatives_trading_usds_futures.rest.api.DerivativesTradingUsdsFuturesRestApi;
 import com.binance.connector.client.derivatives_trading_usds_futures.rest.model.*;
-import com.binance.connector.client.derivatives_trading_usds_futures.rest.model.Interval;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
-import okhttp3.internal.http.HttpMethod;
 import org.bouncycastle.crypto.CryptoException;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.exchange.ExchangeGateway;
@@ -31,6 +29,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Binance USDⓈ-M Futures SDK 12.x 适配器。SDK 类型只允许出现在本类。
@@ -42,8 +41,16 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * Binance 服务器时间偏移刷新周期，单位毫秒。
      */
     private static final long CLOCK_OFFSET_REFRESH_MILLIS = 30_000L;
-    /** Binance 签名请求允许的时间窗口，覆盖代理和网络抖动。 */
+    /**
+     * Binance 签名请求允许的时间窗口，覆盖代理和网络抖动。
+     */
     private static final long RECV_WINDOW_MILLIS = 60_000L;
+    private static final long MARKET_REST_CONNECT_TIMEOUT_SECONDS = 5L;
+    private static final long MARKET_REST_READ_TIMEOUT_SECONDS = 15L;
+    private static final long MARKET_REST_CALL_TIMEOUT_SECONDS = 20L;
+    private static final long ACCOUNT_REST_CONNECT_TIMEOUT_SECONDS = 5L;
+    private static final long ACCOUNT_REST_READ_TIMEOUT_SECONDS = 15L;
+    private static final long ACCOUNT_REST_CALL_TIMEOUT_SECONDS = 20L;
     /**
      * 量化模块配置。
      */
@@ -54,23 +61,29 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * Binance 服务器时间偏移缓存。
      */
     private final Map<String, ClockOffset> clockOffsets = new ConcurrentHashMap<>();
-    /** 同一环境只允许一个服务器时间刷新，其他线程复用结果。 */
+    /**
+     * 同一环境只允许一个服务器时间刷新，其他线程复用结果。
+     */
     private final Map<String, Object> clockOffsetRefreshLocks = new ConcurrentHashMap<>();
     private final Map<String, TradingRules> tradingRules = new ConcurrentHashMap<>();
-    private record TradingRules(long expiresAt, ExchangeInfo info) {}
-    /** 进程内共享的 REST 请求节流时间点，避免同一出口 IP 触发 Binance 权重限制。 */
-    private final java.util.concurrent.ConcurrentHashMap<Credential, java.util.concurrent.CompletableFuture<AccountSnapshot>> accountQueries = new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * 进程内共享的 REST 请求节流时间点，避免同一出口 IP 触发 Binance 权重限制。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Credential, java.util.concurrent.CompletableFuture<AccountSnapshot>> accountQueries =
+        new java.util.concurrent.ConcurrentHashMap<>();
     private final RestRequestScheduler restScheduler = new RestRequestScheduler(250);
     /**
      * Binance 事件解析使用的 JSON 工具。
      */
     private final Gson gson = new Gson();
-
+    private final java.util.concurrent.atomic.AtomicReference<String> currentWebsocketTransport = new java.util.concurrent.atomic.AtomicReference<>();
+    private final java.util.Set<StreamHandle> activeWebsocketStreams = ConcurrentHashMap.newKeySet();
     /**
      * 创建 BinanceGatewayAdapter 实例并初始化其依赖。
      */
     public BinanceGatewayAdapter(QuantProperties properties) {
         this.properties = properties;
+        currentWebsocketTransport.set(validateWebsocketTransport(properties.getBinance().getWebsocketTransport()));
     }
 
     /**
@@ -115,34 +128,6 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 从行情载荷读取最新成交价。
-     */
-    private static BigDecimal priceOf(SymbolPriceTickerResponse response) {
-        Object actual = response.getActualInstance();
-        if (actual instanceof SymbolPriceTickerResponse1 single) {
-            return decimal(single.getPrice());
-        }
-        if (actual instanceof SymbolPriceTickerResponse2 list && !list.isEmpty()) {
-            return decimal(list.get(0).getPrice());
-        }
-        throw new IllegalStateException("Binance 价格响应类型不支持: " + (actual == null ? "null" : actual.getClass().getName()));
-    }
-
-    /**
-     * 从行情载荷读取标记价格。
-     */
-    private static BigDecimal markPriceOf(MarkPriceResponse response) {
-        Object actual = response.getActualInstance();
-        if (actual instanceof MarkPriceResponse1 single) {
-            return decimal(single.getMarkPrice());
-        }
-        if (actual instanceof MarkPriceResponse2 list && !list.isEmpty()) {
-            return decimal(list.get(0).getMarkPrice());
-        }
-        throw new IllegalStateException("Binance 标记价格响应类型不支持: " + (actual == null ? "null" : actual.getClass().getName()));
-    }
-
-    /**
      * 读取必需数据，不满足条件时抛出异常。
      */
     private static void requireCredential(Credential credential) {
@@ -152,13 +137,151 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 从公开行情 JSON 读取必需的小数值。
+     * 私有账户能力校验。只有交易所明确返回 canWithdraw=false 时，
+     * 才能向 LIVE 闸门报告 withdrawalDisabled=true。
+     * null/缺失值属于未知状态，必须拒绝而不是当作已禁用。
+     *
+     * <p>该字段不是 API Key 权限审计的替代品，运维仍须检查密钥权限。
      */
+    static ConnectivityResult tradingPermissions(Boolean canTrade, Boolean canWithdraw) {
+        boolean tradeAllowed = Boolean.TRUE.equals(canTrade);
+        boolean withdrawalDisabled = Boolean.FALSE.equals(canWithdraw);
+        if (!tradeAllowed) {
+            return new ConnectivityResult(false, "账户没有 Futures Trade 权限", false, withdrawalDisabled, Instant.now());
+        }
+        if (!withdrawalDisabled) {
+            return new ConnectivityResult(false, "未确认禁用提现能力，拒绝 LIVE 交易", true, false, Instant.now());
+        }
+        return new ConnectivityResult(true, "OK", true, true, Instant.now());
+    }
+
     private static BigDecimal jsonDecimal(JsonObject data, String field) {
         if (!data.has(field) || data.get(field).isJsonNull()) {
             throw new IllegalStateException("Binance 公开行情缺少字段: " + field);
         }
         return decimal(data.get(field).getAsString());
+    }
+
+    private static String validateWebsocketTransport(String input) {
+        String value = input == null ? "" : input.trim().toUpperCase(Locale.ROOT);
+        if (!"RAW_OKHTTP".equals(value) && !"BINANCE_SDK".equals(value)) {
+            throw new IllegalArgumentException("WebSocket transport must be RAW_OKHTTP or BINANCE_SDK");
+        }
+        return value;
+    }
+
+    /**
+     * 设置交易对保证金模式。
+     */
+    private static com.binance.connector.client.common.ApiException apiError(RuntimeException ex) {
+        Throwable current = ex;
+        while (current != null) {
+            if (current instanceof com.binance.connector.client.common.ApiException error) {
+                return error;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    private static Integer errorCode(com.binance.connector.client.common.ApiException error) {
+        try {
+            return com.google.gson.JsonParser.parseString(error.getResponseBody()).getAsJsonObject().get("code").getAsInt();
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * 将 SDK 异常映射为带阶段信息的安全错误，不输出认证数据。
+     */
+    private static ExchangeRequestException requestFailure(String stage, RuntimeException ex) {
+        if (ex instanceof ExchangeRequestException safe) {
+            return safe;
+        }
+        var error = apiError(ex);
+        String message = ex.getClass().getSimpleName();
+        if (error != null) {
+            try {
+                message = com.google.gson.JsonParser.parseString(error.getResponseBody()).getAsJsonObject().get("msg").getAsString();
+            } catch (RuntimeException ignored) {
+            }
+        }
+        // 不附带原始异常，避免 SDK 的 URL、签名和请求头进入日志。
+        return new ExchangeRequestException(stage, error == null ? null : error.getCode(), error == null ? null : errorCode(error), message);
+    }
+
+    /**
+     * Package-private for SDK DTO/hedge-row contract tests.
+     */
+    static org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings parseSymbolTradingSettings(String expectedSymbol, java.util.List<?> rows) {
+        if (rows == null || rows.isEmpty()) {
+            throw new IllegalStateException("Binance 未返回有效交易对配置");
+        }
+        String actualMode = null;
+        Integer actualLeverage = null;
+        for (var row : rows) {
+            String actualSymbol = string(row, "getSymbol");
+            if (!expectedSymbol.equalsIgnoreCase(actualSymbol)) {
+                throw new IllegalStateException("Binance 配置回查返回了不匹配的交易对");
+            }
+            String isolated = string(row, "getIsolated");
+            String mode = null;
+            if ("true".equalsIgnoreCase(isolated)) {
+                mode = "ISOLATED";
+            } else if ("false".equalsIgnoreCase(isolated)) {
+                mode = "CROSSED";
+            }
+            if (mode == null) {
+                String raw = string(row, "getMarginType");
+                if ("ISOLATED".equalsIgnoreCase(raw)) {
+                    mode = "ISOLATED";
+                } else if ("CROSS".equalsIgnoreCase(raw) || "CROSSED".equalsIgnoreCase(raw)) {
+                    mode = "CROSSED";
+                }
+            }
+            String rawLeverage = string(row, "getLeverage");
+            if (mode == null || rawLeverage == null) {
+                throw new IllegalStateException("Binance 配置回查缺少保证金模式或杠杆");
+            }
+            int leverage;
+            try {
+                leverage = Integer.parseInt(rawLeverage);
+            } catch (NumberFormatException ex) {
+                throw new IllegalStateException("Binance 返回的杠杆值无效");
+            }
+            if (leverage < 1 || leverage > 125 || actualMode != null && !actualMode.equals(mode) || actualLeverage != null && actualLeverage != leverage) {
+                throw new IllegalStateException("Binance 不同持仓方向的保证金/杠杆配置不一致");
+            }
+            actualMode = mode;
+            actualLeverage = leverage;
+        }
+        return new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings(expectedSymbol, actualMode, actualLeverage);
+    }
+
+    private static void requireOrderDeadline(OrderRequest request) {
+        if (request.validUntil() != null && !Instant.now().isBefore(request.validUntil())) {
+            throw new OrderNotSentException("开仓信号在交易请求准备期间过期，订单未发送，等待新的行情");
+        }
+    }
+
+    static boolean hedgePositionSide(String positionSide) {
+        return "LONG".equalsIgnoreCase(positionSide) || "SHORT".equalsIgnoreCase(positionSide);
+    }
+
+    /**
+     * Mirrors the request-body classification used by the official SDK's HTTP
+     * transport without depending on OkHttp's non-public internal classes.
+     * Keep this rule aligned with connector updates to prevent signature drift.
+     */
+    static boolean requiresRequestBody(String method) {
+        if (method == null) {
+            return false;
+        }
+        return switch (method.toUpperCase(java.util.Locale.ROOT)) {
+            case "POST", "PUT", "PATCH", "PROPPATCH", "REPORT" -> true;
+            default -> false;
+        };
     }
 
     /**
@@ -188,15 +311,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             if (account.getData() == null || configuration.getData() == null) {
                 return new ConnectivityResult(false, "Binance 凭证校验无响应");
             }
-            boolean canTrade = Boolean.TRUE.equals(configuration.getData().getCanTrade());
-            boolean withdrawalDisabled = !Boolean.TRUE.equals(configuration.getData().getCanWithdraw());
-            if (!canTrade) {
-                return new ConnectivityResult(false, "账户没有 Futures Trade 权限", false, withdrawalDisabled, Instant.now());
-            }
-            /*if (!withdrawalDisabled) {
-                return new ConnectivityResult(false, "账户提现权限未关闭", true, false, Instant.now());
-            }*/
-            return new ConnectivityResult(true, "OK", true, true, Instant.now());
+            return tradingPermissions(configuration.getData().getCanTrade(), configuration.getData().getCanWithdraw());
         } catch (RuntimeException ex) {
             return new ConnectivityResult(false, "Binance 连接失败");
         }
@@ -210,6 +325,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return queryExchangeInfo(null);
     }
 
+    /**
+     * 查询交易对的精度、过滤器和下单规则。
+     */
     @Override
     public synchronized SymbolRule queryTradingRule(Credential credential, String symbol) {
         String environment = credential != null && "TESTNET".equalsIgnoreCase(credential.runMode()) ? "TESTNET" : "LIVE";
@@ -218,8 +336,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             cached = new TradingRules(System.currentTimeMillis() + 60_000L, queryExchangeInfo(credential));
             tradingRules.put(environment, cached);
         }
-        return cached.info().symbols().stream().filter(rule -> rule.symbol().equalsIgnoreCase(symbol)).findFirst()
-            .orElseThrow(() -> new IllegalArgumentException("实际交易环境中没有有效交易规则: " + symbol));
+        return cached.info().symbols().stream().filter(rule -> rule.symbol().equalsIgnoreCase(symbol)).findFirst().orElseThrow(() -> new IllegalArgumentException(
+            "实际交易环境中没有有效交易规则: " + symbol));
     }
 
     private ExchangeInfo queryExchangeInfo(Credential credential) {
@@ -274,16 +392,23 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return queryKlinesFrom(symbol, interval, null, limit);
     }
 
+    /**
+     * 从开盘时间补取 LIVE 环境的历史 K 线。
+     */
     @Override
     public List<Kline> queryKlinesFrom(String symbol, String interval, Instant from, int limit) {
         return queryKlinesFrom("LIVE", symbol, interval, from, limit);
     }
 
+    /**
+     * 按指定交易环境补取历史 K 线，不跨环境回退。
+     */
     @Override
     public List<Kline> queryKlinesFrom(String runMode, String symbol, String interval, Instant from, int limit) {
         try {
             var sdkInterval = Interval.fromValue(interval);
-            ApiResponse<KlineCandlestickDataResponse> response = marketApi(runMode).klineCandlestickData(symbol.trim(), sdkInterval, from == null ? null : from.toEpochMilli(), null, (long) Math.min(1000, limit));
+            ApiResponse<KlineCandlestickDataResponse> response = marketApi(runMode).klineCandlestickData(symbol.trim(), sdkInterval, from == null ? null : from.toEpochMilli(),
+                null, (long) Math.min(1000, limit));
             List<Kline> result = new ArrayList<>(response.getData().size());
             long now = System.currentTimeMillis();
             for (var row : response.getData()) {
@@ -298,17 +423,27 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
     }
 
+    /**
+     * 按聚合成交 ID 补取 LIVE 环境的行情事件。
+     */
     @Override
     public List<MarketEvent> queryAggregateTradesFrom(String symbol, String interval, long fromId, int limit) {
         return queryAggregateTradesFrom("LIVE", symbol, interval, fromId, limit);
     }
 
+    /** Validate proxy before switching any active LIVE streams. */
+
+    /**
+     * 在指定环境按成交 ID 补偿历史行情缺口。
+     */
     @Override
     public List<MarketEvent> queryAggregateTradesFrom(String runMode, String symbol, String interval, long fromId, int limit) {
         var data = marketApi(runMode).compressedAggregateTradesList(symbol, fromId, null, null, (long) Math.min(1000, limit)).getData();
-        if (data == null) { return List.of(); }
-        return data.stream().map(item -> new MarketEvent("TRADE", symbol, interval, decimal(item.getpLowerCase()), null,
-            instant(item.getT()), item.getaLowerCase(), Instant.now(), true)).toList();
+        if (data == null) {
+            return List.of();
+        }
+        return data.stream().map(item -> new MarketEvent("TRADE", symbol, interval, decimal(item.getpLowerCase()), null, instant(item.getT()), item.getaLowerCase(),
+            Instant.now(), true)).toList();
     }
 
     /**
@@ -319,11 +454,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return queryPrice("LIVE", symbol);
     }
 
+    /**
+     * 查询指定环境的最新标记价格，并返回带来源时间的快照。
+     */
     @Override
     public PriceSnapshot queryPrice(String runMode, String symbol) {
         try {
             String normalizedSymbol = symbol.trim();
-            JsonObject trade = publicJson(runMode, "/fapi/v1/ticker/price", normalizedSymbol);
+            JsonObject trade = publicJson(runMode, "/fapi/v2/ticker/price", normalizedSymbol);
             JsonObject mark = publicJson(runMode, "/fapi/v1/premiumIndex", normalizedSymbol);
             return new PriceSnapshot(normalizedSymbol, jsonDecimal(trade, "price"), jsonDecimal(mark, "markPrice"), Instant.now());
         } catch (RuntimeException ex) {
@@ -332,8 +470,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 读取 Binance 公开行情原始 JSON。SDK 12.0.x 对 ticker 的 oneOf 响应存在 actualInstance 为空的兼容问题，
-     * 这里仍复用 SDK 的客户端、地址和超时配置，只绕过有问题的模型反序列化。
+     * SDK 12.1.1 的 ticker/mark oneOf 解码会返回 actualInstance=null；保留 SDK 的请求、代理和超时配置，按原始 JSON 读取。
      */
     private JsonObject publicJson(String runMode, String path, String symbol) {
         ClientConfiguration config = restConfiguration(marketBaseUrl(runMode));
@@ -357,24 +494,108 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return subscribeMarket("LIVE", symbol, interval, listener);
     }
 
+    /**
+     * 订阅指定环境的公开行情，并封装 SDK 流生命周期。
+     */
     @Override
     public MarketStreamSession subscribeMarket(String runMode, String symbol, String interval, Consumer<MarketEvent> listener) {
         String normalized = symbol.trim().toUpperCase(Locale.ROOT);
         String streamSymbol = normalized.toLowerCase(Locale.ROOT);
         String base = "TESTNET".equalsIgnoreCase(runMode) ? properties.getBinance().getTestnetMarketStreamUrl() : properties.getBinance().getMarketStreamUrl();
-        String url = base + "?streams=" + streamSymbol + "@aggTrade/" + streamSymbol + "@markPrice@1s/" + streamSymbol + "@kline_" + interval;
-        SocketConnection socket = new SocketConnection(url, text -> {
+        Consumer<String> events = text -> {
             MarketEvent event = parseMarketEvent(text, normalized, interval);
-            if (event != null) { listener.accept(event); }
-        }, () -> listener.accept(new MarketEvent("DISCONNECTED", normalized, interval, null, null, Instant.now())));
-        return new MarketStreamSession(socket::close);
+            if (event != null) {
+                listener.accept(event);
+            }
+        };
+        Runnable disconnected = () -> listener.accept(new MarketEvent("DISCONNECTED", normalized, interval, null, null, Instant.now()));
+        if (sdkStreamsEnabled()) {
+            requireSdkStreamsCanConnect();
+            BinanceSdkStreamTransport sdk = BinanceSdkStreamTransport.market(base, streamSymbol, interval, events, disconnected,
+                properties.getBinance().getSdkStreamBacklogLimit(), properties.getProxy());
+            StreamHandle managed = trackWebsocket(sdk::close, disconnected);
+            return new MarketStreamSession(managed::close);
+        }
+        String url = base + "?streams=" + streamSymbol + "@aggTrade/" + streamSymbol + "@markPrice@1s/" + streamSymbol + "@kline_" + interval;
+        SocketConnection socket = new SocketConnection(url, events, disconnected);
+        StreamHandle managed = trackWebsocket(socket::close, disconnected);
+        return new MarketStreamSession(managed::close);
     }
 
-    /** 直接解析原始事件，避免 SDK 内部无界队列及 Jetty 11/12 类型冲突。 */
+    /**
+     * New subscriptions use this transport; existing subscriptions change only after safe reconnect.
+     */
+    boolean sdkStreamsEnabled() {
+        return "BINANCE_SDK".equals(currentWebsocketTransport.get());
+    }
+
+    /**
+     * 启动 SDK WebSocket 前检查代理和网络配置是否满足连接条件。
+     */
+    private void requireSdkStreamsCanConnect() {
+        QuantProperties.Proxy proxy = properties.getProxy();
+        if (proxy == null) {
+            return;
+        }
+        boolean hasHost = proxy.getHost() != null && !proxy.getHost().isBlank();
+        if (hasHost && (proxy.getPort() == null || proxy.getPort() < 1 || proxy.getPort() > 65535)) {
+            throw new IllegalArgumentException("Binance SDK Streams HTTP proxy port is invalid");
+        }
+        if (!hasHost && proxy.getPort() != null) {
+            throw new IllegalArgumentException("Binance SDK Streams HTTP proxy host is missing");
+        }
+    }
+
+    /**
+     * Node-local current mode; cluster deployments must switch every trading node.
+     */
+    public String websocketTransport() {
+        return currentWebsocketTransport.get();
+    }
+
+    /**
+     * Atomically choose the transport for future subscriptions and force old sessions to reconnect.
+     * The market and account stream hubs receive DISCONNECTED and perform existing recovery/replay.
+     * This is NOT a zero-gap migration; operators must verify LIVE protections and user-data health.
+     *
+     * @return number of sessions instructed to reconnect
+     */
+    public synchronized int switchWebsocketTransport(String target) {
+        String normalized = validateWebsocketTransport(target);
+        // Reject an unsupported SDK/proxy combination BEFORE switching the node
+        // transport or notifying existing sockets. Otherwise all LIVE market and
+        // private streams disconnect and enter a permanent reconnect failure loop.
+        if ("BINANCE_SDK".equals(normalized)) {
+            requireSdkStreamsCanConnect();
+        }
+        if (normalized.equals(currentWebsocketTransport.get())) {
+            return 0;
+        }
+        currentWebsocketTransport.set(normalized);
+        int count = 0;
+        for (StreamHandle stream : java.util.List.copyOf(activeWebsocketStreams)) {
+            stream.reconnect();
+            count++;
+        }
+        log.warn("Binance WebSocket transport changed to {} on this node, reconnecting {} streams", normalized, count);
+        return count;
+    }
+
+    private StreamHandle trackWebsocket(Runnable close, Runnable notifyDisconnected) {
+        StreamHandle handle = new StreamHandle(close, notifyDisconnected);
+        activeWebsocketStreams.add(handle);
+        return handle;
+    }
+
+    /**
+     * Original protocol transport: deterministic fail/replay path when SDK stream backlog is unsuitable.
+     */
     private MarketEvent parseMarketEvent(String text, String symbol, String interval) {
         JsonObject root = gson.fromJson(text, JsonObject.class);
         JsonObject data = root.has("data") ? root.getAsJsonObject("data") : root;
-        if (!data.has("e")) { return null; }
+        if (!data.has("e")) {
+            return null;
+        }
         if (!data.has("s") || !symbol.equalsIgnoreCase(data.get("s").getAsString())) {
             throw new IllegalStateException("Binance行情交易对与订阅不一致");
         }
@@ -387,54 +608,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 if (!interval.equals(k.get("i").getAsString()) || !symbol.equalsIgnoreCase(k.get("s").getAsString())) {
                     throw new IllegalStateException("Binance K线交易对或周期与订阅不一致");
                 }
-                Kline candle = new Kline(Instant.ofEpochMilli(k.get("t").getAsLong()), Instant.ofEpochMilli(k.get("T").getAsLong()),
-                    k.get("o").getAsBigDecimal(), k.get("h").getAsBigDecimal(), k.get("l").getAsBigDecimal(), k.get("c").getAsBigDecimal(), k.get("v").getAsBigDecimal(), k.get("x").getAsBoolean());
+                Kline candle = new Kline(Instant.ofEpochMilli(k.get("t").getAsLong()), Instant.ofEpochMilli(k.get("T").getAsLong()), k.get("o").getAsBigDecimal(),
+                    k.get("h").getAsBigDecimal(), k.get("l").getAsBigDecimal(), k.get("c").getAsBigDecimal(), k.get("v").getAsBigDecimal(), k.get("x").getAsBoolean());
                 yield new MarketEvent("KLINE", symbol, interval, null, candle, time);
             }
             default -> null;
         };
-    }
-
-    /** OkHttp 负责 ping/pong；重连、补偿及消费隔离统一由 Hub 管理。 */
-    private final class SocketConnection extends okhttp3.WebSocketListener implements AutoCloseable {
-        private final AtomicBoolean closed = new AtomicBoolean();
-        private final AtomicBoolean connected = new AtomicBoolean();
-        private final Consumer<String> messages;
-        private final Runnable disconnected;
-        private final okhttp3.WebSocket socket;
-
-        private SocketConnection(String url, Consumer<String> messages, Runnable disconnected) {
-            this.messages = messages;
-            this.disconnected = disconnected;
-            var builder = new okhttp3.OkHttpClient.Builder().connectionPool(restPool).dispatcher(restDispatcher)
-                .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
-                .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS).retryOnConnectionFailure(false);
-            QuantProperties.Proxy proxy = properties.getProxy();
-            if (proxy != null && proxy.getHost() != null && !proxy.getHost().isBlank() && proxy.getPort() != null) {
-                builder.proxy(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxy.getHost(), proxy.getPort())));
-            }
-            socket = builder.build().newWebSocket(new okhttp3.Request.Builder().url(url).build(), this);
-        }
-
-        @Override public void onOpen(okhttp3.WebSocket socket, okhttp3.Response response) { connected.set(!closed.get()); }
-        @Override public void onMessage(okhttp3.WebSocket socket, String text) {
-            if (closed.get()) { return; }
-            try { messages.accept(text); } catch (RuntimeException ex) {
-                // 不输出私有事件正文/URL，防止 listenKey 或账户信息进入错误日志。
-                log.warn("Binance WebSocket 事件处理失败: {}", ex.getClass().getSimpleName());
-                fail(); socket.cancel();
-            }
-        }
-        @Override public void onFailure(okhttp3.WebSocket socket, Throwable failure, okhttp3.Response response) {
-            log.warn("Binance WebSocket传输失败: errorType={}, httpStatus={}", failure.getClass().getSimpleName(), response == null ? null : response.code());
-            fail();
-        }
-        @Override public void onClosing(okhttp3.WebSocket socket, int code, String reason) { socket.close(code, null); fail(); }
-        private void fail() {
-            connected.set(false);
-            if (closed.compareAndSet(false, true)) { disconnected.run(); }
-        }
-        @Override public void close() { closed.set(true); connected.set(false); socket.cancel(); }
     }
 
     /**
@@ -445,14 +624,17 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         var result = new java.util.concurrent.CompletableFuture<AccountSnapshot>();
         var running = accountQueries.putIfAbsent(credential, result);
         if (running != null) {
-            try { return running.get(15, java.util.concurrent.TimeUnit.SECONDS); }
-            catch (InterruptedException ex) {
+            try {
+                return running.get(15, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 throw new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException();
             } catch (java.util.concurrent.TimeoutException ex) {
                 throw new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException();
             } catch (java.util.concurrent.ExecutionException ex) {
-                if (ex.getCause() instanceof RuntimeException error) { throw error; }
+                if (ex.getCause() instanceof RuntimeException error) {
+                    throw error;
+                }
                 throw new IllegalStateException("账户查询失败");
             }
         }
@@ -463,17 +645,24 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         } catch (RuntimeException ex) {
             result.completeExceptionally(ex);
             throw ex;
-        } finally { accountQueries.remove(credential, result); }
+        } finally {
+            accountQueries.remove(credential, result);
+        }
     }
 
+    /**
+     * 直接从交易所刷新账户余额与持仓事实，不使用本地缓存。
+     */
     @Override
     public AccountSnapshot queryAccountFresh(Credential credential) {
         try {
-            ApiResponse<AccountInformationV3Response> response = api(credential, RestRequestScheduler.Kind.ACCOUNT).accountInformationV3(RECV_WINDOW_MILLIS);
-            var data = response.getData();
+            AccountInformationV3Response data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.accountInformationV3(RECV_WINDOW_MILLIS).getData());
             return new AccountSnapshot(decimal(data.getTotalWalletBalance()), decimal(data.getAvailableBalance()), decimal(data.getTotalMarginBalance()),
                 decimal(data.getTotalUnrealizedProfit()));
-        } catch (RuntimeException ex) { throw requestFailure("QUERY_ACCOUNT", ex); }
+        } catch (RuntimeException ex) {
+            throw requestFailure("QUERY_ACCOUNT", ex);
+        }
     }
 
     /**
@@ -526,37 +715,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 设置交易对保证金模式。
+     * 按请求设置合约保证金模式。
      */
-    private static com.binance.connector.client.common.ApiException apiError(RuntimeException ex) {
-        Throwable current = ex;
-        while (current != null) {
-            if (current instanceof com.binance.connector.client.common.ApiException error) { return error; }
-            current = current.getCause();
-        }
-        return null;
-    }
-
-    private static Integer errorCode(com.binance.connector.client.common.ApiException error) {
-        try {
-            return com.google.gson.JsonParser.parseString(error.getResponseBody()).getAsJsonObject().get("code").getAsInt();
-        } catch (RuntimeException ignored) { return null; }
-    }
-
-    private static ExchangeRequestException requestFailure(String stage, RuntimeException ex) {
-        if (ex instanceof ExchangeRequestException safe) { return safe; }
-        var error = apiError(ex);
-        String message = ex.getClass().getSimpleName();
-        if (error != null) {
-            try {
-                message = com.google.gson.JsonParser.parseString(error.getResponseBody()).getAsJsonObject().get("msg").getAsString();
-            } catch (RuntimeException ignored) { }
-        }
-        // 不附带原始异常，避免 SDK 的 URL、签名和请求头进入日志。
-        return new ExchangeRequestException(stage,
-            error == null ? null : error.getCode(), error == null ? null : errorCode(error), message);
-    }
-
     @Override
     public void setMarginType(Credential credential, String symbol, String marginType) {
         requireCredential(credential);
@@ -591,19 +751,71 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
+     * Read Binance positionRisk V2 without filtering out zero-quantity rows.
+     * A single zero-quantity row can carry active account-symbol leverage and
+     * isolated/cross mode; account aggregates or cached open positions cannot.
+     * <p>
+     * Every returned LONG/SHORT/BOTH row must agree. Missing getters, empty
+     * data or conflicting facts fail closed rather than acknowledging settings.
+     */
+    @Override
+    public org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings querySymbolTradingSettings(Credential credential, String symbol) {
+        requireCredential(credential);
+        if (symbol == null || !symbol.matches("[a-zA-Z0-9]{2,32}")) {
+            throw new IllegalArgumentException("Binance 交易设置回查缺少有效交易对");
+        }
+        var rows = api(credential, RestRequestScheduler.Kind.ACCOUNT).positionInformationV2(symbol.trim().toUpperCase(Locale.ROOT), RECV_WINDOW_MILLIS).getData();
+        if (rows == null || rows.isEmpty()) {
+            throw new IllegalStateException("Binance 未返回可核实的交易对保证金/杠杆配置");
+        }
+        String expectedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
+        return parseSymbolTradingSettings(expectedSymbol, rows);
+    }
+
+    /**
      * 查询交易所当前持仓。
      */
     @Override
     public List<PositionSnapshot> queryPositions(Credential credential, String symbol) {
-        var response = api(credential, RestRequestScheduler.Kind.ACCOUNT).positionInformationV3(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData();
-        var positions = response.stream().filter(item -> symbol == null || symbol.equalsIgnoreCase(item.getSymbol()))
-            .filter(item -> decimal(item.getPositionAmt()).signum() != 0).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        return signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> queryPositions(client, symbol));
+    }
+
+    private List<PositionSnapshot> queryPositions(DerivativesTradingUsdsFuturesRestApi client, String symbol) {
+        var response = client.positionInformationV3(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData();
+        var positions =
+            response.stream().filter(item -> symbol == null || symbol.equalsIgnoreCase(item.getSymbol())).filter(item -> decimal(item.getPositionAmt()).signum() != 0).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
         if (positions.isEmpty()) {
             return List.of();
         }
         var leverageByPosition =
-            api(credential, RestRequestScheduler.Kind.ACCOUNT).positionInformationV2(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData().stream().collect(java.util.stream.Collectors.toMap(item -> item.getSymbol() + ":" + item.getPositionSide(), item -> Integer.valueOf(item.getLeverage()), (first, second) -> first));
-        return positions.stream().map(item -> new PositionSnapshot(item.getSymbol(), item.getPositionSide(), decimal(item.getPositionAmt()), decimal(item.getEntryPrice()), decimal(item.getMarkPrice()), decimal(item.getUnRealizedProfit()), decimal(item.getLiquidationPrice()), decimal(item.getPositionInitialMargin()), leverageByPosition.get(item.getSymbol() + ":" + item.getPositionSide()), null, null, item.getUpdateTime() == null ? null : Instant.ofEpochMilli(item.getUpdateTime()))).toList();
+            client.positionInformationV2(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData().stream().collect(java.util.stream.Collectors.toMap(item -> item.getSymbol() + ":" + item.getPositionSide(), item -> Integer.valueOf(item.getLeverage()), (first, second) -> first));
+        return positions.stream().map(item -> new PositionSnapshot(item.getSymbol(), item.getPositionSide(), decimal(item.getPositionAmt()), decimal(item.getEntryPrice()),
+            decimal(item.getMarkPrice()), decimal(item.getUnRealizedProfit()), decimal(item.getLiquidationPrice()), decimal(item.getPositionInitialMargin()),
+            leverageByPosition.get(item.getSymbol() + ":" + item.getPositionSide()), null, null,
+            item.getUpdateTime() == null ? null : Instant.ofEpochMilli(item.getUpdateTime()))).toList();
+    }
+
+    /**
+     * 对只读签名请求遇到 Binance 时间戳拒绝时，刷新服务端偏移并最多重试一次。
+     * 写操作不经过此方法，避免请求结果未知时重复提交交易或撤单。
+     */
+    private <T> T signedRead(Credential credential, RestRequestScheduler.Kind kind, Function<DerivativesTradingUsdsFuturesRestApi, T> request) {
+        DerivativesTradingUsdsFuturesRestApi client = api(credential, kind);
+        String runMode = credential == null ? "LIVE" : credential.runMode();
+        String baseUrl = "TESTNET".equalsIgnoreCase(runMode) ? properties.getBinance().getTestnetUrl() : properties.getBinance().getBaseUrl();
+        ClockOffset usedOffset = clockOffsets.get(baseUrl);
+        long usedOffsetUpdatedAt = usedOffset == null ? Long.MIN_VALUE : usedOffset.updatedAt();
+        try {
+            return request.apply(client);
+        } catch (RuntimeException ex) {
+            var error = apiError(ex);
+            if (error == null || !Integer.valueOf(-1021).equals(errorCode(error))) {
+                throw ex;
+            }
+            refreshClockOffset(baseUrl, usedOffsetUpdatedAt);
+            log.warn("Binance 只读请求因时间戳被拒绝，已刷新服务器时间并重试一次: kind={}, runMode={}, binanceCode=-1021", kind, runMode);
+            return request.apply(api(credential, kind));
+        }
     }
 
     /**
@@ -616,7 +828,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             return List.of();
         }
         return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
-            item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item, "getAvgPrice")))).toList();
+            item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
+            "getAvgPrice")))).toList();
     }
 
     /**
@@ -682,7 +895,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         Long to = range == null || range.to() == null ? null : range.to().toEpochMilli();
         ApiResponse<AccountTradeListResponse> response = api(credential).accountTradeList(symbol == null ? null : symbol.trim(), null, from, to, null, 1000L, RECV_WINDOW_MILLIS);
         return response.getData().stream().map(item -> new TradeSnapshot(item.getSymbol(), item.getId(), item.getOrderId(), item.getSide(), decimal(item.getQty()),
-            decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()), instant(item.getTime()))).toList();
+            decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()), instant(item.getTime()), string(item, "getCommissionAsset"))).toList();
     }
 
     /**
@@ -716,6 +929,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             "getTriggerPrice")), instant(number(item, "getUpdateTime")), null, Boolean.valueOf(string(item, "getReduceOnly")), Boolean.valueOf(string(item, "getClosePosition")))).filter(item -> symbol == null || symbol.equalsIgnoreCase(item.symbol())).toList();
     }
 
+    /**
+     * 按交易所订单 ID 或客户端 ID 精确查询保护单状态。
+     */
     @Override
     public ProtectionOrderSnapshot queryProtectionOrder(Credential credential, Long orderId, String clientOrderId, String symbol) {
         requireCredential(credential);
@@ -735,11 +951,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             }
             throw ex;
         }
-        if (data == null) { return null; }
-        return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), string(data, "getAlgoStatus"),
-            string(data, "getSide"), string(data, "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")),
-            decimal(string(data, "getTriggerPrice")), instant(number(data, "getUpdateTime")), decimal(string(data, "getActualQty")), null, null,
-            number(data, "getActualOrderId"), decimal(string(data, "getActualPrice")));
+        if (data == null) {
+            return null;
+        }
+        return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), string(data, "getAlgoStatus"), string(data,
+            "getSide"), string(data, "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")), decimal(string(data, "getTriggerPrice")),
+            instant(number(data, "getUpdateTime")), decimal(string(data, "getActualQty")), null, null, number(data, "getActualOrderId"), decimal(string(data, "getActualPrice")));
     }
 
     /**
@@ -783,7 +1000,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 JsonObject error = com.google.gson.JsonParser.parseString(ex.getResponseBody()).getAsJsonObject();
                 code = error.get("code").getAsInt();
                 message = error.get("msg").getAsString();
-            } catch (RuntimeException ignored) { }
+            } catch (RuntimeException ignored) {
+            }
             // 只分类已知参数拒绝；503、网络超时及不明确响应仍交给UNKNOWN恢复。
             if (ex.getCode() == 400 && code != null && Set.of(-4023, -4004, -4005, -1111, -4164).contains(code)) {
                 tradingRules.remove("TESTNET".equalsIgnoreCase(request.credential().runMode()) ? "TESTNET" : "LIVE");
@@ -793,12 +1011,6 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         NewOrderResponse data = response.getData();
         return new OrderResult(data.getOrderId(), data.getClientOrderId(), data.getStatus());
-    }
-
-    private static void requireOrderDeadline(OrderRequest request) {
-        if (request.validUntil() != null && !Instant.now().isBefore(request.validUntil())) {
-            throw new OrderNotSentException("开仓信号在交易请求准备期间过期，订单未发送，等待新的行情");
-        }
     }
 
     /**
@@ -868,15 +1080,50 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     public UserDataStreamSession subscribeUserData(Credential credential, Consumer<UserDataEvent> listener) {
         requireCredential(credential);
         String listenKey = api(credential).startUserDataStream().getData().getListenKey();
-        if (listenKey == null || listenKey.isBlank()) { throw new IllegalStateException("Binance 用户数据流未返回 listenKey"); }
+        if (listenKey == null || listenKey.isBlank()) {
+            throw new IllegalStateException("Binance 用户数据流未返回 listenKey");
+        }
         boolean testnet = "TESTNET".equalsIgnoreCase(credential.runMode());
         String base = testnet ? properties.getBinance().getTestnetUserDataStreamUrl() : "wss://fstream.binance.com/private/ws/";
-        SocketConnection socket = new SocketConnection(base + listenKey, text -> listener.accept(parseUserDataEvent(text)),
-            () -> listener.accept(new UserDataEvent("DISCONNECTED", Instant.now(), null)));
-        return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(), () -> {
+        Consumer<String> events = text -> listener.accept(parseUserDataEvent(text));
+        Runnable disconnected = () -> listener.accept(new UserDataEvent("DISCONNECTED", Instant.now(), null));
+        if (sdkStreamsEnabled()) {
+            try {
+                requireSdkStreamsCanConnect();
+                // SDK userData(listenKey) subscribes via /private/stream (not the legacy /private/ws/{key} endpoint).
+                String sdkBase = base.endsWith("/private/ws/") ? base.substring(0, base.length() - "/private/ws/".length()) + "/stream" : base;
+                BinanceSdkStreamTransport sdk = BinanceSdkStreamTransport.user(sdkBase, listenKey, events, disconnected, properties.getBinance().getSdkStreamBacklogLimit(),
+                    properties.getProxy());
+                StreamHandle managed = trackWebsocket(() -> {
+                    sdk.close();
+                    try {
+                        api(credential).closeUserDataStream();
+                    } catch (RuntimeException ignored) {
+                    }
+                }, disconnected);
+                return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(), managed::close, sdk::connected);
+            } catch (RuntimeException ex) {
+                // Preserve the raw transport fallback for SDK startup/session failures;
+                // BinanceSdkStreamTransport opens the SDK connection before SUBSCRIBE.
+                if (!(ex instanceof NullPointerException) || ex.getMessage() == null || !ex.getMessage().contains("session")) {
+                    try {
+                        api(credential).closeUserDataStream();
+                    } catch (RuntimeException ignored) {
+                    }
+                    throw ex;
+                }
+                log.warn("Binance SDK user stream session not ready; using RAW_OKHTTP for this LIVE credential without disabling reconciliation");
+            }
+        }
+        SocketConnection socket = new SocketConnection(base + listenKey, events, disconnected);
+        StreamHandle managed = trackWebsocket(() -> {
             socket.close();
-            try { api(credential).closeUserDataStream(); } catch (RuntimeException ignored) { }
-        }, socket.connected::get);
+            try {
+                api(credential).closeUserDataStream();
+            } catch (RuntimeException ignored) {
+            }
+        }, disconnected);
+        return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(), managed::close, socket.connected::get);
     }
 
     private UserDataEvent parseUserDataEvent(String text) {
@@ -887,13 +1134,42 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 根据凭证运行模式创建 Binance API 客户端。
+     * 公开行情仅选择环境，不携带账户签名或密钥。
      */
-    /** 公开行情仅选择环境，不携带账户签名或密钥。 */
     private DerivativesTradingUsdsFuturesRestApi marketApi(String runMode) {
-        return new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(restConfiguration(marketBaseUrl(runMode)))));
+        return new DerivativesTradingUsdsFuturesRestApi(marketRestClient(new ApiClient(restConfiguration(marketBaseUrl(runMode)))));
     }
 
+    okhttp3.OkHttpClient marketHttpClient(okhttp3.OkHttpClient client) {
+        return restHttpClient(client, MARKET_REST_CONNECT_TIMEOUT_SECONDS, MARKET_REST_READ_TIMEOUT_SECONDS, MARKET_REST_CALL_TIMEOUT_SECONDS);
+    }
+
+    ApiClient marketRestClient(ApiClient client) {
+        client.setHttpClient(marketHttpClient(client.getHttpClient()));
+        return client;
+    }
+
+    ApiClient accountRestClient(ApiClient client) {
+        client.setHttpClient(restHttpClient(client.getHttpClient(), ACCOUNT_REST_CONNECT_TIMEOUT_SECONDS, ACCOUNT_REST_READ_TIMEOUT_SECONDS,
+            ACCOUNT_REST_CALL_TIMEOUT_SECONDS));
+        return client;
+    }
+
+    private okhttp3.OkHttpClient restHttpClient(okhttp3.OkHttpClient client, long connectSeconds, long readSeconds, long callSeconds) {
+        return client.newBuilder().connectionPool(restPool).dispatcher(restDispatcher)
+            .connectTimeout(connectSeconds, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(readSeconds, java.util.concurrent.TimeUnit.SECONDS)
+            .callTimeout(callSeconds, java.util.concurrent.TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false).build();
+    }
+
+    /**
+     * 根据凭证运行模式创建 Binance API 客户端。
+     */
+
+    /**
+     * 按运行环境选择行情 REST 主机，不允许跨环境回退。
+     */
     private String marketBaseUrl(String runMode) {
         return "TESTNET".equalsIgnoreCase(runMode) ? properties.getBinance().getTestnetUrl() : properties.getBinance().getBaseUrl();
     }
@@ -915,16 +1191,16 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             signature.setSecretKey(credential.secretKey());
             config.setSignatureConfiguration(signature);
             long offset = clockOffset(config.getUrl());
-            return new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config, new OffsetAuthenticationFactory(offset))));
+            ApiClient client = new ApiClient(config, new OffsetAuthenticationFactory(offset));
+            return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT ? accountRestClient(client) : restClient(client));
         }
-        return new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config)));
+        ApiClient client = new ApiClient(config);
+        return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT ? accountRestClient(client) : restClient(client));
     }
 
-    private ApiClient restClient(ApiClient client) {
+    ApiClient restClient(ApiClient client) {
         // 共享连接池，仍保留 SDK 的每请求签名与代理配置；有限超时避免阻塞本地风控。
-        client.setHttpClient(client.getHttpClient().newBuilder().connectionPool(restPool).dispatcher(restDispatcher)
-            .connectTimeout(3, java.util.concurrent.TimeUnit.SECONDS).readTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
-            .callTimeout(5, java.util.concurrent.TimeUnit.SECONDS).retryOnConnectionFailure(false).build());
+        client.setHttpClient(restHttpClient(client.getHttpClient(), 3L, 3L, 5L));
         return client;
     }
 
@@ -938,8 +1214,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     private ClientConfiguration restConfiguration(String baseUrl, RestRequestScheduler.Kind kind) {
         long queueStarted = System.nanoTime();
         restScheduler.acquire(kind);
-        log.debug("Binance REST 获准执行 kind={} queueMillis={}", kind,
-            java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted));
+        log.debug("Binance REST 获准执行 kind={} queueMillis={}", kind, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted));
         ClientConfiguration config = new ClientConfiguration();
         config.setUrl(baseUrl);
         // SDK 默认会自动重试 429，容易放大 IP 权重；由上层低频调度和退避处理。
@@ -953,13 +1228,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             throw new IllegalStateException("量化代理配置需要有效的 host 和 port");
         }
         config.setProxy(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxy.getHost().trim(), proxy.getPort())));
-//        log.info("Binance REST 请求启用 HTTP 代理: baseUrl={}, proxyHost={}, proxyPort={}", baseUrl, proxy.getHost().trim(), proxy.getPort());
+        //        log.info("Binance REST 请求启用 HTTP 代理: baseUrl={}, proxyHost={}, proxyPort={}", baseUrl, proxy.getHost().trim(), proxy.getPort());
         return config;
     }
-
-    /**
-     * 在同一进程内限制 REST 请求启动速率。
-     */
 
     /**
      * 获取 Binance 服务器时间偏移。
@@ -988,15 +1259,41 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             long localMidpoint = requestStartedAt + (requestFinishedAt - requestStartedAt) / 2;
             long offset = data.getServerTime() - localMidpoint;
             clockOffsets.put(baseUrl, new ClockOffset(offset, requestFinishedAt));
-            log.info("Binance 服务端时间偏移已刷新: baseUrl={}, offsetMillis={}, recvWindowMillis={}, syncElapsedMillis={}, requestElapsedMillis={}",
-                baseUrl, offset, RECV_WINDOW_MILLIS, requestFinishedAt - refreshStartedAt, requestFinishedAt - requestStartedAt);
+            log.info("Binance 服务端时间偏移已刷新: baseUrl={}, offsetMillis={}, recvWindowMillis={}, syncElapsedMillis={}, requestElapsedMillis={}", baseUrl, offset, RECV_WINDOW_MILLIS,
+                requestFinishedAt - refreshStartedAt, requestFinishedAt - requestStartedAt);
             return offset;
         }
     }
 
+    /** 强制刷新偏移；若其他并发请求已在本次请求后完成刷新，则复用其结果。 */
+    private void refreshClockOffset(String baseUrl, long observedUpdatedAt) {
+        synchronized (clockOffsetRefreshLocks.computeIfAbsent(baseUrl, ignored -> new Object())) {
+            ClockOffset cached = clockOffsets.get(baseUrl);
+            if (cached != null && cached.updatedAt() > observedUpdatedAt) {
+                return;
+            }
+            long refreshStartedAt = System.currentTimeMillis();
+            ClientConfiguration config = restConfiguration(baseUrl);
+            long requestStartedAt = System.currentTimeMillis();
+            ApiResponse<CheckServerTimeResponse> response = new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config))).checkServerTime();
+            long requestFinishedAt = System.currentTimeMillis();
+            CheckServerTimeResponse data = response.getData();
+            if (data == null || data.getServerTime() == null) {
+                throw new IllegalStateException("无法获取 Binance 服务端时间");
+            }
+            long localMidpoint = requestStartedAt + (requestFinishedAt - requestStartedAt) / 2;
+            long offset = data.getServerTime() - localMidpoint;
+            clockOffsets.put(baseUrl, new ClockOffset(offset, requestFinishedAt));
+            log.info("Binance 服务端时间偏移已强制刷新: baseUrl={}, offsetMillis={}, syncElapsedMillis={}, requestElapsedMillis={}", baseUrl, offset,
+                requestFinishedAt - refreshStartedAt, requestFinishedAt - requestStartedAt);
+        }
+    }
 
-    static boolean hedgePositionSide(String positionSide) {
-        return "LONG".equalsIgnoreCase(positionSide) || "SHORT".equalsIgnoreCase(positionSide);
+    /**
+     * 在同一进程内限制 REST 请求启动速率。
+     */
+
+    private record TradingRules(long expiresAt, ExchangeInfo info) {
     }
 
     /**
@@ -1068,7 +1365,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             headerParams.put("X-MBX-APIKEY", apiKey);
             queryParams.add(new Pair("timestamp", String.valueOf(System.currentTimeMillis() + offset)));
             String input = joinQueryParameters(queryParams);
-            if (HttpMethod.requiresRequestBody(method) && payload != null && !payload.isEmpty()) {
+            if (requiresRequestBody(method) && payload != null && !payload.isEmpty()) {
                 input += payload;
             }
             try {
@@ -1076,6 +1373,116 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             } catch (CryptoException ex) {
                 throw new IllegalStateException("Binance 请求签名失败", ex);
             }
+        }
+    }
+
+    private final class StreamHandle {
+        private final Runnable closeTransport;
+        private final Runnable notifyDisconnected;
+        private final AtomicBoolean stopped = new AtomicBoolean();
+
+        StreamHandle(Runnable closeTransport, Runnable notifyDisconnected) {
+            this.closeTransport = closeTransport;
+            this.notifyDisconnected = notifyDisconnected;
+        }
+
+        void close() {
+            if (stopped.compareAndSet(false, true)) {
+                activeWebsocketStreams.remove(this);
+                try {
+                    closeTransport.run();
+                } catch (RuntimeException ex) {
+                    log.warn("Binance WebSocket close failed: {}", ex.getClass().getSimpleName());
+                }
+            }
+        }
+
+        void reconnect() {
+            if (stopped.get()) {
+                return;
+            }
+            close();
+            try {
+                notifyDisconnected.run();
+            } catch (RuntimeException ex) {
+                log.warn("Binance WebSocket reconnect notification failed");
+            }
+        }
+    }
+
+    /**
+     * OkHttp 负责 ping/pong；重连、补偿及消费隔离统一由 Hub 管理。
+     */
+    private final class SocketConnection extends okhttp3.WebSocketListener implements AutoCloseable {
+        private final AtomicBoolean closed = new AtomicBoolean();
+        private final AtomicBoolean connected = new AtomicBoolean();
+        private final Consumer<String> messages;
+        private final Runnable disconnected;
+        private final okhttp3.WebSocket socket;
+
+        private SocketConnection(String url, Consumer<String> messages, Runnable disconnected) {
+            this.messages = messages;
+            this.disconnected = disconnected;
+            var builder =
+                new okhttp3.OkHttpClient.Builder().connectionPool(restPool).dispatcher(restDispatcher).connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(0,
+                    java.util.concurrent.TimeUnit.SECONDS).pingInterval(20, java.util.concurrent.TimeUnit.SECONDS).retryOnConnectionFailure(false);
+            QuantProperties.Proxy proxy = properties.getProxy();
+            if (proxy != null && proxy.getHost() != null && !proxy.getHost().isBlank() && proxy.getPort() != null) {
+                builder.proxy(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxy.getHost(), proxy.getPort())));
+            }
+            socket = builder.build().newWebSocket(new okhttp3.Request.Builder().url(url).build(), this);
+        }
+
+        @Override
+        public void onOpen(okhttp3.WebSocket socket, okhttp3.Response response) {
+            connected.set(!closed.get());
+        }
+
+        @Override
+        public void onMessage(okhttp3.WebSocket socket, String text) {
+            if (closed.get()) {
+                return;
+            }
+            try {
+                messages.accept(text);
+            } catch (RuntimeException ex) {
+                // 不输出私有事件正文/URL，防止 listenKey 或账户信息进入错误日志。
+                log.warn("Binance WebSocket 事件处理失败: {}", ex.getClass().getSimpleName());
+                fail();
+                socket.cancel();
+            }
+        }
+
+        @Override
+        public void onFailure(okhttp3.WebSocket socket, Throwable failure, okhttp3.Response response) {
+            // socket.cancel() 会异步触发 onFailure；主动关闭的旧连接不应当产生误导性 WARN。
+            // 非预期失败必须继续向 Hub 发送断线事件，以触发重连、REST 补偿和交易门控。
+            if (closed.get()) {
+                return;
+            }
+            log.warn("Binance WebSocket传输失败: errorType={}, httpStatus={}, wasConnected={}", failure.getClass().getSimpleName(), response == null ? null : response.code(),
+                connected.get());
+            fail();
+        }
+
+        @Override
+        public void onClosing(okhttp3.WebSocket socket, int code, String reason) {
+            socket.close(code, null);
+            fail();
+        }
+
+        private void fail() {
+            connected.set(false);
+            if (closed.compareAndSet(false, true)) {
+                disconnected.run();
+            }
+        }
+
+        @Override
+        public void close() {
+            closed.set(true);
+            connected.set(false);
+            socket.cancel();
         }
     }
 }

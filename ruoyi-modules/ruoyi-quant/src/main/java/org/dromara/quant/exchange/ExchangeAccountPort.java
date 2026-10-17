@@ -12,7 +12,9 @@ public interface ExchangeAccountPort {
 
     ExchangeGateway.AccountSnapshot queryAccount(ExchangeGateway.Credential credential);
 
-    /** 余额资金覆盖校准必须从本次调用之后发起，不能加入此前的共享请求。 */
+    /**
+     * 余额资金覆盖校准必须从本次调用之后发起，不能加入此前的共享请求。
+     */
     default ExchangeGateway.AccountSnapshot queryAccountFresh(ExchangeGateway.Credential credential) {
         return queryAccount(credential);
     }
@@ -33,8 +35,20 @@ public interface ExchangeAccountPort {
      */
     void setMarginType(ExchangeGateway.Credential credential, String symbol, String marginType);
 
+    default SymbolTradingSettings querySymbolTradingSettings(ExchangeGateway.Credential credential, String symbol) {
+        throw new UnsupportedOperationException("交易所未提供可验证的账户交易对杠杆/保证金模式回查");
+    }
+
     /**
      * 设置交易对杠杆。
      */
     void setLeverage(ExchangeGateway.Credential credential, String symbol, int leverage);
+
+    /**
+     * Fresh read-after-write of actual exchange margin mode and leverage.
+     * The base implementation fails closed until an adapter explicitly supports
+     * verified results even when account position quantity is zero.
+     */
+    record SymbolTradingSettings(String symbol, String marginMode, int leverage) {
+    }
 }

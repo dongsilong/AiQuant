@@ -3,8 +3,8 @@ package org.dromara.quant.strategy.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
-import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.core.domain.R;
+import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
@@ -76,6 +76,9 @@ public class QuantStrategyBindingController {
         return R.ok();
     }
 
+    /**
+     * 查询策略绑定的用户列表。
+     */
     @SaCheckPermission("quant:strategy:edit")
     @GetMapping("/{strategyId}/users")
     public R<List<QuantStrategyUser>> users(@PathVariable Long strategyId) {
@@ -83,6 +86,9 @@ public class QuantStrategyBindingController {
         return R.ok(userMapper.selectList(new LambdaQueryWrapper<QuantStrategyUser>().eq(QuantStrategyUser::getStrategyId, strategyId)));
     }
 
+    /**
+     * 整体替换策略的用户绑定关系。
+     */
     @Transactional(rollbackFor = Exception.class)
     @SaCheckPermission("quant:strategy:edit")
     @PutMapping("/{strategyId}/users")
@@ -92,7 +98,10 @@ public class QuantStrategyBindingController {
         userMapper.delete(new LambdaQueryWrapper<QuantStrategyUser>().eq(QuantStrategyUser::getStrategyId, strategyId));
         for (Long userId : ids) {
             QuantStrategyUser item = new QuantStrategyUser();
-            item.setStrategyId(strategyId); item.setUserId(userId); item.setStatus("0"); userMapper.insert(item);
+            item.setStrategyId(strategyId);
+            item.setUserId(userId);
+            item.setStatus("0");
+            userMapper.insert(item);
         }
         return R.ok();
     }

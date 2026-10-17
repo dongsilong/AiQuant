@@ -5,7 +5,9 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
-/** 策略的登录用户授权关系。 */
+/**
+ * 策略的登录用户授权关系。
+ */
 @Data
 @TableName("quant_strategy_user")
 public class QuantStrategyUser {
