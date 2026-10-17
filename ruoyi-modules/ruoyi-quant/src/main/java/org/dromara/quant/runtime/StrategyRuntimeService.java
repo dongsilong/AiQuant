@@ -545,6 +545,14 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                     // 尤其在 LIVE 模式（真实挂过 STOP/TP 条件单，撤销可能失败）反复出现。
                     // 清理失败时改用 protectionCleanupPending 独立阻断开新仓，不再锁住 state。
                     boolean protectionCleaned = cancelStaleProtection(runtime);
+                    if (!protectionCleaned && runtime.state != null && !"CLOSED".equals(runtime.state.getStatus())) {
+                        // 缺少 positionId 且本次 REST 无法再次确认空仓时，不能用旧快照覆盖状态为 CLOSED。
+                        runtime.protectionCleanupPending = true;
+                        runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                        log.warn("交易所空仓核实结果不一致，保留原策略状态并等待重试 instanceId={} symbol={} state={}",
+                            runtime.instance.getId(), runtime.symbol.getSymbol(), runtime.state.getStatus());
+                        return;
+                    }
                     if (previousPosition != null) {
                         recordPositionDecrease(runtime, previousPosition, previousPosition.getQuantity(), "交易所保护单或外部操作导致持仓关闭，具体触发原因待确认");
                         BigDecimal closePrice = runtime.currentPrice() != null ? runtime.currentPrice() : previousPosition.getMarkPrice();
