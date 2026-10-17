@@ -449,6 +449,10 @@ public class StrategyRuntimeService {
                     if (!runtime.closed && runtime.position != null) {
                         ensureHardStop(runtime);
                     }
+                    // 未完成的待确认交易按固定间隔重试，避免监督 tick 持续触发 REST 查询。
+                    if (!runtime.closed) {
+                        runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                    }
                 }
                 return;
             }
@@ -588,7 +592,12 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                     }
                 }
             }
-            runtime.nextReconcileAt = 0L;
+            boolean recoveryStillRequired = runtime.state != null
+                && (Boolean.TRUE.equals(runtime.state.getRecoveryRequired())
+                    || Boolean.TRUE.equals(runtime.state.getUnsafeRecovery())
+                    || "PROTECTION_CLEANUP".equals(runtime.state.getStatus())
+                    || runtime.protectionCleanupPending);
+            runtime.nextReconcileAt = recoveryStillRequired ? System.currentTimeMillis() + 5_000L : 0L;
             if (runtime.instance.getLastError() != null && runtime.instance.getLastError().startsWith("Binance REST 请求排队")) {
                 runtime.instance.setLastError("");
                 instanceMapper.updateById(runtime.instance);
