@@ -27,5 +27,7 @@ jobs:
           bash mvnw -B -ntp
           -pl ruoyi-modules/ruoyi-quant -am
           -Dtest=KlineSlopeRateStrategyTest,StrategyRuntimeSafetyTest,PositionProtectionStateTest,StrategyPositionStateServiceTest,StrategyEntryGuardServiceTest
+          -DskipTests=false
+          -Dmaven.test.skip=false
           -Dsurefire.failIfNoSpecifiedTests=false
           test
