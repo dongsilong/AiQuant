@@ -48,8 +48,7 @@ public class StrategyPositionStateService {
      * 返回仍需监管的持仓或待确认执行，支持应用重启恢复。
      */
     public java.util.List<QuantStrategyPositionState> findUnclosed() {
-        return mapper.selectList(new LambdaQueryWrapper<QuantStrategyPositionState>().and(query -> query.ne(QuantStrategyPositionState::getStatus, "CLOSED").or()
-            .gt(QuantStrategyPositionState::getPositionQty, BigDecimal.ZERO).or()
+        return mapper.selectList(new LambdaQueryWrapper<QuantStrategyPositionState>().and(query -> query.gt(QuantStrategyPositionState::getPositionQty, BigDecimal.ZERO).or()
             .isNotNull(QuantStrategyPositionState::getPendingAction).or()
             .eq(QuantStrategyPositionState::getStatus, "PROTECTION_CLEANUP").or()
             // CLOSED only means the exchange position is flat; recovery flags still require protection cleanup/candle fencing.
