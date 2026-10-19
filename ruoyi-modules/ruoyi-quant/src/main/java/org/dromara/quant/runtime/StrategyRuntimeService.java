@@ -2842,8 +2842,9 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 return;
             }
             runtime.protectionRequested.set(true);
-            // 首次同步必须携带 dynamic，确保插件信号（含 localStopLossRate 镜像）与硬止损一次挂上
-            if (dynamic || runtime.lastProtectionTarget == null) {
+            // Hard-stop-only requests must not implicitly enable dynamic targets. The caller requests
+            // dynamic protection explicitly after the position cycle facts have been frozen.
+            if (dynamic) {
                 runtime.dynamicProtectionRequested.set(true);
             }
             if (!runtime.protectionSyncing.compareAndSet(false, true)) {
