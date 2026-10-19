@@ -1448,6 +1448,13 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                 state.setInitialPositionQty(filledOpen.executedQuantity());
             }
             state.setInitialMargin(runtime.position.getMargin());
+            // Persist the confirmed position identity before protection work. Place the fixed hard stop
+            // before freezing optional TP targets, which can fail when a target is below exchange lot size.
+            runtime.position.setProtectionCycleKey(state.getPositionCycleKey());
+            stateService.save(state);
+            if (!paper) {
+                ensureHardStop(runtime);
+            }
             freezeFilledProtection(runtime);
             freezeOrderEntryPrice(state, filledOpen);
             state.setStatus("OPEN");
@@ -2431,8 +2438,13 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                     }
                     runtime.state.setInitialPositionQty(order.executedQuantity());
                     runtime.state.setInitialMargin(runtime.position.getMargin());
-                    freezeFilledProtection(runtime);
                     freezeOrderEntryPrice(runtime.state, order);
+                    runtime.position.setProtectionCycleKey(runtime.state.getPositionCycleKey());
+                    // Establish the hard stop from verified fill/position facts before optional TP target
+                    // normalization can fail. Pending OPEN continues to block all new strategy decisions.
+                    stateService.save(runtime.state);
+                    ensureHardStop(runtime);
+                    freezeFilledProtection(runtime);
                     runtime.state.setStatus("OPEN");
                     clearPending(runtime.state);
                     stateService.save(runtime.state);
@@ -2518,8 +2530,15 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                         stateService.save(runtime.state);
                         return true;
                     }
+                    runtime.state.setPositionId(runtime.position.getId());
+                    runtime.state.setPositionQty(runtime.position.getQuantity());
+                    runtime.state.setEntryPrice(runtime.position.getEntryPrice());
                     runtime.state.setInitialPositionQty(executed);
-                    runtime.state.setPositionQty(executed);
+                    runtime.state.setInitialMargin(runtime.position.getMargin());
+                    freezeOrderEntryPrice(runtime.state, order);
+                    runtime.position.setProtectionCycleKey(runtime.state.getPositionCycleKey());
+                    stateService.save(runtime.state);
+                    ensureHardStop(runtime);
                     freezeFilledProtection(runtime);
                 } else if (runtime.position != null && (beforeQty == null || runtime.position.getQuantity().compareTo(beforeQty.subtract(executed).max(BigDecimal.ZERO)) > 0)) {
                     runtime.state.setRecoveryRequired(true);
