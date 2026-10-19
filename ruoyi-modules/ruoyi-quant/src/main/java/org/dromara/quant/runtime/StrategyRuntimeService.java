@@ -955,8 +955,8 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                 runtime.marketHealthy = true;
                 return;
             }
-            if (event.kline() != null) {
-                runtime.updateKline(event.kline());
+            if (event.kline() != null && runtime.updateKline(event.kline())) {
+                // Ignore stale/out-of-order candles completely: they must not roll back the close-candle fence timestamp.
                 runtime.market.lastKlineEventAt = event.eventTime();
                 runtime.lastEvaluatedKlineOpenTime = event.kline().openTime();
             }
@@ -2817,7 +2817,9 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
      */
     private void requestProtectionSync(ActiveRuntime runtime, boolean dynamic) {
         synchronized (runtime) {
-            if (runtime.closed || runtime.position == null || runtime.exitCoordinating.get() || !hasFrozenProtectionFacts(runtime)) {
+            // The fixed hard stop is independent of first-TP target freezing. In LIVE, protect any verified
+            // position immediately; only dynamic strategy protections require all frozen cycle facts.
+            if (runtime.closed || runtime.position == null || runtime.exitCoordinating.get() || (dynamic && !hasFrozenProtectionFacts(runtime))) {
                 return;
             }
             runtime.protectionRequested.set(true);
@@ -2853,7 +2855,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                 snapshot.setLeverage(runtime.state.getFrozenLeverage());
                                 snapshot.setEntryPrice(runtime.state.getEntryPrice());
                             }
-                            boolean includeDynamic = runtime.dynamicProtectionRequested.getAndSet(false) && !runtime.hasPendingAction();
+                            boolean includeDynamic = runtime.dynamicProtectionRequested.getAndSet(false) && !runtime.hasPendingAction()
+                                && hasFrozenProtectionFacts(runtime);
                             BigDecimal hardStopRatio = resolveHardStopRatio(runtime);
                             BigDecimal current = runtime.currentPrice() != null ? runtime.currentPrice() : snapshot.getMarkPrice();
                             List<ProtectionSignal> signals = List.of();
@@ -3080,7 +3083,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         final QuantStrategyPositionState expectedState;
         final Long positionId;
         synchronized (runtime) {
-            if (runtime.closed || !runtime.protectionCleanupPending || runtime.position != null || runtime.state == null || runtime.state.getPositionId() == null || runtime.hasPendingAction()) {
+            if (runtime.closed || !runtime.protectionCleanupPending || runtime.position != null || runtime.state == null || runtime.hasPendingAction()) {
                 return;
             }
             expectedState = runtime.state;
@@ -3129,7 +3132,11 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             log.warn("{}时交易所仍有持仓或持仓结果不完整，保留所有保护单 instanceId={} positionId={} symbol={}", reason, runtime.instance.getId(), positionId, runtime.symbol.getSymbol());
             return new ProtectionCleanupResult(false, false);
         }
-        boolean cleaned = protectionOrderService.cancelActiveProtectionOrders(runtime.credential.getId(), positionId, cycleKey, live);
+        // Old/recovered states may lack position_id. Once the exchange confirms this symbol is flat,
+        // use the existing symbol-scoped orphan cleanup rather than leaving recovery blocked forever.
+        boolean cleaned = positionId == null
+            ? protectionOrderService.cancelActiveProtectionOrdersForSymbol(runtime.credential.getId(), runtime.symbol.getSymbol(), live)
+            : protectionOrderService.cancelActiveProtectionOrders(runtime.credential.getId(), positionId, cycleKey, live);
         return new ProtectionCleanupResult(true, cleaned);
     }
 
@@ -3521,12 +3528,12 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /**
          * 更新对应业务状态。
          */
-        private void updateKline(ExchangeGateway.Kline kline) {
+        private boolean updateKline(ExchangeGateway.Kline kline) {
             if (kline == null) {
-                return;
+                return false;
             }
             if (currentKline != null && kline.openTime().isBefore(currentKline.openTime())) {
-                return;
+                return false;
             }
             if (currentKline != null && !currentKline.openTime().equals(kline.openTime())) {
                 thirdPreviousKlineOpen = secondPreviousKlineOpen;
@@ -3541,6 +3548,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             if (kline.closed()) {
                 previousClosedClose = kline.close();
             }
+            return true;
         }
 
         /**
