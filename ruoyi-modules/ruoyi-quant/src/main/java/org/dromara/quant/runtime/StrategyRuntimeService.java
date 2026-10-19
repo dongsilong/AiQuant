@@ -3730,8 +3730,8 @@ StrategyPlugin plugin, Map<String, Object> params) {
         /**
          * 更新对应业务状态。
          */
-        private void updateKline(ExchangeGateway.Kline kline) {
-            market.updateKline(kline);
+        private boolean updateKline(ExchangeGateway.Kline kline) {
+            return market.updateKline(kline);
         }
 
         /**
