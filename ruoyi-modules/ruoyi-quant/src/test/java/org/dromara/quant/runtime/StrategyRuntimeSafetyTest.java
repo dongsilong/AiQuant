@@ -242,6 +242,49 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void confirmedFlatRecoveryAllowsEntryEvaluationOnFollowingCandle() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("CLOSED");
+            state.setPositionId(null);
+            state.setPositionQty(BigDecimal.ZERO);
+            state.setRecoveryRequired(true);
+            state.setUnsafeRecovery(true);
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            ReflectionTestUtils.setField(f.runtime, "protectionCleanupPending", true);
+            ReflectionTestUtils.setField(f.runtime, "marketHealthy", true);
+            ReflectionTestUtils.setField(f.runtime, "marketStreamReady", true);
+            ReflectionTestUtils.setField(f.runtime, "positionFactsReady", true);
+
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            when(gateway.queryPositions(nullable(ExchangeGateway.Credential.class), eq("BTCUSDT"))).thenReturn(List.of(
+                new ExchangeGateway.PositionSnapshot("BTCUSDT", "BOTH", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                    null, BigDecimal.ZERO, 10, null, null)));
+            when(f.protection.cancelActiveProtectionOrdersForSymbol(3L, "BTCUSDT", true)).thenReturn(true);
+            ReflectionTestUtils.invokeMethod(f.service, "retryProtectionCleanupIfNeeded", f.runtime);
+
+            Instant nextCandle = Instant.parse("2026-10-20T10:03:00Z");
+            Object market = ReflectionTestUtils.getField(f.runtime, "market");
+            ReflectionTestUtils.setField(market, "currentKline", new ExchangeGateway.Kline(nextCandle, nextCandle.plusSeconds(60),
+                new BigDecimal("100"), new BigDecimal("103"), new BigDecimal("99"), new BigDecimal("101"), BigDecimal.ONE, false));
+            ReflectionTestUtils.setField(market, "previousKlineOpen", new BigDecimal("100"));
+            ReflectionTestUtils.setField(f.runtime, "lastEvaluatedKlineOpenTime", nextCandle);
+            when(f.plugin.evaluateEntry(any(), anyMap())).thenReturn(Optional.empty());
+
+            ReflectionTestUtils.invokeMethod(f.service, "onMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", new BigDecimal("102"), null, Instant.now()));
+
+            assertFalse(state.getRecoveryRequired());
+            assertFalse(state.getUnsafeRecovery());
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "protectionCleanupPending"));
+            verify(f.plugin, times(1)).evaluateEntry(any(), anyMap());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void staleKlineCannotRollBackCloseFenceTimestamp() throws Exception {
         Fixture f = fixture();
         try {
