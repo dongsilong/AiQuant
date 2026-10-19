@@ -17,6 +17,8 @@ public final class PositionProtectionState {
      * 初始化新持仓周期的保护与首次止盈状态。
      */
     public static void startCycle(QuantStrategyPositionState state, int leverage, BigDecimal symbolStop, BigDecimal price) {
+        // A closed state row is reused for the next cycle. Clear every cycle-scoped fact before
+        // assigning the new order intent, so TP/step/recovery facts cannot leak into the next position.
         state.setPositionCycleKey(UUID.randomUUID().toString());
         state.setPositionId(null);
         state.setFrozenLeverage(Math.max(1, leverage));
@@ -29,7 +31,17 @@ public final class PositionProtectionState {
         state.setConfirmedProtectionStep(0);
         state.setHighestPriceSinceEntry(price);
         state.setLowestPriceSinceEntry(price);
+        state.setEntryAtr(null);
+        state.setPositionQty(BigDecimal.ZERO);
+        state.setInitialPositionQty(BigDecimal.ZERO);
+        state.setInitialMargin(BigDecimal.ZERO);
+        state.setFrozenStopLossRatio(null);
+        state.setStrategyParamsSnapshot(null);
+        state.setDirection(null);
         state.setStopLossPrice(null);
+        state.setRecoveryRequired(false);
+        state.setUnsafeRecovery(false);
+        state.setPendingNotFoundConfirmations(0);
         state.setOpenedAt(LocalDateTime.now());
         state.setPendingAction(null);
         state.setPendingOrderTime(null);
