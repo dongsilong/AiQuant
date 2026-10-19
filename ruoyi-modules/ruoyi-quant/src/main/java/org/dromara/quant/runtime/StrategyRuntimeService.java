@@ -1961,6 +1961,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                 runtime.position = settlement.position();
                 blockCloseCandle(runtime, klineOpenTime);
                 if (runtime.position == null) {
+                    prepareFlatStateForProtectionCleanup(runtime);
                     if (!cancelStaleProtection(runtime)) {
                         return;
                     }
@@ -2078,6 +2079,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
             blockCloseCandle(runtime, context.klineOpenTime());
             runtime.position = null;
             recordPositionDecrease(runtime, before, before.getQuantity(), "持仓关闭；本地同时满足退出条件：" + exit.reason());
+            prepareFlatStateForProtectionCleanup(runtime);
             if (!cancelStaleProtection(runtime)) {
                 return true;
             }
@@ -2488,8 +2490,12 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 return true;
             }
             if ("OPEN".equals(runtime.state.getPendingAction())) {
-                if (closedOpenProven && cancelStaleProtection(runtime)) {
+                if (closedOpenProven) {
                     blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
+                    prepareFlatStateForProtectionCleanup(runtime);
+                    if (!cancelStaleProtection(runtime)) {
+                        return true;
+                    }
                     stateService.markClosed(runtime.state);
                     runtime.state = stateService.findByInstance(runtime.instance.getId());
                     log.info("待确认开仓恢复完成：开平仓成交完整且交易所空仓 instanceId={} symbol={} orderId={}", runtime.instance.getId(), runtime.symbol.getSymbol(), order.orderId());
@@ -2500,10 +2506,11 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 stateService.save(runtime.state);
                 return true;
             }
+            blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
+            prepareFlatStateForProtectionCleanup(runtime);
             if (!cancelStaleProtection(runtime)) {
                 return true;
             }
-            blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
             stateService.markClosed(runtime.state);
             runtime.state = stateService.findByInstance(runtime.instance.getId());
             return true;
@@ -2661,6 +2668,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             runtime.position = settlement.position();
             if (runtime.position == null) {
                 blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
+                prepareFlatStateForProtectionCleanup(runtime);
                 if (!cancelStaleProtection(runtime)) {
                     return true;
                 }
@@ -3158,6 +3166,24 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             ? protectionOrderService.cancelActiveProtectionOrdersForSymbol(runtime.credential.getId(), runtime.symbol.getSymbol(), live)
             : protectionOrderService.cancelActiveProtectionOrders(runtime.credential.getId(), positionId, cycleKey, live);
         return new ProtectionCleanupResult(true, cleaned);
+    }
+
+    /**
+     * Persist a terminal, confirmed-flat state before protection cleanup. The close/open order is already
+     * terminal and the exchange position snapshot is flat, so keeping its pending action would make a
+     * cleanup retry permanently self-block. Recovery flags remain set until every protection is cleaned.
+     */
+    private void prepareFlatStateForProtectionCleanup(ActiveRuntime runtime) {
+        if (runtime == null || runtime.state == null) {
+            return;
+        }
+        runtime.state.setStatus("CLOSED");
+        runtime.state.setPositionQty(BigDecimal.ZERO);
+        clearPending(runtime.state);
+        runtime.state.setRecoveryRequired(true);
+        runtime.state.setUnsafeRecovery(true);
+        runtime.protectionCleanupPending = true;
+        stateService.save(runtime.state);
     }
 
     /**
