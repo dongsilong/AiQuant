@@ -3326,7 +3326,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
      * 同步 StrategyPlugin 计算出的动态保护单。
      */
     private void syncPluginProtections(ActiveRuntime runtime, StrategyContext context) {
-        if (runtime.position == null || runtime.state == null || runtime.hasPendingAction()) {
+        if (runtime.position == null || runtime.state == null || runtime.hasPendingAction()
+            || runtime.plugin instanceof KlineSlopeRateStrategy && !hasFrozenProtectionFacts(runtime)) {
             return;
         }
         List<ProtectionSignal> signals = protectionSignals(runtime, context, frozenParams(runtime));
