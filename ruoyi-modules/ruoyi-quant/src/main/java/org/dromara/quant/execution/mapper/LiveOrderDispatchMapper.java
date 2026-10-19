@@ -182,6 +182,60 @@ public interface LiveOrderDispatchMapper {
 
     @Options(timeout = 3)
     @Select("""
+        SELECT g.credential_id AS credentialId, g.symbol AS symbol,
+               g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
+               t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
+               t.exchange_order_id AS exchangeOrderId
+        FROM quant_live_dispatch_guard g
+        LEFT JOIN quant_order_dispatch_ticket t
+          ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
+         AND t.symbol=g.symbol
+        WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+          AND g.active_dispatch_key IS NOT NULL
+        LIMIT 1
+        """)
+    java.util.Map<String, Object> activeDispatch(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
+    @Options(timeout = 3)
+    @Select("""
+        SELECT g.credential_id AS credentialId, g.symbol AS symbol,
+               g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
+               t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
+               t.exchange_order_id AS exchangeOrderId
+        FROM quant_live_dispatch_guard g
+        JOIN quant_order_dispatch_ticket t
+          ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
+         AND t.symbol=g.symbol
+        WHERE g.credential_id=#{credentialId}
+          AND (#{symbol} IS NULL OR g.symbol=#{symbol})
+          AND t.operation_type='PROTECT_CANCEL'
+          AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
+        ORDER BY g.updated_at ASC
+        LIMIT 100
+        """)
+    java.util.List<java.util.Map<String, Object>> activeProtectionCancels(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
+    @Options(timeout = 3)
+    @Select("""
+        SELECT g.credential_id AS credentialId, g.symbol AS symbol,
+               g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
+               t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
+               t.exchange_order_id AS exchangeOrderId
+        FROM quant_live_dispatch_guard g
+        JOIN quant_order_dispatch_ticket t
+          ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
+         AND t.symbol=g.symbol
+        WHERE g.credential_id=#{credentialId}
+          AND (#{symbol} IS NULL OR g.symbol=#{symbol})
+          AND t.operation_type IN ('PROTECT_CREATE','PROTECT_CANCEL')
+          AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
+        ORDER BY g.updated_at ASC
+        LIMIT 100
+        """)
+    java.util.List<java.util.Map<String, Object>> activeProtectionDispatches(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
+    @Options(timeout = 3)
+    @Select("""
         SELECT dispatch_status FROM quant_order_dispatch_ticket
         WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
         """)

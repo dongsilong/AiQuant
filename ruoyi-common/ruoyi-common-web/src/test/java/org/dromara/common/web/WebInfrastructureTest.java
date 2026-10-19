@@ -210,6 +210,18 @@ class WebInfrastructureTest {
         assertTrue(!result.getMsg().contains("password"));
     }
 
+    @Test
+    @DisplayName("SSE 客户端断开时不再写入普通 JSON 错误")
+    void shouldNotWriteJsonWhenSseClientConnectionIsGone() {
+        var failure = new IllegalStateException("Failed to send SSE event",
+            new org.springframework.web.context.request.async.AsyncRequestNotUsableException("connection closed"));
+
+        Object result = new GlobalExceptionHandler().handleRuntimeException(
+            failure, request("GET", "/quant/market/streams", null));
+
+        assertTrue(result == null);
+    }
+
     /**
      * 创建带请求方法、路径和内容类型的 Mock 请求。
      *

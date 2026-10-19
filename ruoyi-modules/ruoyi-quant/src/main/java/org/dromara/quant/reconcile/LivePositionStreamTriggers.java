@@ -33,9 +33,9 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
     private final UserDataStreamHub hub;
     private final LivePositionEventCoordinator coordinator;
     private final LivePositionFreshness freshness;
-    private final org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper lease;
-    private final String ownerToken = java.util.UUID.randomUUID().toString();
+    private final LiveUserStreamLeaseService lease;
     private final Map<Long, AutoCloseable> subscriptions = new HashMap<>();
+    private final Map<Long, Long> subscriptionEpochs = new HashMap<>();
     /**
      * Avoid flooding WARN when an account is leased to a different LIVE node.
      */
@@ -71,7 +71,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 closeSubscription(id);
                 freshness.invalidate(id);
                 try {
-                    lease.release(id, ownerToken);
+                    lease.release(id);
                 } catch (RuntimeException releaseError) {
                     log.warn("LIVE stream discovery failure lease cleanup failed credentialId={}", id, releaseError);
                 }
@@ -86,9 +86,8 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
             Long id = credential.getId();
             liveIds.add(id);
             try {
-                lease.ensure(id, ownerToken, LEASE_SECONDS);
-                int leaseAcquired = lease.acquireOrRenew(id, ownerToken, LEASE_SECONDS);
-                if (leaseAcquired != 1) {
+                Long leaseEpoch = lease.acquire(id, LEASE_SECONDS);
+                if (leaseEpoch == null) {
                     long now = System.currentTimeMillis();
                     if (now >= nextLeaseConflictLogAt.getOrDefault(id, 0L)) {
                         nextLeaseConflictLogAt.put(id, now + 60_000L);
@@ -98,11 +97,18 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                         } catch (RuntimeException diagnosticError) {
                             leaseState = "lease diagnostic unavailable: " + diagnosticError.getClass().getSimpleName();
                         }
-                        log.warn("LIVE私有流租约竞争 credentialId={} localOwner={} dbLease=[{}]；本节点禁止创建交易策略运行时", id, ownerToken, leaseState);
+                        log.warn("LIVE私有流租约竞争 credentialId={} dbLease=[{}]；本节点禁止创建交易策略运行时", id, leaseState);
                     }
                     closeSubscription(id);
                     freshness.invalidate(id);
                     continue;
+                }
+                Long previousEpoch = subscriptionEpochs.get(id);
+                if (previousEpoch != null && !previousEpoch.equals(leaseEpoch)) {
+                    // A process can reacquire an expired lease with the same token.
+                    // Epoch changes still fence the old socket and its account facts.
+                    closeSubscription(id);
+                    freshness.invalidate(id);
                 }
                 // Hub may have forcibly removed the old WebSocket after a
                 // lease loss while this supervisor still holds its old handle.
@@ -111,7 +117,8 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 if (subscriptions.containsKey(id) && !hub.hasLocalStream(id)) {
                     closeSubscription(id);
                 }
-                hub.registerLeaseOwner(id, ownerToken);
+                hub.registerLeaseOwner(id, leaseEpoch);
+                subscriptionEpochs.put(id, leaseEpoch);
                 if (subscriptions.containsKey(id)) {
                     continue;
                 }
@@ -133,7 +140,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 // A failed Hub enrollment must not strand a DB lease for 75 seconds.
                 // A conditional release cannot affect another node's ownership.
                 try {
-                    lease.release(id, ownerToken);
+                    lease.release(id);
                 } catch (RuntimeException releaseError) {
                     log.warn("LIVE shared stream lease cleanup failed credentialId={}", id, releaseError);
                 }
@@ -145,7 +152,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 closeSubscription(id);
                 freshness.invalidate(id);
                 try {
-                    lease.release(id, ownerToken);
+                    lease.release(id);
                 } catch (RuntimeException ex) {
                     // Account removal must never abort cleanup of other accounts.
                     // The DB lease expires without renewal; no stale local stream remains.
@@ -156,7 +163,10 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
     }
 
     private void closeSubscription(Long id) {
-        hub.unregisterLeaseOwner(id, ownerToken);
+        Long epoch = subscriptionEpochs.remove(id);
+        if (epoch != null) {
+            hub.unregisterLeaseOwner(id, epoch);
+        }
         AutoCloseable subscription = subscriptions.remove(id);
         if (subscription != null) {
             try {
@@ -176,7 +186,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
             closeSubscription(id);
             freshness.invalidate(id);
             try {
-                lease.release(id, ownerToken);
+                lease.release(id);
             } catch (RuntimeException ex) {
                 log.warn("LIVE stream shutdown lease cleanup failed credentialId={}", id, ex);
             }

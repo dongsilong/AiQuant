@@ -12,13 +12,14 @@ import java.util.*;
  * opening a position-book transaction.
  * <p>
  * Binance accountTradeList is capped at 1000 rows and limited to a 7-day
- * request interval. An exactly full page is NOT proof of complete history:
- * this reader rejects it instead of silently omitting the next page.
+ * request interval. Full pages are split by time; a saturated millisecond
+ * interval remains incomplete and is rejected rather than silently truncated.
  */
 @Service
 public class StrictBinanceTradeCollector {
     private static final Duration WINDOW = Duration.ofDays(6);
     private static final int LIMIT = 1000;
+    private static final int MAX_QUERIES = 10_000;
     private final ExchangeGateway gateway;
 
     public StrictBinanceTradeCollector(ExchangeGateway gateway) {
@@ -33,31 +34,51 @@ public class StrictBinanceTradeCollector {
             throw new IllegalArgumentException("Unbounded or unverified historical fill interval");
         }
         Map<Long, ExchangeGateway.TradeSnapshot> unique = new HashMap<>();
-        Instant left = from;
-        while (left.isBefore(to)) {
-            Instant right = left.plus(WINDOW);
-            if (right.isAfter(to)) {
-                right = to;
+        long left = from.toEpochMilli();
+        long end = to.toEpochMilli();
+        int[] queryCount = {0};
+        while (left <= end) {
+            long right = Math.min(end, left + WINDOW.toMillis());
+            collectWindow(credential, symbol, left, right, unique, queryCount);
+            if (right == Long.MAX_VALUE) {
+                break;
             }
-            var page = gateway.queryTrades(credential, symbol, new ExchangeGateway.TimeRange(left, right));
-            if (page == null || page.size() >= LIMIT) {
-                throw new IllegalStateException("Binance trade page saturated; history completeness unproven");
-            }
-            for (var trade : page) {
-                if (trade == null || trade.tradeId() == null || trade.time() == null || !symbol.equalsIgnoreCase(trade.symbol()) || trade.time().isBefore(left) || trade.time().isAfter(right)) {
-                    throw new IllegalStateException("Exchange fill outside requested historical interval");
-                }
-                var prior = unique.putIfAbsent(trade.tradeId(), trade);
-                if (prior != null && !prior.equals(trade)) {
-                    throw new IllegalStateException("Conflicting Binance TradeId across history windows");
-                }
-            }
-            // Binance may return the inclusive right boundary in both queries.
-            // Duplicate TradeIds are checked above and emitted only once.
-            left = right;
+            left = right + 1;
         }
         List<ExchangeGateway.TradeSnapshot> sorted = new ArrayList<>(unique.values());
         sorted.sort(Comparator.comparing(ExchangeGateway.TradeSnapshot::time).thenComparing(ExchangeGateway.TradeSnapshot::tradeId));
         return List.copyOf(sorted);
+    }
+
+    private void collectWindow(ExchangeGateway.Credential credential, String symbol, long leftMillis, long rightMillis,
+                               Map<Long, ExchangeGateway.TradeSnapshot> unique, int[] queryCount) {
+        if (++queryCount[0] > MAX_QUERIES) {
+            throw new IllegalStateException("Binance trade history query budget exceeded; history completeness unproven");
+        }
+        Instant left = Instant.ofEpochMilli(leftMillis);
+        Instant right = Instant.ofEpochMilli(rightMillis);
+        var page = gateway.queryTrades(credential, symbol, new ExchangeGateway.TimeRange(left, right));
+        if (page == null) {
+            throw new IllegalStateException("Binance trade history page unavailable; history completeness unproven");
+        }
+        if (page.size() >= LIMIT) {
+            if (rightMillis - leftMillis <= 1) {
+                throw new IllegalStateException("Binance trade history remains saturated at millisecond precision; history completeness unproven");
+            }
+            long middle = leftMillis + (rightMillis - leftMillis) / 2;
+            collectWindow(credential, symbol, leftMillis, middle, unique, queryCount);
+            collectWindow(credential, symbol, middle + 1, rightMillis, unique, queryCount);
+            return;
+        }
+        for (var trade : page) {
+            if (trade == null || trade.tradeId() == null || trade.time() == null || !symbol.equalsIgnoreCase(trade.symbol())
+                || trade.time().toEpochMilli() < leftMillis || trade.time().toEpochMilli() > rightMillis) {
+                throw new IllegalStateException("Exchange fill outside requested historical interval");
+            }
+            var prior = unique.putIfAbsent(trade.tradeId(), trade);
+            if (prior != null && !prior.equals(trade)) {
+                throw new IllegalStateException("Conflicting Binance TradeId across history windows");
+            }
+        }
     }
 }

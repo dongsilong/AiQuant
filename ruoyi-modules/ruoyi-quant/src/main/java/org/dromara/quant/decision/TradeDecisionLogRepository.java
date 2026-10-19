@@ -112,6 +112,73 @@ public class TradeDecisionLogRepository {
         return instant == null ? null : Timestamp.valueOf(LocalDateTime.ofInstant(instant, ZoneId.systemDefault()));
     }
 
+    private static String percent(BigDecimal rate) {
+        return rate == null ? null : rate.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString() + "%";
+    }
+
+    private static String amount(BigDecimal value) {
+        return value == null ? null : value.stripTrailingZeros().toPlainString();
+    }
+
+    private static BigDecimal snapshotRate(Map<String, Object> position, String key) {
+        String snapshot = text(position, "strategy_params_snapshot");
+        if (snapshot == null || snapshot.isBlank()) {
+            return null;
+        }
+        try {
+            var value = JSON.readTree(snapshot).path(key);
+            return value.isNumber() ? value.decimalValue() : null;
+        } catch (java.io.IOException ex) {
+            return null;
+        }
+    }
+
+    private static BigDecimal returnRate(String direction, BigDecimal price, BigDecimal entryPrice, Integer leverage) {
+        if (price == null || entryPrice == null || price.signum() <= 0 || entryPrice.signum() <= 0) {
+            return null;
+        }
+        BigDecimal change = "SHORT".equalsIgnoreCase(direction) ? entryPrice.subtract(price).divide(entryPrice, 12, java.math.RoundingMode.HALF_UP) : price.subtract(entryPrice).divide(entryPrice, 12, java.math.RoundingMode.HALF_UP);
+        return change.multiply(BigDecimal.valueOf(leverage == null || leverage <= 0 ? 1 : leverage));
+    }
+
+    /**
+     * 从本地保护单意图和冻结持仓快照生成可解释的交易所止盈止损原因。
+     */
+    private static String protectionReason(Map<String, Object> row, DecisionLogEvent event) {
+        String type = text(row, "protection_type");
+        String direction = Objects.toString(text(row, "position_direction"), text(row, "position_side"));
+        BigDecimal trigger = asDecimal(row.get("stop_price"));
+        BigDecimal entry = asDecimal(row.get("entry_price"));
+        Integer leverage = row.get("frozen_leverage") == null ? null : Integer.valueOf(row.get("frozen_leverage").toString());
+        BigDecimal quantity = event.cumulativeQuantity() != null && event.cumulativeQuantity().signum() > 0 ? event.cumulativeQuantity() : event.quantity() != null ? event.quantity() : asDecimal(row.get("quantity"));
+        BigDecimal price = event.price();
+        String qtyText = amount(quantity);
+        String notional = quantity != null && price != null && price.signum() > 0 ? amount(quantity.multiply(price)) + " USDT" : quantity != null && trigger != null ? "约" + amount(quantity.multiply(trigger)) + " USDT（按触发价估算）" : null;
+        String quantityLabel = "HARD_STOP".equals(type) || "LOCAL_STOP".equals(type) || "SYMBOL_STOP".equals(type) ? "止损数量" : "止盈数量";
+        String qtyDetail = qtyText == null ? "" : "，" + quantityLabel + "=" + qtyText + (notional == null ? "" : "，名义金额=" + notional);
+        if ("FIRST_TP".equals(type)) {
+            BigDecimal rate = snapshotRate(row, "firstProfitTakingRate");
+            return "首次止盈：达到首次止盈率" + Objects.toString(percent(rate), "（冻结参数不可用）") + "，交易所触发价=" + Objects.toString(amount(trigger), "未知") + qtyDetail;
+        }
+        if ("STEP_TP".equals(type)) {
+            BigDecimal step = snapshotRate(row, "stepRatio");
+            Integer stepIndex = row.get("step_index") == null ? null : Integer.valueOf(row.get("step_index").toString());
+            BigDecimal locked = step == null || stepIndex == null ? null : step.multiply(BigDecimal.valueOf(Math.max(0, stepIndex - 1L)));
+            BigDecimal favorable = "SHORT".equalsIgnoreCase(direction) ? asDecimal(row.get("lowest_price_since_entry")) : asDecimal(row.get("highest_price_since_entry"));
+            BigDecimal peakReturn = returnRate(direction, favorable, entry, leverage);
+            return "阶梯止盈：持仓期间最大回报率=" + Objects.toString(percent(peakReturn), "未知") + "，回撤至第" + Objects.toString(stepIndex, "未知") + "阶保护线（锁定回报率=" + Objects.toString(percent(locked), "未知") + "）触发，触发价=" + Objects.toString(amount(trigger), "未知") + qtyDetail;
+        }
+        if ("HARD_STOP".equals(type) || "LOCAL_STOP".equals(type) || "SYMBOL_STOP".equals(type)) {
+            BigDecimal threshold = "SYMBOL_STOP".equals(type) ? asDecimal(row.get("frozen_symbol_stop_loss_ratio")) : "HARD_STOP".equals(type) ? asDecimal(row.get("frozen_stop_loss_ratio")) : snapshotRate(row, "localStopLossRate");
+            if (threshold == null) {
+                BigDecimal triggerReturn = returnRate(direction, trigger, entry, leverage);
+                threshold = triggerReturn == null ? null : triggerReturn.abs();
+            }
+            return "止损：达到止损比例" + Objects.toString(percent(threshold), "（冻结参数不可用）") + "，交易所触发价=" + Objects.toString(amount(trigger), "未知") + qtyDetail;
+        }
+        return "交易所保护单触发：" + Objects.toString(type, "类型未知") + "，触发价=" + Objects.toString(amount(trigger), "未知") + qtyDetail;
+    }
+
     /**
      * 在单个批次中写入已脱敏的决策日志事件。
      */
@@ -229,7 +296,8 @@ public class TradeDecisionLogRepository {
                     }
                 }
                 // 保护单通过本地账本和持仓关联策略；绝不按交易对猜测实例归属。
-                var protections = cached(lookupCache, "SELECT p.protection_type,s.instance_id,i.strategy_id FROM quant_protection_order p LEFT JOIN quant_strategy_position_state" +
+                var protections = cached(lookupCache, "SELECT p.protection_type,p.position_side,p.stop_price,p.quantity,p.step_index,s.instance_id,s.direction position_direction,s.entry_price,s.frozen_leverage," +
+                    "s.highest_price_since_entry,s.lowest_price_since_entry,s.strategy_params_snapshot,s.frozen_stop_loss_ratio,s.frozen_symbol_stop_loss_ratio,i.strategy_id FROM quant_protection_order p LEFT JOIN quant_strategy_position_state" +
                     " s ON s.position_id=p.position_id LEFT JOIN quant_strategy_instance i ON i.id=s.instance_id WHERE p.credential_id=? AND p.symbol=? AND (p" +
                     ".exchange_order_id=? OR p.client_order_id=?) LIMIT 1", e.credentialId(), e.symbol(), e.orderId(), e.clientOrderId());
                 if (!protections.isEmpty()) {
@@ -238,7 +306,7 @@ public class TradeDecisionLogRepository {
                     instanceId = number(protection, "instance_id");
                     operation = "CLOSE";
                     reasonCode = "EXCHANGE_PROTECTION";
-                    reason = "交易所保护单触发：" + text(protection, "protection_type");
+                    reason = protectionReason(protection, e);
                 }
                 if (operation == null && e.reduceOnly() != null) {
                     operation = e.reduceOnly() ? "CLOSE" : "UNKNOWN";
@@ -256,8 +324,10 @@ public class TradeDecisionLogRepository {
                     instanceId = number(row, "strategy_instance_id");
                     operation = text(row, "operation");
                     direction = text(row, "direction");
-                    reason = text(row, "reason");
-                    reasonCode = text(row, "reason_code");
+                    if (!("EXCHANGE_PROTECTION".equals(reasonCode) && "EXCHANGE_PROTECTION".equals(text(row, "reason_code")))) {
+                        reason = text(row, "reason");
+                        reasonCode = text(row, "reason_code");
+                    }
                 } else {
                     direction = direction(operation, direction);
                 }
@@ -270,12 +340,15 @@ public class TradeDecisionLogRepository {
             }
         }
         if ("PROTECTION".equals(e.recordType())) {
-            var rows = cached(lookupCache, "SELECT i.strategy_id,i.id instance_id FROM quant_protection_order p JOIN quant_strategy_position_state s ON s.position_id=p" +
+            var rows = cached(lookupCache, "SELECT p.protection_type,p.position_side,p.stop_price,p.quantity,p.step_index,s.direction position_direction,s.entry_price,s.frozen_leverage,s.highest_price_since_entry," +
+                "s.lowest_price_since_entry,s.strategy_params_snapshot,s.frozen_stop_loss_ratio,s.frozen_symbol_stop_loss_ratio,i.strategy_id,i.id instance_id FROM quant_protection_order p JOIN quant_strategy_position_state s ON s.position_id=p" +
                 ".position_id JOIN quant_strategy_instance i ON i.id=s.instance_id WHERE p.credential_id=? AND p.symbol=? AND p.client_order_id=? LIMIT 1", e.credentialId(),
                 e.symbol(), e.clientOrderId());
             if (!rows.isEmpty()) {
                 strategyId = number(rows.getFirst(), "strategy_id");
                 instanceId = number(rows.getFirst(), "instance_id");
+                reason = protectionReason(rows.getFirst(), e);
+                reasonCode = "EXCHANGE_PROTECTION";
             }
             builder.recordType("EXECUTION");
         }

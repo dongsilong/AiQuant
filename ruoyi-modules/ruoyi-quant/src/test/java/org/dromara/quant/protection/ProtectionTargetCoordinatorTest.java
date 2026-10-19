@@ -64,12 +64,26 @@ class ProtectionTargetCoordinatorTest {
         }
         try (var lease = f.second.acquire(1L, f.position, "STEP_TP")) {
             assertEquals(1L, lease.state().pendingOrderId());
-            assertThrows(IllegalStateException.class, () -> lease.prepare(order(2), 3, null, row -> fail("pending must be restored")));
+            assertThrows(ProtectionTargetCoordinator.PendingTargetException.class, () -> lease.prepare(order(2), 3, null, row -> fail("pending must be restored")));
             lease.confirmed(order(1), 2);
             lease.cleaned();
             assertEquals(2, lease.state().confirmedStep());
         }
         assertEquals(1, f.jdbc.queryForObject("SELECT COUNT(*) FROM test_order", Integer.class));
+    }
+
+    @Test
+    void stalePreviousTargetIsReportedAsRecoverablePendingState() {
+        var f = fixture();
+        try (var lease = f.first.acquire(1L, f.position, "HARD_STOP")) {
+            f.jdbc.update("UPDATE quant_protection_target SET previous_order_id=77");
+            var failure = assertThrows(ProtectionTargetCoordinator.PendingTargetException.class,
+                () -> lease.prepare(order(2), 0, null, row -> fail("must not create a second protection intent")));
+            assertTrue(failure.getMessage().contains("previousOrderId=77"));
+            assertNull(lease.state().pendingOrderId());
+            assertEquals(77L, lease.state().previousOrderId());
+        }
+        assertEquals(0, f.jdbc.queryForObject("SELECT COUNT(*) FROM test_order", Integer.class));
     }
 
     @Test

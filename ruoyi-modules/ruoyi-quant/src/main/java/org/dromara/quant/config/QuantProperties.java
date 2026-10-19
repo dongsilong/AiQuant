@@ -215,11 +215,12 @@ public class QuantProperties {
     @Data
     public static class Reconcile {
         /**
-         * 是否启用。
+         * 是否启用周期账户/订单/成交全量对账和持久化执行记录恢复扫描。
+         * 运行时必需的持仓核实及用户数据流触发恢复不受此开关控制。
          */
         private boolean enabled = true;
         /**
-         * 对账调度间隔，单位秒。
+         * 周期全量对账和运行时持仓核实调度间隔，单位秒。
          */
         private int intervalSeconds = 60;
         /**

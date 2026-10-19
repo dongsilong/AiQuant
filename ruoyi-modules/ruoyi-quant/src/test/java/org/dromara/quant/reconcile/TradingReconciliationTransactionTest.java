@@ -4,11 +4,14 @@ import org.dromara.quant.account.mapper.QuantAccountSnapshotMapper;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.execution.StrictBinanceTradeCollector;
+import org.dromara.quant.execution.StrategyFillJournalService;
 import org.dromara.quant.finance.mapper.QuantFinancialEventMapper;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
+import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -41,11 +44,14 @@ class TradingReconciliationTransactionTest {
     private final QuantReconcileRecordMapper records = mock(QuantReconcileRecordMapper.class);
     private final ReconciliationFailureRecorder errors = mock(ReconciliationFailureRecorder.class);
     private final StrategyPositionStateService state = mock(StrategyPositionStateService.class);
+    private final StrategyFillSyncCursorMapper fillCursors = mock(StrategyFillSyncCursorMapper.class);
+    private final StrategyFillSyncCursorService fillCursorService = mock(StrategyFillSyncCursorService.class);
 
     private TradingReconciliationService service() {
         var source = new DriverManagerDataSource("jdbc:h2:mem:reconciliation_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         return new TradingReconciliationService(gateway, accounts, positions, orders, trades, protection, finance, records, errors, state,
-            new DataSourceTransactionManager(source));
+            new DataSourceTransactionManager(source), new StrictBinanceTradeCollector(gateway), mock(StrategyFillJournalService.class),
+            fillCursors, fillCursorService);
     }
 
     private QuantCredential credential() {
@@ -153,6 +159,60 @@ class TradingReconciliationTransactionTest {
         verify(positions).selectList(any());
         verify(state).markClosedByPositionId(502L);
         verify(positions, never()).updateById(flat);
+    }
+
+    @Test
+    void runtimeReconciliationReusesRecentCompleteAccountSnapshot() {
+        stubCommonFacts();
+        var reconciliation = service();
+
+        reconciliation.refreshPositionsOnly(credential());
+        var snapshots = reconciliation.runtimePositionSnapshot(credential());
+
+        assertNotNull(snapshots);
+        assertTrue(snapshots.isEmpty(), "an empty list is a complete confirmed-flat account snapshot");
+        verify(gateway, times(1)).queryAccount(any());
+        verify(gateway, times(1)).queryPositions(any(), isNull());
+    }
+
+    @Test
+    void concurrentRuntimeReconciliationSharesOneAccountSnapshotFetch() throws Exception {
+        stubCommonFacts();
+        var reconciliation = service();
+        var fetchStarted = new java.util.concurrent.CountDownLatch(1);
+        var releaseFetch = new java.util.concurrent.CountDownLatch(1);
+        when(gateway.queryAccount(any())).thenAnswer(invocation -> {
+            fetchStarted.countDown();
+            assertTrue(releaseFetch.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            return new ExchangeGateway.AccountSnapshot(BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ZERO);
+        });
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> reconciliation.runtimePositionSnapshot(credential()));
+            assertTrue(fetchStarted.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            var second = executor.submit(() -> reconciliation.runtimePositionSnapshot(credential()));
+            releaseFetch.countDown();
+            assertTrue(first.get(5, java.util.concurrent.TimeUnit.SECONDS).isEmpty());
+            assertTrue(second.get(5, java.util.concurrent.TimeUnit.SECONDS).isEmpty());
+            verify(gateway, times(1)).queryAccount(any());
+            verify(gateway, times(1)).queryPositions(any(), isNull());
+        } finally {
+            releaseFetch.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void privateStreamEventInvalidatesSharedRuntimeSnapshot() {
+        stubCommonFacts();
+        var reconciliation = service();
+        reconciliation.refreshPositionsOnly(credential());
+
+        reconciliation.invalidateRuntimePositionSnapshot(1L);
+        reconciliation.runtimePositionSnapshot(credential());
+
+        verify(gateway, times(2)).queryAccount(any());
+        verify(gateway, times(2)).queryPositions(any(), isNull());
     }
 
     @Test

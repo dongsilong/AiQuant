@@ -7,7 +7,11 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.apache.ibatis.session.Configuration;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -19,6 +23,11 @@ import static org.mockito.Mockito.*;
 
 @Tag("dev")
 class ExecutionRecoveryServiceTest {
+    @BeforeAll
+    static void initializeExecutionRecordLambdaMetadata() {
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new Configuration(), "execution-recovery-test"), QuantExecutionRecord.class);
+    }
+
     @Test
     void scansUnresolvedOrdersWithoutDiscardingThoseOlderThanOneDay() {
         var records = mock(QuantExecutionRecordMapper.class);
@@ -26,10 +35,13 @@ class ExecutionRecoveryServiceTest {
         var service = new ExecutionRecoveryService(records, mock(QuantCredentialMapper.class), mock(ExchangeGateway.class), mock(ExecutionRecordService.class),
             mock(OrderLedgerService.class), new QuantProperties());
         service.recover();
-        verify(records).selectList(argThat(wrapper -> {
-            String sql = wrapper.getSqlSegment().toLowerCase(java.util.Locale.ROOT);
-            return sql.contains("last_recovery_at") && sql.contains("created_at") && !sql.contains("updated_at") && sql.contains("limit 100");
-        }));
+        var query = org.mockito.ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
+        verify(records).selectList(query.capture());
+        String sql = query.getValue().getCustomSqlSegment().toLowerCase(java.util.Locale.ROOT);
+        org.junit.jupiter.api.Assertions.assertTrue(sql.contains("lastrecoveryat"), sql);
+        org.junit.jupiter.api.Assertions.assertTrue(sql.contains("createdat"));
+        org.junit.jupiter.api.Assertions.assertFalse(sql.contains("createdat <"), "old unresolved executions must not expire");
+        org.junit.jupiter.api.Assertions.assertTrue(sql.contains("limit 100"));
     }
 
     @Test

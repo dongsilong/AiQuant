@@ -2,6 +2,7 @@ package org.dromara.quant.market;
 
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +52,58 @@ class MarketStreamHubRecoveryTest {
             Thread.sleep(10);
         }
         return value.get() > 0;
+    }
+
+    @Test
+    void marketReadinessUsesBinanceClockOffsetInsteadOfRejectingFreshMarkAsStale() throws Exception {
+        Instant localNow = Instant.now();
+        when(gateway.exchangeTimeOffsetMillis("LIVE")).thenReturn(-2_979L);
+        MarketStreamHub hub = hub(List.of(candle(open.minusSeconds(120), true), candle(open.minusSeconds(60), true), candle(open, false)));
+        CountDownLatch ready = new CountDownLatch(1);
+        try {
+            hub.subscribe("LIVE", "BTCUSDT", "1m", ignored -> {
+            }, isReady -> {
+                if (isReady) {
+                    ready.countDown();
+                }
+            });
+            callback.get().accept(new ExchangeGateway.MarketEvent("MARK", "BTCUSDT", "1m", BigDecimal.TEN, null, localNow.minusMillis(3_100), null,
+                localNow.minusMillis(40), false));
+
+            assertTrue(ready.await(2, TimeUnit.SECONDS), "a fresh Binance MARK should pass readiness when the local clock is ahead by the measured offset");
+        } finally {
+            hub.close();
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
+    void unsupportedSymbolPublishesErrorAndDoesNotReconnectForever() throws Exception {
+        properties.getMarket().setReconnectDelaySeconds(1);
+        when(gateway.subscribeMarket(anyString(), anyString(), anyString(), any())).thenReturn(mock(ExchangeGateway.MarketStreamSession.class));
+        when(gateway.queryKlines(eq("TESTNET"), eq("BTWUSDT"), eq("15m"), anyInt())).thenThrow(new ExchangeMarketPort.UnsupportedMarketSymbolException("TESTNET", "BTWUSDT"));
+        MarketStreamHub hub = new MarketStreamHub(gateway, scheduler, properties);
+        CountDownLatch failed = new CountDownLatch(1);
+        AutoCloseable subscription = null;
+        try {
+            subscription = hub.subscribe("TESTNET", "BTWUSDT", "15m", event -> {
+                if ("ERROR".equals(event.type())) {
+                    failed.countDown();
+                }
+            }, ignored -> {
+            });
+
+            assertTrue(failed.await(2, TimeUnit.SECONDS));
+            Thread.sleep(1_200);
+            verify(gateway, times(1)).subscribeMarket(anyString(), anyString(), anyString(), any());
+            verify(gateway, times(1)).queryKlines(eq("TESTNET"), eq("BTWUSDT"), eq("15m"), anyInt());
+        } finally {
+            if (subscription != null) {
+                subscription.close();
+            }
+            hub.close();
+            scheduler.shutdownNow();
+        }
     }
 
     @Test

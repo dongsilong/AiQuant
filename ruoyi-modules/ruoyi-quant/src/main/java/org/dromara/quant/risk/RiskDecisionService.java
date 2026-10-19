@@ -80,6 +80,34 @@ public class RiskDecisionService {
         return approveOpen(credentialId, symbol, notional, runMode, null);
     }
 
+    /**
+     * 捕获通过核验的 LIVE 全账户持仓快照代次，供最终派发前再次确认。
+     */
+    public long captureLivePositionGeneration(Long credentialId) {
+        if (positionFreshness == null) {
+            throw new ServiceException("LIVE 账户持仓快照核验服务不可用");
+        }
+        try {
+            return positionFreshness.requireFreshGeneration(credentialId);
+        } catch (IllegalStateException ex) {
+            throw new ServiceException(ex.getMessage());
+        }
+    }
+
+    /**
+     * 确认 LIVE 全账户持仓快照在开仓准备期间没有失效或被新事件替代。
+     */
+    public void requireLivePositionGeneration(Long credentialId, long expectedGeneration) {
+        if (positionFreshness == null) {
+            throw new ServiceException("LIVE 账户持仓快照核验服务不可用");
+        }
+        try {
+            positionFreshness.requireFreshGeneration(credentialId, expectedGeneration);
+        } catch (IllegalStateException ex) {
+            throw new ServiceException(ex.getMessage());
+        }
+    }
+
     private boolean approveOpen(Long credentialId, String symbol, BigDecimal notional, String runMode, String currentKey) {
         return refusalReason(credentialId, symbol, notional, runMode, currentKey) == null;
     }

@@ -27,6 +27,8 @@ import java.util.Optional;
 @Slf4j
 @Component
 public final class KlineSlopeRateStrategy implements StrategyPlugin {
+    private static final long SLOPE_LOG_INTERVAL_MILLIS = 5_000L;
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> NEXT_SLOPE_LOG_AT = new java.util.concurrent.ConcurrentHashMap<>();
     /**
      * 斜率参考 K 线根数：1 表示往前第 1 根，2 表示往前第 2 根，3 表示往前第 3 根，最大是3。
      */
@@ -279,7 +281,7 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
             return Optional.empty();
         }
         double degrees = evaluation.rawDegrees();
-        if (Math.abs(degrees) > 58) {
+        if (Math.abs(degrees) > 58 && shouldLogSlope(context.symbol(), System.currentTimeMillis())) {
             log.warn("  ***  策略实时斜率 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}°", context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(),
                 evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(), BigDecimal.valueOf(degrees).setScale(2, RoundingMode.HALF_UP));
         }
@@ -288,6 +290,18 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         }
         EntrySignal.Direction direction = degrees > 0 ? EntrySignal.Direction.LONG : EntrySignal.Direction.SHORT;
         return Optional.of(new EntrySignal(direction, "K线斜率角度=" + evaluation.degrees() + "°, 阈值=" + evaluation.entryThreshold() + "°"));
+    }
+
+    static boolean shouldLogSlope(String symbol, long nowMillis) {
+        java.util.concurrent.atomic.AtomicBoolean allowed = new java.util.concurrent.atomic.AtomicBoolean();
+        NEXT_SLOPE_LOG_AT.compute(symbol, (ignored, nextAt) -> {
+            if (nextAt == null || nowMillis >= nextAt) {
+                allowed.set(true);
+                return nowMillis + SLOPE_LOG_INTERVAL_MILLIS;
+            }
+            return nextAt;
+        });
+        return allowed.get();
     }
 
     /**
@@ -314,11 +328,11 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         BigDecimal currentReturn = leveragedReturn(context.direction(), context.currentPrice(), context.entryPrice(), leverage(context));
 
         if (currentReturn.compareTo(localStop.negate()) <= 0) {
-            return List.of(new ExitSignal(EXIT_LOCAL_STOP, BigDecimal.ONE, "本地兜底止损触发，回报率=" + percent(currentReturn) + "，阈值=-" + percent(localStop), false, PROTECTION_LOCAL_STOP,
+            return List.of(new ExitSignal(EXIT_LOCAL_STOP, BigDecimal.ONE, "本地兜底止损触发，止损阈值=-" + percent(localStop) + "，触发时回报率=" + percent(currentReturn), false, PROTECTION_LOCAL_STOP,
                 ExitSignal.QuantityBase.CURRENT));
         }
         if (!context.firstTakeProfitTriggered() && currentReturn.compareTo(firstProfit) >= 0) {
-            return List.of(new ExitSignal(EXIT_FIRST_TP, firstClose, "首次止盈触发，回报率=" + percent(currentReturn) + "，平初始仓位比例=" + percent(firstClose), true, PROTECTION_FIRST_TP,
+            return List.of(new ExitSignal(EXIT_FIRST_TP, firstClose, "首次止盈触发，首次止盈阈值=" + percent(firstProfit) + "，触发时回报率=" + percent(currentReturn) + "，计划平初始仓位比例=" + percent(firstClose), true, PROTECTION_FIRST_TP,
                 ExitSignal.QuantityBase.INITIAL));
         }
         if (stepProtectionStarted(context, firstProfit)) {
@@ -327,7 +341,7 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
             if (stepIndex > 0) {
                 BigDecimal locked = step.multiply(BigDecimal.valueOf(Math.max(0, stepIndex - 1L)));
                 if (currentReturn.compareTo(locked) <= 0) {
-                    return List.of(new ExitSignal(EXIT_STEP_TP, BigDecimal.ONE, "阶梯追踪止盈触发，最高回报率=" + percent(maxReturn) + "，回撤保护=" + percent(locked), false, PROTECTION_STEP_TP,
+                    return List.of(new ExitSignal(EXIT_STEP_TP, BigDecimal.ONE, "阶梯追踪止盈触发，持仓期间最大回报率=" + percent(maxReturn) + "，触发时回报率=" + percent(currentReturn) + "，回撤保护比例=" + percent(locked), false, PROTECTION_STEP_TP,
                         ExitSignal.QuantityBase.CURRENT));
                 }
             }

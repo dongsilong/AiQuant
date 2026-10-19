@@ -4,6 +4,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -112,6 +113,7 @@ public class MarketStreamHub {
         private volatile boolean closed;
         private volatile boolean connected;
         private volatile boolean recovering;
+        private boolean terminalFailure;
         private Long requiredTradeId;
         private Instant connectionStarted;
         private Instant recoveryStarted;
@@ -187,7 +189,7 @@ public class MarketStreamHub {
                     consumer.accept(new Incoming(generation, new ExchangeGateway.MarketEvent("KLINE", key.symbol(), key.interval(), null, kline, Instant.now(), null,
                         Instant.now(), true)));
                 }
-                consumer.accept(new Incoming(generation, status(connected ? "CONNECTED" : "CONNECTING")));
+                consumer.accept(new Incoming(generation, status(terminalFailure ? "ERROR" : connected ? "CONNECTED" : "CONNECTING")));
             }
         }
 
@@ -197,6 +199,11 @@ public class MarketStreamHub {
                     key.interval(), from, limit);
             }
             return from == null ? gateway.queryKlines(key.symbol(), key.interval(), limit) : gateway.queryKlinesFrom(key.symbol(), key.interval(), from, limit);
+        }
+
+        private Instant exchangeNow() {
+            long offsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
+            return Instant.now().plusMillis(offsetMillis);
         }
 
         private void remove(UUID id) {
@@ -213,7 +220,7 @@ public class MarketStreamHub {
          * 建立上游订阅并初始化新鲜度、事件游标和补偿状态。
          */
         private synchronized void start() {
-            if (closed || listeners.isEmpty()) {
+            if (closed || terminalFailure || listeners.isEmpty()) {
                 return;
             }
             long attempt = ++generation;
@@ -305,7 +312,7 @@ public class MarketStreamHub {
                         return;
                     }
                     // REST可能在周期切换瞬间只返回刚收盘的一根；新周期由已缓冲的WS补齐。
-                    if (lastKlineOpen == null || nextOpen(nextOpen(lastKlineOpen)).isBefore(Instant.now())) {
+                    if (lastKlineOpen == null || nextOpen(nextOpen(lastKlineOpen)).isBefore(exchangeNow())) {
                         throw new IllegalStateException("REST K线未补齐到当前周期");
                     }
                 }
@@ -327,7 +334,9 @@ public class MarketStreamHub {
             } catch (RuntimeException ex) {
                 synchronized (this) {
                     if (!closed && attempt == generation) {
-                        if (networkFailure(ex)) {
+                        if (unsupportedSymbol(ex)) {
+                            failPermanently(ex);
+                        } else if (networkFailure(ex)) {
                             // REST不稳定不能连带拆掉健康WS；保持缓冲和决策暂停，继续精确补偿。
                             log.warn("行情REST补偿网络失败，保留WS并退避重试: symbol={}, interval={}, errorType={}", key.symbol(), key.interval(), ex.getClass().getSimpleName());
                             recoveryTask = scheduler.schedule(() -> {
@@ -351,6 +360,15 @@ public class MarketStreamHub {
         private boolean networkFailure(Throwable error) {
             for (Throwable cause = error; cause != null; cause = cause.getCause()) {
                 if (cause instanceof java.io.IOException || cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private boolean unsupportedSymbol(Throwable error) {
+            for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+                if (cause instanceof ExchangeMarketPort.UnsupportedMarketSymbolException) {
                     return true;
                 }
             }
@@ -498,32 +516,34 @@ public class MarketStreamHub {
             if (!List.of("TRADE", "MARK", "KLINE").contains(event.type())) {
                 return;
             }
+            long exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
             Instant now = Instant.now();
+            Instant exchangeNow = now.plusMillis(exchangeOffsetMillis);
             if (event.eventTime() == null) {
                 disconnect(new IllegalStateException("Binance事件时间缺失: type=" + event.type() + ", symbol=" + key.symbol()));
                 return;
             }
-            long futureSkewMillis = java.time.Duration.between(now, event.eventTime()).toMillis();
+            long futureSkewMillis = java.time.Duration.between(exchangeNow, event.eventTime()).toMillis();
             if (futureSkewMillis > MAX_FUTURE_CLOCK_SKEW_MILLIS) {
-                disconnect(new IllegalStateException("Binance事件时间超前过大: symbol=" + key.symbol() + ", type=" + event.type() + ", futureSkewMs=" + futureSkewMillis + ", eventTime=" + event.eventTime() + ", localNow=" + now));
+                disconnect(new IllegalStateException("Binance事件时间超前过大: symbol=" + key.symbol() + ", type=" + event.type() + ", futureSkewMs=" + futureSkewMillis + ", eventTime=" + event.eventTime() + ", exchangeNow=" + exchangeNow));
                 return;
             }
             Instant receivedAt = event.receivedAt() == null ? now : event.receivedAt();
-            Instant processingEventTime = futureSkewMillis > 0 ? receivedAt : event.eventTime();
+            Instant processingEventTime = futureSkewMillis > 0 ? receivedAt.plusMillis(exchangeOffsetMillis) : event.eventTime();
             if (futureSkewMillis > 1_000L && System.currentTimeMillis() >= nextClockSkewWarningAt) {
                 nextClockSkewWarningAt = System.currentTimeMillis() + 30_000L;
-                log.warn("Binance行情时间领先本机时钟，按本地接收时间处理: mode={} symbol={} type={} futureSkewMs={} eventTime={} receivedAt={}", key.runMode(), key.symbol(), event.type(),
+                log.warn("Binance行情时间领先服务端校准时钟，按校准后的接收时间处理: mode={} symbol={} type={} futureSkewMs={} eventTime={} receivedAt={}", key.runMode(), key.symbol(), event.type(),
                     futureSkewMillis, event.eventTime(), receivedAt);
             }
-            long networkLag = Math.max(0, java.time.Duration.between(event.eventTime(), receivedAt).toMillis());
+            long networkLag = Math.max(0, java.time.Duration.between(event.eventTime(), receivedAt.plusMillis(exchangeOffsetMillis)).toMillis());
             long queueLag = Math.max(0, java.time.Duration.between(receivedAt, now).toMillis());
             maxNetworkLag.accumulate(networkLag);
             maxQueueLag.accumulate(queueLag);
             lastReceived.put(event.type(), receivedAt);
             long maxEventAgeMillis = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
-            boolean fresh = !processingEventTime.isBefore(now.minusMillis(maxEventAgeMillis)) && !receivedAt.isBefore(now.minusMillis(maxEventAgeMillis));
+            boolean fresh = MarketEventFreshness.isFresh(processingEventTime, receivedAt, now, exchangeNow, maxEventAgeMillis);
             if ("MARK".equals(event.type())) {
-                lastMarkProcessingLagMs = java.time.Duration.between(processingEventTime, now).toMillis();
+                lastMarkProcessingLagMs = java.time.Duration.between(processingEventTime, exchangeNow).toMillis();
                 lastMarkFreshAtProcessing = fresh;
             }
             Instant previous = lastEventTime.get(event.type());
@@ -566,7 +586,7 @@ public class MarketStreamHub {
                     beginRecovery("成交事件序号缺口", event.sequenceId());
                     return;
                 }
-                if (!currentKlineValid(now)) {
+                if (!currentKlineValid(exchangeNow)) {
                     if (lastTradeId == null) {
                         lastTradeId = event.sequenceId() - 1;
                     }
@@ -575,7 +595,7 @@ public class MarketStreamHub {
                 }
                 lastTradeId = event.sequenceId();
             }
-            if (!connected && currentKlineValid(now) && lastEventTime.get("MARK") != null && !lastEventTime.get("MARK").isBefore(now.minusMillis(Math.max(1,
+            if (!connected && currentKlineValid(exchangeNow) && lastEventTime.get("MARK") != null && !lastEventTime.get("MARK").isBefore(exchangeNow.minusMillis(Math.max(1,
                 properties.getMarket().getMaxEventAgeMillis())))) {
                 connected = true;
                 log.info("行情已就绪: symbol={}, interval={}, klineOpen={}, networkLagMs={}, queueLagMs={}", key.symbol(), key.interval(), lastKlineOpen, networkLag, queueLag);
@@ -587,8 +607,8 @@ public class MarketStreamHub {
         /**
          * K线可以由REST或WS确认；不把低活跃交易对的静默当成断线。
          */
-        private boolean currentKlineValid(Instant now) {
-            return lastKlineOpen != null && !lastKlineClosed && !lastKlineOpen.isAfter(now) && nextOpen(lastKlineOpen).isAfter(now);
+        private boolean currentKlineValid(Instant exchangeNow) {
+            return lastKlineOpen != null && !lastKlineClosed && !lastKlineOpen.isAfter(exchangeNow) && nextOpen(lastKlineOpen).isAfter(exchangeNow);
         }
 
         /**
@@ -660,20 +680,29 @@ public class MarketStreamHub {
          * 定时检查流事件年龄、补偿状态和下游健康回调。
          */
         private synchronized void checkHealth() {
-            if (closed || reconnect != null) {
+            if (closed || terminalFailure || reconnect != null) {
                 return;
             }
+            long exchangeOffsetMillis;
+            try {
+                exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
+            } catch (RuntimeException ex) {
+                disconnect(ex);
+                return;
+            }
+            Instant localNow = Instant.now();
+            Instant exchangeNow = localNow.plusMillis(exchangeOffsetMillis);
             if (!connected && System.currentTimeMillis() >= nextMetricsAt) {
                 nextMetricsAt = System.currentTimeMillis() + 60_000L;
-                Instant now = Instant.now();
+                Instant now = localNow;
                 Instant markTime = lastEventTime.get("MARK");
                 Instant markReceived = lastReceived.get("MARK");
                 long maxAge = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
                 log.warn("行情未就绪诊断 mode={} symbol={} interval={} recovering={} wsMarkSeen={} markAgeMs={} markReceiveAgeMs={} maxEventAgeMs={} markFresh={} markProcessLagMs={} " +
                     "markFreshAtProcessing={} klineOpen={} klineClosed={} currentKlineValid={} listeners={} ingress={}", key.runMode(), key.symbol(), key.interval(), recovering,
-                    markTime != null, markTime == null ? null : java.time.Duration.between(markTime, now).toMillis(), markReceived == null ? null :
-                        java.time.Duration.between(markReceived, now).toMillis(), maxAge, markTime != null && !markTime.isBefore(now.minusMillis(maxAge)),
-                    lastMarkProcessingLagMs, lastMarkFreshAtProcessing, lastKlineOpen, lastKlineClosed, currentKlineValid(now), listeners.size(), ingress.statistics());
+                    markTime != null, markTime == null ? null : java.time.Duration.between(markTime, exchangeNow).toMillis(), markReceived == null ? null :
+                        java.time.Duration.between(markReceived, now).toMillis(), maxAge, markTime != null && !markTime.isBefore(exchangeNow.minusMillis(maxAge)),
+                    lastMarkProcessingLagMs, lastMarkFreshAtProcessing, lastKlineOpen, lastKlineClosed, currentKlineValid(exchangeNow), listeners.size(), ingress.statistics());
             }
             if (connectionStarted != null && connectionStarted.isBefore(Instant.now().minusSeconds(23 * 3600 + 55 * 60))) {
                 disconnect(new IllegalStateException("连接接近24小时有效期，主动轮换并补偿"));
@@ -691,7 +720,7 @@ public class MarketStreamHub {
                 disconnect(new IllegalStateException("MARK流超时未收到事件"));
                 return;
             }
-            if (!currentKlineValid(Instant.now())) {
+            if (!currentKlineValid(exchangeNow)) {
                 beginRecovery("K线周期已切换，REST校验当前状态", null);
             } else if (lastReceived.getOrDefault("KLINE", Instant.EPOCH).isBefore(deadline)) {
                 checkQuietKline();
@@ -724,7 +753,7 @@ public class MarketStreamHub {
                             validateKline(kline);
                         }
                         ExchangeGateway.Kline latest = history.get(history.size() - 1);
-                        if (!latest.openTime().equals(expectedOpen) || latest.closed() || !currentKlineValid(Instant.now())) {
+                        if (!latest.openTime().equals(expectedOpen) || latest.closed() || !currentKlineValid(exchangeNow())) {
                             beginRecovery("静默校验发现K线周期状态变化", null);
                             return;
                         }
@@ -746,7 +775,7 @@ public class MarketStreamHub {
          * 使当前连接代次失效并安排受控重连和历史补偿。
          */
         private synchronized void disconnect(Throwable cause) {
-            if (closed || reconnect != null) {
+            if (closed || terminalFailure || reconnect != null) {
                 return;
             }
             log.warn("行情中断，暂停决策并重建: symbol={}, interval={}", key.symbol(), key.interval(), cause);
@@ -813,6 +842,41 @@ public class MarketStreamHub {
             ingress.close();
             listeners.values().forEach(StreamEventConsumer::close);
             listeners.clear();
+        }
+
+        /**
+         * 将交易环境明确拒绝的标的隔离为终态，避免循环重建同一行情连接。
+         */
+        private synchronized void failPermanently(Throwable cause) {
+            if (closed || terminalFailure) {
+                return;
+            }
+            terminalFailure = true;
+            signalUnhealthy();
+            ++generation;
+            connected = false;
+            recovering = false;
+            notifyAll();
+            if (recoveryTask != null) {
+                recoveryTask.cancel(true);
+            }
+            if (quietCheckTask != null) {
+                quietCheckTask.cancel(true);
+            }
+            nextQuietCheckAt = 0L;
+            ingress.clear();
+            listeners.values().forEach(StreamEventConsumer::clear);
+            log.error("交易环境拒绝该行情交易对，已暂停该标的并停止自动重连: mode={} symbol={} interval={}", key.runMode(), key.symbol(), key.interval(), cause);
+            publish(status("ERROR"));
+            ExchangeGateway.MarketStreamSession old = upstream;
+            upstream = null;
+            if (old != null) {
+                try {
+                    old.close();
+                } catch (RuntimeException ex) {
+                    log.warn("关闭不支持标的的行情连接失败: mode={} symbol={}", key.runMode(), key.symbol(), ex);
+                }
+            }
         }
     }
 }

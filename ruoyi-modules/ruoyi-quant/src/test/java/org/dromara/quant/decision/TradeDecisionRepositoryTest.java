@@ -6,8 +6,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 
@@ -22,8 +20,11 @@ class TradeDecisionRepositoryTest {
     void setup() throws Exception {
         var ds = new DriverManagerDataSource("jdbc:h2:mem:" + java.util.UUID.randomUUID() + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1", "sa", "");
         jdbc = new JdbcTemplate(ds);
-        Path schema = Path.of("../../script/sql/quant_trade_decision_log.sql");
-        jdbc.execute(Files.readString(schema));
+        jdbc.execute("CREATE TABLE quant_trade_decision_log(id BIGINT AUTO_INCREMENT PRIMARY KEY,event_key VARCHAR(64) NOT NULL UNIQUE,record_type VARCHAR(24) NOT NULL,parent_key VARCHAR(64)," +
+            "credential_id BIGINT NOT NULL,account_name VARCHAR(255),run_mode VARCHAR(16),strategy_id BIGINT,strategy_instance_id BIGINT,strategy_name VARCHAR(255),symbol VARCHAR(40) NOT NULL," +
+            "operation VARCHAR(16),direction VARCHAR(16),status VARCHAR(32),reason_code VARCHAR(64),reason VARCHAR(2000),angle DECIMAL(20,8),threshold DECIMAL(20,8),kline_time TIMESTAMP," +
+            "quantity DECIMAL(38,16),price DECIMAL(38,16),margin DECIMAL(38,16),idempotency_key VARCHAR(255),order_id BIGINT,client_order_id VARCHAR(128),event_time TIMESTAMP NOT NULL," +
+            "trade_time TIMESTAMP,repeat_count BIGINT NOT NULL,last_time TIMESTAMP NOT NULL)");
         jdbc.execute("CREATE TABLE quant_credential(id BIGINT,account_name VARCHAR(255),run_mode VARCHAR(20))");
         jdbc.execute("CREATE TABLE quant_strategy(id BIGINT,strategy_name VARCHAR(255))");
         jdbc.execute("CREATE TABLE quant_execution_record(credential_id BIGINT,symbol VARCHAR(40),operation_type VARCHAR(20),exchange_order_id BIGINT,client_order_id VARCHAR" +
@@ -31,8 +32,9 @@ class TradeDecisionRepositoryTest {
         jdbc.execute("CREATE TABLE quant_order(credential_id BIGINT,symbol VARCHAR(40),exchange_order_id BIGINT,strategy_id BIGINT,strategy_instance_id BIGINT,reduce_only " +
             "BOOLEAN,position_side VARCHAR(20),status VARCHAR(30))");
         jdbc.execute("CREATE TABLE quant_protection_order(credential_id BIGINT,symbol VARCHAR(40),exchange_order_id BIGINT,client_order_id VARCHAR(128),protection_type VARCHAR" +
-            "(30),position_id BIGINT)");
-        jdbc.execute("CREATE TABLE quant_strategy_position_state(position_id BIGINT,instance_id BIGINT)");
+            "(30),position_id BIGINT,position_side VARCHAR(10),step_index INT,quantity DECIMAL(32,16),stop_price DECIMAL(32,16))");
+        jdbc.execute("CREATE TABLE quant_strategy_position_state(position_id BIGINT,instance_id BIGINT,direction VARCHAR(10),entry_price DECIMAL(32,16),frozen_leverage INT," +
+            "highest_price_since_entry DECIMAL(32,16),lowest_price_since_entry DECIMAL(32,16),strategy_params_snapshot VARCHAR(2000),frozen_stop_loss_ratio DECIMAL(16,8),frozen_symbol_stop_loss_ratio DECIMAL(16,8))");
         jdbc.execute("CREATE TABLE quant_strategy_instance(id BIGINT,strategy_id BIGINT)");
         jdbc.update("INSERT INTO quant_credential VALUES(1,'测试账户','TESTNET')");
         jdbc.update("INSERT INTO quant_strategy VALUES(2,'原策略名称')");
@@ -142,8 +144,8 @@ class TradeDecisionRepositoryTest {
         var fill =
             DecisionLogEvent.builder().recordType("FILL").credentialId(1L).symbol("BTCUSDT").orderId(99L).tradeId(1L).direction("SELL").quantity(BigDecimal.ONE).price(BigDecimal.TEN).eventTime(Instant.now()).tradeTime(Instant.now()).build();
         repository.writeBatch(List.of(fill));
-        jdbc.update("INSERT INTO quant_protection_order VALUES(1,'BTCUSDT',99,'protect','STOP_LOSS',7)");
-        jdbc.update("INSERT INTO quant_strategy_position_state VALUES(7,3)");
+        jdbc.update("INSERT INTO quant_protection_order(credential_id,symbol,exchange_order_id,client_order_id,protection_type,position_id,step_index,quantity,stop_price) VALUES(1,'BTCUSDT',99,'protect','STOP_LOSS',7,0,1,9)");
+        jdbc.update("INSERT INTO quant_strategy_position_state(position_id,instance_id) VALUES(7,3)");
         jdbc.update("INSERT INTO quant_strategy_instance VALUES(3,2)");
         repository.writeBatch(List.of(fill));
         var row = repository.list(new TradeDecisionQuery()).getRows().iterator().next();
@@ -151,6 +153,42 @@ class TradeDecisionRepositoryTest {
         assertEquals("CLOSE", row.get("operation"));
         assertEquals("LONG", row.get("direction"));
         assertEquals("EXCHANGE_PROTECTION", row.get("reasonCode"));
+    }
+
+    @Test
+    void exchangeStepTakeProfitExplainsPeakRetracementAndFilledQuantity() {
+        jdbc.update("INSERT INTO quant_protection_order(credential_id,symbol,exchange_order_id,client_order_id,protection_type,position_id,step_index,quantity,stop_price) VALUES(1,'BTCUSDT',99,'step-tp','STEP_TP',7,3,2,106.6666667)");
+        jdbc.update("INSERT INTO quant_strategy_position_state(position_id,instance_id,direction,entry_price,frozen_leverage,highest_price_since_entry,lowest_price_since_entry,strategy_params_snapshot,frozen_stop_loss_ratio) VALUES(7,3,'LONG',100,3,110,100,'{\"stepRatio\":0.1}',0.05)");
+        jdbc.update("INSERT INTO quant_strategy_instance VALUES(3,2)");
+        var fill = DecisionLogEvent.builder().recordType("FILL").credentialId(1L).symbol("BTCUSDT").orderId(99L).tradeId(1L).direction("SELL").quantity(new BigDecimal("1.5")).price(new BigDecimal("106.6")).eventTime(Instant.now()).tradeTime(Instant.now()).build();
+
+        repository.writeBatch(List.of(fill));
+
+        var row = repository.list(new TradeDecisionQuery()).getRows().iterator().next();
+        String reason = row.get("reason").toString();
+        assertTrue(reason.contains("阶梯止盈"));
+        assertTrue(reason.contains("最大回报率=30%"));
+        assertTrue(reason.contains("第3阶"));
+        assertTrue(reason.contains("锁定回报率=20%"));
+        assertTrue(reason.contains("止盈数量=1.5"));
+        assertEquals("159.9", row.get("amount"));
+    }
+
+    @Test
+    void protectionConfirmationExplainsFirstTakeProfitThresholdAndEstimatedNotional() {
+        jdbc.update("INSERT INTO quant_protection_order(credential_id,symbol,exchange_order_id,client_order_id,protection_type,position_id,position_side,step_index,quantity,stop_price) VALUES(1,'BTCUSDT',99,'first-tp','FIRST_TP',7,'LONG',0,2,110)");
+        jdbc.update("INSERT INTO quant_strategy_position_state(position_id,instance_id,direction,entry_price,frozen_leverage,strategy_params_snapshot) VALUES(7,3,'LONG',100,5,'{\"firstProfitTakingRate\":0.1}')");
+        jdbc.update("INSERT INTO quant_strategy_instance VALUES(3,2)");
+        var event = DecisionLogEvent.builder().eventKey("O:1:BTCUSDT:99").recordType("PROTECTION").credentialId(1L).symbol("BTCUSDT").operation("CLOSE").direction("LONG")
+            .status("ACCEPTED").reasonCode("EXCHANGE_PROTECTION").orderId(99L).clientOrderId("first-tp").eventTime(Instant.now()).build();
+
+        repository.writeBatch(List.of(event));
+
+        var row = repository.list(new TradeDecisionQuery()).getRows().iterator().next();
+        String reason = row.get("reason").toString();
+        assertTrue(reason.contains("首次止盈率10%"));
+        assertTrue(reason.contains("止盈数量=2"));
+        assertTrue(reason.contains("约220 USDT（按触发价估算）"));
     }
 
     @Test

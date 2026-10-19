@@ -4,6 +4,7 @@ import org.dromara.quant.execution.OpenPositionCommand;
 import org.dromara.quant.market.AccountBalanceSnapshot;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -51,6 +52,7 @@ class MySqlLiveCapacityRaceTest {
     }
 
     @Test
+    @EnabledIfEnvironmentVariable(named = "AIQUANT_MYSQL_URL", matches = ".+")
     void lastSlotCannotBeReservedByBothNodes() throws Exception {
         String base = System.getenv("AIQUANT_MYSQL_URL");
         if (base == null || base.isBlank()) {

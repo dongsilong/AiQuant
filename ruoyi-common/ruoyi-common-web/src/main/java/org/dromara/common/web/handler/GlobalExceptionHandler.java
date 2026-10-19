@@ -27,6 +27,7 @@ import org.springframework.web.bind.MissingPathVariableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -131,9 +132,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IOException.class)
     public void handleIoException(IOException e, HttpServletRequest request) {
         String requestURI = request.getRequestURI();
+        if (hasCause(e, AsyncRequestNotUsableException.class)) {
+            log.debug("SSE 客户端连接已关闭，请求结束: {}", requestURI);
+            return;
+        }
         String path = SpringUtils.getProperty("message.path");
         if (requestURI.contains(path)) {
             // sse 经常性连接中断 例如关闭浏览器 直接屏蔽
+            log.debug("sse 经常性连接中断: {}", requestURI);
             return;
         }
         log.error("请求地址'{}',连接中断", requestURI, e);
@@ -151,10 +157,23 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(RuntimeException.class)
     public R<Void> handleRuntimeException(RuntimeException e, HttpServletRequest request) {
+        if (hasCause(e, AsyncRequestNotUsableException.class)) {
+            log.debug("SSE 客户端连接已关闭，请求结束: {}", request.getRequestURI());
+            return null;
+        }
         String requestURI = request.getRequestURI();
         String errorId = RandomUtil.randomNumbers(8);
         log.error("请求地址'{}',发生未知异常, 错误编号: {}", requestURI, errorId, e);
         return R.fail("发生未知异常，请联系管理员 [错误编号: " + errorId + "]");
+    }
+
+    private static boolean hasCause(Throwable failure, Class<? extends Throwable> causeType) {
+        for (Throwable cause = failure; cause != null && cause != cause.getCause(); cause = cause.getCause()) {
+            if (causeType.isInstance(cause)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -163,6 +182,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public R<Void> handleException(Exception e, HttpServletRequest request) {
         String requestURI = request.getRequestURI();
+        if (hasCause(e, AsyncRequestNotUsableException.class)) {
+            log.debug("SSE 客户端连接已关闭，请求结束: {}", requestURI);
+            return null;
+        }
         String errorId = RandomUtil.randomNumbers(8);
         log.error("请求地址'{}',发生系统异常, 错误编号: {}", requestURI, errorId, e);
         return R.fail("发生系统异常，请联系管理员 [错误编号: " + errorId + "]");

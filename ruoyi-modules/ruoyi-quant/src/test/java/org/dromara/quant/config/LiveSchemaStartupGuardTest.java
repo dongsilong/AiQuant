@@ -19,10 +19,14 @@ class LiveSchemaStartupGuardTest {
         when(mapper.innodbTables()).thenReturn(List.of("quant_credential"));
         when(mapper.uniqueContracts()).thenReturn(List.of());
         when(mapper.leaseEpochColumns()).thenReturn(List.of());
-        when(mapper.entryGuardColumns()).thenReturn(List.of());
+        when(mapper.entryGuardColumns()).thenReturn(List.of("quant_strategy_entry_guard|guard_type"));
         var error = assertThrows(IllegalStateException.class, guard::verify);
         assertTrue(error.getMessage().contains("quant_strategy_runtime_lease"));
         assertTrue(error.getMessage().contains("quant_execution_record|credential_id,idempotency_key"));
+        assertTrue(error.getMessage().contains("quant_strategy_fill_journal"));
+        assertTrue(error.getMessage().contains("quant_strategy_fill_sync_cursor"));
+        assertTrue(error.getMessage().contains("V20261017_01__strategy_fill_journal.sql"));
+        assertTrue(!error.getMessage().contains("V20261016_01__close_candle_entry_guard.sql"));
     }
 
     @Test

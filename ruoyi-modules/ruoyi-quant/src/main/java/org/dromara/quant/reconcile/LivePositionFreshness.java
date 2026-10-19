@@ -66,4 +66,40 @@ public class LivePositionFreshness {
         Instant at = verified.get(credentialId);
         return at != null && !at.isAfter(Instant.now()) && Duration.between(at, Instant.now()).compareTo(MAX_AGE) <= 0;
     }
+
+    /**
+     * 捕获当前仍新鲜的全账户持仓快照代次；代次变化代表核验后出现了新账户事实。
+     */
+    public long requireFreshGeneration(Long credentialId) {
+        if (credentialId == null) {
+            throw new IllegalStateException("缺少 LIVE 账户持仓快照身份");
+        }
+        var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+        synchronized (counter) {
+            if (!isFresh(verified.get(credentialId))) {
+                throw new IllegalStateException("LIVE 账户级持仓快照缺失或过期");
+            }
+            return counter.get();
+        }
+    }
+
+    /**
+     * 发单前要求全账户持仓快照仍新鲜，且自开仓准入后没有收到使其失效的新事件。
+     */
+    public void requireFreshGeneration(Long credentialId, long expectedGeneration) {
+        if (credentialId == null) {
+            throw new IllegalStateException("缺少 LIVE 账户持仓快照身份");
+        }
+        var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+        synchronized (counter) {
+            if (counter.get() != expectedGeneration || !isFresh(verified.get(credentialId))) {
+                throw new IllegalStateException("LIVE 账户级持仓快照在开仓准备期间失效或发生变化");
+            }
+        }
+    }
+
+    private static boolean isFresh(Instant at) {
+        Instant now = Instant.now();
+        return at != null && !at.isAfter(now) && Duration.between(at, now).compareTo(MAX_AGE) <= 0;
+    }
 }

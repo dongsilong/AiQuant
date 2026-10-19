@@ -18,19 +18,19 @@ class LivePositionStreamSingleNodeGateTest {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
         var coordinator = mock(LivePositionEventCoordinator.class);
-        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var leaseService = mock(LiveUserStreamLeaseService.class);
         var account = new QuantCredential();
         account.setId(108L);
         account.setStatus("0");
         account.setRunMode("LIVE");
         when(credentials.selectList(any())).thenReturn(List.of(account));
-        when(lease.acquireOrRenew(eq(108L), anyString(), anyInt())).thenReturn(1);
+        when(leaseService.acquire(eq(108L), anyInt())).thenReturn(1L);
         var reference = mock(AutoCloseable.class);
         when(hub.subscribe(eq(account), any())).thenReturn(reference);
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), lease);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), leaseService);
         try {
             stream.run(new org.springframework.boot.DefaultApplicationArguments());
-            verify(hub).registerLeaseOwner(eq(108L), anyString());
+            verify(hub).registerLeaseOwner(108L, 1L);
             verify(hub).subscribe(eq(account), any());
             verify(coordinator).request(108L);
         } finally {
@@ -45,9 +45,9 @@ class LivePositionStreamSingleNodeGateTest {
         when(hub.hasLocalStream(anyLong())).thenReturn(true);
         var coordinator = mock(LivePositionEventCoordinator.class);
         var freshness = new LivePositionFreshness();
-        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
-        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
+        var leaseService = mock(LiveUserStreamLeaseService.class);
+        when(leaseService.acquire(anyLong(), anyInt())).thenReturn(1L);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, leaseService);
         var account = new QuantCredential();
         account.setId(71L);
         account.setStatus("0");
@@ -59,9 +59,42 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         verify(hub, times(1)).subscribe(eq(account), any());
         verify(coordinator).request(71L);
-        verify(hub, times(2)).registerLeaseOwner(eq(71L), anyString());
+        verify(hub, times(2)).registerLeaseOwner(71L, 1L);
         stream.close();
         verify(subscription).close();
+    }
+
+    @Test
+    void sameProcessLeaseEpochChangeRebuildsStreamAndInvalidatesSnapshot() throws Exception {
+        var credentials = mock(QuantCredentialMapper.class);
+        var hub = mock(UserDataStreamHub.class);
+        when(hub.hasLocalStream(110L)).thenReturn(true);
+        var coordinator = mock(LivePositionEventCoordinator.class);
+        var freshness = new LivePositionFreshness();
+        var leaseService = mock(LiveUserStreamLeaseService.class);
+        when(leaseService.acquire(110L, 75)).thenReturn(4L, 5L);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, leaseService);
+        var account = new QuantCredential();
+        account.setId(110L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectList(any())).thenReturn(List.of(account));
+        var oldSubscription = mock(AutoCloseable.class);
+        var newSubscription = mock(AutoCloseable.class);
+        when(hub.subscribe(eq(account), any())).thenReturn(oldSubscription, newSubscription);
+
+        stream.supervise();
+        freshness.verified(110L);
+        stream.supervise();
+
+        verify(oldSubscription).close();
+        verify(hub).unregisterLeaseOwner(110L, 4L);
+        verify(hub).registerLeaseOwner(110L, 5L);
+        verify(hub, times(2)).subscribe(eq(account), any());
+        verify(coordinator, times(2)).request(110L);
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(110L));
+        stream.close();
+        verify(newSubscription).close();
     }
 
     @Test
@@ -70,9 +103,9 @@ class LivePositionStreamSingleNodeGateTest {
         var hub = mock(UserDataStreamHub.class);
         when(hub.hasLocalStream(anyLong())).thenReturn(true);
         var coordinator = mock(LivePositionEventCoordinator.class);
-        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
-        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), lease);
+        var leaseService = mock(LiveUserStreamLeaseService.class);
+        when(leaseService.acquire(anyLong(), anyInt())).thenReturn(1L);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), leaseService);
         var account = new QuantCredential();
         account.setId(72L);
         account.setStatus("0");
@@ -83,7 +116,7 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         stream.supervise();
         verify(subscription).close();
-        verify(hub).unregisterLeaseOwner(eq(72L), anyString());
+        verify(hub).unregisterLeaseOwner(72L, 1L);
     }
 
     @Test
@@ -92,15 +125,15 @@ class LivePositionStreamSingleNodeGateTest {
         var hub = mock(UserDataStreamHub.class);
         when(hub.hasLocalStream(anyLong())).thenReturn(true);
         var coordinator = mock(LivePositionEventCoordinator.class);
-        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var leaseService = mock(LiveUserStreamLeaseService.class);
         var freshness = new LivePositionFreshness();
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, leaseService);
         var account = new QuantCredential();
         account.setId(91L);
         account.setStatus("0");
         account.setRunMode("LIVE");
         when(credentials.selectList(any())).thenReturn(List.of(account));
-        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1, 0);
+        when(leaseService.acquire(anyLong(), anyInt())).thenReturn(1L, (Long) null);
         var reference = mock(AutoCloseable.class);
         when(hub.subscribe(eq(account), any())).thenReturn(reference);
         stream.supervise();
@@ -108,7 +141,7 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         verify(hub, times(1)).subscribe(eq(account), any());
         verify(reference).close();
-        verify(hub).unregisterLeaseOwner(eq(91L), anyString());
+        verify(hub).unregisterLeaseOwner(91L, 1L);
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(91L));
     }
 
@@ -118,9 +151,9 @@ class LivePositionStreamSingleNodeGateTest {
         var hub = mock(UserDataStreamHub.class);
         when(hub.hasLocalStream(anyLong())).thenReturn(true);
         var coordinator = mock(LivePositionEventCoordinator.class);
-        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
-        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), lease);
+        var leaseService = mock(LiveUserStreamLeaseService.class);
+        when(leaseService.acquire(anyLong(), anyInt())).thenReturn(1L);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), leaseService);
         var account = new QuantCredential();
         account.setId(94L);
         account.setStatus("0");
@@ -128,8 +161,8 @@ class LivePositionStreamSingleNodeGateTest {
         when(credentials.selectList(any())).thenReturn(List.of(account));
         when(hub.subscribe(eq(account), any())).thenThrow(new IllegalStateException("Cannot open private stream"));
         stream.supervise();
-        verify(hub).unregisterLeaseOwner(eq(94L), anyString());
-        verify(lease).release(eq(94L), anyString());
+        verify(hub).unregisterLeaseOwner(94L, 1L);
+        verify(leaseService).release(94L);
         verifyNoInteractions(coordinator);
     }
 
@@ -138,9 +171,9 @@ class LivePositionStreamSingleNodeGateTest {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
         var coordinator = mock(LivePositionEventCoordinator.class);
-        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var leaseService = mock(LiveUserStreamLeaseService.class);
         var freshness = new LivePositionFreshness();
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, leaseService);
         var account = new QuantCredential();
         account.setId(96L);
         account.setStatus("0");
@@ -148,7 +181,7 @@ class LivePositionStreamSingleNodeGateTest {
         freshness.verified(96L);
         org.junit.jupiter.api.Assertions.assertTrue(freshness.fresh(96L));
         when(credentials.selectList(any())).thenReturn(List.of(account));
-        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        when(leaseService.acquire(anyLong(), anyInt())).thenReturn(1L);
         when(hub.subscribe(eq(account), any())).thenReturn(mock(AutoCloseable.class));
         stream.supervise();
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(96L));
@@ -161,14 +194,14 @@ class LivePositionStreamSingleNodeGateTest {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
         var coordinator = mock(LivePositionEventCoordinator.class);
-        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), lease);
+        var leaseService = mock(LiveUserStreamLeaseService.class);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, new LivePositionFreshness(), leaseService);
         var account = new QuantCredential();
         account.setId(95L);
         account.setStatus("0");
         account.setRunMode("LIVE");
         when(credentials.selectList(any())).thenReturn(List.of(account));
-        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        when(leaseService.acquire(anyLong(), anyInt())).thenReturn(1L);
         when(hub.hasLocalStream(95L)).thenReturn(false);
         var first = mock(AutoCloseable.class);
         var replacement = mock(AutoCloseable.class);
@@ -187,25 +220,25 @@ class LivePositionStreamSingleNodeGateTest {
         var credentials = mock(QuantCredentialMapper.class);
         var hub = mock(UserDataStreamHub.class);
         var coordinator = mock(LivePositionEventCoordinator.class);
-        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var leaseService = mock(LiveUserStreamLeaseService.class);
         var freshness = new LivePositionFreshness();
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, leaseService);
         var account = new QuantCredential();
         account.setId(97L);
         account.setStatus("0");
         account.setRunMode("LIVE");
         when(credentials.selectList(any())).thenReturn(List.of(account)).thenThrow(new IllegalStateException("database unavailable"));
-        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        when(leaseService.acquire(anyLong(), anyInt())).thenReturn(1L);
         var reference = mock(AutoCloseable.class);
         when(hub.subscribe(eq(account), any())).thenReturn(reference);
         stream.supervise();
         freshness.verified(97L);
         stream.supervise();
         verify(reference).close();
-        verify(hub).unregisterLeaseOwner(eq(97L), anyString());
-        verify(lease).release(eq(97L), anyString());
+        verify(hub).unregisterLeaseOwner(97L, 1L);
+        verify(leaseService).release(97L);
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(97L));
-        verify(lease, times(1)).acquireOrRenew(eq(97L), anyString(), anyInt());
+        verify(leaseService, times(1)).acquire(eq(97L), anyInt());
     }
 
     @Test
@@ -214,9 +247,9 @@ class LivePositionStreamSingleNodeGateTest {
         var hub = mock(UserDataStreamHub.class);
         when(hub.hasLocalStream(anyLong())).thenReturn(true);
         var coordinator = mock(LivePositionEventCoordinator.class);
-        var lease = mock(org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper.class);
+        var leaseService = mock(LiveUserStreamLeaseService.class);
         var freshness = new LivePositionFreshness();
-        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, lease);
+        var stream = new LivePositionStreamTriggers(credentials, hub, coordinator, freshness, leaseService);
         var firstAccount = new QuantCredential();
         firstAccount.setId(101L);
         firstAccount.setStatus("0");
@@ -226,7 +259,7 @@ class LivePositionStreamSingleNodeGateTest {
         secondAccount.setStatus("0");
         secondAccount.setRunMode("LIVE");
         when(credentials.selectList(any())).thenReturn(List.of(firstAccount, secondAccount), List.of());
-        when(lease.acquireOrRenew(anyLong(), anyString(), anyInt())).thenReturn(1);
+        when(leaseService.acquire(anyLong(), anyInt())).thenReturn(1L);
         var firstSubscription = mock(AutoCloseable.class);
         var secondSubscription = mock(AutoCloseable.class);
         when(hub.subscribe(eq(firstAccount), any())).thenReturn(firstSubscription);
@@ -234,7 +267,7 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         freshness.verified(101L);
         freshness.verified(102L);
-        doThrow(new IllegalStateException("MySQL unavailable")).when(lease).release(anyLong(), anyString());
+        doThrow(new IllegalStateException("MySQL unavailable")).when(leaseService).release(anyLong());
         stream.supervise();
         verify(firstSubscription).close();
         verify(secondSubscription).close();

@@ -90,6 +90,67 @@ class LivePositionEventCoordinatorTest {
     }
 
     @Test
+    void nonTradeOrderUpdatesDoNotInvalidatePositionSnapshot() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        var freshness = new LivePositionFreshness();
+        freshness.verified(72L);
+        org.springframework.test.util.ReflectionTestUtils.setField(coordinator, "freshness", freshness);
+
+        coordinator.onUserDataEvent(72L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent(
+            "ORDER_TRADE_UPDATE", java.time.Instant.now(), "{\"e\":\"ORDER_TRADE_UPDATE\",\"o\":{\"x\":\"NEW\",\"X\":\"NEW\"}}"));
+
+        org.junit.jupiter.api.Assertions.assertTrue(freshness.fresh(72L));
+        coordinator.drain();
+        verifyNoInteractions(credentials, reconciliation);
+    }
+
+    @Test
+    void tradeExecutionInvalidatesPositionSnapshotAndSchedulesRefresh() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        var freshness = new LivePositionFreshness();
+        freshness.verified(74L);
+        org.springframework.test.util.ReflectionTestUtils.setField(coordinator, "freshness", freshness);
+        var account = new QuantCredential();
+        account.setId(74L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectById(74L)).thenReturn(account);
+
+        coordinator.onUserDataEvent(74L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent(
+            "ORDER_TRADE_UPDATE", java.time.Instant.now(), "{\"e\":\"ORDER_TRADE_UPDATE\",\"o\":{\"x\":\"TRADE\",\"X\":\"PARTIALLY_FILLED\"}}"));
+        coordinator.drain();
+
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(74L));
+        verify(reconciliation).refreshPositionsOnly(account);
+    }
+
+    @Test
+    void malformedOrderUpdateFailsClosedAndSchedulesRefresh() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        var freshness = new LivePositionFreshness();
+        freshness.verified(75L);
+        org.springframework.test.util.ReflectionTestUtils.setField(coordinator, "freshness", freshness);
+        var account = new QuantCredential();
+        account.setId(75L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectById(75L)).thenReturn(account);
+
+        coordinator.onUserDataEvent(75L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent(
+            "ORDER_TRADE_UPDATE", java.time.Instant.now(), "not-json"));
+        coordinator.drain();
+
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(75L));
+        verify(reconciliation).refreshPositionsOnly(account);
+    }
+
+    @Test
     void disconnectInvalidatesSnapshotAndReconnectSchedulesFullRefresh() {
         var credentials = mock(QuantCredentialMapper.class);
         var reconciliation = mock(TradingReconciliationService.class);
@@ -107,6 +168,68 @@ class LivePositionEventCoordinatorTest {
         coordinator.onUserDataEvent(73L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent("CONNECTED", java.time.Instant.now(), null));
         coordinator.drain();
         verify(reconciliation).refreshPositionsOnly(account);
+    }
+
+    @Test
+    void algoUpdateQueuesExactSymbolProtectionRecoveryOffTheStreamCallback() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var protection = mock(org.dromara.quant.protection.ProtectionOrderService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        coordinator.setProtectionOrderService(protection);
+        QuantCredential account = new QuantCredential();
+        account.setId(88L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectById(88L)).thenReturn(account);
+
+        coordinator.onUserDataEvent(88L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent(
+            "ALGO_UPDATE", java.time.Instant.now(), "{\"e\":\"ALGO_UPDATE\",\"o\":{\"s\":\"BTCUSDT\"}}"));
+
+        verifyNoInteractions(protection);
+        coordinator.drain();
+
+        verify(protection).recoverUnresolvedProtectionDispatches(88L, "BTCUSDT");
+        verifyNoInteractions(reconciliation);
+    }
+
+    @Test
+    void reconnectQueuesAccountWideProtectionRecovery() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var protection = mock(org.dromara.quant.protection.ProtectionOrderService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        coordinator.setProtectionOrderService(protection);
+        QuantCredential account = new QuantCredential();
+        account.setId(89L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectById(89L)).thenReturn(account);
+
+        coordinator.onUserDataEvent(89L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent("CONNECTED", java.time.Instant.now(), null));
+        coordinator.drain();
+
+        verify(protection).recoverUnresolvedProtectionDispatches(89L, null);
+    }
+
+    @Test
+    void dispatchGateBlockQueuesRecoveryForTheOccupiedAccountSymbolSlot() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var protection = mock(org.dromara.quant.protection.ProtectionOrderService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        coordinator.setProtectionOrderService(protection);
+        QuantCredential account = new QuantCredential();
+        account.setId(90L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectById(90L)).thenReturn(account);
+
+        coordinator.onDispatchBlocked(new org.dromara.quant.execution.DispatchBlockedEvent(90L, "BTCUSDT", "OPEN"));
+        verifyNoInteractions(protection);
+        coordinator.drain();
+
+        verify(protection).recoverUnresolvedProtectionDispatches(90L, "BTCUSDT");
     }
 
 }

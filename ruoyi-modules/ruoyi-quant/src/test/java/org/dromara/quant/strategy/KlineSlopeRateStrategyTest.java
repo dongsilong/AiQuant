@@ -14,6 +14,14 @@ class KlineSlopeRateStrategyTest {
     private final KlineSlopeRateStrategy strategy = new KlineSlopeRateStrategy();
 
     @Test
+    void slopeDiagnosticLogIsRateLimitedPerSymbol() {
+        String symbol = "TEST-" + java.util.UUID.randomUUID();
+        assertTrue(KlineSlopeRateStrategy.shouldLogSlope(symbol, 1_000));
+        org.junit.jupiter.api.Assertions.assertFalse(KlineSlopeRateStrategy.shouldLogSlope(symbol, 1_001));
+        assertTrue(KlineSlopeRateStrategy.shouldLogSlope(symbol, 6_000));
+    }
+
+    @Test
     void opensLongWhenRealtimeSlopeExceedsThreshold() {
         StrategyContext c = context(null, null, new BigDecimal("100"), new BigDecimal("102"), false, null, null);
         assertEquals(EntrySignal.Direction.LONG, strategy.evaluateEntry(c, Map.of("entryAngleDegrees", 60)).orElseThrow().direction());
@@ -25,19 +33,25 @@ class KlineSlopeRateStrategyTest {
         var exit = strategy.evaluateExit(c, Map.of("firstProfitTakingRate", "0.10", "firstClosePositionRate", "0.50")).getFirst();
         assertEquals(KlineSlopeRateStrategy.EXIT_FIRST_TP, exit.type());
         assertEquals(0, new BigDecimal("0.50").compareTo(exit.quantityRate()));
+        assertTrue(exit.reason().contains("首次止盈阈值=10%"));
     }
 
     @Test
     void localStopUsesFivePercentReturnByDefault() {
         StrategyContext c = context("LONG", new BigDecimal("100"), null, new BigDecimal("99.4"), false, new BigDecimal("100"), null);
-        assertEquals(KlineSlopeRateStrategy.EXIT_LOCAL_STOP, strategy.evaluateExit(c, Map.of()).getFirst().type());
+        var exit = strategy.evaluateExit(c, Map.of()).getFirst();
+        assertEquals(KlineSlopeRateStrategy.EXIT_LOCAL_STOP, exit.type());
+        assertTrue(exit.reason().contains("止损阈值=-5%"));
     }
 
     @Test
     void trailingClosesAtPreviousStepAfterFirstTakeProfit() {
         // 10x 杠杆：最高价 102.1 => 21% 回报率，处于 n=2；回撤到 101 => 10% 锁盈线，触发剩余全平。
         StrategyContext c = context("LONG", new BigDecimal("100"), null, new BigDecimal("101"), true, new BigDecimal("102.1"), null);
-        assertEquals(KlineSlopeRateStrategy.EXIT_STEP_TP, strategy.evaluateExit(c, Map.of()).getFirst().type());
+        var exit = strategy.evaluateExit(c, Map.of()).getFirst();
+        assertEquals(KlineSlopeRateStrategy.EXIT_STEP_TP, exit.type());
+        assertTrue(exit.reason().contains("持仓期间最大回报率=21%"));
+        assertTrue(exit.reason().contains("回撤保护比例=10%"));
     }
 
     @Test

@@ -135,7 +135,7 @@ class OpenCapacityServiceTest {
         var newShort = new OpenPositionCommand(1L, 20L, 200L, null, "BTCUSDT", "SELL", "MARKET", BigDecimal.ONE, BigDecimal.TEN, "SHORT", "live-conflict", "LIVE", null, 1,
             "ISOLATED", null);
         var blocked = assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> f.first.reserve(newShort, BigDecimal.TEN, List.of(), balance(1L, "100", Set.of())));
-        assertTrue(blocked.getMessage().contains("尚不支持多策略"));
+        assertTrue(blocked.getMessage().contains("单向持仓模式"));
         assertEquals(0L, f.jdbc.queryForObject("SELECT COUNT(*) FROM quant_open_capacity", Long.class));
     }
 
@@ -324,7 +324,7 @@ class OpenCapacityServiceTest {
     void absentMarginMigrationCannotCreateTrustedBalanceCoverage() {
         Fixture f = fixture(3, 3);
         f.jdbc.execute("ALTER TABLE quant_open_capacity DROP COLUMN reserved_margin");
-        assertThrows(org.springframework.dao.DataAccessException.class, () -> f.first.balanceCoverage(1L));
+        assertThrows(org.springframework.dao.DataAccessException.class, () -> f.first.availableBalance(1L, balance(1L, "100", Set.of())));
     }
 
     @Test

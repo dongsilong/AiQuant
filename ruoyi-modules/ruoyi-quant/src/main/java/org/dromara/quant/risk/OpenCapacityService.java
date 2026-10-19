@@ -66,18 +66,56 @@ public class OpenCapacityService {
      * 原子预留开仓额度，避免并发决策同时超过持仓和保证金上限。
      */
     public void reserve(OpenPositionCommand command, BigDecimal notional, List<ExchangeGateway.PositionSnapshot> freshPositions, AccountBalanceSnapshot balance) {
-        checkCapacity(command, notional, freshPositions, balance, true);
+        reserve(command, notional, freshPositions, balance, false);
+    }
+
+    /**
+     * 原子预留开仓额度；只有交易准备流程已确认 Hedge Mode 时才允许异方向并存。
+     */
+    public void reserve(OpenPositionCommand command, BigDecimal notional, List<ExchangeGateway.PositionSnapshot> freshPositions, AccountBalanceSnapshot balance,
+                        boolean hedgeModeConfirmed) {
+        checkCapacity(command, notional, freshPositions, balance, true, hedgeModeConfirmed);
     }
 
     /**
      * 失败重试前复用同一套容量判据；不创建或释放占位，不创建执行记录，不请求交易所。
      */
     public void requireCanReserve(OpenPositionCommand command, BigDecimal notional, List<ExchangeGateway.PositionSnapshot> freshPositions, AccountBalanceSnapshot balance) {
-        checkCapacity(command, notional, freshPositions, balance, false);
+        requireCanReserve(command, notional, freshPositions, balance, false);
+    }
+
+    /**
+     * 只读重试准入校验；共享异方向持仓同样要求已确认 Hedge Mode。
+     */
+    public void requireCanReserve(OpenPositionCommand command, BigDecimal notional, List<ExchangeGateway.PositionSnapshot> freshPositions, AccountBalanceSnapshot balance,
+                                  boolean hedgeModeConfirmed) {
+        checkCapacity(command, notional, freshPositions, balance, false, hedgeModeConfirmed);
+    }
+
+    /**
+     * 为 LIVE 开仓捕获已核验账户持仓快照的代次。
+     */
+    public long captureLivePositionGeneration(Long credentialId) {
+        try {
+            return risk.captureLivePositionGeneration(credentialId);
+        } catch (org.dromara.common.core.exception.ServiceException ex) {
+            throw new CapacityBlockedException(ex.getMessage());
+        }
+    }
+
+    /**
+     * 发单前复核 LIVE 账户持仓快照代次，拒绝使用开仓准备期间已失效的事实。
+     */
+    public void requireLivePositionGeneration(Long credentialId, long expectedGeneration) {
+        try {
+            risk.requireLivePositionGeneration(credentialId, expectedGeneration);
+        } catch (org.dromara.common.core.exception.ServiceException ex) {
+            throw new CapacityBlockedException(ex.getMessage());
+        }
     }
 
     private void checkCapacity(OpenPositionCommand command, BigDecimal notional, List<ExchangeGateway.PositionSnapshot> freshPositions, AccountBalanceSnapshot balance,
-                               boolean reserve) {
+                               boolean reserve, boolean hedgeModeConfirmed) {
         if (command.credentialId() == null || command.idempotencyKey() == null || command.symbol() == null || notional == null || notional.signum() <= 0 || (!"PAPER".equalsIgnoreCase(command.runMode()) && freshPositions == null)) {
             throw new CapacityBlockedException("开仓容量检查缺少有效账户、金额或持仓事实");
         }
@@ -165,14 +203,13 @@ public class OpenCapacityService {
             if (alreadyReserved) {
                 return;
             }
-            // First LIVE release deliberately does not support sharing the same exchange
-            // account+symbol across multiple strategies or opposite hedge directions.
-            // Exchange position facts are aggregated and cannot prove strategy attribution.
-            // This fail-closed rule must stay until a verified strategy fill-allocation ledger exists.
-            if ("LIVE".equalsIgnoreCase(command.runMode()) && command.strategyInstanceId() != null) {
+            // One-way mode aggregates both sides into BOTH, so the whole symbol stays exclusive.
+            // A confirmed Hedge Mode may hold opposite directions independently; the exact-side
+            // check below still prevents same-direction strategies from sharing or adding size.
+            if ("LIVE".equalsIgnoreCase(command.runMode()) && command.strategyInstanceId() != null && !hedgeModeConfirmed) {
                 String symbolPrefix = command.symbol().toUpperCase(Locale.ROOT) + ":";
                 if (accountKeys.stream().anyMatch(positionKey -> positionKey.startsWith(symbolPrefix))) {
-                    throw new CapacityBlockedException("LIVE 单账户同交易对已有仓位或待确认订单，尚不支持多策略/双向共享持仓: " + command.symbol(), true);
+                    throw new CapacityBlockedException("LIVE 单向持仓模式下同交易对已有仓位或待确认订单: " + command.symbol(), true);
                 }
             }
             if (command.strategyId() != null && strategyKeys.size() >= strategyLimit) {

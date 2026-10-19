@@ -149,7 +149,7 @@ public class ProtectionTargetCoordinator {
             transaction.executeWithoutResult(status -> {
                 var old = convert(row(true));
                 if (old.pendingOrderId() != null || old.previousOrderId() != null) {
-                    throw new IllegalStateException("原保护目标尚待确认或清理，禁止生成第二份意图");
+                    throw new PendingTargetException(old.pendingOrderId(), old.previousOrderId());
                 }
                 candidate.setTargetVersion(old.version() + 1);
                 candidate.setStepIndex(Math.max(old.stepIndex(), step));
@@ -210,6 +210,15 @@ public class ProtectionTargetCoordinator {
             }
             heartbeat.interrupt();
             mapper.releaseLease(key, owner);
+        }
+    }
+
+    /**
+     * 已有保护订单仍待交易所确认或旧单清理；调用方应保留交易阻断并稍后重核。
+     */
+    public static final class PendingTargetException extends IllegalStateException {
+        public PendingTargetException(Long pendingOrderId, Long previousOrderId) {
+            super("保护目标尚待确认或清理，禁止生成第二份意图 pendingOrderId=" + pendingOrderId + " previousOrderId=" + previousOrderId);
         }
     }
 }

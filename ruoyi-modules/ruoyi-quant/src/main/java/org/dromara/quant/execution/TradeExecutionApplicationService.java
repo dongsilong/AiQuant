@@ -215,11 +215,16 @@ public class TradeExecutionApplicationService {
      * 只读重试准入校验，复用可信缓存及容量规则，不产生交易请求或账本记录。
      */
     public void requireOpenCapacityForRuntime(Long credentialId, Long strategyId, Long instanceId, String symbol, String side, BigDecimal quantity, BigDecimal price,
-                                              int leverage, String runMode, org.dromara.quant.market.AccountBalanceSnapshot balance) {
+                                              int leverage, String marginMode, String runMode, org.dromara.quant.market.AccountBalanceSnapshot balance) {
         var positions = "PAPER".equalsIgnoreCase(runMode) ? null : positionCache.requirePositions(credentialId);
         var command = new OpenPositionCommand(credentialId, strategyId, instanceId, null, symbol, side, "MARKET", quantity, null, null, "RETRY_CHECK:" + instanceId, runMode,
             null, leverage, null, null);
-        openCapacityService.requireCanReserve(command, quantity.multiply(price), positions, balance);
+        boolean hedgeModeConfirmed = false;
+        if ("LIVE".equalsIgnoreCase(runMode)) {
+            var prepared = preparationService.requireReady(credentialId, symbol, leverage, marginMode);
+            hedgeModeConfirmed = prepared.positionMode() != null && prepared.positionMode().hedgeMode();
+        }
+        openCapacityService.requireCanReserve(command, quantity.multiply(price), positions, balance, hedgeModeConfirmed);
     }
 
     /**

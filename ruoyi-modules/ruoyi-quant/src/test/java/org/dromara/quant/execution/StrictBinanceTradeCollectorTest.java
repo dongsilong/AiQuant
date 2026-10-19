@@ -10,6 +10,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -28,7 +29,20 @@ class StrictBinanceTradeCollectorTest {
     }
 
     @Test
-    void rejectsSaturatedPageRatherThanClaimingMissingFillsDoNotExist() {
+    void splitsSaturatedPagesAndDeduplicatesInclusiveBoundaryFacts() {
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), argThat(range -> range.from().equals(start) && range.to().equals(end))))
+            .thenReturn(java.util.Collections.nCopies(1000, trade(1L)));
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), argThat(range -> range.from().isAfter(start) || range.to().isBefore(end))))
+            .thenAnswer(call -> {
+                var range = call.<ExchangeGateway.TimeRange>getArgument(2);
+                return List.of(trade(1L), trade(3L)).stream().filter(value -> !value.time().isBefore(range.from()) && !value.time().isAfter(range.to())).toList();
+            });
+        var result = collector.collect(credential, "BTCUSDT", start, end);
+        assertEquals(List.of(1L, 3L), result.stream().map(ExchangeGateway.TradeSnapshot::tradeId).toList());
+    }
+
+    @Test
+    void rejectsAOneMillisecondWindowThatRemainsSaturated() {
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(java.util.Collections.nCopies(1000, trade(1L)));
         assertThrows(IllegalStateException.class, () -> collector.collect(credential, "BTCUSDT", start, end));
     }

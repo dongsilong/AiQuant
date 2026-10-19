@@ -5,7 +5,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.util.QuantJsonMapper;
+import org.dromara.quant.protection.ProtectionOrderService;
+import org.dromara.quant.execution.DispatchBlockedEvent;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -29,6 +33,8 @@ public class LivePositionEventCoordinator {
     private final ConcurrentHashMap<Long, Long> retryNotBefore = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> failures = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Long> lastAttempt = new ConcurrentHashMap<>();
+    private final Set<ProtectionRecoveryRequest> protectionRecoveryPending = ConcurrentHashMap.newKeySet();
+    private ProtectionOrderService protectionOrderService;
     @Autowired(required = false)
     private LivePositionFreshness freshness;
 
@@ -48,8 +54,46 @@ public class LivePositionEventCoordinator {
             }
             return;
         }
-        if ("ACCOUNT_UPDATE".equalsIgnoreCase(type) || "ORDER_TRADE_UPDATE".equalsIgnoreCase(type) || "CONNECTED".equalsIgnoreCase(type)) {
+        if ("CONNECTED".equalsIgnoreCase(type)) {
+            protectionRecoveryPending.add(new ProtectionRecoveryRequest(credentialId, null));
+        } else if ("ALGO_UPDATE".equalsIgnoreCase(type)) {
+            // Algorithm-order events can recover the exact active protection create/cancel ticket.
+            // Parsing and exchange REST reconciliation are deferred to drain(), off the WS callback thread.
+            protectionRecoveryPending.add(new ProtectionRecoveryRequest(credentialId, algoEventSymbol(event.rawJson())));
+        }
+        if ("ACCOUNT_UPDATE".equalsIgnoreCase(type) || "CONNECTED".equalsIgnoreCase(type)
+            || ("ORDER_TRADE_UPDATE".equalsIgnoreCase(type) && mayChangePosition(event.rawJson()))) {
             request(credentialId);
+        }
+    }
+
+    private static String algoEventSymbol(String rawJson) {
+        try {
+            java.util.Map<String, Object> root = QuantJsonMapper.readMap(rawJson);
+            Object orderValue = root.get("o");
+            if (orderValue instanceof java.util.Map<?, ?> order && order.get("s") != null) {
+                return order.get("s").toString();
+            }
+            Object symbol = root.get("s");
+            return symbol == null ? null : symbol.toString();
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /**
+     * 判断订单私有事件是否表示成交；无法确认事件类型时按可能改变持仓处理。
+     */
+    private static boolean mayChangePosition(String rawJson) {
+        try {
+            Object orderValue = QuantJsonMapper.readMap(rawJson).get("o");
+            if (!(orderValue instanceof java.util.Map<?, ?> order)) {
+                return true;
+            }
+            Object executionType = order.get("x");
+            return executionType == null || "TRADE".equalsIgnoreCase(executionType.toString());
+        } catch (Exception ex) {
+            return true;
         }
     }
 
@@ -72,6 +116,8 @@ public class LivePositionEventCoordinator {
      */
     @Scheduled(fixedDelay = 2000, initialDelay = 3000)
     public void drain() {
+        // Resolve gate-blocked protection tickets before potentially slower position snapshots.
+        drainProtectionRecoveryRequests();
         for (Long id : Set.copyOf(pending)) {
             long now = System.currentTimeMillis();
             if (now < retryNotBefore.getOrDefault(id, 0L) || now - lastAttempt.getOrDefault(id, 0L) < MIN_REFRESH_GAP_MILLIS || !pending.remove(id)) {
@@ -97,6 +143,50 @@ public class LivePositionEventCoordinator {
                 pending.add(id);
                 log.warn("LIVE event-triggered position refresh failed credentialId={} retryInMs={}", id, backoffMillis, ex);
             }
+        }
+    }
+
+    private void drainProtectionRecoveryRequests() {
+        ProtectionOrderService recoveryService = protectionOrderService;
+        if (recoveryService == null) {
+            return;
+        }
+        for (ProtectionRecoveryRequest request : Set.copyOf(protectionRecoveryPending)) {
+            if (!protectionRecoveryPending.remove(request)) {
+                continue;
+            }
+            try {
+                QuantCredential credential = credentials.selectById(request.credentialId());
+                if (credential == null || !"0".equals(credential.getStatus()) || !"LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                    continue;
+                }
+                int recovered = recoveryService.recoverUnresolvedProtectionDispatches(request.credentialId(), request.symbol());
+                if (recovered > 0) {
+                    log.info("私有流触发保护派发恢复完成 credentialId={} symbol={} recoveredCount={}", request.credentialId(), request.symbol(), recovered);
+                }
+            } catch (RuntimeException ex) {
+                log.warn("私有流触发保护派发核实失败，派发门禁保持不变 credentialId={} symbol={} errorType={}", request.credentialId(), request.symbol(),
+                    ex.getClass().getSimpleName());
+            }
+        }
+    }
+
+    /** 注入保护撤单的精确事实恢复服务。 */
+    @Autowired(required = false)
+    public void setProtectionOrderService(ProtectionOrderService protectionOrderService) {
+        this.protectionOrderService = protectionOrderService;
+    }
+
+    private record ProtectionRecoveryRequest(Long credentialId, String symbol) {
+    }
+
+    /**
+     * 派发槽被占用时排队核实当前旧票据；监听器不执行 REST，避免阻塞交易调用和数据库事务。
+     */
+    @EventListener
+    public void onDispatchBlocked(DispatchBlockedEvent event) {
+        if (event != null && event.credentialId() != null && event.symbol() != null) {
+            protectionRecoveryPending.add(new ProtectionRecoveryRequest(event.credentialId(), event.symbol()));
         }
     }
 }

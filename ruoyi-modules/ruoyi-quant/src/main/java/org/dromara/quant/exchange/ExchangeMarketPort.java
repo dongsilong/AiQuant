@@ -7,6 +7,13 @@ import java.util.function.Consumer;
  * 交易所行情端口。
  */
 public interface ExchangeMarketPort {
+    /**
+     * 获取交易所时间相对本机时间的偏移；非 Binance 网关默认无偏移。
+     */
+    default long exchangeTimeOffsetMillis(String runMode) {
+        return 0L;
+    }
+
     private static void requireSupportedMarket(String runMode) {
         if ("TESTNET".equalsIgnoreCase(runMode)) {
             throw new IllegalStateException("网关不支持测试网行情，拒绝回退正式网");
@@ -75,6 +82,15 @@ public interface ExchangeMarketPort {
     class RequestDeferredException extends IllegalStateException {
         public RequestDeferredException() {
             super("Binance REST 请求排队达到上限，延后执行");
+        }
+    }
+
+    /**
+     * 交易环境明确拒绝该标的；重建连接不能修复，应等待标的或环境配置变更。
+     */
+    class UnsupportedMarketSymbolException extends IllegalStateException {
+        public UnsupportedMarketSymbolException(String runMode, String symbol) {
+            super("交易环境不支持该行情交易对: mode=" + runMode + ", symbol=" + symbol);
         }
     }
 }

@@ -1,4 +1,8 @@
 # Spring配置
+logging:
+  level:
+    org.dromara: info
+
 quant:
   binance:
     # RAW_OKHTTP / BINANCE_SDK; SDK 路径需通过集成验证后逐步启用。
@@ -30,16 +34,12 @@ quant:
     recovery-seconds: 5
   # 交易所事实对账与用户数据流协调配置
   reconcile:
-    # 是否启用对账、用户数据流监督和执行恢复任务
+    # 是否启用周期账户/订单/成交全量对账及持久化执行记录恢复扫描；运行时持仓核实与用户数据流恢复仍运行
     enabled: false
-    # 持仓/订单事实对账间隔，单位：秒
+    # 周期全量对账和运行时定期持仓核实间隔，单位：秒
     interval-seconds: 60
     # 对账查询历史订单和成交的回溯范围，单位：小时
     history-hours: 48
-
-#logging:
-#  level:
-#    org.dromara.quant.strategy: debug
 
 --- # 监控中心配置
 spring.boot.admin.client:

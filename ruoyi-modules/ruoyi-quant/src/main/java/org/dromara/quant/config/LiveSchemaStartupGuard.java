@@ -23,12 +23,14 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
     private static final Set<String> TABLES = Set.of("quant_credential", "quant_strategy", "quant_strategy_instance", "quant_strategy_position_state",
         "quant_strategy_runtime_lease", "quant_strategy_entry_guard", "quant_execution_record", "quant_open_capacity", "quant_order", "quant_position", "quant_protection_order",
         "quant_protection_target", "quant_trade", "quant_trade_decision_log", "quant_live_dispatch_guard", "quant_order_dispatch_ticket", "quant_strategy_fill_allocation",
-        "quant_live_account_settings_intent", "quant_position_sync_fence", "quant_live_user_stream_lease");
+        "quant_strategy_fill_journal", "quant_strategy_fill_sync_cursor", "quant_live_account_settings_intent", "quant_position_sync_fence", "quant_live_user_stream_lease");
 
     private static final Set<String> UNIQUE = Set.of("quant_strategy_runtime_lease|credential_id,symbol", "quant_strategy_entry_guard|credential_id,symbol,kline_open_time",
         "quant_execution_record|credential_id,idempotency_key", "quant_open_capacity|credential_id,idempotency_key", "quant_strategy_position_state|instance_id",
         "quant_protection_target|target_key", "quant_live_dispatch_guard|credential_id,symbol", "quant_order_dispatch_ticket|credential_id,idempotency_key",
-        "quant_strategy_fill_allocation|credential_id,symbol,exchange_trade_id", "quant_live_account_settings_intent|credential_id,symbol");
+        "quant_strategy_fill_allocation|credential_id,symbol,exchange_trade_id", "quant_strategy_fill_journal|credential_id,symbol,exchange_trade_id",
+        "quant_strategy_fill_sync_cursor|credential_id,symbol",
+        "quant_live_account_settings_intent|credential_id,symbol");
 
     private final LiveSchemaContractMapper mapper;
 
@@ -55,7 +57,19 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         boolean missingEpoch = !leaseEpoch.contains("quant_strategy_runtime_lease|lease_epoch");
         boolean missingEntryGuardType = !entryGuardColumns.contains("quant_strategy_entry_guard|guard_type");
         if (!missingTables.isEmpty() || !missingUnique.isEmpty() || missingEpoch || missingEntryGuardType) {
-            throw new IllegalStateException("LIVE schema preflight rejected startup; missing InnoDB tables=" + missingTables + ", missing unique-index contracts=" + missingUnique + ", leaseEpochMissing=" + missingEpoch + ", entryGuardTypeMissing=" + missingEntryGuardType + ". Apply the missing schema migrations to the application's configured MySQL database " + "(for candle close guards: script/sql/quant/V20261016_01__close_candle_entry_guard.sql), " + "then restart; LIVE schema preflight does not auto-create trading tables.");
+            List<String> requiredMigrations = new java.util.ArrayList<>();
+            if (missingTables.contains("quant_strategy_fill_journal") || missingTables.contains("quant_strategy_fill_sync_cursor")
+                || missingUnique.contains("quant_strategy_fill_journal|credential_id,symbol,exchange_trade_id")
+                || missingUnique.contains("quant_strategy_fill_sync_cursor|credential_id,symbol")) {
+                requiredMigrations.add("script/sql/quant/V20261017_01__strategy_fill_journal.sql");
+            }
+            if (missingEntryGuardType) {
+                requiredMigrations.add("script/sql/quant/V20261016_01__close_candle_entry_guard.sql");
+            }
+            String migrationHint = requiredMigrations.isEmpty()
+                ? "apply the migrations corresponding to the missing schema contracts"
+                : "apply required migration(s): " + String.join(", ", requiredMigrations);
+            throw new IllegalStateException("LIVE schema preflight rejected startup; missing InnoDB tables=" + missingTables + ", missing unique-index contracts=" + missingUnique + ", leaseEpochMissing=" + missingEpoch + ", entryGuardTypeMissing=" + missingEntryGuardType + ". On the application's configured MySQL database, " + migrationHint + ", then restart; LIVE schema preflight does not auto-create trading tables.");
         }
     }
 }

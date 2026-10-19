@@ -7,7 +7,7 @@ import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.TradingPreparationService;
-import org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper;
+import org.dromara.quant.reconcile.LiveUserStreamLeaseService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -46,11 +46,11 @@ public class UserDataStreamHub {
      * 共享底层流连接缓存。
      */
     private final Map<Long, SharedUserStream> streams = new ConcurrentHashMap<>();
-    private final Map<Long, String> localLeaseOwners = new ConcurrentHashMap<>();
+    private final Map<Long, Long> localLeaseEpochs = new ConcurrentHashMap<>();
     @Autowired
     private TradeDecisionLogService decisionLogs;
     @Autowired
-    private LiveUserStreamLeaseMapper streamLease;
+    private LiveUserStreamLeaseService streamLease;
     @Autowired(required = false)
     private org.dromara.quant.reconcile.LivePositionEventCoordinator positionEvents;
 
@@ -69,18 +69,16 @@ public class UserDataStreamHub {
     /**
      * Called only after the resident subscriber acquired the DB lease.
      */
-    public void registerLeaseOwner(Long credentialId, String token) {
-        if (streamLease.owns(credentialId, token) != 1) {
-            throw new IllegalStateException("LIVE user stream lease is not owned by this node");
-        }
-        localLeaseOwners.put(credentialId, token);
+    public void registerLeaseOwner(Long credentialId, long epoch) {
+        streamLease.requireCurrentEpoch(credentialId, epoch);
+        localLeaseEpochs.put(credentialId, epoch);
     }
 
     /**
      * 注销指定账户的用户流租约持有者。
      */
-    public void unregisterLeaseOwner(Long credentialId, String token) {
-        if (!localLeaseOwners.remove(credentialId, token)) {
+    public void unregisterLeaseOwner(Long credentialId, long epoch) {
+        if (!localLeaseEpochs.remove(credentialId, epoch)) {
             return;
         }
         // Closing only the supervisor's subscription is insufficient when an
@@ -116,8 +114,8 @@ public class UserDataStreamHub {
     }
 
     private boolean ownsLiveStream(Long credentialId) {
-        String token = localLeaseOwners.get(credentialId);
-        return token != null && streamLease.owns(credentialId, token) == 1;
+        Long epoch = localLeaseEpochs.get(credentialId);
+        return epoch != null && streamLease.owns(credentialId, epoch);
     }
 
     /**

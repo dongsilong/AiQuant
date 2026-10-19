@@ -5,6 +5,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.Locale;
 import java.util.Objects;
@@ -25,6 +27,7 @@ import java.util.Objects;
 public class LiveOrderDispatcher {
     private final LiveOrderDispatchMapper mapper;
     private final TransactionTemplate transaction;
+    private volatile ApplicationEventPublisher eventPublisher;
 
     public LiveOrderDispatcher(LiveOrderDispatchMapper mapper, PlatformTransactionManager manager) {
         this.mapper = Objects.requireNonNull(mapper);
@@ -32,6 +35,11 @@ public class LiveOrderDispatcher {
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         this.transaction.setTimeout(5);
+    }
+
+    @Autowired(required = false)
+    public void setEventPublisher(ApplicationEventPublisher eventPublisher) {
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -56,15 +64,36 @@ public class LiveOrderDispatcher {
     }
 
     /**
-     * Proof-carrying LIVE hedge strategy reservation. This commits immutable
-     * OPEN/CLOSE and LONG/SHORT provenance with the outbound dispatch ticket.
+     * Proof-carrying LIVE strategy reservation. This commits immutable
+     * OPEN/CLOSE and logical LONG/SHORT provenance with the dispatch ticket.
      */
     public Ticket beginStrategy(Long credentialId, String symbol, String key, String operation, String clientOrderId, Long strategyId, Long instanceId, Long epoch,
                                 String positionSide, String exchangeSide) {
-        if (strategyId == null || strategyId <= 0 || instanceId == null || instanceId <= 0 || epoch == null || epoch <= 0 || !java.util.Set.of("OPEN", "CLOSE").contains(operation) || !java.util.Set.of("LONG", "SHORT").contains(positionSide) || !java.util.Set.of("BUY", "SELL").contains(exchangeSide) || !exchangeSide.equals((("LONG".equals(positionSide)) == "OPEN".equals(operation)) ? "BUY" : "SELL")) {
+        String normalizedOperation = operation == null ? null : operation.toUpperCase(Locale.ROOT);
+        String normalizedPositionSide = positionSide == null ? null : positionSide.toUpperCase(Locale.ROOT);
+        String normalizedExchangeSide = exchangeSide == null ? null : exchangeSide.toUpperCase(Locale.ROOT);
+        if ("BOTH".equals(normalizedPositionSide)) {
+            // Binance one-way mode uses BOTH in the exchange request. The
+            // strategy attribution ledger records the logical LONG/SHORT side.
+            normalizedPositionSide = logicalPositionSide(normalizedOperation, normalizedExchangeSide);
+        }
+        boolean directionMatches = (("LONG".equals(normalizedPositionSide)) == "OPEN".equals(normalizedOperation)) ? "BUY".equals(normalizedExchangeSide) : "SELL".equals(normalizedExchangeSide);
+        if (strategyId == null || strategyId <= 0 || instanceId == null || instanceId <= 0 || epoch == null || epoch <= 0 || normalizedOperation == null || normalizedPositionSide == null || normalizedExchangeSide == null ||
+            !java.util.Set.of("OPEN", "CLOSE").contains(normalizedOperation) ||
+            !java.util.Set.of("LONG", "SHORT").contains(normalizedPositionSide) || !java.util.Set.of("BUY", "SELL").contains(normalizedExchangeSide) || !directionMatches) {
             throw new IllegalArgumentException("Unproven strategy order intent cannot be dispatched");
         }
-        return reserve(credentialId, symbol, key, operation, clientOrderId, instanceId, epoch, null, null, strategyId, positionSide, exchangeSide);
+        return reserve(credentialId, symbol, key, normalizedOperation, clientOrderId, instanceId, epoch, null, null, strategyId, normalizedPositionSide, normalizedExchangeSide);
+    }
+
+    private static String logicalPositionSide(String operation, String exchangeSide) {
+        if ("OPEN".equals(operation)) {
+            return "BUY".equals(exchangeSide) ? "LONG" : "SHORT";
+        }
+        if ("CLOSE".equals(operation)) {
+            return "SELL".equals(exchangeSide) ? "LONG" : "SHORT";
+        }
+        return null;
     }
 
     private Ticket reserve(Long credentialId, String symbol, String key, String operation, String clientOrderId, Long instanceId, Long epoch, String marginMode, Integer leverage
@@ -73,27 +102,36 @@ public class LiveOrderDispatcher {
             throw new IllegalArgumentException("LIVE dispatch 缺少可靠的订单或租约标识");
         }
         String normalized = symbol.toUpperCase(Locale.ROOT);
-        return transaction.execute(status -> {
-            mapper.ensureGuard(credentialId, normalized);
-            int claimed = instanceId == null ? mapper.claim(credentialId, normalized, key) : mapper.claimWithLease(credentialId, normalized, key, instanceId, epoch);
-            if (claimed != 1) {
-                throw new IllegalStateException("同账户交易对存在未完成交易所操作或策略租约已过期/转移，拒绝发送");
-            }
-            if (marginMode != null) {
-                mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
-                if (mapper.matchingSettingsIntent(credentialId, normalized, marginMode, leverage) != 1L) {
-                    throw new IllegalStateException("同账户交易对存在冲突的保证金/杠杆配置契约，拒绝更改交易所");
+        try {
+            return transaction.execute(status -> {
+                mapper.ensureGuard(credentialId, normalized);
+                int claimed = instanceId == null ? mapper.claim(credentialId, normalized, key) : mapper.claimWithLease(credentialId, normalized, key, instanceId, epoch);
+                if (claimed != 1) {
+                    throw new DispatchBlockedException("同账户交易对存在未完成交易所操作或策略租约已过期/转移，订单未发送");
                 }
+                if (marginMode != null) {
+                    mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
+                    if (mapper.matchingSettingsIntent(credentialId, normalized, marginMode, leverage) != 1L) {
+                        throw new IllegalStateException("同账户交易对存在冲突的保证金/杠杆配置契约，拒绝更改交易所");
+                    }
+                }
+                if (mapper.insertTicket(credentialId, normalized, key, operation, clientOrderId, instanceId, epoch) != 1) {
+                    throw new IllegalStateException("LIVE dispatch 发送票据落库失败");
+                }
+                if (strategyId != null && mapper.insertPreDispatchIntent(credentialId, normalized, key, clientOrderId, strategyId, instanceId, operation, positionSide, exchangeSide,
+                    epoch) != 1) {
+                    throw new IllegalStateException("LIVE pre-send strategy intent is not durable");
+                }
+                return new Ticket(credentialId, normalized, key);
+            });
+        } catch (DispatchBlockedException blocked) {
+            // TransactionTemplate has rolled back before this callback; never perform exchange IO under the DB transaction.
+            ApplicationEventPublisher publisher = eventPublisher;
+            if (publisher != null) {
+                publisher.publishEvent(new DispatchBlockedEvent(credentialId, normalized, operation));
             }
-            if (mapper.insertTicket(credentialId, normalized, key, operation, clientOrderId, instanceId, epoch) != 1) {
-                throw new IllegalStateException("LIVE dispatch 发送票据落库失败");
-            }
-            if (strategyId != null && mapper.insertPreDispatchIntent(credentialId, normalized, key, clientOrderId, strategyId, instanceId, operation, positionSide, exchangeSide,
-                epoch) != 1) {
-                throw new IllegalStateException("LIVE pre-send strategy intent is not durable");
-            }
-            return new Ticket(credentialId, normalized, key);
-        });
+            throw blocked;
+        }
     }
 
     /**
@@ -172,6 +210,64 @@ public class LiveOrderDispatcher {
     }
 
     /**
+     * 返回当前账户交易对派发槽的持有事实；本地票据缺失时也返回占用记录，供启动门禁 fail-closed。
+     */
+    public ActiveDispatch activeDispatch(Long credentialId, String symbol) {
+        if (credentialId == null || symbol == null || symbol.isBlank()) {
+            throw new IllegalArgumentException("Cannot inspect a dispatch slot without account and symbol");
+        }
+        return toActiveDispatch(mapper.activeDispatch(credentialId, symbol.toUpperCase(Locale.ROOT)));
+    }
+
+    /**
+     * 列出账户或指定交易对当前持有的未决保护撤单票据，供连接恢复和事件恢复使用。
+     */
+    public java.util.List<ActiveDispatch> activeProtectionCancels(Long credentialId, String symbol) {
+        if (credentialId == null || credentialId <= 0) {
+            throw new IllegalArgumentException("Cannot inspect protection dispatches without account identity");
+        }
+        return mapper.activeProtectionCancels(credentialId, symbol == null ? null : symbol.toUpperCase(Locale.ROOT)).stream()
+            .map(LiveOrderDispatcher::toActiveDispatch).filter(Objects::nonNull).toList();
+    }
+
+    /** List unresolved protection create and cancel tickets for connection recovery. */
+    public java.util.List<ActiveDispatch> activeProtectionDispatches(Long credentialId, String symbol) {
+        if (credentialId == null || credentialId <= 0) {
+            throw new IllegalArgumentException("Cannot inspect protection dispatches without account identity");
+        }
+        return mapper.activeProtectionDispatches(credentialId, symbol == null ? null : symbol.toUpperCase(Locale.ROOT)).stream()
+            .map(LiveOrderDispatcher::toActiveDispatch).filter(Objects::nonNull).toList();
+    }
+
+    private static ActiveDispatch toActiveDispatch(java.util.Map<String, Object> row) {
+        if (row == null || row.isEmpty()) {
+            return null;
+        }
+        return new ActiveDispatch(value(row, "credentialId"), stringValue(row, "symbol"), stringValue(row, "dispatchKey"),
+            stringValue(row, "operationType"), stringValue(row, "clientOrderId"), stringValue(row, "dispatchStatus"), value(row, "exchangeOrderId"));
+    }
+
+    private static Long value(java.util.Map<String, Object> row, String name) {
+        Object value = row.entrySet().stream().filter(entry -> name.equalsIgnoreCase(entry.getKey())).map(java.util.Map.Entry::getValue).findFirst().orElse(null);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.valueOf(value.toString());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private static String stringValue(java.util.Map<String, Object> row, String name) {
+        return row.entrySet().stream().filter(entry -> name.equalsIgnoreCase(entry.getKey())).map(java.util.Map.Entry::getValue)
+            .filter(Objects::nonNull).map(Object::toString).findFirst().orElse(null);
+    }
+
+    /**
      * Recovery may only be called AFTER the exact algo order ID, client ID and
      * locally persisted order status have been independently verified.
      */
@@ -189,7 +285,13 @@ public class LiveOrderDispatcher {
     public void unknown(Ticket ticket) {
         transaction.executeWithoutResult(status -> {
             if (mapper.unknown(ticket.credentialId(), ticket.key()) != 1) {
-                throw new IllegalStateException("LIVE 发送结果未知且票据状态异常，禁止重新发送");
+                String current = mapper.ticketStatus(ticket.credentialId(), ticket.key());
+                // A recovery worker may persist the exact exchange fact and release
+                // this ticket while the original request thread is still unwinding.
+                // Do not turn that completed race into a false UNKNOWN failure.
+                if (!java.util.Set.of("UNKNOWN", "ACKED", "RECOVERED", "FAILED_NOT_SENT").contains(current)) {
+                    throw new IllegalStateException("LIVE 发送结果未知且票据状态异常，禁止重新发送");
+                }
             }
         });
     }
@@ -198,5 +300,19 @@ public class LiveOrderDispatcher {
      * 用于串行化同账户、同交易对派发的本地队列票据。
      */
     public record Ticket(Long credentialId, String symbol, String key) {
+    }
+
+    /** 当前账户交易对门禁占用的不可变票据事实。 */
+    public record ActiveDispatch(Long credentialId, String symbol, String dispatchKey, String operationType, String clientOrderId, String dispatchStatus,
+                                 Long exchangeOrderId) {
+    }
+
+    /**
+     * 派发槽或策略租约校验在任何交易所请求发送前失败。
+     */
+    public static final class DispatchBlockedException extends IllegalStateException {
+        public DispatchBlockedException(String message) {
+            super(message);
+        }
     }
 }

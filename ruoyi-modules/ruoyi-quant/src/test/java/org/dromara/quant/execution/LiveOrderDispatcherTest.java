@@ -139,6 +139,19 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
+    void unknownIsIdempotentWhenRecoveryWinsTheCancelRace() throws Exception {
+        var f = fixture();
+        var cancel = f.first().begin(1L, "BTCUSDT", "cancel-race", "PROTECT_CANCEL", "algo-client", null, null);
+        f.first().unknown(cancel);
+
+        assertTrue(f.other().recoveredFromExchange(1L, "BTCUSDT", "cancel-race", "algo-client", 77L));
+        assertDoesNotThrow(() -> f.first().unknown(cancel));
+
+        assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "cancel-race"));
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+    }
+
+    @Test
     void ackWithoutBinanceOrderIdCannotFreeDispatchGuard() throws Exception {
         var f = fixture();
         var ticket = f.first().begin(1L, "BTCUSDT", "ack-no-id", "OPEN", "cid-ack", null, null);

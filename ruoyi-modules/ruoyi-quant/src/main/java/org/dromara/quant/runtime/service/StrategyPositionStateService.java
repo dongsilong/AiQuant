@@ -125,7 +125,22 @@ public class StrategyPositionStateService {
     }
 
     /**
-     * 交易所对账确认本地持仓归零时，关闭关联的策略持仓状态。
+     * 快照确认空仓时先关闭数量事实，但保留恢复阻断，直到运行时持久化平仓 K 线封锁并核实保护单。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void markClosedAwaitingCandleFence(QuantStrategyPositionState state) {
+        if (state == null) {
+            return;
+        }
+        state.setStatus("CLOSED");
+        state.setPositionQty(BigDecimal.ZERO);
+        state.setRecoveryRequired(true);
+        state.setUnsafeRecovery(true);
+        save(state);
+    }
+
+    /**
+     * 快照确认空仓后先归零关联策略状态，但保留恢复位等待运行时封锁平仓 K 线并清理保护单。
      */
     @Transactional(rollbackFor = Exception.class)
     public void markClosedByPositionId(Long positionId) {
@@ -133,6 +148,11 @@ public class StrategyPositionStateService {
             return;
         }
         mapper.selectList(new LambdaQueryWrapper<QuantStrategyPositionState>().eq(QuantStrategyPositionState::getPositionId, positionId).ne(QuantStrategyPositionState::getStatus
-            , "CLOSED")).forEach(this::markClosed);
+            , "CLOSED")).stream().filter(this::isClosableFromFlatPositionSnapshot).forEach(this::markClosedAwaitingCandleFence);
+    }
+
+    private boolean isClosableFromFlatPositionSnapshot(QuantStrategyPositionState state) {
+        return "OPEN".equals(state.getStatus()) && state.getPendingAction() == null && !Boolean.TRUE.equals(state.getRecoveryRequired())
+            && !Boolean.TRUE.equals(state.getUnsafeRecovery());
     }
 }

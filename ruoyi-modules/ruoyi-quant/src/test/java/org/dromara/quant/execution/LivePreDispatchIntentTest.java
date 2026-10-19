@@ -35,6 +35,21 @@ class LivePreDispatchIntentTest {
     }
 
     @Test
+    void oneWayExchangePositionSideIsPersistedAsLogicalLongForOpeningBuy() {
+        when(mapper.insertPreDispatchIntent(1L, "BTCUSDT", "dispatch-a", "cid-a", 2L, 3L, "OPEN", "LONG", "BUY", 4L)).thenReturn(1);
+        dispatcher.beginStrategy(1L, "BTCUSDT", "dispatch-a", "OPEN", "cid-a", 2L, 3L, 4L, "BOTH", "BUY");
+        verify(mapper).insertPreDispatchIntent(1L, "BTCUSDT", "dispatch-a", "cid-a", 2L, 3L, "OPEN", "LONG", "BUY", 4L);
+    }
+
+    @Test
+    void oneWayExchangePositionSideIsPersistedAsLogicalLongForClosingSell() {
+        when(mapper.insertTicket(1L, "BTCUSDT", "dispatch-a", "CLOSE", "cid-a", 3L, 4L)).thenReturn(1);
+        when(mapper.insertPreDispatchIntent(1L, "BTCUSDT", "dispatch-a", "cid-a", 2L, 3L, "CLOSE", "LONG", "SELL", 4L)).thenReturn(1);
+        dispatcher.beginStrategy(1L, "BTCUSDT", "dispatch-a", "CLOSE", "cid-a", 2L, 3L, 4L, "BOTH", "SELL");
+        verify(mapper).insertPreDispatchIntent(1L, "BTCUSDT", "dispatch-a", "cid-a", 2L, 3L, "CLOSE", "LONG", "SELL", 4L);
+    }
+
+    @Test
     void failedIntentInsertRollsBackOutboundTicketClaim() {
         assertThrows(IllegalStateException.class, () -> dispatcher.beginStrategy(1L, "BTCUSDT", "dispatch-a", "OPEN", "cid-a", 2L, 3L, 4L, "LONG", "BUY"));
         verify(mapper).insertTicket(1L, "BTCUSDT", "dispatch-a", "OPEN", "cid-a", 3L, 4L);

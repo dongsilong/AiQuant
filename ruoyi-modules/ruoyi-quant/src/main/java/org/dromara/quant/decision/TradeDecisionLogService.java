@@ -6,6 +6,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+
 /**
  * 将交易事件异步写入决策日志，隔离日志故障与交易执行线程。
  */
@@ -35,6 +37,26 @@ public class TradeDecisionLogService {
             }
         }
         return "执行异常：" + ex.getClass().getSimpleName();
+    }
+
+    /**
+     * 在开平仓原因中补充计划数量和按参考价格估算的名义金额。
+     */
+    public static String withPlannedQuantityAndNotional(String reason, String operation, BigDecimal quantity, BigDecimal referencePrice) {
+        if (quantity == null || quantity.signum() <= 0) {
+            return reason;
+        }
+        String action = "OPEN".equals(operation) ? "开仓" : "平仓";
+        StringBuilder details = new StringBuilder(reason == null || reason.isBlank() ? "交易执行" : reason)
+            .append("；计划").append(action).append("数量=").append(format(quantity));
+        if (referencePrice != null && referencePrice.signum() > 0) {
+            details.append("；按参考价估算名义金额=").append(format(quantity.multiply(referencePrice))).append(" USDT");
+        }
+        return details.toString();
+    }
+
+    private static String format(BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
     }
 
     /**

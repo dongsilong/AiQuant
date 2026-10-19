@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.bouncycastle.crypto.CryptoException;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -51,6 +52,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     private static final long ACCOUNT_REST_CONNECT_TIMEOUT_SECONDS = 5L;
     private static final long ACCOUNT_REST_READ_TIMEOUT_SECONDS = 15L;
     private static final long ACCOUNT_REST_CALL_TIMEOUT_SECONDS = 20L;
+    private static final int ALGO_HISTORY_PAGE_SIZE = 1000;
+    private static final int ALGO_HISTORY_MAX_QUERIES = 4096;
     /**
      * 量化模块配置。
      */
@@ -96,6 +99,21 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         } catch (ReflectiveOperationException ignored) {
             return null;
         }
+    }
+
+    /**
+     * Normalize status-token casing and whitespace at the Binance boundary.
+     * Unknown values remain unknown to the protection lifecycle and fail closed.
+     */
+    static String normalizeAlgoStatus(String status) {
+        return status == null || status.isBlank() ? status : status.trim().toUpperCase(Locale.ROOT);
+    }
+
+    static BigDecimal protectionExecutedQuantity(String status, BigDecimal actualQuantity) {
+        if (actualQuantity != null) {
+            return actualQuantity;
+        }
+        return status != null && Set.of("CANCELED", "EXPIRED", "REJECTED").contains(normalizeAlgoStatus(status)) ? BigDecimal.ZERO : null;
     }
 
     /**
@@ -152,7 +170,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (!withdrawalDisabled) {
             return new ConnectivityResult(false, "未确认禁用提现能力，拒绝 LIVE 交易", true, false, Instant.now());
         }
-        return new ConnectivityResult(true, "OK", true, true, Instant.now());
+        return new ConnectivityResult(true, "OK", true, withdrawalDisabled, Instant.now());
     }
 
     private static BigDecimal jsonDecimal(JsonObject data, String field) {
@@ -190,6 +208,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         } catch (RuntimeException ignored) {
             return null;
         }
+    }
+
+    static boolean isInvalidSymbolError(RuntimeException ex) {
+        var error = apiError(ex);
+        return error != null && Integer.valueOf(-1121).equals(errorCode(error));
     }
 
     /**
@@ -259,10 +282,23 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings(expectedSymbol, actualMode, actualLeverage);
     }
 
-    private static void requireOrderDeadline(OrderRequest request) {
-        if (request.validUntil() != null && !Instant.now().isBefore(request.validUntil())) {
+    private void requireOrderDeadline(OrderRequest request) {
+        if (request.validUntil() == null) {
+            return;
+        }
+        String runMode = request.credential() == null ? "UNKNOWN" : request.credential().runMode();
+        long exchangeOffsetMillis = request.credential() == null ? 0L : exchangeTimeOffsetMillis(runMode);
+        Instant localNow = Instant.now();
+        Instant exchangeNow = localNow.plusMillis(exchangeOffsetMillis);
+        if (isOrderDeadlineExpired(request.validUntil(), localNow, exchangeOffsetMillis)) {
+            log.warn("开仓信号过期，拒绝发送订单 runMode={} symbol={} localNow={} exchangeNow={} exchangeOffsetMillis={} signalDeadline={} remainingSignalMillis={}", runMode,
+                request.symbol(), localNow, exchangeNow, exchangeOffsetMillis, request.validUntil(), java.time.Duration.between(exchangeNow, request.validUntil()).toMillis());
             throw new OrderNotSentException("开仓信号在交易请求准备期间过期，订单未发送，等待新的行情");
         }
+    }
+
+    static boolean isOrderDeadlineExpired(Instant validUntil, Instant localNow, long exchangeOffsetMillis) {
+        return validUntil != null && !localNow.plusMillis(exchangeOffsetMillis).isBefore(validUntil);
     }
 
     static boolean hedgePositionSide(String positionSide) {
@@ -419,7 +455,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             }
             return result;
         } catch (RuntimeException ex) {
-            throw new IllegalStateException("查询 Binance K 线失败", ex);
+            if (isInvalidSymbolError(ex)) {
+                throw new ExchangeMarketPort.UnsupportedMarketSymbolException(runMode, symbol.trim().toUpperCase(Locale.ROOT));
+            }
+            throw requestFailure("QUERY_KLINES", ex);
         }
     }
 
@@ -924,8 +963,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (data == null) {
             return List.of();
         }
-        return data.stream().map(item -> new ProtectionOrderSnapshot(string(item, "getSymbol"), number(item, "getAlgoId"), string(item, "getClientAlgoId"), string(item,
-            "getAlgoStatus"), string(item, "getSide"), string(item, "getPositionSide"), string(item, "getOrderType"), decimal(string(item, "getQuantity")), decimal(string(item,
+        return data.stream().map(item -> new ProtectionOrderSnapshot(string(item, "getSymbol"), number(item, "getAlgoId"), string(item, "getClientAlgoId"), normalizeAlgoStatus(string(item,
+            "getAlgoStatus")), string(item, "getSide"), string(item, "getPositionSide"), string(item, "getOrderType"), decimal(string(item, "getQuantity")), decimal(string(item,
             "getTriggerPrice")), instant(number(item, "getUpdateTime")), null, Boolean.valueOf(string(item, "getReduceOnly")), Boolean.valueOf(string(item, "getClosePosition")))).filter(item -> symbol == null || symbol.equalsIgnoreCase(item.symbol())).toList();
     }
 
@@ -939,24 +978,116 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         try {
             data = api(credential).queryAlgoOrder(orderId, clientOrderId, RECV_WINDOW_MILLIS).getData();
         } catch (com.binance.connector.client.common.ApiException ex) {
-            try {
-                JsonObject error = com.google.gson.JsonParser.parseString(ex.getResponseBody()).getAsJsonObject();
-                if (error.has("code") && error.get("code").getAsInt() == -2013) {
-                    throw new ProtectionOrderAbsentException();
-                }
-            } catch (ProtectionOrderAbsentException absent) {
-                throw absent;
-            } catch (RuntimeException ignored) {
-                // 保留网络/权限/限流等未知结果，不能当作订单不存在。
+            if (!isProtectionOrderAbsent(ex)) {
+                throw ex;
             }
-            throw ex;
+            // Binance 的精确查询可能已不返回已结束的 Algo 单；仅在明确 -2013 时查近 7 天历史，
+            // 必须按 clientAlgoId 和 symbol 精确匹配。历史查询失败或未匹配仍返回未知，由上层保持阻断。
+            return queryProtectionOrderHistory(credential, orderId, clientOrderId, symbol);
         }
         if (data == null) {
+            // 成功响应也可能没有 data；先查有限时间范围的算法单历史，再由上层决定是否仍未知。
+            return queryProtectionOrderHistory(credential, orderId, clientOrderId, symbol);
+        }
+        String status = normalizeAlgoStatus(string(data, "getAlgoStatus"));
+        return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), status, string(data, "getSide"), string(data,
+            "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")), decimal(string(data, "getTriggerPrice")),
+            instant(number(data, "getUpdateTime")), protectionExecutedQuantity(status, decimal(string(data, "getActualQty"))), null, null, number(data, "getActualOrderId"),
+            decimal(string(data, "getActualPrice")));
+    }
+
+    private ProtectionOrderSnapshot queryProtectionOrderHistory(Credential credential, Long orderId, String clientOrderId, String symbol) {
+        if (symbol == null || symbol.isBlank()) {
             return null;
         }
-        return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), string(data, "getAlgoStatus"), string(data,
-            "getSide"), string(data, "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")), decimal(string(data, "getTriggerPrice")),
-            instant(number(data, "getUpdateTime")), decimal(string(data, "getActualQty")), null, null, number(data, "getActualOrderId"), decimal(string(data, "getActualPrice")));
+        long endTime = System.currentTimeMillis();
+        long startTime = endTime - java.time.Duration.ofDays(7).toMillis() + 1;
+        var client = api(credential, RestRequestScheduler.Kind.ACCOUNT);
+        if (orderId != null && orderId > 0) {
+            var response = client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), orderId, startTime, endTime, (long) ALGO_HISTORY_PAGE_SIZE,
+                RECV_WINDOW_MILLIS);
+            var data = response == null ? null : response.getData();
+            ProtectionOrderSnapshot exact = findExactAlgoHistory(data, symbol, orderId, clientOrderId);
+            if (exact != null) {
+                return exact;
+            }
+        }
+        AlgoHistoryResult result = collectCompleteAlgoHistory(startTime, endTime, (from, to) -> {
+            var response = client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), null, from, to, (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS);
+            return response == null ? null : response.getData();
+        });
+        // A full page at one millisecond resolution may still be truncated.
+        // In that case absence and uniqueness are unknowable, so stay fail closed.
+        return result.complete() ? findExactAlgoHistory(result.orders(), symbol, orderId, clientOrderId) : null;
+    }
+
+    static AlgoHistoryResult collectCompleteAlgoHistory(long startTime, long endTime,
+                                                         java.util.function.BiFunction<Long, Long,
+                                                             List<com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAllAlgoOrdersResponseInner>> query) {
+        if (startTime < 0 || endTime < startTime || query == null) {
+            return new AlgoHistoryResult(List.of(), false);
+        }
+        List<com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAllAlgoOrdersResponseInner> orders = new ArrayList<>();
+        int[] queryCount = {0};
+        boolean complete = collectAlgoHistoryRange(startTime, endTime, query, orders, queryCount);
+        return new AlgoHistoryResult(complete ? List.copyOf(orders) : List.of(), complete);
+    }
+
+    private static boolean collectAlgoHistoryRange(long startTime, long endTime,
+                                                    java.util.function.BiFunction<Long, Long,
+                                                        List<com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAllAlgoOrdersResponseInner>> query,
+                                                    List<com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAllAlgoOrdersResponseInner> orders,
+                                                    int[] queryCount) {
+        if (++queryCount[0] > ALGO_HISTORY_MAX_QUERIES) {
+            return false;
+        }
+        List<com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAllAlgoOrdersResponseInner> page = query.apply(startTime, endTime);
+        if (page == null) {
+            return false;
+        }
+        if (page.size() < ALGO_HISTORY_PAGE_SIZE) {
+            orders.addAll(page);
+            return true;
+        }
+        if (startTime == endTime) {
+            return false;
+        }
+        long middle = startTime + (endTime - startTime) / 2;
+        return collectAlgoHistoryRange(startTime, middle, query, orders, queryCount)
+            && collectAlgoHistoryRange(middle + 1, endTime, query, orders, queryCount);
+    }
+
+    record AlgoHistoryResult(List<com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAllAlgoOrdersResponseInner> orders, boolean complete) {
+    }
+
+    static ProtectionOrderSnapshot findExactAlgoHistory(
+        List<com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAllAlgoOrdersResponseInner> data, String symbol, Long orderId, String clientOrderId) {
+        if (data == null || symbol == null || symbol.isBlank() || orderId == null && (clientOrderId == null || clientOrderId.isBlank())) {
+            return null;
+        }
+        var matches = data.stream().filter(item -> item != null && symbol.equalsIgnoreCase(item.getSymbol())
+            && (orderId == null || orderId.equals(item.getAlgoId()))
+            && (clientOrderId == null || clientOrderId.equals(item.getClientAlgoId()))).toList();
+        if (matches.size() != 1) {
+            return null;
+        }
+        var item = matches.getFirst();
+        String status = normalizeAlgoStatus(item.getAlgoStatus());
+        BigDecimal executedQuantity = status != null && Set.of("CANCELED", "EXPIRED", "REJECTED").contains(status) ? BigDecimal.ZERO : null;
+        Long updateTime = item.getUpdateTime() == null ? item.getCreateTime() : item.getUpdateTime();
+        return new ProtectionOrderSnapshot(item.getSymbol(), item.getAlgoId(), item.getClientAlgoId(), status, item.getSide(), item.getPositionSide(), item.getOrderType(),
+            decimal(item.getQuantity()), decimal(item.getTriggerPrice()), instant(updateTime), executedQuantity, item.getReduceOnly(), item.getClosePosition(),
+            number(item, "getActualOrderId"), decimal(item.getActualPrice()));
+    }
+
+    private static boolean isProtectionOrderAbsent(com.binance.connector.client.common.ApiException exception) {
+        try {
+            JsonObject error = com.google.gson.JsonParser.parseString(exception.getResponseBody()).getAsJsonObject();
+            return error.has("code") && error.get("code").getAsInt() == -2013;
+        } catch (RuntimeException ignored) {
+            // 无法解析的错误不能降级为“订单不存在”。
+            return false;
+        }
     }
 
     /**
@@ -1055,7 +1186,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             throw requestFailure("PLACE_PROTECTION_ORDER", ex);
         }
         NewAlgoOrderResponse data = response.getData();
-        return new ProtectionOrderResult(data.getAlgoId(), data.getClientAlgoId(), data.getAlgoStatus());
+        return new ProtectionOrderResult(data.getAlgoId(), data.getClientAlgoId(), normalizeAlgoStatus(data.getAlgoStatus()));
     }
 
     /**
@@ -1172,6 +1303,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     private String marketBaseUrl(String runMode) {
         return "TESTNET".equalsIgnoreCase(runMode) ? properties.getBinance().getTestnetUrl() : properties.getBinance().getBaseUrl();
+    }
+
+    /**
+     * 将 Binance 的服务端时钟偏移应用于公开行情时间判定。
+     */
+    @Override
+    public long exchangeTimeOffsetMillis(String runMode) {
+        return clockOffset(marketBaseUrl(runMode));
     }
 
     private DerivativesTradingUsdsFuturesRestApi api(Credential credential) {

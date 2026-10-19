@@ -198,8 +198,11 @@ public class QuantAdminController {
             QuantSymbol symbol = binding == null ? null : positionSymbols.get(binding.getSymbolId());
             row.put("id", item.getId());
             row.put("instanceId", item.getInstanceId());
+            row.put("positionId", item.getPositionId());
+            row.put("positionCycleKey", item.getPositionCycleKey());
             row.put("instanceName", (strategy == null ? "策略" : strategy.getStrategyName()) + (symbol == null ? "" : " / " + symbol.getSymbol()));
             row.put("credentialId", instance == null ? null : instance.getCredentialId());
+            row.put("symbol", symbol == null ? null : symbol.getSymbol());
             row.put("status", item.getStatus());
             row.put("statusLabel", positionStatusLabel(item.getStatus()));
             row.put("direction", item.getDirection());
@@ -207,6 +210,9 @@ public class QuantAdminController {
             row.put("entryPrice", item.getEntryPrice());
             row.put("positionQty", item.getPositionQty());
             row.put("initialPositionQty", item.getInitialPositionQty());
+            row.put("initialMargin", item.getInitialMargin());
+            row.put("highestPriceSinceEntry", item.getHighestPriceSinceEntry());
+            row.put("lowestPriceSinceEntry", item.getLowestPriceSinceEntry());
             row.put("highestStep", item.getHighestStep());
             row.put("firstTakeProfitTriggered", item.getFirstTakeProfitTriggered());
             row.put("pendingAction", item.getPendingAction());

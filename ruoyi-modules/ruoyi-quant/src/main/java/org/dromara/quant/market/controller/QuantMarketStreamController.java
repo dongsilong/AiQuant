@@ -1,9 +1,11 @@
 package org.dromara.quant.market.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.dromara.quant.market.MarketStreamHub;
+import org.dromara.quant.exchange.ExchangeGateway;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -59,14 +61,21 @@ public class QuantMarketStreamController {
      */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(HttpServletResponse response, @RequestParam String symbol, @RequestParam(defaultValue = "15m") String interval) {
+    public SseEmitter stream(HttpServletRequest request, HttpServletResponse response, @RequestParam String symbol, @RequestParam(defaultValue = "15m") String interval,
+                             @RequestParam(defaultValue = "LIVE") String runMode) {
         response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("X-Accel-Buffering", "no");
         SseEmitter emitter = new SseEmitter(0L);
+        SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
         AtomicReference<AutoCloseable> subscription = new AtomicReference<>();
+        AtomicReference<SseEventDispatcher> dispatcher = new AtomicReference<>();
+        SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
         Runnable cleanup = () -> {
+            responseReady.close();
+            SseEventDispatcher activeDispatcher = dispatcher.getAndSet(null);
+            if (activeDispatcher != null) activeDispatcher.close();
             AutoCloseable active = subscription.getAndSet(null);
             if (active != null) {
                 try {
@@ -85,14 +94,16 @@ public class QuantMarketStreamController {
             cleanup.run();
             return emitter;
         }
+        SseEventDispatcher delivery = new SseEventDispatcher(emitter, responseReady, () -> {
+            cleanup.run();
+            emitter.complete();
+        });
+        dispatcher.set(delivery);
+        delivery.start();
         try {
-            subscription.set(hub.subscribe(symbol, interval, event -> {
-                try {
-                    emitter.send(SseEmitter.event().name("quant.market").data(event));
-                } catch (IOException | RuntimeException ex) {
-                    cleanup.run();
-                }
-            }));
+            subscription.set(hub.subscribe(runMode, symbol, interval, event -> {
+                replayBuffer.publish(event, item -> delivery.offer("quant.market", item));
+            }, ignored -> { }));
         } catch (RuntimeException ex) {
             cleanup.run();
             try {
@@ -109,16 +120,22 @@ public class QuantMarketStreamController {
      */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping(value = "/streams", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streams(HttpServletResponse response, @RequestParam("symbol") List<String> symbols, @RequestParam("interval") List<String> intervals) {
+    public SseEmitter streams(HttpServletRequest request, HttpServletResponse response, @RequestParam("symbol") List<String> symbols, @RequestParam("interval") List<String> intervals,
+                              @RequestParam(defaultValue = "LIVE") String runMode) {
         validateSubscriptions(symbols, intervals);
         response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("X-Accel-Buffering", "no");
         SseEmitter emitter = new SseEmitter(0L);
+        SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
         AtomicBoolean closed = new AtomicBoolean();
         List<AutoCloseable> subscriptions = new ArrayList<>();
+        AtomicReference<SseEventDispatcher> dispatcher = new AtomicReference<>();
         Runnable cleanup = () -> {
+            responseReady.close();
+            SseEventDispatcher activeDispatcher = dispatcher.getAndSet(null);
+            if (activeDispatcher != null) activeDispatcher.close();
             List<AutoCloseable> active;
             synchronized (subscriptions) {
                 if (!closed.compareAndSet(false, true)) {
@@ -138,20 +155,20 @@ public class QuantMarketStreamController {
             cleanup.run();
             return emitter;
         }
+        SseEventDispatcher delivery = new SseEventDispatcher(emitter, responseReady, () -> {
+            cleanup.run();
+            emitter.complete();
+        });
+        dispatcher.set(delivery);
+        delivery.start();
         for (int index = 0; index < symbols.size() && !closed.get(); index++) {
             String symbol = symbols.get(index).trim();
             String interval = intervals.get(index).trim();
             try {
-                AutoCloseable subscription = hub.subscribe(symbol, interval, event -> {
-                    try {
-                        if (closed.get()) {
-                            return;
-                        }
-                        emitter.send(SseEmitter.event().name("quant.market").data(event));
-                    } catch (IOException | RuntimeException ex) {
-                        cleanup.run();
-                    }
-                });
+                SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
+                AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
+                    if (!closed.get()) replayBuffer.publish(event, item -> delivery.offer("quant.market", item));
+                }, ignored -> { });
                 addSubscription(subscriptions, closed, subscription);
             } catch (RuntimeException ex) {
                 try {
