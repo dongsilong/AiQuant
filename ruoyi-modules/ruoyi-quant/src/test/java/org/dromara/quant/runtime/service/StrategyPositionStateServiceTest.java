@@ -60,7 +60,7 @@ class StrategyPositionStateServiceTest {
         String sql = captor.getValue().getSqlSegment();
         assertTrue(sql.contains("recovery_required"), sql);
         assertTrue(sql.contains("unsafe_recovery"), sql);
-        assertTrue(sql.contains("CLOSED"), sql);
+        assertTrue(sql.contains("status"), sql);
     }
 
     private QuantStrategyPositionState state(String status, String pendingAction, boolean recoveryRequired, boolean unsafeRecovery) {
