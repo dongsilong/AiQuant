@@ -285,6 +285,25 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void recoveryCloseFenceFallsBackToInitialKlineBeforeFirstMarketEvent() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "lastEvaluatedKlineOpenTime", null);
+            Object market = ReflectionTestUtils.getField(f.runtime, "market");
+            Instant open = Instant.parse("2026-10-20T10:02:00Z");
+            ReflectionTestUtils.setField(market, "currentKline", new ExchangeGateway.Kline(open, open.plusSeconds(60),
+                new BigDecimal("100"), new BigDecimal("102"), new BigDecimal("99"), new BigDecimal("101"), BigDecimal.ONE, false));
+
+            ReflectionTestUtils.invokeMethod(f.service, "blockCloseCandle", f.runtime, null);
+
+            var guard = (org.dromara.quant.runtime.coordination.StrategyEntryGuardService) ReflectionTestUtils.getField(f.service, "entryGuardService");
+            verify(guard).blockClosedCandle(1L, 3L, "BTCUSDT", open);
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void staleKlineCannotRollBackCloseFenceTimestamp() throws Exception {
         Fixture f = fixture();
         try {
