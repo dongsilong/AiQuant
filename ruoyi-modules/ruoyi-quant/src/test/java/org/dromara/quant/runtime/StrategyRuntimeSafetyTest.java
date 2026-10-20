@@ -2066,6 +2066,48 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void terminalFilledCloseClearsPendingBeforeRetryableProtectionCleanup() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("EXIT_PENDING");
+            state.setPendingAction("CLOSE");
+            state.setPendingOrderId(55L);
+            state.setPendingClientOrderId("close-client");
+            state.setPendingOrderTime(System.currentTimeMillis());
+            state.setPendingIdempotencyKey("close-key");
+            state.setRecoveryRequired(true);
+            state.setUnsafeRecovery(true);
+
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            var flat = new ExchangeGateway.PositionSnapshot("BTCUSDT", "BOTH", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, null, BigDecimal.ZERO, 10, null, null);
+            var order = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "FILLED",
+                new BigDecimal("99"), BigDecimal.ONE, BigDecimal.ONE, Instant.now());
+            when(f.protection.cancelActiveProtectionOrders(3L, 4L, true)).thenReturn(false, true);
+            when(gateway.queryPositions(nullable(ExchangeGateway.Credential.class), eq("BTCUSDT"))).thenReturn(List.of(flat));
+
+            ReflectionTestUtils.invokeMethod(f.service, "applyPendingExecution", f.runtime, null, order, List.of(flat), false);
+
+            assertEquals("CLOSED", state.getStatus());
+            assertNull(state.getPendingAction(), "terminal close identity must not self-block cleanup retry");
+            assertNull(state.getPendingOrderId());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "protectionCleanupPending"));
+
+            ReflectionTestUtils.invokeMethod(f.service, "retryProtectionCleanupIfNeeded", f.runtime);
+
+            assertFalse(state.getRecoveryRequired());
+            assertFalse(state.getUnsafeRecovery());
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "protectionCleanupPending"));
+            verify(f.protection, times(2)).cancelActiveProtectionOrders(3L, 4L, true);
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void confirmedPartialOpenGetsHardStopWithoutFreezingFinalTargets() throws Exception {
         Fixture f = fixture();
         try {
