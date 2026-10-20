@@ -2449,6 +2449,13 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
         }
         if ("FILLED".equalsIgnoreCase(status)) {
             runtime.state.setPendingNotFoundConfirmations(0);
+            if (order.executedQuantity() == null || order.executedQuantity().signum() <= 0) {
+                // A terminal label without a positive execution quantity is inconsistent; never infer flatness from it.
+                runtime.state.setRecoveryRequired(true);
+                runtime.state.setUnsafeRecovery(true);
+                stateService.save(runtime.state);
+                return true;
+            }
             runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
             if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                 blockCloseCandleAtExchangeTime(runtime, order.updateTime());
@@ -2563,7 +2570,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
         }
         if ("CANCELED".equalsIgnoreCase(status) || "EXPIRED".equalsIgnoreCase(status) || "REJECTED".equalsIgnoreCase(status)) {
             BigDecimal executed = order.executedQuantity();
-            if (executed == null) {
+            if (executed == null || executed.signum() < 0) {
                 runtime.state.setRecoveryRequired(true);
                 runtime.state.setUnsafeRecovery(true);
                 stateService.save(runtime.state);
