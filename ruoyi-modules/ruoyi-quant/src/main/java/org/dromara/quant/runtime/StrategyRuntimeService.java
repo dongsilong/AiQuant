@@ -1543,7 +1543,16 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
 
     /** 持仓减少已由交易所事实确认后，持久化封锁发生减少的账户/交易对 K 线。 */
     private void blockCloseCandle(ActiveRuntime runtime, Instant klineOpenTime) {
-        Instant candle = klineOpenTime == null ? runtime.lastEvaluatedKlineOpenTime : klineOpenTime;
+        Instant candle = klineOpenTime;
+        if (candle == null) {
+            candle = runtime.lastEvaluatedKlineOpenTime;
+        }
+        if (candle == null && runtime.market != null) {
+            // During restart recovery no market event may have been evaluated yet, but initial Kline
+            // history is already loaded. Conservatively fence that current candle instead of making
+            // recovery depend on a later trade tick to discover the candle boundary.
+            candle = runtime.market.currentKlineOpen();
+        }
         if (candle == null) {
             throw new IllegalStateException("无法确认平仓所属 K 线，禁止解除账户交易对开仓封锁");
         }
