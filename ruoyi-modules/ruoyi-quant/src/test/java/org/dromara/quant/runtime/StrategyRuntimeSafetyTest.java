@@ -2068,8 +2068,9 @@ class StrategyRuntimeSafetyTest {
         }
     }
 
-    @Test
-    void terminalFilledCloseClearsPendingBeforeRetryableProtectionCleanup() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"FILLED", "CANCELED", "EXPIRED"})
+    void terminalFlatCloseClearsPendingBeforeRetryableProtectionCleanup(String status) throws Exception {
         Fixture f = fixture();
         try {
             var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
@@ -2085,7 +2086,7 @@ class StrategyRuntimeSafetyTest {
             var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
             var flat = new ExchangeGateway.PositionSnapshot("BTCUSDT", "BOTH", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, null, BigDecimal.ZERO, 10, null, null);
-            var order = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "FILLED",
+            var order = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", status,
                 new BigDecimal("99"), BigDecimal.ONE, BigDecimal.ONE, Instant.now());
             when(f.protection.cancelActiveProtectionOrders(3L, 4L, true)).thenReturn(false);
             when(f.protection.cancelActiveProtectionOrders(3L, 4L, "cycle", true)).thenReturn(true);
