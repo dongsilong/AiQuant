@@ -2077,6 +2077,8 @@ class StrategyRuntimeSafetyTest {
             state.setUnsafeRecovery(true);
             var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
             var reconciliation = configureFreshPosition(f, new BigDecimal("0.5"));
+            // Dynamic protection resync after the terminal fill needs a valid price, just as LIVE does.
+            ((QuantPosition) ReflectionTestUtils.getField(f.runtime, "position")).setMarkPrice(new BigDecimal("100"));
             // The terminal partial fill is not fully recovered until its mandatory hard stop is confirmed.
             when(f.protection.ensureMarginHardStop(eq(3L), any(QuantPosition.class), eq(new BigDecimal("0.1")), eq(true)))
                 .thenReturn(new org.dromara.quant.protection.domain.QuantProtectionOrder());
