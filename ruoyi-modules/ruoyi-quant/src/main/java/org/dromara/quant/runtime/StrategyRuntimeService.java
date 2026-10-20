@@ -1936,6 +1936,24 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
         String side = "SHORT".equalsIgnoreCase(direction) ? "BUY" : "SELL";
         Instant klineOpenTime = context.klineOpenTime() == null ? Instant.ofEpochMilli(System.currentTimeMillis()) : context.klineOpenTime();
         String idempotencyKey = buildIdempotencyKey(runtime, exit.type(), klineOpenTime);
+        QuantExecutionRecord previousAttempt = executionRecordService.find(runtime.credential.getId(), idempotencyKey);
+        if (previousAttempt != null && "FAILED".equalsIgnoreCase(previousAttempt.getExecutionStatus())) {
+            // A definitively failed request did not create an exchange order. Use a new deterministic
+            // attempt key instead of replaying the same failed idempotency record forever.
+            int retry = 1;
+            while (retry <= 100) {
+                String retryKey = idempotencyKey + ":RETRY:" + retry;
+                QuantExecutionRecord retryAttempt = executionRecordService.find(runtime.credential.getId(), retryKey);
+                if (retryAttempt == null || !"FAILED".equalsIgnoreCase(retryAttempt.getExecutionStatus())) {
+                    idempotencyKey = retryKey;
+                    break;
+                }
+                retry++;
+            }
+            if (retry > 100) {
+                throw new IllegalStateException("同一 K 线平仓失败重试次数已达安全上限");
+            }
+        }
         if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
             throw new IllegalStateException("退出前租约失效，等待恢复");
         }
