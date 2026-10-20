@@ -2549,11 +2549,32 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             if (executed.signum() > 0) {
                 BigDecimal beforeQty = runtime.state.getPositionQty();
                 runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
-                if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
+                String terminalAction = runtime.state.getPendingAction();
+                if (!"OPEN".equalsIgnoreCase(terminalAction)) {
                     blockCloseCandleAtExchangeTime(runtime, order.updateTime());
                 }
-                if ("OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
-                    if (runtime.position == null || runtime.state.getDirection() == null || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())
+                if (runtime.position == null) {
+                    if ("OPEN".equalsIgnoreCase(terminalAction) && !closedOpenProven) {
+                        // A canceled/expired entry may still have partial fills. Without proof that the
+                        // resulting exposure was subsequently closed, keep the pending identity fail-closed.
+                        runtime.state.setRecoveryRequired(true);
+                        runtime.state.setUnsafeRecovery(true);
+                        stateService.save(runtime.state);
+                        return true;
+                    }
+                    if ("OPEN".equalsIgnoreCase(terminalAction)) {
+                        blockCloseCandleAtExchangeTime(runtime, order.updateTime());
+                    }
+                    prepareFlatStateForProtectionCleanup(runtime);
+                    if (!cancelStaleProtection(runtime)) {
+                        return true;
+                    }
+                    stateService.markClosed(runtime.state);
+                    runtime.state = stateService.findByInstance(runtime.instance.getId());
+                    return true;
+                }
+                if ("OPEN".equalsIgnoreCase(terminalAction)) {
+                    if (runtime.state.getDirection() == null || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())
                         || runtime.position.getQuantity().compareTo(executed) != 0) {
                         runtime.state.setRecoveryRequired(true);
                         runtime.state.setUnsafeRecovery(true);
