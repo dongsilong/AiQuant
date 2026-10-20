@@ -572,9 +572,10 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                     // 全账户快照可能已把状态标记为待封锁，而运行时本地尚无旧持仓对象。
                     blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
                     boolean flatPositionConfirmed = "PAPER".equalsIgnoreCase(runtime.credential.getRunMode())
-                        || snapshots != null && snapshots.stream().allMatch(snapshot -> snapshot != null
-                            && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
-                            && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
+                        || snapshots != null && !snapshots.isEmpty()
+                            && snapshots.stream().allMatch(snapshot -> snapshot != null
+                                && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
+                                && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
                     if (!flatPositionConfirmed) {
                         runtime.protectionCleanupPending = true;
                         runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
@@ -3299,7 +3300,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
              ex.getClass().getSimpleName());
             return new ProtectionCleanupResult(false, false);
         }
-        boolean exchangeFlat = snapshots != null && snapshots.stream().allMatch(snapshot -> snapshot.quantity() != null && snapshot.quantity().signum() == 0);
+        boolean exchangeFlat = snapshots != null && !snapshots.isEmpty()
+            && snapshots.stream().allMatch(snapshot -> snapshot != null
+                && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
+                && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
         if (!exchangeFlat) {
             log.warn("{}时交易所仍有持仓或持仓结果不完整，保留所有保护单 instanceId={} positionId={} symbol={}", reason, runtime.instance.getId(), positionId, runtime.symbol.getSymbol());
             return new ProtectionCleanupResult(false, false);
