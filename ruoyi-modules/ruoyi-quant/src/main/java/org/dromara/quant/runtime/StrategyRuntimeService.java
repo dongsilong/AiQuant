@@ -2276,7 +2276,10 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
         }
         boolean closedOpenProven = false;
-        if (order != null && "FILLED".equalsIgnoreCase(order.status()) && "OPEN".equals(expectedPending.get(0)) && snapshots != null && snapshots.stream().allMatch(p -> p.quantity() != null && p.quantity().signum() == 0)) {
+        if (order != null && Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(order.status() == null ? "" : order.status().toUpperCase(Locale.ROOT))
+            && "OPEN".equals(expectedPending.get(0)) && order.executedQuantity() != null && order.executedQuantity().signum() > 0
+            && snapshots != null && snapshots.stream().allMatch(p -> p != null && runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol())
+                && p.quantity() != null && p.quantity().signum() == 0)) {
             Instant from = expectedPending.get(4) instanceof Long time ? Instant.ofEpochMilli(time) : order.updateTime();
             Instant to = Instant.now();
             // 成交接口窗口有限；缺少完整历史或双向持仓归属时保留 pending，不能仅凭空仓放行。
@@ -2287,8 +2290,8 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 if (closedOpenProven) {
                     // 成交证明读取之后再次确认空仓，避免使用旧的持仓快照提交恢复。
                     snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
-                    closedOpenProven =
-snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
+                    closedOpenProven = snapshots != null && snapshots.stream().allMatch(p -> p != null
+                        && runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
                 }
             }
         }
