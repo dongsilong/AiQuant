@@ -2065,6 +2065,10 @@ class StrategyRuntimeSafetyTest {
                 new BigDecimal("100"), BigDecimal.ONE, new BigDecimal("0.5"), Instant.now()));
 
             assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime));
+            var protectionTask = (java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "protectionTask");
+            if (protectionTask != null) {
+                protectionTask.get(3, java.util.concurrent.TimeUnit.SECONDS);
+            }
 
             var reads = inOrder(gateway, reconciliation);
             reads.verify(gateway).queryOrder(any(), any(), any(), any());
