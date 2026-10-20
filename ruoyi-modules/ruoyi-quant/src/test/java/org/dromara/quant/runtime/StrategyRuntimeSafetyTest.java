@@ -2084,7 +2084,8 @@ class StrategyRuntimeSafetyTest {
                 BigDecimal.ZERO, null, BigDecimal.ZERO, 10, null, null);
             var order = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "FILLED",
                 new BigDecimal("99"), BigDecimal.ONE, BigDecimal.ONE, Instant.now());
-            when(f.protection.cancelActiveProtectionOrders(3L, 4L, true)).thenReturn(false, true);
+            when(f.protection.cancelActiveProtectionOrders(3L, 4L, true)).thenReturn(false);
+            when(f.protection.cancelActiveProtectionOrders(3L, 4L, "cycle", true)).thenReturn(true);
             when(gateway.queryPositions(nullable(ExchangeGateway.Credential.class), eq("BTCUSDT"))).thenReturn(List.of(flat));
 
             ReflectionTestUtils.invokeMethod(f.service, "applyPendingExecution", f.runtime, null, order, List.of(flat), false);
@@ -2101,7 +2102,8 @@ class StrategyRuntimeSafetyTest {
             assertFalse(state.getRecoveryRequired());
             assertFalse(state.getUnsafeRecovery());
             assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "protectionCleanupPending"));
-            verify(f.protection, times(2)).cancelActiveProtectionOrders(3L, 4L, true);
+            verify(f.protection).cancelActiveProtectionOrders(3L, 4L, true);
+            verify(f.protection).cancelActiveProtectionOrders(3L, 4L, "cycle", true);
         } finally {
             f.service.destroy();
         }
