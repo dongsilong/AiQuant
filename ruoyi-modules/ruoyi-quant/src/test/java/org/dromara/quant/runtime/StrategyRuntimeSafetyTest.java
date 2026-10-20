@@ -2048,6 +2048,9 @@ class StrategyRuntimeSafetyTest {
             state.setUnsafeRecovery(true);
             var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
             var reconciliation = configureFreshPosition(f, new BigDecimal("0.5"));
+            // The terminal partial fill is not fully recovered until its mandatory hard stop is confirmed.
+            when(f.protection.ensureMarginHardStop(any(), any(), any(), anyBoolean()))
+                .thenReturn(new org.dromara.quant.protection.domain.QuantProtectionOrder());
             when(gateway.queryOrder(any(), any(), any(), any())).thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "open", "BUY", "MARKET", status,
                 new BigDecimal("100"), BigDecimal.ONE, new BigDecimal("0.5"), Instant.now()));
 
