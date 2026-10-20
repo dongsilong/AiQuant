@@ -3104,8 +3104,15 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                     blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
                                     stateService.markClosed(cleanupState);
                                     runtime.state = stateService.findByInstance(runtime.instance.getId());
-                                    // 保护单撤销失败仍必须阻止新开仓；但已确认空仓的记录不应继续占用最大持仓数。
+                                    // 保护单撤销失败仍必须阻止新开仓，并把恢复事实持久化，确保节点重启后仍能发现。
                                     runtime.protectionCleanupPending = !cleaned;
+                                    if (!cleaned && runtime.state != null) {
+                                        runtime.state.setRecoveryRequired(true);
+                                        runtime.state.setUnsafeRecovery(true);
+                                        stateService.save(runtime.state);
+                                    } else if (cleaned) {
+                                        runtime.protectionDegraded = false;
+                                    }
                                     log.info("迟到保护清理后已确认交易所空仓，释放策略持仓名额 instanceId={} symbol={} protectionCleaned={}", runtime.instance.getId(), runtime.symbol.getSymbol(),
                                      cleaned);
                                 }
