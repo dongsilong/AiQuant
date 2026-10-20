@@ -2681,6 +2681,11 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 stateService.save(runtime.state);
                 return true;
             }
+            if (runtime.position != null) {
+                runtime.state.setPositionId(runtime.position.getId());
+                runtime.state.setPositionQty(runtime.position.getQuantity());
+                runtime.state.setEntryPrice(runtime.position.getEntryPrice());
+            }
             clearPending(runtime.state);
             if (runtime.position != null) {
                 // The terminal order and refreshed position snapshot now agree; do not leave recovery
@@ -2689,6 +2694,12 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 runtime.state.setRecoveryRequired(false);
                 runtime.state.setUnsafeRecovery(false);
                 stateService.save(runtime.state);
+                ensureHardStop(runtime);
+                BigDecimal current = runtime.currentPrice() != null ? runtime.currentPrice() : runtime.position.getMarkPrice();
+                if (current != null && current.signum() > 0) {
+                    syncPluginProtections(runtime, buildContext(runtime, current, new ExchangeGateway.MarketEvent("RECOVERY", runtime.symbol.getSymbol(),
+                        runtime.strategySymbol.getIntervalCode(), current, null, Instant.now())));
+                }
             } else {
                 stateService.markClosed(runtime.state);
             }
