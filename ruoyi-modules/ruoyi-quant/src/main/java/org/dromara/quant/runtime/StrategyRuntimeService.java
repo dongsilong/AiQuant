@@ -2251,8 +2251,10 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             order = gateway.queryOrder(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
         }
         List<ExchangeGateway.PositionSnapshot> snapshots = null;
-        if (order == null || "NEW".equalsIgnoreCase(order.status()) || "PARTIALLY_FILLED".equalsIgnoreCase(order.status()) || "FILLED".equalsIgnoreCase(order.status())) {
-            // 订单查询之后再读取持仓，防止用成交之前的快照解除待确认保护。
+        if (order == null || Set.of("NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(order.status() == null ? "" : order.status().toUpperCase(Locale.ROOT))) {
+            // Read position facts after the order status, including terminal partial fills. CANCELED/EXPIRED
+            // does not mean zero execution; applying those statuses without a fresh snapshot can either
+            // throw on a missing snapshot or incorrectly clear a real partial position.
             snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
         }
         boolean closedOpenProven = false;
