@@ -2894,9 +2894,9 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 return;
             }
             runtime.protectionRequested.set(true);
-            // Hard-stop-only requests must not implicitly enable dynamic targets. The caller requests
-            // dynamic protection explicitly after the position cycle facts have been frozen.
-            if (dynamic) {
+            // Preserve the initial combined sync request for compatibility. The worker independently
+            // executes the hard stop first and includes dynamic targets only when frozen cycle facts exist.
+            if (dynamic || runtime.lastProtectionTarget == null) {
                 runtime.dynamicProtectionRequested.set(true);
             }
             if (!runtime.protectionSyncing.compareAndSet(false, true)) {
