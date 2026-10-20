@@ -2092,6 +2092,7 @@ class StrategyRuntimeSafetyTest {
             var reads = inOrder(gateway, reconciliation);
             reads.verify(gateway).queryOrder(any(), any(), any(), any());
             reads.verify(reconciliation).refreshSymbolPosition(any(), eq("BTCUSDT"), any());
+            verify(f.protection, atLeastOnce()).ensureMarginHardStop(eq(3L), any(QuantPosition.class), eq(new BigDecimal("0.1")), eq(true));
             assertNull(state.getPendingAction());
             assertEquals("OPEN", state.getStatus());
             assertFalse(state.getUnsafeRecovery());
