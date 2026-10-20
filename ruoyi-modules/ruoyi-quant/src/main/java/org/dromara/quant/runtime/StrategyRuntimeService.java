@@ -2569,10 +2569,12 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 stateService.save(runtime.state);
                 return true;
             }
+            String terminalAction = runtime.state.getPendingAction();
+            // Terminal order status does not establish the current exposure by itself. Always apply the
+            // post-order snapshot, even when executedQuantity is zero.
+            runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
             if (executed.signum() > 0) {
                 BigDecimal beforeQty = runtime.state.getPositionQty();
-                runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
-                String terminalAction = runtime.state.getPendingAction();
                 if (!"OPEN".equalsIgnoreCase(terminalAction)) {
                     blockCloseCandleAtExchangeTime(runtime, order.updateTime());
                 }
@@ -2625,6 +2627,43 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 if (runtime.position == null && !"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                     blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
                 }
+            }
+            if (executed.signum() == 0) {
+                if (runtime.position == null) {
+                    if (!"OPEN".equalsIgnoreCase(terminalAction)) {
+                        blockCloseCandleAtExchangeTime(runtime, order.updateTime());
+                    }
+                    prepareFlatStateForProtectionCleanup(runtime);
+                    if (!cancelStaleProtection(runtime)) {
+                        return true;
+                    }
+                    stateService.markClosed(runtime.state);
+                    runtime.state = stateService.findByInstance(runtime.instance.getId());
+                    return true;
+                }
+                if ("OPEN".equalsIgnoreCase(terminalAction)) {
+                    // A no-fill entry cannot adopt a position that the fresh snapshot shows already exists.
+                    runtime.state.setRecoveryRequired(true);
+                    runtime.state.setUnsafeRecovery(true);
+                    stateService.save(runtime.state);
+                    return true;
+                }
+                if (runtime.state.getDirection() == null
+                    || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())
+                    || runtime.state.getPositionQty() == null
+                    || runtime.state.getPositionQty().compareTo(runtime.position.getQuantity()) != 0) {
+                    runtime.state.setRecoveryRequired(true);
+                    runtime.state.setUnsafeRecovery(true);
+                    stateService.save(runtime.state);
+                    return true;
+                }
+                clearPending(runtime.state);
+                runtime.state.setStatus("OPEN");
+                runtime.state.setPositionQty(runtime.position.getQuantity());
+                runtime.state.setRecoveryRequired(false);
+                runtime.state.setUnsafeRecovery(false);
+                stateService.save(runtime.state);
+                return true;
             }
             clearPending(runtime.state);
             if (runtime.position != null) {
