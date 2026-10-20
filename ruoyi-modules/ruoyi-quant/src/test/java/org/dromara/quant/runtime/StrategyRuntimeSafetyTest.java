@@ -2001,6 +2001,16 @@ class StrategyRuntimeSafetyTest {
         var release = new java.util.concurrent.CountDownLatch(1);
         var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
         try {
+            // The exit task schedules reconciliation in finally; explicitly keep its snapshot open so the
+            // mocked reconciliation service cannot interpret an empty default as confirmed flat.
+            var position = (QuantPosition) ReflectionTestUtils.getField(f.runtime, "position");
+            var positionMapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+            com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(new org.apache.ibatis.session.Configuration(), "stalled-exit-test"), QuantPosition.class);
+            when(positionMapper.selectList(any())).thenReturn(List.of(position));
+            var reconciliation = (org.dromara.quant.reconcile.TradingReconciliationService) ReflectionTestUtils.getField(f.service, "reconciliationService");
+            when(reconciliation.runtimePositionSnapshot(any())).thenReturn(List.of(new ExchangeGateway.PositionSnapshot("BTCUSDT", "LONG", BigDecimal.ONE,
+                new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.TEN, 10, null, null)));
             var properties = (QuantProperties) ReflectionTestUtils.getField(f.service, "properties");
             properties.getProtection().setConfirmationWaitMillis(0);
             when(f.plugin.evaluateExit(any(), anyMap())).thenReturn(List.of(new ExitSignal("LOCAL_STOP_LOSS", BigDecimal.ONE, "test", false, "LOCAL_STOP",
