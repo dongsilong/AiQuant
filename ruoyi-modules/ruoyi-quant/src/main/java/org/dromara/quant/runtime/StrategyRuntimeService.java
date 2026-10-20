@@ -1990,6 +1990,10 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                 blockCloseCandleForExecution(runtime, executionResult, klineOpenTime);
                 blockCloseCandle(runtime, klineOpenTime);
                 if (runtime.position == null) {
+                    // The close order is confirmed FILLED and REST confirms flat. Clear its terminal pending
+                    // identity before protection cleanup; otherwise retryProtectionCleanupIfNeeded will
+                    // self-block forever on hasPendingAction().
+                    prepareFlatStateForProtectionCleanup(runtime);
                     if (!cancelStaleProtection(runtime)) {
                         return;
                     }
@@ -2425,6 +2429,25 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
             if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                 blockCloseCandleAtExchangeTime(runtime, order.updateTime());
+            }
+            if (runtime.position == null) {
+                String completedAction = runtime.state.getPendingAction();
+                if ("OPEN".equalsIgnoreCase(completedAction) && !closedOpenProven) {
+                    // A FILLED entry order plus a missing position snapshot is not enough to prove the
+                    // open/close lifecycle. Preserve pending identity until trades/account facts prove flat.
+                    runtime.state.setRecoveryRequired(true);
+                    runtime.state.setUnsafeRecovery(true);
+                    stateService.save(runtime.state);
+                    return true;
+                }
+                blockCloseCandleAtExchangeTime(runtime, order.updateTime());
+                prepareFlatStateForProtectionCleanup(runtime);
+                if (!cancelStaleProtection(runtime)) {
+                    return true;
+                }
+                stateService.markClosed(runtime.state);
+                runtime.state = stateService.findByInstance(runtime.instance.getId());
+                return true;
             }
             if (runtime.position != null) {
                 if ("OPEN".equals(runtime.state.getPendingAction())) {
