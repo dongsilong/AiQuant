@@ -28,6 +28,22 @@ class KlineSlopeRateStrategyTest {
     }
 
     @Test
+    void opensShortWhenRealtimeSlopeIsNegativeBeyondThreshold() {
+        StrategyContext c = context(null, null, new BigDecimal("100"), new BigDecimal("98"), false, null, null);
+        assertEquals(EntrySignal.Direction.SHORT, strategy.evaluateEntry(c, Map.of("entryAngleDegrees", 60)).orElseThrow().direction());
+    }
+
+    @Test
+    void legacyStopLossRatioStillControlsLocalStopAndMirrorPrice() {
+        StrategyContext c = context("LONG", new BigDecimal("100"), null, new BigDecimal("99.4"), false, new BigDecimal("100"), null);
+        assertTrue(strategy.evaluateExit(c, Map.of("stopLossRatio", "0.10")).isEmpty(),
+            "legacy 10% leveraged stop must not fall back to the default 5% stop");
+        var mirror = strategy.evaluateProtection(c, Map.of("stopLossRatio", "0.10")).stream()
+            .filter(p -> p.type().equals(KlineSlopeRateStrategy.PROTECTION_LOCAL_STOP)).findFirst().orElseThrow();
+        assertEquals(0, new BigDecimal("99.000000000000").compareTo(mirror.triggerPrice().setScale(12)));
+    }
+
+    @Test
     void firstTakeProfitClosesConfiguredHalf() {
         StrategyContext c = context("LONG", new BigDecimal("100"), null, new BigDecimal("101"), false, new BigDecimal("101"), null);
         var exit = strategy.evaluateExit(c, Map.of("firstProfitTakingRate", "0.10", "firstClosePositionRate", "0.50")).getFirst();

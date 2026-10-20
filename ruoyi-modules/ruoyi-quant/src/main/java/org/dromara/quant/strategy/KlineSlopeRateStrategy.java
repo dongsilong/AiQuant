@@ -259,7 +259,7 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         requireRate(params, "firstClosePositionRate", "FirstClosePositionRate", DEFAULT_FIRST_CLOSE_POSITION_RATE);
         requireRate(params, "firstProfitTakingRate", "FirstProfitTakingRate", DEFAULT_FIRST_PROFIT_TAKING_RATE);
         // 旧版本曾使用 stopLossRatio 表示程序止损；新版本明确命名 localStopLossRate，避免和策略表硬止损混淆。
-        requireRate(params, "localStopLossRate", "LocalStopLossRate", DEFAULT_LOCAL_STOP_LOSS_RATE);
+        requireRate(params, "localStopLossRate", "LocalStopLossRate", DEFAULT_LOCAL_STOP_LOSS_RATE, "stopLossRatio", "StopLossRatio");
         requireRate(params, "stepRatio", "StepRatio", DEFAULT_STEP_RATIO);
     }
 
@@ -321,7 +321,7 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         if (!validPosition(context)) {
             return List.of();
         }
-        BigDecimal localStop = rate(params, "localStopLossRate", "LocalStopLossRate", DEFAULT_LOCAL_STOP_LOSS_RATE);
+        BigDecimal localStop = rate(params, "localStopLossRate", "LocalStopLossRate", DEFAULT_LOCAL_STOP_LOSS_RATE, "stopLossRatio", "StopLossRatio");
         BigDecimal firstProfit = rate(params, "firstProfitTakingRate", "FirstProfitTakingRate", DEFAULT_FIRST_PROFIT_TAKING_RATE);
         BigDecimal firstClose = rate(params, "firstClosePositionRate", "FirstClosePositionRate", DEFAULT_FIRST_CLOSE_POSITION_RATE);
         BigDecimal step = rate(params, "stepRatio", "StepRatio", DEFAULT_STEP_RATIO);
@@ -357,7 +357,7 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         if (!validPosition(context)) {
             return List.of();
         }
-        BigDecimal localStop = rate(params, "localStopLossRate", "LocalStopLossRate", DEFAULT_LOCAL_STOP_LOSS_RATE);
+        BigDecimal localStop = rate(params, "localStopLossRate", "LocalStopLossRate", DEFAULT_LOCAL_STOP_LOSS_RATE, "stopLossRatio", "StopLossRatio");
         BigDecimal firstProfit = rate(params, "firstProfitTakingRate", "FirstProfitTakingRate", DEFAULT_FIRST_PROFIT_TAKING_RATE);
         BigDecimal firstClose = rate(params, "firstClosePositionRate", "FirstClosePositionRate", DEFAULT_FIRST_CLOSE_POSITION_RATE);
         BigDecimal step = rate(params, "stepRatio", "StepRatio", DEFAULT_STEP_RATIO);

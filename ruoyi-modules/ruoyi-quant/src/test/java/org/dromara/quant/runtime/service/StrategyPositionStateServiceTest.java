@@ -1,11 +1,18 @@
 package org.dromara.quant.runtime.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.apache.ibatis.session.Configuration;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
 import org.dromara.quant.runtime.mapper.QuantStrategyPositionStateMapper;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.List;
+
+import org.mockito.ArgumentCaptor;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
@@ -35,6 +42,25 @@ class StrategyPositionStateServiceTest {
         assertEquals("OPEN", recovery.getStatus());
         assertEquals("PROTECTION_CLEANUP", cleanup.getStatus());
         verify(mapper, times(1)).updateById(cleanOpen);
+    }
+
+    @Test
+    void findUnclosedQueryIncludesClosedRowsAwaitingRecovery() {
+        var configuration = new Configuration();
+        configuration.setMapUnderscoreToCamelCase(true);
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(configuration, "unclosed-test"), QuantStrategyPositionState.class);
+        when(mapper.selectList(any())).thenReturn(List.of());
+
+        service.findUnclosed();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<LambdaQueryWrapper<QuantStrategyPositionState>> captor =
+            (ArgumentCaptor<LambdaQueryWrapper<QuantStrategyPositionState>>) (ArgumentCaptor<?>) ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(mapper).selectList(captor.capture());
+        String sql = captor.getValue().getSqlSegment();
+        assertTrue(sql.contains("recovery_required"), sql);
+        assertTrue(sql.contains("unsafe_recovery"), sql);
+        assertTrue(sql.contains("status"), sql);
     }
 
     private QuantStrategyPositionState state(String status, String pendingAction, boolean recoveryRequired, boolean unsafeRecovery) {

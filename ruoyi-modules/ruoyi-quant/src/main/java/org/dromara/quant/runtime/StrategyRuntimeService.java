@@ -572,9 +572,10 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                     // 全账户快照可能已把状态标记为待封锁，而运行时本地尚无旧持仓对象。
                     blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
                     boolean flatPositionConfirmed = "PAPER".equalsIgnoreCase(runtime.credential.getRunMode())
-                        || snapshots != null && snapshots.stream().allMatch(snapshot -> snapshot != null
-                            && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
-                            && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
+                        || snapshots != null && !snapshots.isEmpty()
+                            && snapshots.stream().allMatch(snapshot -> snapshot != null
+                                && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
+                                && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
                     if (!flatPositionConfirmed) {
                         runtime.protectionCleanupPending = true;
                         runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
@@ -955,8 +956,8 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                 runtime.marketHealthy = true;
                 return;
             }
-            if (event.kline() != null) {
-                runtime.updateKline(event.kline());
+            if (event.kline() != null && runtime.updateKline(event.kline())) {
+                // Ignore stale/out-of-order candles completely: they must not roll back the close-candle fence timestamp.
                 runtime.market.lastKlineEventAt = event.eventTime();
                 runtime.lastEvaluatedKlineOpenTime = event.kline().openTime();
             }
@@ -1448,6 +1449,13 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                 state.setInitialPositionQty(filledOpen.executedQuantity());
             }
             state.setInitialMargin(runtime.position.getMargin());
+            // Persist the confirmed position identity before protection work. Place the fixed hard stop
+            // before freezing optional TP targets, which can fail when a target is below exchange lot size.
+            runtime.position.setProtectionCycleKey(state.getPositionCycleKey());
+            stateService.save(state);
+            if (!paper) {
+                ensureHardStop(runtime);
+            }
             freezeFilledProtection(runtime);
             freezeOrderEntryPrice(state, filledOpen);
             state.setStatus("OPEN");
@@ -1536,7 +1544,16 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
 
     /** 持仓减少已由交易所事实确认后，持久化封锁发生减少的账户/交易对 K 线。 */
     private void blockCloseCandle(ActiveRuntime runtime, Instant klineOpenTime) {
-        Instant candle = klineOpenTime == null ? runtime.lastEvaluatedKlineOpenTime : klineOpenTime;
+        Instant candle = klineOpenTime;
+        if (candle == null) {
+            candle = runtime.lastEvaluatedKlineOpenTime;
+        }
+        if (candle == null && runtime.market != null) {
+            // During restart recovery no market event may have been evaluated yet, but initial Kline
+            // history is already loaded. Conservatively fence that current candle instead of making
+            // recovery depend on a later trade tick to discover the candle boundary.
+            candle = runtime.market.currentKlineOpen();
+        }
         if (candle == null) {
             throw new IllegalStateException("无法确认平仓所属 K 线，禁止解除账户交易对开仓封锁");
         }
@@ -1929,6 +1946,24 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
         String side = "SHORT".equalsIgnoreCase(direction) ? "BUY" : "SELL";
         Instant klineOpenTime = context.klineOpenTime() == null ? Instant.ofEpochMilli(System.currentTimeMillis()) : context.klineOpenTime();
         String idempotencyKey = buildIdempotencyKey(runtime, exit.type(), klineOpenTime);
+        QuantExecutionRecord previousAttempt = executionRecordService.find(runtime.credential.getId(), idempotencyKey);
+        if (previousAttempt != null && "FAILED".equalsIgnoreCase(previousAttempt.getExecutionStatus())) {
+            // A definitively failed request did not create an exchange order. Use a new deterministic
+            // attempt key instead of replaying the same failed idempotency record forever.
+            int retry = 1;
+            while (retry <= 100) {
+                String retryKey = idempotencyKey + ":RETRY:" + retry;
+                QuantExecutionRecord retryAttempt = executionRecordService.find(runtime.credential.getId(), retryKey);
+                if (retryAttempt == null || !"FAILED".equalsIgnoreCase(retryAttempt.getExecutionStatus())) {
+                    idempotencyKey = retryKey;
+                    break;
+                }
+                retry++;
+            }
+            if (retry > 100) {
+                throw new IllegalStateException("同一 K 线平仓失败重试次数已达安全上限");
+            }
+        }
         if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
             throw new IllegalStateException("退出前租约失效，等待恢复");
         }
@@ -1954,6 +1989,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                 runtime.position = settlement.position();
                 blockCloseCandle(runtime, klineOpenTime);
                 if (runtime.position == null) {
+                    prepareFlatStateForProtectionCleanup(runtime);
                     if (!cancelStaleProtection(runtime)) {
                         return;
                     }
@@ -1982,6 +2018,10 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                 blockCloseCandleForExecution(runtime, executionResult, klineOpenTime);
                 blockCloseCandle(runtime, klineOpenTime);
                 if (runtime.position == null) {
+                    // The close order is confirmed FILLED and REST confirms flat. Clear its terminal pending
+                    // identity before protection cleanup; otherwise retryProtectionCleanupIfNeeded will
+                    // self-block forever on hasPendingAction().
+                    prepareFlatStateForProtectionCleanup(runtime);
                     if (!cancelStaleProtection(runtime)) {
                         return;
                     }
@@ -2071,6 +2111,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
             blockCloseCandle(runtime, context.klineOpenTime());
             runtime.position = null;
             recordPositionDecrease(runtime, before, before.getQuantity(), "持仓关闭；本地同时满足退出条件：" + exit.reason());
+            prepareFlatStateForProtectionCleanup(runtime);
             if (!cancelStaleProtection(runtime)) {
                 return true;
             }
@@ -2238,12 +2279,17 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             order = gateway.queryOrder(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
         }
         List<ExchangeGateway.PositionSnapshot> snapshots = null;
-        if (order == null || "NEW".equalsIgnoreCase(order.status()) || "PARTIALLY_FILLED".equalsIgnoreCase(order.status()) || "FILLED".equalsIgnoreCase(order.status())) {
-            // 订单查询之后再读取持仓，防止用成交之前的快照解除待确认保护。
+        if (order == null || Set.of("NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(order.status() == null ? "" : order.status().toUpperCase(Locale.ROOT))) {
+            // Read position facts after the order status, including terminal partial fills. CANCELED/EXPIRED
+            // does not mean zero execution; applying those statuses without a fresh snapshot can either
+            // throw on a missing snapshot or incorrectly clear a real partial position.
             snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
         }
         boolean closedOpenProven = false;
-        if (order != null && "FILLED".equalsIgnoreCase(order.status()) && "OPEN".equals(expectedPending.get(0)) && snapshots != null && snapshots.stream().allMatch(p -> p.quantity() != null && p.quantity().signum() == 0)) {
+        if (order != null && Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(order.status() == null ? "" : order.status().toUpperCase(Locale.ROOT))
+            && "OPEN".equals(expectedPending.get(0)) && order.executedQuantity() != null && order.executedQuantity().signum() > 0
+            && snapshots != null && snapshots.stream().allMatch(p -> p != null && runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol())
+                && p.quantity() != null && p.quantity().signum() == 0)) {
             Instant from = expectedPending.get(4) instanceof Long time ? Instant.ofEpochMilli(time) : order.updateTime();
             Instant to = Instant.now();
             // 成交接口窗口有限；缺少完整历史或双向持仓归属时保留 pending，不能仅凭空仓放行。
@@ -2254,8 +2300,8 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 if (closedOpenProven) {
                     // 成交证明读取之后再次确认空仓，避免使用旧的持仓快照提交恢复。
                     snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
-                    closedOpenProven =
-snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
+                    closedOpenProven = snapshots != null && snapshots.stream().allMatch(p -> p != null
+                        && runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
                 }
             }
         }
@@ -2413,9 +2459,35 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
         }
         if ("FILLED".equalsIgnoreCase(status)) {
             runtime.state.setPendingNotFoundConfirmations(0);
+            if (order.executedQuantity() == null || order.executedQuantity().signum() <= 0) {
+                // A terminal label without a positive execution quantity is inconsistent; never infer flatness from it.
+                runtime.state.setRecoveryRequired(true);
+                runtime.state.setUnsafeRecovery(true);
+                stateService.save(runtime.state);
+                return true;
+            }
             runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
             if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                 blockCloseCandleAtExchangeTime(runtime, order.updateTime());
+            }
+            if (runtime.position == null) {
+                String completedAction = runtime.state.getPendingAction();
+                if ("OPEN".equalsIgnoreCase(completedAction) && !closedOpenProven) {
+                    // A FILLED entry order plus a missing position snapshot is not enough to prove the
+                    // open/close lifecycle. Preserve pending identity until trades/account facts prove flat.
+                    runtime.state.setRecoveryRequired(true);
+                    runtime.state.setUnsafeRecovery(true);
+                    stateService.save(runtime.state);
+                    return true;
+                }
+                blockCloseCandleAtExchangeTime(runtime, order.updateTime());
+                prepareFlatStateForProtectionCleanup(runtime);
+                if (!cancelStaleProtection(runtime)) {
+                    return true;
+                }
+                stateService.markClosed(runtime.state);
+                runtime.state = stateService.findByInstance(runtime.instance.getId());
+                return true;
             }
             if (runtime.position != null) {
                 if ("OPEN".equals(runtime.state.getPendingAction())) {
@@ -2431,8 +2503,13 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                     }
                     runtime.state.setInitialPositionQty(order.executedQuantity());
                     runtime.state.setInitialMargin(runtime.position.getMargin());
-                    freezeFilledProtection(runtime);
                     freezeOrderEntryPrice(runtime.state, order);
+                    runtime.position.setProtectionCycleKey(runtime.state.getPositionCycleKey());
+                    // Establish the hard stop from verified fill/position facts before optional TP target
+                    // normalization can fail. Pending OPEN continues to block all new strategy decisions.
+                    stateService.save(runtime.state);
+                    ensureHardStop(runtime);
+                    freezeFilledProtection(runtime);
                     runtime.state.setStatus("OPEN");
                     clearPending(runtime.state);
                     stateService.save(runtime.state);
@@ -2476,8 +2553,12 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 return true;
             }
             if ("OPEN".equals(runtime.state.getPendingAction())) {
-                if (closedOpenProven && cancelStaleProtection(runtime)) {
+                if (closedOpenProven) {
                     blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
+                    prepareFlatStateForProtectionCleanup(runtime);
+                    if (!cancelStaleProtection(runtime)) {
+                        return true;
+                    }
                     stateService.markClosed(runtime.state);
                     runtime.state = stateService.findByInstance(runtime.instance.getId());
                     log.info("待确认开仓恢复完成：开平仓成交完整且交易所空仓 instanceId={} symbol={} orderId={}", runtime.instance.getId(), runtime.symbol.getSymbol(), order.orderId());
@@ -2488,38 +2569,69 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 stateService.save(runtime.state);
                 return true;
             }
+            blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
+            prepareFlatStateForProtectionCleanup(runtime);
             if (!cancelStaleProtection(runtime)) {
                 return true;
             }
-            blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
             stateService.markClosed(runtime.state);
             runtime.state = stateService.findByInstance(runtime.instance.getId());
             return true;
         }
         if ("CANCELED".equalsIgnoreCase(status) || "EXPIRED".equalsIgnoreCase(status) || "REJECTED".equalsIgnoreCase(status)) {
             BigDecimal executed = order.executedQuantity();
-            if (executed == null) {
+            if (executed == null || executed.signum() < 0) {
                 runtime.state.setRecoveryRequired(true);
                 runtime.state.setUnsafeRecovery(true);
                 stateService.save(runtime.state);
                 return true;
             }
+            String terminalAction = runtime.state.getPendingAction();
+            // Terminal order status does not establish the current exposure by itself. Always apply the
+            // post-order snapshot, even when executedQuantity is zero.
+            runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
             if (executed.signum() > 0) {
                 BigDecimal beforeQty = runtime.state.getPositionQty();
-                runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
-                if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
+                if (!"OPEN".equalsIgnoreCase(terminalAction)) {
                     blockCloseCandleAtExchangeTime(runtime, order.updateTime());
                 }
-                if ("OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
-                    if (runtime.position == null || runtime.state.getDirection() == null || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())
+                if (runtime.position == null) {
+                    if ("OPEN".equalsIgnoreCase(terminalAction) && !closedOpenProven) {
+                        // A canceled/expired entry may still have partial fills. Without proof that the
+                        // resulting exposure was subsequently closed, keep the pending identity fail-closed.
+                        runtime.state.setRecoveryRequired(true);
+                        runtime.state.setUnsafeRecovery(true);
+                        stateService.save(runtime.state);
+                        return true;
+                    }
+                    if ("OPEN".equalsIgnoreCase(terminalAction)) {
+                        blockCloseCandleAtExchangeTime(runtime, order.updateTime());
+                    }
+                    prepareFlatStateForProtectionCleanup(runtime);
+                    if (!cancelStaleProtection(runtime)) {
+                        return true;
+                    }
+                    stateService.markClosed(runtime.state);
+                    runtime.state = stateService.findByInstance(runtime.instance.getId());
+                    return true;
+                }
+                if ("OPEN".equalsIgnoreCase(terminalAction)) {
+                    if (runtime.state.getDirection() == null || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())
                         || runtime.position.getQuantity().compareTo(executed) != 0) {
                         runtime.state.setRecoveryRequired(true);
                         runtime.state.setUnsafeRecovery(true);
                         stateService.save(runtime.state);
                         return true;
                     }
+                    runtime.state.setPositionId(runtime.position.getId());
+                    runtime.state.setPositionQty(runtime.position.getQuantity());
+                    runtime.state.setEntryPrice(runtime.position.getEntryPrice());
                     runtime.state.setInitialPositionQty(executed);
-                    runtime.state.setPositionQty(executed);
+                    runtime.state.setInitialMargin(runtime.position.getMargin());
+                    freezeOrderEntryPrice(runtime.state, order);
+                    runtime.position.setProtectionCycleKey(runtime.state.getPositionCycleKey());
+                    stateService.save(runtime.state);
+                    ensureHardStop(runtime);
                     freezeFilledProtection(runtime);
                 } else if (runtime.position != null && (beforeQty == null || runtime.position.getQuantity().compareTo(beforeQty.subtract(executed).max(BigDecimal.ZERO)) > 0)) {
                     runtime.state.setRecoveryRequired(true);
@@ -2533,10 +2645,62 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                     blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
                 }
             }
+            if (executed.signum() == 0) {
+                if (runtime.position == null) {
+                    if (!"OPEN".equalsIgnoreCase(terminalAction)) {
+                        blockCloseCandleAtExchangeTime(runtime, order.updateTime());
+                    }
+                    prepareFlatStateForProtectionCleanup(runtime);
+                    if (!cancelStaleProtection(runtime)) {
+                        return true;
+                    }
+                    stateService.markClosed(runtime.state);
+                    runtime.state = stateService.findByInstance(runtime.instance.getId());
+                    return true;
+                }
+                if ("OPEN".equalsIgnoreCase(terminalAction)) {
+                    // A no-fill entry cannot adopt a position that the fresh snapshot shows already exists.
+                    runtime.state.setRecoveryRequired(true);
+                    runtime.state.setUnsafeRecovery(true);
+                    stateService.save(runtime.state);
+                    return true;
+                }
+                if (runtime.state.getDirection() == null
+                    || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())
+                    || runtime.state.getPositionQty() == null
+                    || runtime.state.getPositionQty().compareTo(runtime.position.getQuantity()) != 0) {
+                    runtime.state.setRecoveryRequired(true);
+                    runtime.state.setUnsafeRecovery(true);
+                    stateService.save(runtime.state);
+                    return true;
+                }
+                clearPending(runtime.state);
+                runtime.state.setStatus("OPEN");
+                runtime.state.setPositionQty(runtime.position.getQuantity());
+                runtime.state.setRecoveryRequired(false);
+                runtime.state.setUnsafeRecovery(false);
+                stateService.save(runtime.state);
+                return true;
+            }
+            if (runtime.position != null) {
+                runtime.state.setPositionId(runtime.position.getId());
+                runtime.state.setPositionQty(runtime.position.getQuantity());
+                runtime.state.setEntryPrice(runtime.position.getEntryPrice());
+            }
             clearPending(runtime.state);
             if (runtime.position != null) {
+                // The terminal order and refreshed position snapshot now agree; do not leave recovery
+                // flags from the pre-fill pending state attached to a verified live position.
                 runtime.state.setStatus("OPEN");
+                runtime.state.setRecoveryRequired(false);
+                runtime.state.setUnsafeRecovery(false);
                 stateService.save(runtime.state);
+                ensureHardStop(runtime);
+                BigDecimal current = runtime.currentPrice() != null ? runtime.currentPrice() : runtime.position.getMarkPrice();
+                if (current != null && current.signum() > 0) {
+                    syncPluginProtections(runtime, buildContext(runtime, current, new ExchangeGateway.MarketEvent("RECOVERY", runtime.symbol.getSymbol(),
+                        runtime.strategySymbol.getIntervalCode(), current, null, Instant.now())));
+                }
             } else {
                 stateService.markClosed(runtime.state);
             }
@@ -2642,6 +2806,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             runtime.position = settlement.position();
             if (runtime.position == null) {
                 blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
+                prepareFlatStateForProtectionCleanup(runtime);
                 if (!cancelStaleProtection(runtime)) {
                     return true;
                 }
@@ -2817,11 +2982,14 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
      */
     private void requestProtectionSync(ActiveRuntime runtime, boolean dynamic) {
         synchronized (runtime) {
-            if (runtime.closed || runtime.position == null || runtime.exitCoordinating.get() || !hasFrozenProtectionFacts(runtime)) {
+            // The fixed hard stop is independent of first-TP target freezing. In LIVE, protect any verified
+            // position immediately; only dynamic strategy protections require all frozen cycle facts.
+            if (runtime.closed || runtime.position == null || runtime.exitCoordinating.get() || (dynamic && !hasFrozenProtectionFacts(runtime))) {
                 return;
             }
             runtime.protectionRequested.set(true);
-            // 首次同步必须携带 dynamic，确保插件信号（含 localStopLossRate 镜像）与硬止损一次挂上
+            // Preserve the initial combined sync request for compatibility. The worker independently
+            // executes the hard stop first and includes dynamic targets only when frozen cycle facts exist.
             if (dynamic || runtime.lastProtectionTarget == null) {
                 runtime.dynamicProtectionRequested.set(true);
             }
@@ -2853,7 +3021,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                 snapshot.setLeverage(runtime.state.getFrozenLeverage());
                                 snapshot.setEntryPrice(runtime.state.getEntryPrice());
                             }
-                            boolean includeDynamic = runtime.dynamicProtectionRequested.getAndSet(false) && !runtime.hasPendingAction();
+                            boolean includeDynamic = runtime.dynamicProtectionRequested.getAndSet(false) && !runtime.hasPendingAction()
+                                && hasFrozenProtectionFacts(runtime);
                             BigDecimal hardStopRatio = resolveHardStopRatio(runtime);
                             BigDecimal current = runtime.currentPrice() != null ? runtime.currentPrice() : snapshot.getMarkPrice();
                             List<ProtectionSignal> signals = List.of();
@@ -3002,8 +3171,15 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                     blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
                                     stateService.markClosed(cleanupState);
                                     runtime.state = stateService.findByInstance(runtime.instance.getId());
-                                    // 保护单撤销失败仍必须阻止新开仓；但已确认空仓的记录不应继续占用最大持仓数。
+                                    // 保护单撤销失败仍必须阻止新开仓，并把恢复事实持久化，确保节点重启后仍能发现。
                                     runtime.protectionCleanupPending = !cleaned;
+                                    if (!cleaned && runtime.state != null) {
+                                        runtime.state.setRecoveryRequired(true);
+                                        runtime.state.setUnsafeRecovery(true);
+                                        stateService.save(runtime.state);
+                                    } else if (cleaned) {
+                                        runtime.protectionDegraded = false;
+                                    }
                                     log.info("迟到保护清理后已确认交易所空仓，释放策略持仓名额 instanceId={} symbol={} protectionCleaned={}", runtime.instance.getId(), runtime.symbol.getSymbol(),
                                      cleaned);
                                 }
@@ -3080,7 +3256,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         final QuantStrategyPositionState expectedState;
         final Long positionId;
         synchronized (runtime) {
-            if (runtime.closed || !runtime.protectionCleanupPending || runtime.position != null || runtime.state == null || runtime.state.getPositionId() == null || runtime.hasPendingAction()) {
+            if (runtime.closed || !runtime.protectionCleanupPending || runtime.position != null || runtime.state == null || runtime.hasPendingAction()) {
                 return;
             }
             expectedState = runtime.state;
@@ -3124,13 +3300,38 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
              ex.getClass().getSimpleName());
             return new ProtectionCleanupResult(false, false);
         }
-        boolean exchangeFlat = snapshots != null && snapshots.stream().allMatch(snapshot -> snapshot.quantity() != null && snapshot.quantity().signum() == 0);
+        boolean exchangeFlat = snapshots != null && !snapshots.isEmpty()
+            && snapshots.stream().allMatch(snapshot -> snapshot != null
+                && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
+                && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
         if (!exchangeFlat) {
             log.warn("{}时交易所仍有持仓或持仓结果不完整，保留所有保护单 instanceId={} positionId={} symbol={}", reason, runtime.instance.getId(), positionId, runtime.symbol.getSymbol());
             return new ProtectionCleanupResult(false, false);
         }
-        boolean cleaned = protectionOrderService.cancelActiveProtectionOrders(runtime.credential.getId(), positionId, cycleKey, live);
+        // Old/recovered states may lack position_id. Once the exchange confirms this symbol is flat,
+        // use the existing symbol-scoped orphan cleanup rather than leaving recovery blocked forever.
+        boolean cleaned = positionId == null
+            ? protectionOrderService.cancelActiveProtectionOrdersForSymbol(runtime.credential.getId(), runtime.symbol.getSymbol(), live)
+            : protectionOrderService.cancelActiveProtectionOrders(runtime.credential.getId(), positionId, cycleKey, live);
         return new ProtectionCleanupResult(true, cleaned);
+    }
+
+    /**
+     * Persist a terminal, confirmed-flat state before protection cleanup. The close/open order is already
+     * terminal and the exchange position snapshot is flat, so keeping its pending action would make a
+     * cleanup retry permanently self-block. Recovery flags remain set until every protection is cleaned.
+     */
+    private void prepareFlatStateForProtectionCleanup(ActiveRuntime runtime) {
+        if (runtime == null || runtime.state == null) {
+            return;
+        }
+        runtime.state.setStatus("CLOSED");
+        runtime.state.setPositionQty(BigDecimal.ZERO);
+        clearPending(runtime.state);
+        runtime.state.setRecoveryRequired(true);
+        runtime.state.setUnsafeRecovery(true);
+        runtime.protectionCleanupPending = true;
+        stateService.save(runtime.state);
     }
 
     /**
@@ -3300,7 +3501,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
      * 同步 StrategyPlugin 计算出的动态保护单。
      */
     private void syncPluginProtections(ActiveRuntime runtime, StrategyContext context) {
-        if (runtime.position == null || runtime.state == null || runtime.hasPendingAction()) {
+        if (runtime.position == null || runtime.state == null || runtime.hasPendingAction()
+            || runtime.plugin instanceof KlineSlopeRateStrategy && !hasFrozenProtectionFacts(runtime)) {
             return;
         }
         List<ProtectionSignal> signals = protectionSignals(runtime, context, frozenParams(runtime));
@@ -3521,12 +3723,12 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /**
          * 更新对应业务状态。
          */
-        private void updateKline(ExchangeGateway.Kline kline) {
+        private boolean updateKline(ExchangeGateway.Kline kline) {
             if (kline == null) {
-                return;
+                return false;
             }
             if (currentKline != null && kline.openTime().isBefore(currentKline.openTime())) {
-                return;
+                return false;
             }
             if (currentKline != null && !currentKline.openTime().equals(kline.openTime())) {
                 thirdPreviousKlineOpen = secondPreviousKlineOpen;
@@ -3541,6 +3743,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             if (kline.closed()) {
                 previousClosedClose = kline.close();
             }
+            return true;
         }
 
         /**
@@ -3722,8 +3925,8 @@ StrategyPlugin plugin, Map<String, Object> params) {
         /**
          * 更新对应业务状态。
          */
-        private void updateKline(ExchangeGateway.Kline kline) {
-            market.updateKline(kline);
+        private boolean updateKline(ExchangeGateway.Kline kline) {
+            return market.updateKline(kline);
         }
 
         /**
