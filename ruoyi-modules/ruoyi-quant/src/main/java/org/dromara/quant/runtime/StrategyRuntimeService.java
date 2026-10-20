@@ -2628,7 +2628,11 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             }
             clearPending(runtime.state);
             if (runtime.position != null) {
+                // The terminal order and refreshed position snapshot now agree; do not leave recovery
+                // flags from the pre-fill pending state attached to a verified live position.
                 runtime.state.setStatus("OPEN");
+                runtime.state.setRecoveryRequired(false);
+                runtime.state.setUnsafeRecovery(false);
                 stateService.save(runtime.state);
             } else {
                 stateService.markClosed(runtime.state);
