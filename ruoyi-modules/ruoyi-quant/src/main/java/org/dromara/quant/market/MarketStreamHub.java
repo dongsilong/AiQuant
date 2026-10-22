@@ -121,6 +121,7 @@ public class MarketStreamHub {
         private Instant lastRecoveryWarningPeriod;
         private long nextMetricsAt;
         private long nextClockSkewWarningAt;
+        private long nextClockSyncWarningAt;
         /**
          * MARK freshness measured at event consumption, not at the watchdog sample.
          */
@@ -339,13 +340,14 @@ public class MarketStreamHub {
                         } else if (networkFailure(ex)) {
                             // REST不稳定不能连带拆掉健康WS；保持缓冲和决策暂停，继续精确补偿。
                             log.warn("行情REST补偿网络失败，保留WS并退避重试: symbol={}, interval={}, errorType={}", key.symbol(), key.interval(), ex.getClass().getSimpleName());
+                            long retryDelayMillis = recoveryRetryDelayMillis(ex);
                             recoveryTask = scheduler.schedule(() -> {
                                 synchronized (this) {
                                     if (!closed && attempt == generation) {
                                         recoveryTask = recoveryExecutor.submit(() -> restoreHistory(attempt));
                                     }
                                 }
-                            }, Math.max(1, properties.getMarket().getReconnectDelaySeconds()), TimeUnit.SECONDS);
+                            }, retryDelayMillis, TimeUnit.MILLISECONDS);
                         } else {
                             disconnect(ex);
                         }
@@ -359,7 +361,49 @@ public class MarketStreamHub {
          */
         private boolean networkFailure(Throwable error) {
             for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-                if (cause instanceof java.io.IOException || cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException) {
+                if (cause instanceof java.io.IOException || cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException ||
+                    cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private long recoveryRetryDelayMillis(Throwable error) {
+            long delay = TimeUnit.SECONDS.toMillis(Math.max(1, properties.getMarket().getReconnectDelaySeconds()));
+            for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+                if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
+                    delay = Math.max(delay, deferred.retryAfterMillis());
+                } else if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException rateLimit) {
+                    delay = Math.max(delay, rateLimit.retryAfterMillis());
+                    delay += java.util.concurrent.ThreadLocalRandom.current().nextLong(0, 1_001L);
+                }
+            }
+            return delay;
+        }
+
+        private boolean rateLimited(Throwable error) {
+            for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+                if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private boolean requestDeferred(Throwable error) {
+            for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+                if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private boolean clockUnavailable(Throwable error) {
+            for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+                if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException ||
+                    cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException) {
                     return true;
                 }
             }
@@ -397,7 +441,7 @@ public class MarketStreamHub {
                     Thread.currentThread().interrupt();
                     throw new java.util.concurrent.CancellationException("行情恢复已取消");
                 } catch (RuntimeException ex) {
-                    if (retry >= 2 || !networkFailure(ex)) {
+                    if (retry >= 2 || !networkFailure(ex) || rateLimited(ex) || requestDeferred(ex)) {
                         throw ex;
                     }
                     log.warn("行情REST只读重试: symbol={}, interval={}, attempt={}, errorType={}", key.symbol(), key.interval(), retry + 1, ex.getClass().getSimpleName());
@@ -516,7 +560,19 @@ public class MarketStreamHub {
             if (!List.of("TRADE", "MARK", "KLINE").contains(event.type())) {
                 return;
             }
-            long exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
+            long exchangeOffsetMillis;
+            try {
+                exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
+            } catch (RuntimeException ex) {
+                if (!clockUnavailable(ex)) {
+                    disconnect(ex);
+                    return;
+                }
+                connected = false;
+                signalUnhealthy();
+                warnClockUnavailable(ex);
+                return;
+            }
             Instant now = Instant.now();
             Instant exchangeNow = now.plusMillis(exchangeOffsetMillis);
             if (event.eventTime() == null) {
@@ -687,6 +743,12 @@ public class MarketStreamHub {
             try {
                 exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
             } catch (RuntimeException ex) {
+                if (clockUnavailable(ex)) {
+                    connected = false;
+                    signalUnhealthy();
+                    warnClockUnavailable(ex);
+                    return;
+                }
                 disconnect(ex);
                 return;
             }
@@ -709,7 +771,7 @@ public class MarketStreamHub {
                 return;
             }
             if (recovering) {
-                if (recoveryStarted != null && recoveryStarted.isBefore(Instant.now().minusSeconds(120))) {
+                if ((recoveryTask == null || recoveryTask.isDone()) && recoveryStarted != null && recoveryStarted.isBefore(Instant.now().minusSeconds(120))) {
                     disconnect(new IllegalStateException("行情历史恢复超时"));
                 }
                 return;
@@ -724,6 +786,14 @@ public class MarketStreamHub {
                 beginRecovery("K线周期已切换，REST校验当前状态", null);
             } else if (lastReceived.getOrDefault("KLINE", Instant.EPOCH).isBefore(deadline)) {
                 checkQuietKline();
+            }
+        }
+
+        private void warnClockUnavailable(RuntimeException error) {
+            long now = System.currentTimeMillis();
+            if (now >= nextClockSyncWarningAt) {
+                nextClockSyncWarningAt = now + 30_000L;
+                log.warn("Binance时间校准受限，保留WebSocket但暂停行情决策: symbol={} interval={} errorType={}", key.symbol(), key.interval(), error.getClass().getSimpleName());
             }
         }
 

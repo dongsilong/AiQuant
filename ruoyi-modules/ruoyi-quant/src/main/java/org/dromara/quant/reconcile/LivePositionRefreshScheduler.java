@@ -33,6 +33,9 @@ public class LivePositionRefreshScheduler {
             }
             try {
                 reconciliation.refreshPositionsOnly(credential);
+            } catch (TradingReconciliationService.SnapshotSupersededException ex) {
+                // 新事件已使旧 REST 结果失效；事件刷新器和下一轮心跳会重新取证，不放宽新鲜度门禁。
+                log.debug("LIVE 持仓心跳快照已被更新事实取代，等待重新核实 credentialId={}", credential.getId());
             } catch (RuntimeException ex) {
                 log.warn("LIVE position heartbeat failed credentialId={}, new entries remain subject to snapshot TTL", credential.getId(), ex);
             }

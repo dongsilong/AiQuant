@@ -16,7 +16,7 @@ class StrategyPositionPerformanceHubTest {
         AutoCloseable subscription = hub.subscribe(11L, first::add);
         hub.subscribe(12L, second::add);
 
-        StrategyPositionPerformanceEvent event = new StrategyPositionPerformanceEvent(11L, 21L, 31L, "cycle", "BTCUSDT", "LONG", null, null, null, null, null, null);
+        StrategyPositionPerformanceEvent event = new StrategyPositionPerformanceEvent(11L, 21L, 31L, "cycle", "BTCUSDT", "LONG", null, null, null, null, null, null, null);
         hub.publish(event);
         subscription.close();
         hub.publish(event);

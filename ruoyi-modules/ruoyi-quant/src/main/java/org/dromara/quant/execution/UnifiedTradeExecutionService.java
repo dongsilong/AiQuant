@@ -507,9 +507,13 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                     if (acceptanceJournal == null) {
                         throw new IllegalStateException("Missing transactional strategy order provenance journal");
                     }
-                    acceptanceJournal.persist(credentialId, strategyId, strategyInstanceId, runMode, operationType, request, exchangeResult);
+                    acceptanceJournal.persist(credentialId, strategyId, strategyInstanceId, runMode, operationType, request, exchangeResult,
+                        openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),
+                        openCommand == null || openCommand.symbolRule() == null ? null : openCommand.symbolRule().priceTickSize());
                 } else {
-                    orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult);
+                    orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult,
+                        openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),
+                        openCommand == null || openCommand.symbolRule() == null ? null : openCommand.symbolRule().priceTickSize());
                 }
             } catch (RuntimeException ledgerEx) {
                 // 交易所已经返回订单结果；本地账本失败不能把执行事实改写为 FAILED。由恢复/对账补齐账本。

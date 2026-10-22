@@ -83,6 +83,30 @@ class TradeDecisionRepositoryTest {
     }
 
     @Test
+    void queriedFillPromotesAcceptedOpenWithActualPriceAndLateAckCannotRegressIt() {
+        var accepted = request().toBuilder().status("ACCEPTED").orderId(88L).clientOrderId("client").build();
+        repository.writeBatch(List.of(accepted));
+        jdbc.update("INSERT INTO quant_execution_record VALUES(1,'BTCUSDT','OPEN',88,'client',CURRENT_TIMESTAMP,2,3,'open-1')");
+        var service = org.mockito.Mockito.spy(new TradeDecisionLogService(repository,
+            org.mockito.Mockito.mock(org.dromara.quant.notification.QuantTradeNotificationService.class)));
+        org.mockito.Mockito.doAnswer(call -> {
+            repository.writeBatch(List.of(call.getArgument(0, DecisionLogEvent.class)));
+            return null;
+        }).when(service).record(org.mockito.ArgumentMatchers.any());
+        service.order(1L, new org.dromara.quant.exchange.ExchangeGateway.OrderSnapshot("BTCUSDT", 88L, "client", "BUY", "MARKET", "FILLED",
+            BigDecimal.ZERO, new BigDecimal("2"), new BigDecimal("2"), Instant.now(), new BigDecimal("101")));
+        repository.writeBatch(List.of(accepted.toBuilder().eventTime(Instant.now()).build()));
+
+        var rows = repository.list(new TradeDecisionQuery()).getRows();
+        assertEquals(1, rows.size());
+        var row = rows.iterator().next();
+        assertEquals("FILLED", row.get("status"));
+        assertEquals("ACTUAL", row.get("priceKind"));
+        assertEquals("202", row.get("amount"));
+        assertEquals("角度达到开仓阈值", row.get("reason"));
+    }
+
+    @Test
     void repeatedBlockedReasonIsMergedButChangedReasonIsSeparate() {
         var first = request().toBuilder().eventKey("E:first").recordType("EVALUATION").status("BLOCKED").reasonCode("MAX_POSITIONS").build();
         repository.writeBatch(List.of(first, first, first));

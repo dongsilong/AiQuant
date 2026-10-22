@@ -17,14 +17,14 @@ import static org.junit.jupiter.api.Assertions.*;
 class BinanceGatewayConnectivityTest {
 
     @Test
-    void liveCredentialFailsClosedWhenWithdrawalIsEnabledOrUnknown() {
+    void credentialTradingAccessDoesNotDependOnAccountTransferCapability() {
         var enabled = BinanceGatewayAdapter.tradingPermissions(true, true);
-        assertFalse(enabled.success());
+        assertTrue(enabled.success());
         assertTrue(enabled.canTrade());
         assertFalse(enabled.withdrawalDisabled());
 
         var missing = BinanceGatewayAdapter.tradingPermissions(true, null);
-        assertFalse(missing.success());
+        assertTrue(missing.success());
         assertFalse(missing.withdrawalDisabled());
 
         var safe = BinanceGatewayAdapter.tradingPermissions(true, false);

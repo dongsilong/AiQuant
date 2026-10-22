@@ -41,8 +41,21 @@ public interface ExchangeTradingPort {
      * 可安全展示的执行诊断，不保留 SDK 原始请求和异常。
      */
     class ExchangeRequestException extends IllegalStateException {
+        private final Integer httpStatus;
+        private final Integer code;
+
         public ExchangeRequestException(String stage, Integer httpStatus, Integer code, String message) {
             super("stage=" + stage + " httpStatus=" + httpStatus + " binanceCode=" + code + " msg=" + sanitize(message));
+            this.httpStatus = httpStatus;
+            this.code = code;
+        }
+
+        public Integer httpStatus() {
+            return httpStatus;
+        }
+
+        public Integer code() {
+            return code;
         }
 
         private static String sanitize(String message) {

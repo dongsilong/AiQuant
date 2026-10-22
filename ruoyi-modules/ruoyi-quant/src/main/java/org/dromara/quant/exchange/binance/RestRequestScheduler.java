@@ -13,6 +13,7 @@ final class RestRequestScheduler {
     private final int[] rotation = {0, 1, 0, 2};
     private final long interval;
     private long nextStart;
+    private long blockedUntil;
     private int cursor;
     @SuppressWarnings("unchecked")
     RestRequestScheduler(long intervalMillis) {
@@ -21,6 +22,10 @@ final class RestRequestScheduler {
     }
 
     synchronized void acquire(Kind kind) {
+        long initialNow = System.nanoTime();
+        if (initialNow < blockedUntil) {
+            throw new ExchangeMarketPort.RequestDeferredException(TimeUnit.NANOSECONDS.toMillis(blockedUntil - initialNow) + 1L);
+        }
         var queue = queues[kind.ordinal()];
         if (queue.size() >= 16) {
             throw new ExchangeMarketPort.RequestDeferredException();
@@ -34,6 +39,9 @@ final class RestRequestScheduler {
                     throw new ExchangeMarketPort.RequestDeferredException();
                 }
                 long now = System.nanoTime();
+                if (now < blockedUntil) {
+                    throw new ExchangeMarketPort.RequestDeferredException(TimeUnit.NANOSECONDS.toMillis(blockedUntil - now) + 1L);
+                }
                 if (now >= deadline) {
                     throw new ExchangeMarketPort.RequestDeferredException();
                 }
@@ -61,6 +69,12 @@ final class RestRequestScheduler {
             queue.remove(ticket);
             notifyAll();
         }
+    }
+
+    synchronized void deferFor(long delayMillis) {
+        long duration = TimeUnit.MILLISECONDS.toNanos(Math.max(1L, delayMillis));
+        blockedUntil = Math.max(blockedUntil, System.nanoTime() + duration);
+        notifyAll();
     }
 
     /**

@@ -107,7 +107,10 @@ public class LiveOrderDispatcher {
                 mapper.ensureGuard(credentialId, normalized);
                 int claimed = instanceId == null ? mapper.claim(credentialId, normalized, key) : mapper.claimWithLease(credentialId, normalized, key, instanceId, epoch);
                 if (claimed != 1) {
-                    throw new DispatchBlockedException("同账户交易对存在未完成交易所操作或策略租约已过期/转移，订单未发送");
+                    boolean slotOccupied = mapper.activeDispatch(credentialId, normalized) != null;
+                    String reason = slotOccupied ? "同账户交易对存在未完成交易所操作，订单未发送"
+                        : "策略租约已过期或转移，订单未发送";
+                    throw new DispatchBlockedException(reason);
                 }
                 if (marginMode != null) {
                     mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
@@ -294,6 +297,10 @@ public class LiveOrderDispatcher {
                 }
             }
         });
+        ApplicationEventPublisher publisher = eventPublisher;
+        if (publisher != null) {
+            publisher.publishEvent(new DispatchRecoveryRequestedEvent(ticket.credentialId(), ticket.symbol()));
+        }
     }
 
     /**

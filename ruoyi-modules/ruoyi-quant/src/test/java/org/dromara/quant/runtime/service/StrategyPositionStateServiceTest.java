@@ -11,9 +11,22 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+@org.junit.jupiter.api.Tag("dev")
 class StrategyPositionStateServiceTest {
     private final QuantStrategyPositionStateMapper mapper = mock(QuantStrategyPositionStateMapper.class);
     private final StrategyPositionStateService service = new StrategyPositionStateService(mapper);
+
+    @Test
+    void rejectedUpdateRestoresVersionMutatedByOptimisticLockInterceptor() {
+        var state = state("OPEN", null, false, false);
+        state.setVersion(7);
+        when(mapper.updateById(any(QuantStrategyPositionState.class))).thenAnswer(call -> {
+            state.setVersion(8);
+            return 0;
+        });
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> service.save(state));
+        assertEquals(7, state.getVersion(), "failed SQL must not leave an uncommitted version on the runtime object");
+    }
 
     @Test
     void flatSnapshotClosesOnlyCleanOpenState() {

@@ -41,4 +41,15 @@ public interface StrategyFillSyncCursorMapper {
         WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND last_complete_to<#{lastCompleteTo}
         """)
     int advanceIfBehind(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("lastCompleteTo") LocalDateTime lastCompleteTo);
+
+    /** 完整补采后只修复采集开始时读到的未来游标；并发变更不能被回退覆盖。 */
+    @Options(timeout = 3)
+    @org.apache.ibatis.annotations.Update("""
+        UPDATE quant_strategy_fill_sync_cursor
+        SET last_complete_to=#{lastCompleteTo}, updated_at=NOW(3)
+        WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+          AND last_complete_to=#{expected} AND last_complete_to>#{lastCompleteTo}
+        """)
+    int repairFuture(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("expected") LocalDateTime expected,
+                     @Param("lastCompleteTo") LocalDateTime lastCompleteTo);
 }

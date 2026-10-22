@@ -20,6 +20,16 @@ public class QuantPosition {
     @com.baomidou.mybatisplus.annotation.TableField(exist = false)
     private String protectionCycleKey;
 
+    /** 从策略冻结快照传入保护服务的内部规则版本，不写入持仓事实表。 */
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Integer protectionPolicyVersion;
+
+    /** V2 周期已持久化的固定硬止损价格，只用于运行时保护同步。 */
+    @com.baomidou.mybatisplus.annotation.TableField(exist = false)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private BigDecimal protectionStopLossPrice;
+
     /**
      * 主键。
      */

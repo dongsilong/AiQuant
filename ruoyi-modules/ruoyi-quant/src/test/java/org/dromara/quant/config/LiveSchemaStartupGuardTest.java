@@ -20,12 +20,14 @@ class LiveSchemaStartupGuardTest {
         when(mapper.uniqueContracts()).thenReturn(List.of());
         when(mapper.leaseEpochColumns()).thenReturn(List.of());
         when(mapper.entryGuardColumns()).thenReturn(List.of("quant_strategy_entry_guard|guard_type"));
+        when(mapper.positionReturnRateColumns()).thenReturn(List.of());
         var error = assertThrows(IllegalStateException.class, guard::verify);
         assertTrue(error.getMessage().contains("quant_strategy_runtime_lease"));
         assertTrue(error.getMessage().contains("quant_execution_record|credential_id,idempotency_key"));
         assertTrue(error.getMessage().contains("quant_strategy_fill_journal"));
         assertTrue(error.getMessage().contains("quant_strategy_fill_sync_cursor"));
         assertTrue(error.getMessage().contains("V20261017_01__strategy_fill_journal.sql"));
+        assertTrue(error.getMessage().contains("V20261021_01__strategy_position_maximum_return_rate.sql"));
         assertTrue(!error.getMessage().contains("V20261016_01__close_candle_entry_guard.sql"));
     }
 
@@ -37,6 +39,7 @@ class LiveSchemaStartupGuardTest {
         when(mapper.uniqueContracts()).thenReturn(List.of("quant_strategy_runtime_lease|credential_id,symbol"));
         when(mapper.leaseEpochColumns()).thenReturn(List.of());
         when(mapper.entryGuardColumns()).thenReturn(List.of());
+        when(mapper.positionReturnRateColumns()).thenReturn(List.of("maximum_return_rate"));
         var ex = assertThrows(IllegalStateException.class, new LiveSchemaStartupGuard(mapper)::verify);
         assertTrue(ex.getMessage().contains("leaseEpochMissing=true"));
     }
@@ -48,6 +51,7 @@ class LiveSchemaStartupGuardTest {
         when(mapper.uniqueContracts()).thenReturn(List.of());
         when(mapper.leaseEpochColumns()).thenReturn(List.of("quant_strategy_runtime_lease|lease_epoch"));
         when(mapper.entryGuardColumns()).thenReturn(List.of());
+        when(mapper.positionReturnRateColumns()).thenReturn(List.of("maximum_return_rate"));
         var ex = assertThrows(IllegalStateException.class, new LiveSchemaStartupGuard(mapper)::verify);
         assertTrue(ex.getMessage().contains("entryGuardTypeMissing=true"));
         assertTrue(ex.getMessage().contains("V20261016_01__close_candle_entry_guard.sql"));

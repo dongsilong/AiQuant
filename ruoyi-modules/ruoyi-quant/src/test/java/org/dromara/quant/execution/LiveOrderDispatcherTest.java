@@ -43,6 +43,12 @@ class LiveOrderDispatcherTest {
               created_at TIMESTAMP,
               PRIMARY KEY(credential_id,symbol))
             """);
+        jdbc.execute("""
+            CREATE TABLE quant_strategy_runtime_lease (
+              instance_id BIGINT NOT NULL, credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
+              owner_token VARCHAR(80), lease_epoch BIGINT, lease_until TIMESTAMP,
+              PRIMARY KEY(credential_id,symbol))
+            """);
         var config = new Configuration();
         config.addMapper(LiveOrderDispatchMapper.class);
         var bean = new SqlSessionFactoryBean();
@@ -75,6 +81,32 @@ class LiveOrderDispatcherTest {
         assertThrows(IllegalStateException.class, () -> f.other().beginConfiguration(1L, "BTCUSDT", "new-config", "CROSSED", 25));
         assertEquals("config-timeout", f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'",
             String.class));
+    }
+
+    @Test
+    void strategyDispatchReportsExpiredLeaseSeparatelyFromOccupiedAccountSymbolSlot() throws Exception {
+        var f = fixture();
+        var expired = assertThrows(LiveOrderDispatcher.DispatchBlockedException.class,
+            () -> f.first().beginStrategy(1L, "BTCUSDT", "stale-lease", "OPEN", "cid-stale", 2L, 3L, 1L, "LONG", "BUY"));
+        assertTrue(expired.getMessage().contains("策略租约已过期或转移"));
+
+        var occupying = f.first().begin(1L, "BTCUSDT", "existing-order", "CLOSE", "cid-existing", null, null);
+        var occupied = assertThrows(LiveOrderDispatcher.DispatchBlockedException.class,
+            () -> f.other().beginStrategy(1L, "BTCUSDT", "blocked-by-order", "OPEN", "cid-blocked", 2L, 3L, 1L, "LONG", "BUY"));
+        assertTrue(occupied.getMessage().contains("同账户交易对存在未完成交易所操作"));
+        f.first().notSent(occupying);
+    }
+
+    @Test
+    void unknownDispatchPublishesAsyncRecoveryRequest() throws Exception {
+        var f = fixture();
+        var publisher = org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class);
+        f.first().setEventPublisher(publisher);
+        var ticket = f.first().begin(4L, "ETHUSDT", "timeout", "PROTECT_CREATE", "QHARD_test", null, null);
+
+        f.first().unknown(ticket);
+
+        org.mockito.Mockito.verify(publisher).publishEvent(new DispatchRecoveryRequestedEvent(4L, "ETHUSDT"));
     }
 
     @Test

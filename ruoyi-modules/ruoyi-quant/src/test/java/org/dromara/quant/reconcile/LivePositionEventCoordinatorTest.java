@@ -10,6 +10,28 @@ import static org.mockito.Mockito.*;
 @Tag("dev")
 class LivePositionEventCoordinatorTest {
     @Test
+    void supersededSnapshotsStayQueuedWithoutNetworkFailureBackoff() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        var live = new QuantCredential();
+        live.setId(42L);
+        live.setStatus("0");
+        live.setRunMode("LIVE");
+        when(credentials.selectById(42L)).thenReturn(live);
+        doThrow(new TradingReconciliationService.SnapshotSupersededException()).when(reconciliation).refreshPositionsOnly(live);
+        coordinator.request(42L);
+        for (int attempt = 0; attempt < 4; attempt++) {
+            coordinator.drain();
+            var failures = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(coordinator, "failures");
+            org.junit.jupiter.api.Assertions.assertFalse(failures.containsKey(42L));
+            var lastAttempt = (java.util.Map<Long, Long>) org.springframework.test.util.ReflectionTestUtils.getField(coordinator, "lastAttempt");
+            lastAttempt.put(42L, 0L);
+        }
+        verify(reconciliation, times(4)).refreshPositionsOnly(live);
+    }
+
+    @Test
     void duplicateEventsCoalesceToOneRestPositionRefresh() {
         var credentials = mock(QuantCredentialMapper.class);
         var reconciliation = mock(TradingReconciliationService.class);
@@ -230,6 +252,56 @@ class LivePositionEventCoordinatorTest {
         coordinator.drain();
 
         verify(protection).recoverUnresolvedProtectionDispatches(90L, "BTCUSDT");
+    }
+
+    @Test
+    void unknownDispatchQueuesImmediateProtectionFactRecovery() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var protection = mock(org.dromara.quant.protection.ProtectionOrderService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        coordinator.setProtectionOrderService(protection);
+        QuantCredential account = new QuantCredential();
+        account.setId(92L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectById(92L)).thenReturn(account);
+
+        coordinator.onDispatchRecoveryRequested(new org.dromara.quant.execution.DispatchRecoveryRequestedEvent(92L, "BTCUSDT"));
+        coordinator.drain();
+
+        verify(protection).recoverUnresolvedProtectionDispatches(92L, "BTCUSDT");
+    }
+
+    @Test
+    void unresolvedProtectionRecoveryIsRetriedWithBackoffAfterPrivateStreamAttempt() {
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var protection = mock(org.dromara.quant.protection.ProtectionOrderService.class);
+        var coordinator = new LivePositionEventCoordinator(credentials, reconciliation);
+        coordinator.setProtectionOrderService(protection);
+        QuantCredential account = new QuantCredential();
+        account.setId(91L);
+        account.setStatus("0");
+        account.setRunMode("LIVE");
+        when(credentials.selectById(91L)).thenReturn(account);
+        when(protection.recoverUnresolvedProtectionDispatches(91L, "BTCUSDT")).thenReturn(0);
+        when(protection.hasUnresolvedProtectionDispatches(91L, "BTCUSDT")).thenReturn(true);
+
+        coordinator.onDispatchBlocked(new org.dromara.quant.execution.DispatchBlockedEvent(91L, "BTCUSDT", "PROTECT_CREATE"));
+        coordinator.drain();
+        coordinator.drain();
+
+        verify(protection, times(1)).recoverUnresolvedProtectionDispatches(91L, "BTCUSDT");
+        var pending = (java.util.Set<?>) org.springframework.test.util.ReflectionTestUtils.getField(coordinator, "protectionRecoveryPending");
+        org.junit.jupiter.api.Assertions.assertEquals(1, pending.size(), "unresolved exact dispatch must stay queued after one failed recovery");
+
+        Object request = pending.iterator().next();
+        var retryNotBefore = (java.util.Map<Object, Long>) org.springframework.test.util.ReflectionTestUtils.getField(coordinator, "protectionRetryNotBefore");
+        retryNotBefore.put(request, 0L);
+        coordinator.drain();
+
+        verify(protection, times(2)).recoverUnresolvedProtectionDispatches(91L, "BTCUSDT");
     }
 
 }

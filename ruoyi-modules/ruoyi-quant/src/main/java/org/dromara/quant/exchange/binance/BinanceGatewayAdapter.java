@@ -42,6 +42,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * Binance 服务器时间偏移刷新周期，单位毫秒。
      */
     private static final long CLOCK_OFFSET_REFRESH_MILLIS = 30_000L;
+    private static final long MAX_STALE_MARKET_CLOCK_OFFSET_MILLIS = 5 * 60_000L;
     /**
      * Binance 签名请求允许的时间窗口，覆盖代理和网络抖动。
      */
@@ -68,6 +69,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * 同一环境只允许一个服务器时间刷新，其他线程复用结果。
      */
     private final Map<String, Object> clockOffsetRefreshLocks = new ConcurrentHashMap<>();
+    private final Map<String, Long> clockOffsetWarningTimes = new ConcurrentHashMap<>();
     private final Map<String, TradingRules> tradingRules = new ConcurrentHashMap<>();
     /**
      * 进程内共享的 REST 请求节流时间点，避免同一出口 IP 触发 Binance 权重限制。
@@ -155,20 +157,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 私有账户能力校验。只有交易所明确返回 canWithdraw=false 时，
-     * 才能向 LIVE 闸门报告 withdrawalDisabled=true。
-     * null/缺失值属于未知状态，必须拒绝而不是当作已禁用。
-     *
-     * <p>该字段不是 API Key 权限审计的替代品，运维仍须检查密钥权限。
+     * 私有账户交易能力校验。canWithdraw 表示合约账户资金转出能力，不能用于判断 API Key 提现权限。
+     * 兼容字段 withdrawalDisabled 只记录 canWithdraw 是否明确为 false，不作为凭证或交易准入条件。
      */
     static ConnectivityResult tradingPermissions(Boolean canTrade, Boolean canWithdraw) {
         boolean tradeAllowed = Boolean.TRUE.equals(canTrade);
         boolean withdrawalDisabled = Boolean.FALSE.equals(canWithdraw);
         if (!tradeAllowed) {
             return new ConnectivityResult(false, "账户没有 Futures Trade 权限", false, withdrawalDisabled, Instant.now());
-        }
-        if (!withdrawalDisabled) {
-            return new ConnectivityResult(false, "未确认禁用提现能力，拒绝 LIVE 交易", true, false, Instant.now());
         }
         return new ConnectivityResult(true, "OK", true, withdrawalDisabled, Instant.now());
     }
@@ -218,7 +214,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     /**
      * 将 SDK 异常映射为带阶段信息的安全错误，不输出认证数据。
      */
-    private static ExchangeRequestException requestFailure(String stage, RuntimeException ex) {
+    private RuntimeException requestFailure(String stage, RuntimeException ex) {
+        if (ex instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
+            return deferred;
+        }
         if (ex instanceof ExchangeRequestException safe) {
             return safe;
         }
@@ -231,7 +230,45 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             }
         }
         // 不附带原始异常，避免 SDK 的 URL、签名和请求头进入日志。
+        if (error != null && (error.getCode() == 418 || error.getCode() == 429)) {
+            long retryAfterMillis = retryAfterMillis(error);
+            restScheduler.deferFor(retryAfterMillis);
+            return new org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException(stage, error.getCode(), errorCode(error), message, retryAfterMillis);
+        }
         return new ExchangeRequestException(stage, error == null ? null : error.getCode(), error == null ? null : errorCode(error), message);
+    }
+
+    private static long retryAfterMillis(com.binance.connector.client.common.ApiException error) {
+        if (error.getResponseHeaders() != null) {
+            for (var header : error.getResponseHeaders().entrySet()) {
+                if (!"retry-after".equalsIgnoreCase(header.getKey()) || header.getValue() == null || header.getValue().isEmpty()) {
+                    continue;
+                }
+                String value = header.getValue().getFirst();
+                try {
+                    return Math.max(1L, Math.multiplyExact(Long.parseLong(value.trim()), 1_000L));
+                } catch (RuntimeException ignored) {
+                    try {
+                        return Math.max(1L, java.time.Duration.between(java.time.Instant.now(), java.time.ZonedDateTime.parse(value,
+                            java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()).toMillis());
+                    } catch (RuntimeException ignoredDate) {
+                        // Fall through to Binance's ban-until timestamp or a conservative default.
+                    }
+                }
+            }
+        }
+        String body = error.getResponseBody();
+        if (body != null) {
+            java.util.regex.Matcher bannedUntil = java.util.regex.Pattern.compile("(?i)banned until\\s+(\\d+)").matcher(body);
+            if (bannedUntil.find()) {
+                try {
+                    return Math.max(1L, Long.parseLong(bannedUntil.group(1)) - System.currentTimeMillis());
+                } catch (NumberFormatException ignored) {
+                    // Use the bounded fallback below.
+                }
+            }
+        }
+        return error.getCode() == 418 ? 60_000L : 1_000L;
     }
 
     /**
@@ -1310,7 +1347,32 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     @Override
     public long exchangeTimeOffsetMillis(String runMode) {
-        return clockOffset(marketBaseUrl(runMode));
+        String baseUrl = marketBaseUrl(runMode);
+        try {
+            return clockOffset(baseUrl);
+        } catch (RuntimeException ex) {
+            if (!(ex instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException ||
+                ex instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException)) {
+                throw ex;
+            }
+            ClockOffset cached = clockOffsets.get(baseUrl);
+            long now = System.currentTimeMillis();
+            if (cached == null || now - cached.updatedAt() > MAX_STALE_MARKET_CLOCK_OFFSET_MILLIS) {
+                throw ex;
+            }
+            java.util.concurrent.atomic.AtomicBoolean shouldWarn = new java.util.concurrent.atomic.AtomicBoolean();
+            clockOffsetWarningTimes.compute(baseUrl, (ignored, lastWarning) -> {
+                if (lastWarning == null || now - lastWarning >= 30_000L) {
+                    shouldWarn.set(true);
+                    return now;
+                }
+                return lastWarning;
+            });
+            if (shouldWarn.get()) {
+                log.warn("Binance时间同步受限，暂用最近一次有效偏移并等待恢复: baseUrl={}, cacheAgeMs={}", baseUrl, now - cached.updatedAt());
+            }
+            return cached.value();
+        }
     }
 
     private DerivativesTradingUsdsFuturesRestApi api(Credential credential) {
@@ -1389,7 +1451,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             long refreshStartedAt = System.currentTimeMillis();
             ClientConfiguration config = restConfiguration(baseUrl);
             long requestStartedAt = System.currentTimeMillis();
-            ApiResponse<CheckServerTimeResponse> response = new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config))).checkServerTime();
+            ApiResponse<CheckServerTimeResponse> response;
+            try {
+                response = new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config))).checkServerTime();
+            } catch (RuntimeException ex) {
+                throw requestFailure("CHECK_SERVER_TIME", ex);
+            }
             long requestFinishedAt = System.currentTimeMillis();
             CheckServerTimeResponse data = response.getData();
             if (data == null || data.getServerTime() == null) {
@@ -1414,7 +1481,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             long refreshStartedAt = System.currentTimeMillis();
             ClientConfiguration config = restConfiguration(baseUrl);
             long requestStartedAt = System.currentTimeMillis();
-            ApiResponse<CheckServerTimeResponse> response = new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config))).checkServerTime();
+            ApiResponse<CheckServerTimeResponse> response;
+            try {
+                response = new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config))).checkServerTime();
+            } catch (RuntimeException ex) {
+                throw requestFailure("CHECK_SERVER_TIME", ex);
+            }
             long requestFinishedAt = System.currentTimeMillis();
             CheckServerTimeResponse data = response.getData();
             if (data == null || data.getServerTime() == null) {

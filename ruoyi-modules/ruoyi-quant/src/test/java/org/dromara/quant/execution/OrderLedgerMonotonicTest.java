@@ -31,7 +31,9 @@ class OrderLedgerMonotonicTest {
               side VARCHAR(8), order_type VARCHAR(24), status VARCHAR(32),
               position_side VARCHAR(8), price DECIMAL(30,12),
               original_quantity DECIMAL(30,12), executed_quantity DECIMAL(30,12),
-              reduce_only BOOLEAN, updated_at TIMESTAMP
+              reduce_only BOOLEAN, leverage_snapshot INT, price_tick_size_snapshot DECIMAL(32,16),
+              post_fill_wallet_balance DECIMAL(32,16), post_fill_balance_at TIMESTAMP,
+              post_fill_balance_requested_at TIMESTAMP, updated_at TIMESTAMP
             )
             """);
         jdbc.update("""
@@ -103,6 +105,30 @@ class OrderLedgerMonotonicTest {
         wrongExchange.setExchangeOrderId(100L);
         assertEquals(0, f.mapper().mergeExchangeFactIfMonotonic(wrongExchange));
         assertEquals(20L, f.jdbc().queryForObject("SELECT strategy_instance_id FROM quant_order", Long.class));
+    }
+
+    @Test
+    void acceptedOpeningMetadataIsMergedOnceAndNotClearedByLaterSnapshots() throws Exception {
+        var f = fixture();
+        var accepted = fact("PARTIALLY_FILLED", "0.8");
+        accepted.setLeverageSnapshot(5);
+        accepted.setPriceTickSizeSnapshot(new BigDecimal("0.001"));
+        assertEquals(1, f.mapper().mergeExchangeFactIfMonotonic(accepted));
+        assertEquals(1, f.mapper().mergeExchangeFactIfMonotonic(fact("FILLED", "1")));
+        assertEquals(5, f.jdbc().queryForObject("SELECT leverage_snapshot FROM quant_order WHERE id=1", Integer.class));
+        assertEquals(0, new BigDecimal("0.001").compareTo(f.jdbc().queryForObject("SELECT price_tick_size_snapshot FROM quant_order WHERE id=1", BigDecimal.class)));
+    }
+
+    @Test
+    void postFillBalanceSnapshotUsesDatabaseThrottleAndPersistsObservedTime() throws Exception {
+        var f = fixture();
+        var requestedAt = LocalDateTime.now();
+        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt));
+        assertEquals(0, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(10)));
+        f.jdbc().update("UPDATE quant_order SET post_fill_balance_requested_at=TIMESTAMPADD(SECOND, -31, CURRENT_TIMESTAMP) WHERE id=1");
+        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(31)));
+        assertEquals(1, f.mapper().savePostFillBalanceSnapshot(1L, new BigDecimal("125.5"), requestedAt.plusSeconds(32)));
+        assertEquals(0, new BigDecimal("125.5").compareTo(f.jdbc().queryForObject("SELECT post_fill_wallet_balance FROM quant_order WHERE id=1", BigDecimal.class)));
     }
 
     private record Fixture(QuantOrderMapper mapper, JdbcTemplate jdbc) {

@@ -4,6 +4,8 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.OpenPositionCommand;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -29,12 +31,17 @@ class OpenCapacityServiceTest {
     }
 
     private static OpenPositionCommand command(Long credential, Long strategy, Long instance, String symbol, String id) {
-        return new OpenPositionCommand(credential, strategy, instance, null, symbol, "BUY", "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, id, "TESTNET", null, 1, "ISOLATED",
+        return command(credential, strategy, instance, symbol, id, "TESTNET");
+    }
+
+    private static OpenPositionCommand command(Long credential, Long strategy, Long instance, String symbol, String id, String mode) {
+        return new OpenPositionCommand(credential, strategy, instance, null, symbol, "BUY", "MARKET", BigDecimal.ONE, BigDecimal.TEN, null, id, mode, null, 1, "ISOLATED",
             null);
     }
 
-    @Test
-    void fiveConcurrentSymbolsAcrossTwoNodesOnlyAdmitOneForStrategy() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"LIVE", "TESTNET"})
+    void fiveConcurrentSymbolsAcrossTwoNodesOnlyAdmitOneForStrategy(String mode) throws Exception {
         Fixture f = fixture(2, 1);
         var start = new CountDownLatch(1);
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -44,7 +51,7 @@ class OpenCapacityServiceTest {
                 results.add(executor.submit(() -> {
                     start.await();
                     try {
-                        reserve(number % 2 == 0 ? f.first : f.second, command(1L, 10L, 100L + number, "S" + number, "entry" + number), BigDecimal.TEN, List.of());
+                        reserve(number % 2 == 0 ? f.first : f.second, command(1L, 10L, 100L + number, "S" + number, "entry" + number, mode), BigDecimal.TEN, List.of());
                         return true;
                     } catch (OpenCapacityService.CapacityBlockedException blocked) {
                         return false;

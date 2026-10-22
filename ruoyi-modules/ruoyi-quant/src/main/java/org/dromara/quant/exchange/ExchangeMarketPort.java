@@ -80,8 +80,33 @@ public interface ExchangeMarketPort {
      * 本地请求尚未发出，调用方可以退避后重试只读操作。
      */
     class RequestDeferredException extends IllegalStateException {
+        private final long retryAfterMillis;
+
         public RequestDeferredException() {
-            super("Binance REST 请求排队达到上限，延后执行");
+            this(1_000L);
+        }
+
+        public RequestDeferredException(long retryAfterMillis) {
+            super("Binance REST 请求受限，延后执行");
+            this.retryAfterMillis = Math.max(1L, retryAfterMillis);
+        }
+
+        public long retryAfterMillis() {
+            return retryAfterMillis;
+        }
+    }
+
+    /** Binance 已返回 418/429；调用方应按 Retry-After 退避，不能重建健康 WebSocket。 */
+    class RateLimitException extends ExchangeTradingPort.ExchangeRequestException {
+        private final long retryAfterMillis;
+
+        public RateLimitException(String stage, int httpStatus, Integer code, String message, long retryAfterMillis) {
+            super(stage, httpStatus, code, message);
+            this.retryAfterMillis = Math.max(1L, retryAfterMillis);
+        }
+
+        public long retryAfterMillis() {
+            return retryAfterMillis;
         }
     }
 

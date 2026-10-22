@@ -128,7 +128,7 @@ public class QuantTradeNotificationService {
     }
 
     /**
-     * 创建并发送开仓邮件通知。
+     * 发布开仓站内消息并持久化待发送邮件，由后台 Outbox 任务投递。
      */
     public void notifyOpen(QuantStrategy strategy, QuantCredential credential, String symbol, String direction, BigDecimal quantity, BigDecimal price, int leverage,
                            BigDecimal openRatio, String reason) {
@@ -139,7 +139,7 @@ public class QuantTradeNotificationService {
     }
 
     /**
-     * 创建并发送平仓邮件通知。
+     * 发布平仓站内消息并持久化待发送邮件，由后台 Outbox 任务投递。
      */
     public void notifyClose(QuantStrategy strategy, QuantCredential credential, String symbol, String direction, BigDecimal quantity, BigDecimal entryPrice,
                             BigDecimal closePrice, BigDecimal profitAmount, BigDecimal profitRate, String closeType, String reason) {
@@ -150,7 +150,7 @@ public class QuantTradeNotificationService {
     }
 
     /**
-     * 把通知写入 Outbox 并尝试立即投递。
+     * 把邮件写入 Outbox；交易调用线程不执行 SMTP 网络请求。
      */
     private void send(Long credentialId, String subject, String content) {
         // 1. 保留原：写 quant_notification 存根记录
@@ -191,7 +191,7 @@ public class QuantTradeNotificationService {
             notification.setCreatedAt(LocalDateTime.now());
             try {
                 notificationMapper.insert(notification);
-                claimAndDeliver(notification);
+                // 邮件网络等待不能阻塞行情消费；现有调度器负责抢占、发送和失败重试。
             } catch (RuntimeException ex) {
                 // Outbox 入库本身失败时不能影响交易，但必须留下高优先级错误日志。
                 log.error("量化交易通知 Outbox 写入失败 credentialId={} recipient={} subject={}", credentialId, email, subject, ex);

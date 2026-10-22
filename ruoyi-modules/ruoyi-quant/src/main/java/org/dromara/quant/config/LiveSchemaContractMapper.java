@@ -45,4 +45,17 @@ public interface LiveSchemaContractMapper {
         """)
     List<String> entryGuardColumns();
 
+    @Options(timeout = 3)
+    @Select("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema=DATABASE() AND table_name='quant_protection_order'
+          AND column_name IN ('strategy_id','strategy_instance_id') AND data_type='bigint'
+        """)
+    List<String> protectionOwnerColumns();
+
+    @Options(timeout = 3)
+    @Select("SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='quant_strategy_position_state' "
+        + "AND column_name='maximum_return_rate' AND data_type='decimal'")
+    List<String> positionReturnRateColumns();
+
 }

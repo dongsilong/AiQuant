@@ -40,5 +40,9 @@ class StrategyFillSyncCursorMapperTest {
 
         assertEquals(later, mapper.selectLastCompleteTo(9L, "BTCUSDT"));
         assertEquals(java.util.List.of("BTCUSDT"), mapper.selectSymbols(9L));
+        assertEquals(1, mapper.repairFuture(9L, "BTCUSDT", later, first));
+        assertEquals(0, mapper.repairFuture(9L, "BTCUSDT", later, first.minusHours(1)));
+        assertEquals(0, mapper.repairFuture(9L, "BTCUSDT", first, later));
+        assertEquals(first, mapper.selectLastCompleteTo(9L, "BTCUSDT"));
     }
 }

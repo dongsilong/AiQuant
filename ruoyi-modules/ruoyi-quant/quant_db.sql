@@ -178,6 +178,8 @@ CREATE TABLE `quant_protection_order`
 (
     `id`                bigint                                                        NOT NULL COMMENT '主键ID',
     `credential_id`     bigint                                                        NOT NULL COMMENT '量化凭证ID',
+    `strategy_id`       bigint NULL COMMENT '创建保护意图时冻结的策略ID',
+    `strategy_instance_id` bigint NULL COMMENT '创建保护意图时冻结的策略实例ID',
     `position_id`       bigint NULL DEFAULT NULL COMMENT '本地持仓ID，暂时无法归属时允许为空',
     `symbol`            varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci  NOT NULL COMMENT '交易对',
     `position_side`     varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '持仓方向',
@@ -483,6 +485,7 @@ CREATE TABLE `quant_strategy_position_state`
     `strategy_params_snapshot`        json NULL COMMENT '开仓时冻结策略参数',
     `highest_price_since_entry`       decimal(32, 16) NULL COMMENT '入场后最高价',
     `lowest_price_since_entry`        decimal(32, 16) NULL COMMENT '入场后最低价',
+    `maximum_return_rate`             decimal(32, 16) NULL COMMENT '持仓周期实时标记价回报率峰值',
     `highest_step`                    int         NOT NULL DEFAULT 0 COMMENT '最高止盈阶梯',
     `first_take_profit_triggered`     char(1)     NOT NULL DEFAULT '0' COMMENT '首次止盈是否触发',
     `stop_loss_price`                 decimal(32, 16) NULL COMMENT '程序/保护止损价',

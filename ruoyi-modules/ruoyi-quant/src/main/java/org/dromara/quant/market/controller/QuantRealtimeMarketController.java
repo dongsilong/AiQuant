@@ -33,11 +33,12 @@ public class QuantRealtimeMarketController {
     }
 
     /**
-     * 查询指定交易对和周期的历史 K 线。
+     * 查询指定环境、交易对和周期的历史 K 线，与终端实时订阅保持一致。
      */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping("/klines")
-    public R<List<ExchangeGateway.Kline>> klines(@RequestParam String symbol, @RequestParam(defaultValue = "15m") String interval, @RequestParam(defaultValue = "100") int limit) {
-        return R.ok(gateway.queryKlines(symbol, interval, Math.min(Math.max(limit, 1), 1000)));
+    public R<List<ExchangeGateway.Kline>> klines(@RequestParam String symbol, @RequestParam(defaultValue = "15m") String interval, @RequestParam(defaultValue = "100") int limit,
+                                               @RequestParam(defaultValue = "LIVE") String runMode) {
+        return R.ok(gateway.queryKlines(runMode, symbol, interval, Math.min(Math.max(limit, 1), 1000)));
     }
 }

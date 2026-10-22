@@ -13,7 +13,8 @@ public interface TradeHistoryMapper {
     // 先限制成交窗口，再关联来源；保留20001哨兵行和重复来源，让服务拒绝截断或歧义账本。
     @Select("""
         <script>
-        SELECT t.*, o.position_side, o.reduce_only, e.operation_type
+        SELECT t.*, o.position_side, o.reduce_only, e.operation_type, o.leverage_snapshot, o.price_tick_size_snapshot,
+               o.post_fill_wallet_balance, o.post_fill_balance_at, qs.price_tick_size AS current_price_tick_size
         FROM (
             SELECT * FROM quant_trade
             WHERE credential_id IN
@@ -27,6 +28,7 @@ public interface TradeHistoryMapper {
         LEFT JOIN quant_execution_record e ON e.credential_id = t.credential_id
             AND e.symbol = t.symbol AND e.exchange_order_id = t.exchange_order_id
             AND e.operation_type IN ('OPEN', 'CLOSE')
+        LEFT JOIN quant_symbol qs ON qs.symbol = t.symbol
         ORDER BY t.trade_time, t.id
         LIMIT 20001
         </script>

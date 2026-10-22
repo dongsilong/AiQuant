@@ -48,6 +48,17 @@ public final class TradeHistoryAssembler {
                 cycle.openQty = cycle.openQty.add(fill.quantity());
                 cycle.openValue = cycle.openValue.add(fill.quantity().multiply(fill.price()));
                 cycle.remaining = cycle.remaining.add(fill.quantity());
+                BigDecimal tickSize = positive(fill.priceTickSize()) ? fill.priceTickSize() : fill.currentPriceTickSize();
+                if (cycle.priceScale == null && positive(tickSize)) {
+                    cycle.priceScale = Math.max(0, Math.min(16, tickSize.stripTrailingZeros().scale()));
+                }
+                if (cycle.leverage == null && fill.leverage() != null && fill.leverage() > 0) {
+                    cycle.leverage = fill.leverage();
+                }
+                if (fill.postFillWalletBalance() != null) {
+                    cycle.openingBalance = fill.postFillWalletBalance();
+                    cycle.openingBalanceAt = fill.postFillBalanceAt();
+                }
             } else {
                 if (cycle == null || fill.quantity().compareTo(cycle.remaining) > 0 || !("LONG".equals(direction) ? "SELL" : "BUY").equals(fill.side())) {
                     incomplete.add(scope);
@@ -57,6 +68,10 @@ public final class TradeHistoryAssembler {
                 cycle.closeValue = cycle.closeValue.add(fill.quantity().multiply(fill.price()));
                 cycle.remaining = cycle.remaining.subtract(fill.quantity());
                 cycle.pnl = addKnown(cycle.pnl, fill.realizedPnl());
+                if (fill.postFillWalletBalance() != null) {
+                    cycle.closingBalance = fill.postFillWalletBalance();
+                    cycle.closingBalanceAt = fill.postFillBalanceAt();
+                }
                 if (cycle.remaining.signum() == 0) {
                     cycle.closedAt = fill.tradeTime();
                     active.remove(key);
@@ -103,7 +118,12 @@ public final class TradeHistoryAssembler {
      * 一笔用于还原开平仓周期的成交事实。
      */
     public record Fill(Long id, Long credentialId, String symbol, String side, String positionSide, String operationType, Boolean reduceOnly, BigDecimal quantity, BigDecimal price,
-                       BigDecimal commission, BigDecimal realizedPnl, LocalDateTime tradeTime) {
+                       BigDecimal commission, BigDecimal realizedPnl, LocalDateTime tradeTime, Integer leverage, BigDecimal priceTickSize, BigDecimal postFillWalletBalance,
+                       LocalDateTime postFillBalanceAt, BigDecimal currentPriceTickSize) {
+        public Fill(Long id, Long credentialId, String symbol, String side, String positionSide, String operationType, Boolean reduceOnly, BigDecimal quantity, BigDecimal price,
+                    BigDecimal commission, BigDecimal realizedPnl, LocalDateTime tradeTime) {
+            this(id, credentialId, symbol, side, positionSide, operationType, reduceOnly, quantity, price, commission, realizedPnl, tradeTime, null, null, null, null, null);
+        }
     }
 
     /**
@@ -123,6 +143,10 @@ public final class TradeHistoryAssembler {
         private BigDecimal openQty = BigDecimal.ZERO, openValue = BigDecimal.ZERO, remaining = BigDecimal.ZERO;
         private BigDecimal closeQty = BigDecimal.ZERO, closeValue = BigDecimal.ZERO;
         private BigDecimal pnl = BigDecimal.ZERO, fee = BigDecimal.ZERO;
+        private Integer leverage;
+        private Integer priceScale;
+        private BigDecimal openingBalance, closingBalance;
+        private LocalDateTime openingBalanceAt, closingBalanceAt;
 
         private Cycle(Fill fill, String direction, String scope) {
             this.id = fill.id();
@@ -140,17 +164,29 @@ public final class TradeHistoryAssembler {
             row.put("accountName", names.get(credentialId));
             row.put("symbol", symbol);
             row.put("direction", direction);
-            row.put("entryPrice", decimal(openValue.divide(openQty, 18, RoundingMode.HALF_UP)));
-            // 当前持仓或当前策略配置不能证明历史开仓保证金、杠杆。
-            row.put("openingMargin", null);
-            row.put("leverage", null);
+            Integer displayScale = priceScale;
+            row.put("entryPrice", price(openValue.divide(openQty, 18, RoundingMode.HALF_UP), displayScale));
+            row.put("openingNotional", decimal(openValue));
+            row.put("leverage", leverage);
+            row.put("openingBalance", fixedDecimal(openingBalance, 4));
+            row.put("openingBalanceAt", timestamp(openingBalanceAt));
             row.put("openedAt", timestamp(openedAt));
-            row.put("closePrice", closedAt == null ? null : decimal(closeValue.divide(closeQty, 18, RoundingMode.HALF_UP)));
+            row.put("closePrice", closedAt == null ? null : price(closeValue.divide(closeQty, 18, RoundingMode.HALF_UP), displayScale));
+            row.put("closingBalance", fixedDecimal(closingBalance, 4));
+            row.put("closingBalanceAt", timestamp(closingBalanceAt));
             row.put("realizedPnl", decimal(pnl));
-            row.put("commission", decimal(fee));
+            row.put("commission", price(fee, displayScale));
             row.put("closedAt", timestamp(closedAt));
             row.put("status", closedAt == null ? "OPEN" : "CLOSED");
             return row;
+        }
+
+        private static String price(BigDecimal value, Integer scale) {
+            return value == null ? null : scale == null ? decimal(value) : value.setScale(scale, RoundingMode.HALF_UP).toPlainString();
+        }
+
+        private static String fixedDecimal(BigDecimal value, int scale) {
+            return value == null ? null : value.setScale(scale, RoundingMode.HALF_UP).toPlainString();
         }
     }
 }

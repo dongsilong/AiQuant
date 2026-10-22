@@ -196,6 +196,47 @@ class MarketStreamHubRecoveryTest {
     }
 
     @Test
+    void binanceRateLimitDefersHistoryRecoveryWithoutReplacingWebSocket() throws Exception {
+        properties.getMarket().setReconnectDelaySeconds(1);
+        MarketStreamHub hub = hub(List.of(candle(open.minusSeconds(60), true), candle(open, false)));
+        when(gateway.queryKlines(any(), any(), anyInt())).thenThrow(new ExchangeMarketPort.RateLimitException("QUERY_KLINES", 418, -1003, "banned", 3_000));
+        try {
+            hub.subscribe("BTCUSDT", "1m", ignored -> {
+            });
+
+            Thread.sleep(1_200);
+
+            verify(gateway, times(1)).subscribeMarket(any(), any(), any());
+            verify(gateway, times(1)).queryKlines(any(), any(), anyInt());
+        } finally {
+            hub.close();
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
+    void clockSyncRateLimitKeepsWebSocketConnectedAndFailsClosed() throws Exception {
+        properties.getMarket().setReconnectDelaySeconds(1);
+        when(gateway.exchangeTimeOffsetMillis("LIVE")).thenThrow(new ExchangeMarketPort.RequestDeferredException(10_000));
+        MarketStreamHub hub = hub(List.of(candle(open.minusSeconds(60), true), candle(open, false)));
+        AtomicBoolean healthy = new AtomicBoolean(true);
+        try {
+            hub.subscribe("LIVE", "BTCUSDT", "1m", ignored -> {
+            }, healthy::set);
+
+            Thread.sleep(150);
+            checkHealth(hub);
+            Thread.sleep(1_200);
+
+            verify(gateway, times(1)).subscribeMarket(any(), any(), any());
+            assertFalse(healthy.get(), "clock calibration unavailable must keep the strategy gate closed");
+        } finally {
+            hub.close();
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
     void disconnectImmediatelyClosesHealthGateWhileConsumerIsBlocked() throws Exception {
         MarketStreamHub hub = hub(List.of(candle(open.minusSeconds(60), true), candle(open, false)));
         AtomicBoolean healthy = new AtomicBoolean();

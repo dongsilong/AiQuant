@@ -11,6 +11,21 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BinanceGatewayAdapterTest {
     @Test
+    void rateLimitResponseBlocksFurtherRestRequestsAndPreservesRetryAfter() {
+        var adapter = new BinanceGatewayAdapter(new org.dromara.quant.config.QuantProperties());
+        var apiException = new ApiException(418, "I'm a teapot", java.util.Map.of("retry-after", List.of("5")),
+            "{\"code\":-1003,\"msg\":\"Way too many requests\"}");
+
+        RuntimeException mapped = org.springframework.test.util.ReflectionTestUtils.invokeMethod(adapter, "requestFailure", "QUERY_KLINES", apiException);
+
+        var rateLimit = assertInstanceOf(org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException.class, mapped);
+        assertTrue(rateLimit.retryAfterMillis() >= 4_000);
+        assertTrue(rateLimit.retryAfterMillis() <= 5_000);
+        var scheduler = (RestRequestScheduler) org.springframework.test.util.ReflectionTestUtils.getField(adapter, "restScheduler");
+        assertThrows(org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException.class, () -> scheduler.acquire(RestRequestScheduler.Kind.BACKGROUND));
+    }
+
+    @Test
     void classifiesBinanceInvalidSymbolResponseFromWrappedSdkException() {
         ApiException invalidSymbol = new ApiException(400, "Bad Request", java.util.Map.of(), "{\"code\":-1121,\"msg\":\"Invalid symbol.\"}");
         ApiException otherError = new ApiException(400, "Bad Request", java.util.Map.of(), "{\"code\":-1003,\"msg\":\"Too many requests.\"}");

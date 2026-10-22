@@ -37,6 +37,61 @@ class TradeHistoryAssemblerTest {
     }
 
     @Test
+    void reportsOpeningNotionalAndUsesOpeningTickSizeForBothPrices() {
+        var opening = fill(1, 10, "BTCUSDT", "BUY", "LONG", "OPEN", "2", "100.125", "0", "0");
+        var closing = fill(2, 10, "BTCUSDT", "SELL", "LONG", "CLOSE", "2", "110.37549", "0", "20");
+        var result = TradeHistoryAssembler.assemble(List.of(
+            new TradeHistoryAssembler.Fill(opening.id(), opening.credentialId(), opening.symbol(), opening.side(), opening.positionSide(), opening.operationType(), false,
+                opening.quantity(), opening.price(), opening.commission(), opening.realizedPnl(), opening.tradeTime(), 5, new BigDecimal("0.001"), new BigDecimal("1000"),
+                LocalDateTime.of(2026, 10, 9, 1, 0).plusSeconds(1), null),
+            new TradeHistoryAssembler.Fill(closing.id(), closing.credentialId(), closing.symbol(), closing.side(), closing.positionSide(), closing.operationType(), true,
+                closing.quantity(), closing.price(), closing.commission(), closing.realizedPnl(), closing.tradeTime(), null, null, new BigDecimal("125"),
+                LocalDateTime.of(2026, 10, 9, 1, 0).plusSeconds(2), null)
+        ), Map.of());
+
+        var row = result.rows().getFirst();
+        assertEquals("100.125", row.get("entryPrice"));
+        assertEquals("110.375", row.get("closePrice"));
+        assertEquals("200.25", row.get("openingNotional"));
+        assertEquals(5, row.get("leverage"));
+        assertEquals("1000.0000", row.get("openingBalance"));
+        assertEquals("125.0000", row.get("closingBalance"));
+    }
+
+    @Test
+    void roundsBalancesToFourDecimalsAndCommissionToContractPriceScale() {
+        var openedAt = LocalDateTime.of(2026, 10, 9, 1, 0);
+        var result = TradeHistoryAssembler.assemble(List.of(
+            new TradeHistoryAssembler.Fill(1L, 10L, "BTCUSDT", "BUY", "LONG", "OPEN", false, new BigDecimal("1"), new BigDecimal("100.123"),
+                BigDecimal.ZERO, BigDecimal.ZERO, openedAt, 5, new BigDecimal("0.001"), new BigDecimal("4811.63172"), openedAt, null),
+            new TradeHistoryAssembler.Fill(2L, 10L, "BTCUSDT", "SELL", "LONG", "CLOSE", true, new BigDecimal("1"), new BigDecimal("101.123"),
+                new BigDecimal("0.12345"), BigDecimal.ONE, openedAt.plusMinutes(1), null, null, new BigDecimal("5561.00831248"), openedAt.plusMinutes(1), null)
+        ), Map.of());
+
+        var row = result.rows().getFirst();
+        assertEquals("4811.6317", row.get("openingBalance"));
+        assertEquals("5561.0083", row.get("closingBalance"));
+        assertEquals("0.123", row.get("commission"));
+    }
+
+    @Test
+    void legacyPricesUseCurrentSymbolTickFallbackWithoutInventingLeverage() {
+        var opening = fill(1, 10, "BTCUSDT", "BUY", "LONG", "OPEN", "1", "100.123456", "0", "0");
+        var closing = fill(2, 10, "BTCUSDT", "SELL", "LONG", "CLOSE", "1", "101.23455", "0", "1");
+        var result = TradeHistoryAssembler.assemble(List.of(
+            new TradeHistoryAssembler.Fill(opening.id(), opening.credentialId(), opening.symbol(), opening.side(), opening.positionSide(), opening.operationType(), false,
+                opening.quantity(), opening.price(), opening.commission(), opening.realizedPnl(), opening.tradeTime(), null, null, null, null, new BigDecimal("0.0001")),
+            new TradeHistoryAssembler.Fill(closing.id(), closing.credentialId(), closing.symbol(), closing.side(), closing.positionSide(), closing.operationType(), true,
+                closing.quantity(), closing.price(), closing.commission(), closing.realizedPnl(), closing.tradeTime(), null, null, null, null, new BigDecimal("0.0001"))
+        ), Map.of());
+
+        var row = result.rows().getFirst();
+        assertEquals("100.1235", row.get("entryPrice"));
+        assertEquals("101.2346", row.get("closePrice"));
+        assertNull(row.get("leverage"));
+    }
+
+    @Test
     void separatesAccountsSymbolsDirectionsAndRepeatedCycles() {
         var result = TradeHistoryAssembler.assemble(List.of(fill(1, 10, "BTCUSDT", "BUY", "LONG", "OPEN", "1", "100", "0", "0"), fill(2, 10, "BTCUSDT", "SELL", "LONG", "CLOSE",
             "1", "110", "0", "10"), fill(3, 10, "BTCUSDT", "BUY", "LONG", "OPEN", "1", "120", "0", "0"), fill(4, 11, "BTCUSDT", "BUY", "LONG", "OPEN", "1", "100", "0", "0"),

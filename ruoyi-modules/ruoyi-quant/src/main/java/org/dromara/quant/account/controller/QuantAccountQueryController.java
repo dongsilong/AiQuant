@@ -10,8 +10,10 @@ import org.dromara.common.core.domain.R;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.mybatis.core.page.PageQuery;
 import org.dromara.common.satoken.utils.LoginHelper;
+import org.dromara.quant.account.domain.QuantAccountSnapshot;
 import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.domain.vo.QuantTradeVo;
+import org.dromara.quant.account.mapper.QuantAccountSnapshotMapper;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
@@ -20,8 +22,12 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 账户、持仓、委托实时查询门面，以及本地成交账本同步入口。
@@ -42,6 +48,10 @@ public class QuantAccountQueryController {
      * 成交 Mapper。
      */
     private final QuantTradeMapper tradeMapper;
+    /**
+     * 已持久化的账户权益快照。
+     */
+    private final QuantAccountSnapshotMapper accountSnapshotMapper;
 
     /**
      * 查询指定凭证的账户资金快照。
@@ -50,6 +60,30 @@ public class QuantAccountQueryController {
     @GetMapping("/account/{credentialId}")
     public R<ExchangeGateway.AccountSnapshot> account(@PathVariable Long credentialId) {
         return R.ok(gateway.queryAccount(credential(credentialId)));
+    }
+
+    /**
+     * 查询当日零点附近的账户权益基线；缺少可信基线时返回空。
+     */
+    @SaCheckPermission("quant:account:list")
+    @GetMapping("/account/{credentialId}/daily-baseline")
+    public R<DailyAccountBaseline> dailyBaseline(@PathVariable Long credentialId) {
+        credentialEntity(credentialId);
+        LocalDateTime dayStart = LocalDate.now(ZoneId.of("Asia/Shanghai")).atStartOfDay();
+        QuantAccountSnapshot baseline = accountSnapshotMapper.selectOne(new LambdaQueryWrapper<QuantAccountSnapshot>()
+            .select(QuantAccountSnapshot::getMarginBalance, QuantAccountSnapshot::getObservedAt)
+            .eq(QuantAccountSnapshot::getCredentialId, credentialId)
+            .ge(QuantAccountSnapshot::getObservedAt, dayStart)
+            .lt(QuantAccountSnapshot::getObservedAt, dayStart.plusMinutes(5))
+            .orderByAsc(QuantAccountSnapshot::getObservedAt)
+            .last("LIMIT 1"));
+        return R.ok(baseline == null ? null : new DailyAccountBaseline(baseline.getMarginBalance(), baseline.getObservedAt()));
+    }
+
+    /**
+     * 当日账户权益基线及其观测时间。
+     */
+    public record DailyAccountBaseline(java.math.BigDecimal equity, LocalDateTime observedAt) {
     }
 
     /**
@@ -96,6 +130,49 @@ public class QuantAccountQueryController {
         lqw.orderByDesc(QuantTrade::getTradeTime).orderByDesc(QuantTrade::getId);
         Page<QuantTrade> page = tradeMapper.selectPage(pageQuery.build(), lqw);
         List<QuantTradeVo> rows = page.getRecords().stream().map(item -> toVo(item, credential)).toList();
+        return R.ok(PageResult.build(rows, page.getTotal()));
+    }
+
+    /**
+     * 分页查询当前用户有权访问的全部凭证成交记录；可选按凭证筛选。
+     */
+    @SaCheckPermission("quant:trade:list")
+    @GetMapping("/trade/page")
+    public R<PageResult<QuantTradeVo>> tradePageForAccessibleAccounts(@RequestParam(required = false) Long credentialId,
+                                                                      @RequestParam(required = false) String symbol,
+                                                                      @RequestParam(required = false) String side,
+                                                                      @RequestParam(required = false) String from,
+                                                                      @RequestParam(required = false) String to,
+                                                                      PageQuery pageQuery) {
+        List<QuantCredential> credentials;
+        if (credentialId != null) {
+            credentials = List.of(credentialEntity(credentialId));
+        } else {
+            LambdaQueryWrapper<QuantCredential> credentialQuery = new LambdaQueryWrapper<QuantCredential>()
+                .select(QuantCredential::getId, QuantCredential::getUserId, QuantCredential::getAccountName);
+            if (!LoginHelper.isSuperAdmin(LoginHelper.getUserId())) {
+                credentialQuery.eq(QuantCredential::getUserId, LoginHelper.getUserId());
+            }
+            credentials = credentialMapper.selectList(credentialQuery);
+        }
+        if (credentials.isEmpty()) {
+            return R.ok(PageResult.build(List.of(), 0L));
+        }
+
+        List<Long> credentialIds = credentials.stream().map(QuantCredential::getId).toList();
+        Map<Long, QuantCredential> credentialById = credentials.stream()
+            .collect(Collectors.toMap(QuantCredential::getId, Function.identity()));
+        LambdaQueryWrapper<QuantTrade> tradeQuery = new LambdaQueryWrapper<QuantTrade>()
+            .in(QuantTrade::getCredentialId, credentialIds)
+            .eq(StringUtils.isNotBlank(symbol), QuantTrade::getSymbol, symbol)
+            .eq(StringUtils.isNotBlank(side), QuantTrade::getSide, side)
+            .ge(StringUtils.isNotBlank(from), QuantTrade::getTradeTime, StringUtils.isBlank(from) ? null : LocalDate.parse(from).atStartOfDay())
+            .lt(StringUtils.isNotBlank(to), QuantTrade::getTradeTime, StringUtils.isBlank(to) ? null : LocalDate.parse(to).plusDays(1).atStartOfDay())
+            .orderByDesc(QuantTrade::getTradeTime).orderByDesc(QuantTrade::getId);
+        Page<QuantTrade> page = tradeMapper.selectPage(pageQuery.build(), tradeQuery);
+        List<QuantTradeVo> rows = page.getRecords().stream()
+            .map(item -> toVo(item, credentialById.get(item.getCredentialId())))
+            .toList();
         return R.ok(PageResult.build(rows, page.getTotal()));
     }
 

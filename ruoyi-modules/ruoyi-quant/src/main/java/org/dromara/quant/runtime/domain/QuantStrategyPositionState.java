@@ -96,6 +96,9 @@ public class QuantStrategyPositionState {
      * 开仓后的最低实时价。
      */
     private BigDecimal lowestPriceSinceEntry;
+    /** 持仓周期内按实时标记价回报率采样得到的最大值。 */
+    @TableField(updateStrategy = FieldStrategy.NEVER)
+    private BigDecimal maximumReturnRate;
     /**
      * 当前已达到的最高收益阶梯。
      */

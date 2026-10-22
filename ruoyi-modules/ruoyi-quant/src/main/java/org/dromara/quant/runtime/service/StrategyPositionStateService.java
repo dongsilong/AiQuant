@@ -16,6 +16,13 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Service
 public class StrategyPositionStateService {
+    /** 状态已被其他写入者推进，调用方必须重新核实，不得重发旧状态。 */
+    public static final class StateConflictException extends IllegalStateException {
+        public StateConflictException(Long instanceId) {
+            super("策略持仓状态乐观锁冲突，拒绝覆盖最新运行状态: instanceId=" + instanceId);
+        }
+    }
+
     /**
      * 当前领域 Mapper。
      */
@@ -42,6 +49,22 @@ public class StrategyPositionStateService {
             return null;
         }
         return mapper.selectOne(new LambdaQueryWrapper<QuantStrategyPositionState>().eq(QuantStrategyPositionState::getInstanceId, instanceId));
+    }
+
+    /** Update the cycle's return-rate peak atomically without advancing the strategy-state optimistic-lock version. */
+    @Transactional(rollbackFor = Exception.class)
+    public int updateMaximumReturnRate(Long instanceId, Long positionId, String cycleKey, BigDecimal rate) {
+        if (instanceId == null || positionId == null || cycleKey == null || rate == null) {
+            return 0;
+        }
+        return mapper.updateMaximumReturnRate(instanceId, positionId, cycleKey, rate);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void resetClosedMaximumReturnRate(Long instanceId) {
+        if (instanceId != null) {
+            mapper.resetClosedMaximumReturnRate(instanceId);
+        }
     }
 
     /**
@@ -92,15 +115,24 @@ public class StrategyPositionStateService {
                 } else {
                     state.setId(existing.getId());
                     state.setVersion(existing.getVersion());
-                    if (mapper.updateById(state) != 1) {
-                        throw new IllegalStateException("策略持仓状态并发更新失败，拒绝覆盖最新运行状态: instanceId=" + state.getInstanceId());
-                    }
+                    updateExisting(state);
                 }
             } else {
-                if (mapper.updateById(state) != 1) {
-                    throw new IllegalStateException("策略持仓状态乐观锁冲突，拒绝覆盖最新运行状态: instanceId=" + state.getInstanceId());
-                }
+                updateExisting(state);
             }
+        }
+    }
+
+    private void updateExisting(QuantStrategyPositionState state) {
+        Integer expectedVersion = state.getVersion();
+        try {
+            if (mapper.updateById(state) != 1) {
+                throw new StateConflictException(state.getInstanceId());
+            }
+        } catch (RuntimeException ex) {
+            // 乐观锁插件在 SQL 执行前修改实体版本；失败时不能把这个未提交版本留给后续状态比较。
+            state.setVersion(expectedVersion);
+            throw ex;
         }
     }
 

@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -32,6 +33,7 @@ public class ProtectionOrderService {
      */
     private static final List<String> ACTIVE_STATUSES = List.of("NEW", "WORKING", "ACCEPTED", "PAPER_ACCEPTED", "CANCEL_FAILED", "PREPARED", "DISPATCHING", "PENDING", "UNKNOWN", "REJECTED");
     private static final Set<String> STRATEGY_PROTECTION_TYPES = Set.of("LOCAL_STOP", "SYMBOL_STOP", "FIRST_TP", "STEP_TP");
+    private static final List<String> STOP_PROTECTION_TYPES = List.of("SYMBOL_STOP", "LOCAL_STOP", "HARD_STOP", "STEP_TP");
     private final ExchangeGateway gateway;
     /**
      * 当前领域 Mapper。
@@ -46,6 +48,8 @@ public class ProtectionOrderService {
     @Autowired
     private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
     private volatile LiveOrderDispatcher liveOrderDispatcher;
+    @Autowired
+    private ProtectionOrderJournalService protectionJournal;
     /**
      * 创建 ProtectionOrderService 实例并初始化其依赖。
      */
@@ -164,6 +168,11 @@ public class ProtectionOrderService {
         return recoverProtectionDispatch(active) ? 1 : 0;
     }
 
+    /** 判断账户交易对是否仍有必须通过精确交易所查询恢复的保护派发票据。 */
+    public boolean hasUnresolvedProtectionDispatches(Long credentialId, String symbol) {
+        return !requireLiveDispatcher().activeProtectionDispatches(credentialId, symbol).isEmpty();
+    }
+
     private boolean recoverProtectionDispatch(LiveOrderDispatcher.ActiveDispatch active) {
         if (active == null) {
             return false;
@@ -195,6 +204,17 @@ public class ProtectionOrderService {
             if (!"PROTECT_CANCEL".equals(active.operationType()) || !local.getClientOrderId().equals(active.clientOrderId())) {
                 return false;
             }
+            ExchangeGateway.ProtectionOrderSnapshot current = readProtectionSnapshot(credential, local);
+            if (isExactUnfilledWorkingProtection(local, current)) {
+                // A precise active-order fact proves that the prior cancel did not reach a terminal state.
+                // Repeating cancellation with the same exchange/client identity is idempotent; never create a new ticket.
+                try {
+                    gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(credential, local.getExchangeOrderId(), local.getClientOrderId(), true));
+                } catch (RuntimeException retryFailure) {
+                    log.debug("恢复期间重复保护撤单没有明确回执，随后按同一客户端标识查询终态 accountId={} symbol={} clientAlgoId={} errorType={}",
+                        active.credentialId(), active.symbol(), active.clientOrderId(), retryFailure.getClass().getSimpleName());
+                }
+            }
             Long terminalAlgoId = persistVerifiedCancelledProtection(active.credentialId(), local, credential,
                 Set.of("CANCELED", "EXPIRED", "REJECTED"), true);
             if (terminalAlgoId == null) {
@@ -211,6 +231,20 @@ public class ProtectionOrderService {
                 active.dispatchKey(), active.clientOrderId(), ex.getClass().getSimpleName());
             return false;
         }
+    }
+
+    /** 只有完整身份匹配、未成交且仍活动的精确委托，才允许重试原撤单。 */
+    private boolean isExactUnfilledWorkingProtection(QuantProtectionOrder local, ExchangeGateway.ProtectionOrderSnapshot actual) {
+        return actual != null && Set.of("NEW", "WORKING", "ACCEPTED").contains(actual.status())
+            && actual.executedQuantity() != null && actual.executedQuantity().signum() == 0
+            && local.getClientOrderId() != null && local.getClientOrderId().equals(actual.clientAlgoId())
+            && actual.algoId() != null && actual.algoId() > 0
+            && (local.getExchangeOrderId() == null || local.getExchangeOrderId().equals(actual.algoId()))
+            && local.getSymbol() != null && local.getSymbol().equalsIgnoreCase(actual.symbol())
+            && local.getPositionSide() != null
+            && sameTarget(local, actual.type(), actual.quantity(), actual.triggerPrice())
+            && ("SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" : "SELL").equalsIgnoreCase(actual.side())
+            && ("BOTH".equalsIgnoreCase(actual.positionSide()) || local.getPositionSide().equalsIgnoreCase(actual.positionSide()));
     }
 
     /**
@@ -257,6 +291,21 @@ public class ProtectionOrderService {
         if (!validPosition(position)) {
             return null;
         }
+        if (live && !Integer.valueOf(2).equals(position.getProtectionPolicyVersion())) {
+            BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), true);
+            BigDecimal price = normalizePrice(credentialId, position.getSymbol(), hardStopPrice(position, marginLossRatio), true);
+            // 已冻结的硬止损不能因均价变化而被更弱的替代单覆盖。
+            for (var old : scopedStops(credentialId, position)) {
+                if ("HARD_STOP".equals(old.getProtectionType()) && "WORKING".equals(old.getStatus()) && old.getStopPrice() != null) {
+                    price = "SHORT".equalsIgnoreCase(position.getPositionSide()) ? price.min(old.getStopPrice()) : price.max(old.getStopPrice());
+                }
+            }
+            var covering = confirmedCover(credentialId, position, "HARD_STOP", quantity, price);
+            if (covering != null) {
+                pruneCoveredStops(credentialId, position);
+                return covering;
+            }
+        }
         return coordinated(credentialId, position, "HARD_STOP", () -> ensureMarginHardStopTarget(credentialId, position, marginLossRatio, live));
     }
 
@@ -268,7 +317,7 @@ public class ProtectionOrderService {
             return null;
         }
         BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), live);
-        BigDecimal stopPrice = normalizePrice(credentialId, position.getSymbol(), hardStopPrice(position, marginLossRatio), live);
+        BigDecimal stopPrice = normalizeProtectionPrice(credentialId, position, hardStopPrice(position, marginLossRatio), live);
         QuantProtectionOrder existing = findActive(credentialId, position, "HARD_STOP");
         boolean working = existing != null && (!live || confirmOnExchange(credentialId, existing, true, position.getQuantity()));
         // 固定保护价在该持仓生命周期内冻结，保证金波动不能驱动撤单重挂。
@@ -301,7 +350,7 @@ public class ProtectionOrderService {
             return null;
         }
         return placeProtection(credentialId, position, "HARD_STOP", "STOP_MARKET", normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), live),
-            normalizePrice(credentialId, position.getSymbol(), hardStopPrice(position, marginLossRatio), live), live);
+            normalizeProtectionPrice(credentialId, position, hardStopPrice(position, marginLossRatio), live), live);
     }
 
     /**
@@ -310,6 +359,10 @@ public class ProtectionOrderService {
     private BigDecimal hardStopPrice(QuantPosition position, BigDecimal marginLossRatio) {
         if (marginLossRatio == null || marginLossRatio.signum() <= 0 || marginLossRatio.compareTo(BigDecimal.ONE) >= 0) {
             throw new IllegalArgumentException("硬止损回报率必须 > 0 且 < 1");
+        }
+        if (Integer.valueOf(2).equals(position.getProtectionPolicyVersion()) && position.getProtectionStopLossPrice() != null
+            && position.getProtectionStopLossPrice().signum() > 0) {
+            return position.getProtectionStopLossPrice();
         }
         BigDecimal price = org.dromara.quant.strategy.KlineSlopeRateStrategy.priceForReturn(position.getEntryPrice(), position.getPositionSide(), marginLossRatio.negate(),
             position.getLeverage() == null ? 1 : position.getLeverage());
@@ -332,6 +385,12 @@ public class ProtectionOrderService {
      */
     public void syncStrategyProtections(Long credentialId, QuantPosition position, BigDecimal initialPositionQuantity, List<ProtectionSignal> desiredSignals,
                                         BigDecimal firstRemaining, boolean live) {
+        syncStrategyProtections(credentialId, position, initialPositionQuantity, desiredSignals, firstRemaining, null, live);
+    }
+
+    /** V2 首平创建前核对新鲜交易所累计成交，并扣除本地已确认成交，防止旧工作快照重建已完成目标。 */
+    public void syncStrategyProtections(Long credentialId, QuantPosition position, BigDecimal initialPositionQuantity, List<ProtectionSignal> desiredSignals,
+                                        BigDecimal firstRemaining, BigDecimal firstLocalExecuted, boolean live) {
         if (!validPosition(position)) {
             return;
         }
@@ -346,10 +405,21 @@ public class ProtectionOrderService {
             if (signal == null || signal.type() == null || !STRATEGY_PROTECTION_TYPES.contains(signal.type())) {
                 continue;
             }
+            if (Integer.valueOf(2).equals(position.getProtectionPolicyVersion()) && !Set.of("FIRST_TP", "STEP_TP").contains(signal.type())) {
+                continue;
+            }
             desiredTypes.add(signal.type());
             try {
+                if (live && Set.of("LOCAL_STOP", "SYMBOL_STOP").contains(signal.type()) && "STOP_MARKET".equalsIgnoreCase(signal.orderType())) {
+                    BigDecimal base = signal.quantityBase() == ProtectionSignal.QuantityBase.INITIAL && initialPositionQuantity != null ? initialPositionQuantity : position.getQuantity();
+                    BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), base.multiply(signal.quantityRate() == null ? BigDecimal.ONE : signal.quantityRate()).min(position.getQuantity()), true);
+                    BigDecimal price = normalizePrice(credentialId, position.getSymbol(), signal.triggerPrice(), true);
+                    if (confirmedCover(credentialId, position, signal.type(), quantity, price) != null) {
+                        continue;
+                    }
+                }
                 coordinated(credentialId, position, signal.type(), () -> {
-                    syncStrategyProtectionTarget(credentialId, position, initialPositionQuantity, signal, firstRemaining, live);
+                    syncStrategyProtectionTarget(credentialId, position, initialPositionQuantity, signal, firstRemaining, firstLocalExecuted, live);
                     return null;
                 });
             } catch (RuntimeException ex) {
@@ -368,8 +438,78 @@ public class ProtectionOrderService {
             mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>().eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getPositionId,
                 position.getId()).eq(position.getProtectionCycleKey() != null, QuantProtectionOrder::getPositionCycleKey, position.getProtectionCycleKey()).in(QuantProtectionOrder::getProtectionType, STRATEGY_PROTECTION_TYPES).in(QuantProtectionOrder::getStatus, ACTIVE_STATUSES));
         for (QuantProtectionOrder order : stale) {
-            if (!desiredTypes.contains(order.getProtectionType()) && !cancelOne(credentialId, order, live)) {
-                throw new IllegalStateException("过期策略保护单撤销失败: " + order.getProtectionType());
+            if (!desiredTypes.contains(order.getProtectionType())) {
+                // 某张策略止损可能已经代替硬止损；目标暂时缺失不等于可以撤掉唯一的整仓保护。
+                if (live && STOP_PROTECTION_TYPES.contains(order.getProtectionType())
+                    && confirmedCover(credentialId, position, order.getProtectionType(),
+                        normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), true), order.getStopPrice()) == null) {
+                    throw new IllegalStateException("缺少已确认的替代保护，保留已有止损: " + order.getProtectionType());
+                }
+                if (!cancelOne(credentialId, order, live)) {
+                    throw new IllegalStateException("过期策略保护单撤销失败: " + order.getProtectionType());
+                }
+            }
+        }
+        if (live) {
+            pruneCoveredStops(credentialId, position);
+        }
+    }
+
+    /** 只比较同一持仓周期的止损；不跨周期复用，也不把分批止盈当成整仓保护。 */
+    private List<QuantProtectionOrder> scopedStops(Long credentialId, QuantPosition position) {
+        if (position.getProtectionCycleKey() == null || position.getProtectionCycleKey().isBlank()) {
+            return List.of();
+        }
+        return mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
+            .eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getPositionId, position.getId())
+            .eq(QuantProtectionOrder::getPositionCycleKey, position.getProtectionCycleKey()).in(QuantProtectionOrder::getProtectionType, STOP_PROTECTION_TYPES)
+            .in(QuantProtectionOrder::getStatus, ACTIVE_STATUSES)).stream()
+            .filter(order -> credentialId.equals(order.getCredentialId()) && position.getId().equals(order.getPositionId())
+                && position.getProtectionCycleKey().equals(order.getPositionCycleKey()) && position.getSymbol().equals(order.getSymbol())
+                && position.getPositionSide().equalsIgnoreCase(order.getPositionSide()) && STOP_PROTECTION_TYPES.contains(order.getProtectionType())
+                && ACTIVE_STATUSES.contains(order.getStatus())).toList();
+    }
+
+    /**
+     * 数量必须一致，做多触发价只能更高、做空只能更低。相同价位按阶梯、硬止损、策略止损的顺序保留，
+     * 避免两张单互相认作冗余。覆盖单在自己的目标租约下精确查询，不能把它写入另一保护类型的目标记录。
+     */
+    private QuantProtectionOrder confirmedCover(Long credentialId, QuantPosition position, String type, BigDecimal quantity, BigDecimal price) {
+        if (quantity == null || quantity.signum() <= 0 || price == null || price.signum() <= 0) {
+            return null;
+        }
+        for (var candidate : scopedStops(credentialId, position)) {
+            if (type.equals(candidate.getProtectionType()) || !"WORKING".equals(candidate.getStatus())
+                || !"STOP_MARKET".equalsIgnoreCase(candidate.getOrderType()) || candidate.getQuantity() == null
+                || candidate.getQuantity().compareTo(quantity) != 0 || candidate.getStopPrice() == null
+                || candidate.getExecutedQuantity() != null && candidate.getExecutedQuantity().signum() > 0) {
+                continue;
+            }
+            int tightening = candidate.getStopPrice().compareTo(price) * ("SHORT".equalsIgnoreCase(position.getPositionSide()) ? -1 : 1);
+            if (tightening < 0 || tightening == 0 && STOP_PROTECTION_TYPES.indexOf(candidate.getProtectionType()) <= STOP_PROTECTION_TYPES.indexOf(type)) {
+                continue;
+            }
+            if (coordinated(credentialId, position, candidate.getProtectionType(), () -> confirmOnExchange(credentialId, candidate, false))) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /** 先精确确认足额覆盖保护，再清理较弱止损；本方法不撤销阶梯单。 */
+    private void pruneCoveredStops(Long credentialId, QuantPosition position) {
+        BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), true);
+        for (var old : scopedStops(credentialId, position)) {
+            if ("STEP_TP".equals(old.getProtectionType()) || Integer.valueOf(2).equals(position.getProtectionPolicyVersion()) && "HARD_STOP".equals(old.getProtectionType()) || !"STOP_MARKET".equalsIgnoreCase(old.getOrderType()) || old.getStopPrice() == null) {
+                continue;
+            }
+            var covering = confirmedCover(credentialId, position, old.getProtectionType(), quantity, old.getStopPrice());
+            if (covering != null) {
+                if (!coordinated(credentialId, position, old.getProtectionType(), () -> cancelOne(credentialId, old, true))) {
+                    throw new IllegalStateException("覆盖保护已生效，旧止损撤销仍待确认");
+                }
+                log.info("已确认保护覆盖旧止损: positionId={} cycle={} oldType={} oldOrderId={} coveringType={} coveringOrderId={}",
+                    position.getId(), position.getProtectionCycleKey(), old.getProtectionType(), old.getExchangeOrderId(), covering.getProtectionType(), covering.getExchangeOrderId());
             }
         }
     }
@@ -378,20 +518,44 @@ public class ProtectionOrderService {
      * 协调保护目标的持久意图、下单确认和旧单清理顺序。
      */
     private void syncStrategyProtectionTarget(Long credentialId, QuantPosition position, BigDecimal initialPositionQuantity, ProtectionSignal signal, BigDecimal firstRemaining,
-                                              boolean live) {
+                                              BigDecimal firstLocalExecuted, boolean live) {
         BigDecimal baseQty = signal.quantityBase() == ProtectionSignal.QuantityBase.INITIAL && initialPositionQuantity != null ? initialPositionQuantity : position.getQuantity();
         BigDecimal targetQty = baseQty.multiply(signal.quantityRate() == null ? BigDecimal.ONE : signal.quantityRate());
-        if ("FIRST_TP".equals(signal.type()) && firstRemaining != null) {
-            targetQty = firstRemaining;
+        boolean firstWasWorking = false;
+        if ("FIRST_TP".equals(signal.type())) {
+            if (firstRemaining != null && firstRemaining.signum() <= 0) {
+                return;
+            }
+            if (live && Integer.valueOf(2).equals(position.getProtectionPolicyVersion())) {
+                if (firstLocalExecuted == null || firstLocalExecuted.signum() < 0) {
+                    throw new IllegalStateException("首平缺少可信本地累计成交量，禁止创建新目标");
+                }
+                var fact = firstProfitFacts(credentialId, position);
+                firstWasWorking = fact.working();
+                targetQty = normalizeQuantity(credentialId, position.getSymbol(), targetQty, true)
+                    .subtract(fact.executed()).subtract(firstLocalExecuted).max(BigDecimal.ZERO);
+                if (firstRemaining != null) {
+                    targetQty = targetQty.min(firstRemaining);
+                }
+            } else if (firstRemaining != null) {
+                targetQty = firstRemaining;
+            }
         }
         targetQty = targetQty.min(position.getQuantity());
+        if (targetQty.signum() <= 0) {
+            return;
+        }
         targetQty = normalizeQuantity(credentialId, position.getSymbol(), targetQty, live);
-        BigDecimal triggerPrice = normalizePrice(credentialId, position.getSymbol(), signal.triggerPrice(), live);
+        BigDecimal triggerPrice = normalizeProtectionPrice(credentialId, position, signal.triggerPrice(), live);
         if (targetQty.signum() <= 0 || triggerPrice == null || triggerPrice.signum() <= 0) {
             return;
         }
 
         QuantProtectionOrder existing = findActive(credentialId, position, signal.type());
+        if (existing == null && firstWasWorking) {
+            // 查询时仍活动的首平突然离开活动集合，可能刚成交；下一轮重核终态，绝不能创建第二份意图。
+            throw new ProtectionExecutionPendingException();
+        }
         boolean working = existing != null && (!live || confirmOnExchange(credentialId, existing, true, position.getQuantity()));
         if (working && existing.getStopPrice() != null && (signal.orderType() == null || signal.orderType().equalsIgnoreCase(existing.getOrderType()))) {
             if (!"STEP_TP".equals(signal.type())) {
@@ -469,6 +633,9 @@ public class ProtectionOrderService {
         // this safe-to-retry boundary from an exchange request with unknown result.
         entity.setStatus("PAPER".equalsIgnoreCase(credential.runMode()) ? "PENDING" : "PREPARED");
         entity.setStepIndex(stepIndex);
+        if (protectionJournal != null) {
+            protectionJournal.captureOwner(entity);
+        }
         if (targetLease.get() == null) {
             if (mapper.insert(entity) != 1 || entity.getId() == null) {
                 throw new IllegalStateException("保护单意图未可靠持久化，拒绝发送交易所请求");
@@ -498,6 +665,9 @@ public class ProtectionOrderService {
                 throw new IllegalStateException("Binance 保护单尚未确认生效");
             }
         } catch (RuntimeException ex) {
+            if (ex instanceof ProtectionIntentChangedException) {
+                throw ex;
+            }
             entity.setStatus(protectionFailureStatus(ex));
             String failureSummary = ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.ExchangeRequestException
                 || ex instanceof org.dromara.quant.execution.LiveOrderDispatcher.DispatchBlockedException ? ex.getMessage() : ex.getClass().getSimpleName();
@@ -543,13 +713,15 @@ public class ProtectionOrderService {
         boolean finished = false;
         try {
             String preparedStatus = local.getStatus();
-            local.setStatus("DISPATCHING");
-            if (mapper.update(local, new LambdaQueryWrapper<QuantProtectionOrder>()
+            QuantProtectionOrder dispatching = new QuantProtectionOrder();
+            dispatching.setStatus("DISPATCHING");
+            if (mapper.update(dispatching, new LambdaQueryWrapper<QuantProtectionOrder>()
                 .eq(QuantProtectionOrder::getId, local.getId())
                 .eq(QuantProtectionOrder::getStatus, preparedStatus)
                 .isNull(QuantProtectionOrder::getExchangeOrderId)) != 1) {
-                throw new IllegalStateException("保护单派发状态未可靠落库");
+                throw new ProtectionIntentChangedException();
             }
+            local.setStatus("DISPATCHING");
             // The durable dispatch guard and target lease are separate safety fences.
             // Recheck target ownership after reserving the account-symbol slot and before REST.
             checkTargetLease();
@@ -577,7 +749,8 @@ public class ProtectionOrderService {
                     ex.addSuppressed(dispatchError);
                 }
             }
-            if (!attempted && !(ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException)) {
+            if (!attempted && !(ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException)
+                && !(ex instanceof ProtectionIntentChangedException)) {
                 throw new ProtectionOrderNotSentException("保护目标租约失效，保护单未发送", ex);
             }
             throw ex;
@@ -624,7 +797,7 @@ public class ProtectionOrderService {
         if ("NOT_SENT".equals(local.getStatus())) {
             return true;
         }
-        if ("PREPARED".equals(local.getStatus()) && local.getExchangeOrderId() == null) {
+        if (Set.of("PREPARED", "REJECTED").contains(Objects.toString(local.getStatus(), "")) && local.getExchangeOrderId() == null) {
             try {
                 if (!confirmOnExchange(credentialId, local, false)) {
                     return "NOT_SENT".equals(local.getStatus());
@@ -787,7 +960,7 @@ public class ProtectionOrderService {
     }
 
     private boolean confirmOnExchange(Long credentialId, QuantProtectionOrder local, boolean allowResubmit, BigDecimal currentQuantity) {
-        if (recoverPreparedNotSent(credentialId, local)) {
+        if (recoverNeverSentIntent(credentialId, local)) {
             return false;
         }
         ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
@@ -820,6 +993,9 @@ public class ProtectionOrderService {
                         "SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" : "SELL", exchangeSide, local.getOrderType(), local.getQuantity(), local.getStopPrice(),
                         local.getClientOrderId(), true));
                 } catch (RuntimeException ex) {
+                    if (ex instanceof ProtectionIntentChangedException) {
+                        throw ex;
+                    }
                     local.setStatus(protectionFailureStatus(ex));
                     mapper.updateById(local);
                     if (("NOT_SENT".equals(local.getStatus()) || "REJECTED".equals(local.getStatus())) && targetLease.get() != null) {
@@ -908,10 +1084,10 @@ public class ProtectionOrderService {
     }
 
     /**
-     * PREPARED 尚未进入派发状态；在目标租约下与创建方竞争同一条件更新，避免旧持有者随后发送。
+     * PREPARED 尚未进入派发，或请求已明确 REJECTED 且无交易所 ID；与创建方竞争同一条件更新。
      */
-    private boolean recoverPreparedNotSent(Long credentialId, QuantProtectionOrder local) {
-        if (!"PREPARED".equals(local.getStatus()) || local.getExchangeOrderId() != null
+    private boolean recoverNeverSentIntent(Long credentialId, QuantProtectionOrder local) {
+        if (!Set.of("PREPARED", "REJECTED").contains(Objects.toString(local.getStatus(), "")) || local.getExchangeOrderId() != null
             || local.getExecutedQuantity() != null && local.getExecutedQuantity().signum() != 0) {
             return false;
         }
@@ -920,12 +1096,12 @@ public class ProtectionOrderService {
             scope.setId(local.getPositionId());
             scope.setPositionSide(local.getPositionSide());
             scope.setProtectionCycleKey(local.getPositionCycleKey());
-            return coordinated(credentialId, scope, local.getProtectionType(), () -> markPreparedNotSent(credentialId, local));
+            return coordinated(credentialId, scope, local.getProtectionType(), () -> markNeverSentIntent(credentialId, local));
         }
-        return markPreparedNotSent(credentialId, local);
+        return markNeverSentIntent(credentialId, local);
     }
 
-    private boolean markPreparedNotSent(Long credentialId, QuantProtectionOrder local) {
+    private boolean markNeverSentIntent(Long credentialId, QuantProtectionOrder local) {
         checkTargetLease();
         if (requireLiveDispatcher().activeProtectionTicket(credentialId, local.getSymbol(), local.getClientOrderId(), "PROTECT_CREATE") != null) {
             return false;
@@ -935,7 +1111,7 @@ public class ProtectionOrderService {
         update.setExecutedQuantity(BigDecimal.ZERO);
         if (mapper.update(update, new LambdaQueryWrapper<QuantProtectionOrder>()
             .eq(QuantProtectionOrder::getId, local.getId())
-            .eq(QuantProtectionOrder::getStatus, "PREPARED")
+            .eq(QuantProtectionOrder::getStatus, local.getStatus())
             .isNull(QuantProtectionOrder::getExchangeOrderId)
             .and(query -> query.isNull(QuantProtectionOrder::getExecutedQuantity).or().eq(QuantProtectionOrder::getExecutedQuantity, BigDecimal.ZERO))) != 1) {
             throw new IllegalStateException("保护意图已被并发派发或更新，保持待核实");
@@ -985,6 +1161,13 @@ public class ProtectionOrderService {
     /**
      * 按实际交易环境的 PRICE_FILTER 标准化触发价。
      */
+    private BigDecimal normalizeProtectionPrice(Long credentialId, QuantPosition position, BigDecimal price, boolean live) {
+        if (live && price != null && Integer.valueOf(2).equals(position.getProtectionPolicyVersion())) {
+            return QuantityNormalizer.protectionPrice(price, rule(credentialId, position.getSymbol()), position.getPositionSide());
+        }
+        return normalizePrice(credentialId, position.getSymbol(), price, live);
+    }
+
     private BigDecimal normalizePrice(Long credentialId, String symbol, BigDecimal price, boolean live) {
         return price == null || !live ? price : QuantityNormalizer.price(price, rule(credentialId, symbol));
     }
@@ -1045,11 +1228,8 @@ public class ProtectionOrderService {
             return coordinated(credentialId, scope, order.getProtectionType(), () -> cancelOne(credentialId, order, live));
         }
         checkTargetLease();
-        if ("MISSING".equals(order.getStatus())) {
-            if (!live || order.getClientOrderId() == null
-                || requireLiveDispatcher().activeProtectionTicket(credentialId, order.getSymbol(), order.getClientOrderId(), "PROTECT_CANCEL") == null) {
-                return true;
-            }
+        if ("MISSING".equals(order.getStatus()) && !live) {
+            return true;
         }
         if (cancelProtected(credentialId, order, live, Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED"), false)) {
             return true;
@@ -1068,6 +1248,9 @@ public class ProtectionOrderService {
             return actual;
         }
         ExchangeGateway.OrderSnapshot child = gateway.queryOrder(credential, order.getSymbol(), actual.actualOrderId(), null);
+        if (child != null && protectionJournal != null) {
+            protectionJournal.bindChild(credential, order, actual, child);
+        }
         if (child == null || child.executedQuantity() == null || !Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(child.status())) {
             throw new ProtectionExecutionPendingException();
         }
@@ -1135,13 +1318,20 @@ public class ProtectionOrderService {
      * 精确读取本周期全部首止盈订单的成交量；重挂后的成交也保留，人工减仓不计入。
      */
     public BigDecimal firstTakeProfitExecutedQuantity(Long credentialId, QuantPosition position) {
+        return firstProfitFacts(credentialId, position).executed();
+    }
+
+    private record FirstProfitFacts(BigDecimal executed, boolean working) { }
+
+    private FirstProfitFacts firstProfitFacts(Long credentialId, QuantPosition position) {
         List<QuantProtectionOrder> orders =
             mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>().eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getPositionId,
                 position.getId()).eq(QuantProtectionOrder::getPositionCycleKey, position.getProtectionCycleKey()).eq(QuantProtectionOrder::getProtectionType, "FIRST_TP"));
         ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
         BigDecimal total = BigDecimal.ZERO;
+        boolean working = false;
         for (QuantProtectionOrder order : orders) {
-            if (recoverPreparedNotSent(credentialId, order)
+            if (recoverNeverSentIntent(credentialId, order)
                 || Set.of("NOT_SENT", "REJECTED").contains(order.getStatus()) && order.getExchangeOrderId() == null
                     && (order.getExecutedQuantity() == null || order.getExecutedQuantity().signum() == 0)) {
                 continue;
@@ -1153,13 +1343,28 @@ public class ProtectionOrderService {
             if (actual.executedQuantity() == null && !Set.of("NEW", "WORKING", "ACCEPTED").contains(actual.status())) {
                 throw new ProtectionExecutionPendingException();
             }
+            if (!Objects.equals(order.getSymbol(), actual.symbol()) || !Objects.equals(order.getClientOrderId(), actual.clientAlgoId())
+                || actual.algoId() == null || actual.algoId() <= 0 || order.getExchangeOrderId() != null && !order.getExchangeOrderId().equals(actual.algoId())
+                || !sameTarget(order, actual.type(), actual.quantity(), actual.triggerPrice())
+                || !("SHORT".equalsIgnoreCase(order.getPositionSide()) ? "BUY" : "SELL").equalsIgnoreCase(actual.side())
+                || !("BOTH".equalsIgnoreCase(actual.positionSide()) || Objects.equals(order.getPositionSide(), actual.positionSide()))) {
+                throw new IllegalStateException("首平精确查询与持久化身份或参数冲突");
+            }
+            boolean active = Set.of("NEW", "WORKING", "ACCEPTED").contains(actual.status());
+            if (!active && (!Set.of("FINISHED", "CANCELED", "EXPIRED", "REJECTED").contains(actual.status())
+                || actual.executedQuantity() == null && !"REJECTED".equals(actual.status()))) {
+                throw new ProtectionExecutionPendingException();
+            }
+            working |= active;
             BigDecimal executed = actual.executedQuantity() == null ? BigDecimal.ZERO : actual.executedQuantity();
             order.setExecutedQuantity(executed.max(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity()));
             order.setStatus(actual.status());
-            mapper.updateById(order);
+            if (mapper.updateById(order) != 1) {
+                throw new IllegalStateException("首平成交事实未可靠持久化，禁止重建目标");
+            }
             total = total.add(order.getExecutedQuantity());
         }
-        return total;
+        return new FirstProfitFacts(total, working);
     }
 
     /**
@@ -1259,6 +1464,140 @@ public class ProtectionOrderService {
     }
 
     /**
+     * 开仓前的空仓清理屏障。网络调用由运行时恢复线程执行；列表缺单不作为撤单终态证明，
+     * 手工委托不撤，带本系统前缀但缺少账本归属的委托阻断开仓并等待核查。
+     */
+    public boolean prepareEntryProtectionCleanup(Long credentialId, String symbol, boolean live) {
+        var credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
+        validateProtectionMode(credential, live);
+        if (live && (!exchangeFlatAndIdle(credential, symbol) || !recoverDispatchBeforeStrategyStart(credentialId, symbol))) {
+            return false;
+        }
+        var locals = mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
+            .eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getSymbol, symbol)).stream()
+            .filter(local -> local.getProtectionType() != null && (STOP_PROTECTION_TYPES.contains(local.getProtectionType()) || "FIRST_TP".equals(local.getProtectionType()))).toList();
+        if (live) {
+            var active = gateway.queryProtectionOrders(credential, symbol);
+            if (active == null) {
+                return false;
+            }
+            for (var actual : active) {
+                if (!symbol.equals(actual.symbol())) {
+                    return false;
+                }
+                var matches = locals.stream().filter(local -> actual.clientAlgoId() != null && actual.clientAlgoId().equals(local.getClientOrderId())
+                    || actual.algoId() != null && actual.algoId().equals(local.getExchangeOrderId())).toList();
+                if (matches.isEmpty()) {
+                    if (systemProtectionId(actual.clientAlgoId())) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (matches.size() != 1 || "NOT_SENT".equals(matches.getFirst().getStatus())
+                    || !Objects.equals(matches.getFirst().getClientOrderId(), actual.clientAlgoId())
+                    || matches.getFirst().getExchangeOrderId() != null && !matches.getFirst().getExchangeOrderId().equals(actual.algoId())
+                    || !cancelOne(credentialId, matches.getFirst(), true)) {
+                    return false;
+                }
+            }
+        }
+        for (var local : locals) {
+            if ((ACTIVE_STATUSES.contains(local.getStatus()) || "MISSING".equals(local.getStatus())) && !cancelOne(credentialId, local, live)) {
+                return false;
+            }
+        }
+        if (!live) {
+            return true;
+        }
+        if (!exchangeFlatAndIdle(credential, symbol) || requireLiveDispatcher().activeDispatch(credentialId, symbol) != null) {
+            return false;
+        }
+        var remaining = gateway.queryProtectionOrders(credential, symbol);
+        return remaining != null && remaining.stream().allMatch(actual -> symbol.equals(actual.symbol())) && remaining.stream().noneMatch(actual -> systemProtectionId(actual.clientAlgoId())
+            || locals.stream().anyMatch(local -> actual.clientAlgoId() != null && actual.clientAlgoId().equals(local.getClientOrderId())
+                || actual.algoId() != null && actual.algoId().equals(local.getExchangeOrderId())));
+    }
+
+    private boolean exchangeFlatAndIdle(ExchangeGateway.Credential credential, String symbol) {
+        var positions = gateway.queryPositions(credential, symbol);
+        if (positions == null || positions.stream().anyMatch(position -> !symbol.equals(position.symbol())
+            || position.quantity() == null || position.quantity().signum() != 0)) {
+            return false;
+        }
+        var orders = gateway.queryOrders(credential, symbol);
+        return orders != null && orders.isEmpty();
+    }
+
+    private boolean systemProtectionId(String clientId) {
+        return clientId != null && List.of("QHARD_", "QFTP_", "QSTEP_", "QSTOP_", "QSYM_").stream().anyMatch(clientId::startsWith);
+    }
+
+    /**
+     * 本地兜底只停止首平委托，整仓止损继续留在交易所。精确核实整个周期的在途条件单与子订单，
+     * 触发中或结果未知时不允许补平；返回后仍须刷新持仓并由持久化派发门禁提交只减仓订单。
+     */
+    public boolean prepareLocalExit(Long credentialId, QuantPosition position, String protectionType) {
+        if (position == null || position.getId() == null || position.getProtectionCycleKey() == null) {
+            return false;
+        }
+        var credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
+        var statuses = new java.util.ArrayList<>(ACTIVE_STATUSES);
+        statuses.add("FINISHED");
+        statuses.add("MISSING");
+        var orders = mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
+            .eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getPositionId, position.getId())
+            .eq(QuantProtectionOrder::getPositionCycleKey, position.getProtectionCycleKey()).in(QuantProtectionOrder::getStatus, statuses));
+        try {
+            // 先核实所有事实，再停首平；不能先撤单后才发现另一张条件单正在成交。
+            for (var order : orders) {
+                if (!Objects.equals(credentialId, order.getCredentialId()) || !Objects.equals(position.getId(), order.getPositionId())
+                    || !Objects.equals(position.getProtectionCycleKey(), order.getPositionCycleKey())) {
+                    return false;
+                }
+                if (recoverNeverSentIntent(credentialId, order)) {
+                    continue;
+                }
+                var actual = readProtectionSnapshot(credential, order);
+                if (actual == null || !Objects.equals(order.getSymbol(), actual.symbol()) || !Objects.equals(order.getClientOrderId(), actual.clientAlgoId())
+                    || actual.algoId() == null || actual.algoId() <= 0
+                    || order.getExchangeOrderId() != null && !order.getExchangeOrderId().equals(actual.algoId())
+                    || !sameTarget(order, actual.type(), actual.quantity(), actual.triggerPrice())
+                    || !("SHORT".equalsIgnoreCase(order.getPositionSide()) ? "BUY" : "SELL").equalsIgnoreCase(actual.side())
+                    || !("BOTH".equalsIgnoreCase(actual.positionSide()) || Objects.equals(order.getPositionSide(), actual.positionSide()))) {
+                    return false;
+                }
+                if (Set.of("NEW", "WORKING", "ACCEPTED").contains(actual.status())) {
+                    if (actual.executedQuantity() != null && actual.executedQuantity().signum() > 0) {
+                        return false;
+                    }
+                    order.setStatus("WORKING");
+                } else if (Set.of("FINISHED", "CANCELED", "EXPIRED", "REJECTED").contains(actual.status()) && actual.executedQuantity() != null) {
+                    order.setStatus(actual.status());
+                    order.setExecutedQuantity(actual.executedQuantity().max(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity()));
+                } else {
+                    return false;
+                }
+                order.setExchangeOrderId(actual.algoId());
+                if (mapper.updateById(order) != 1) {
+                    return false;
+                }
+            }
+            if ("FIRST_TP".equals(protectionType)) {
+                for (var order : orders) {
+                    if ("FIRST_TP".equals(order.getProtectionType()) && ACTIVE_STATUSES.contains(order.getStatus()) && !cancelOne(credentialId, order, true)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("本地退出等待保护事实核实，保留整仓保护 accountId={} symbol={} cycle={} errorType={}", credentialId,
+                position.getSymbol(), position.getProtectionCycleKey(), ex.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /**
      * 撤销无法关联有效持仓的孤儿保护单。
      */
     public boolean cancelOrphanProtectionOrders(Long credentialId, boolean live) {
@@ -1301,6 +1640,13 @@ public class ProtectionOrderService {
         private ProtectionOrderNotSentException(String reason, RuntimeException cause) {
             super(reason);
             addSuppressed(cause);
+        }
+    }
+
+    /** CAS 失败仅说明本线程失去意图所有权，不能用旧实体覆盖另一线程的派发事实。 */
+    private static final class ProtectionIntentChangedException extends IllegalStateException {
+        private ProtectionIntentChangedException() {
+            super("保护意图已被并发恢复或派发，本线程未发送且不覆盖最新状态");
         }
     }
 

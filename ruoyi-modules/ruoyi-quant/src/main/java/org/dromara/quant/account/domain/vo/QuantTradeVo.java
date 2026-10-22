@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.linpeilie.annotations.AutoMapper;
 import lombok.Data;
+import org.dromara.common.translation.annotation.Translation;
+import org.dromara.common.translation.constant.TransConstant;
 import org.dromara.quant.account.domain.QuantTrade;
 
 import java.io.Serial;
@@ -45,6 +47,7 @@ public class QuantTradeVo implements Serializable {
     /**
      * 用户名称。
      */
+    @Translation(type = TransConstant.USER_ID_TO_NAME, mapper = "userId")
     private String userName;
     /**
      * 交易对，例如 BTCUSDT。

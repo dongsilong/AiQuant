@@ -13,6 +13,14 @@ import java.time.LocalDateTime;
 public class StrategyFillSyncCursorService {
     private final StrategyFillSyncCursorMapper mapper;
 
+    /** 调用方必须与完整补采成交的落库共用事务，修复失败时一起回滚。 */
+    public void repairFutureAfterCollection(Long credentialId, String symbol, LocalDateTime expected, LocalDateTime lastCompleteTo) {
+        if (expected == null || lastCompleteTo == null || !expected.isAfter(lastCompleteTo)
+            || mapper.repairFuture(credentialId, symbol, expected, lastCompleteTo) != 1) {
+            throw new IllegalStateException("未来成交游标已被并发修改或补采边界无效，拒绝覆盖");
+        }
+    }
+
     /** Advance only after a complete exchange interval has been persisted. */
     public void advance(Long credentialId, String symbol, LocalDateTime lastCompleteTo) {
         if (mapper.advanceIfBehind(credentialId, symbol, lastCompleteTo) > 0) {

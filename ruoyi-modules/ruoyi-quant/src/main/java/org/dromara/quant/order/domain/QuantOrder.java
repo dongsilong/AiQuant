@@ -75,6 +75,16 @@ public class QuantOrder {
      * 是否为只减仓订单。
      */
     private Boolean reduceOnly;
+    /** 开仓订单受理时冻结的杠杆。 */
+    private Integer leverageSnapshot;
+    /** 开仓订单受理时冻结的价格最小变动单位。 */
+    private BigDecimal priceTickSizeSnapshot;
+    /** 成交后核实到账户钱包余额；不代表该笔交易单独造成的余额变化。 */
+    private BigDecimal postFillWalletBalance;
+    /** 成交后余额核实时间（UTC）。 */
+    private LocalDateTime postFillBalanceAt;
+    /** 最近一次余额核实尝试时间，用于限频。 */
+    private LocalDateTime postFillBalanceRequestedAt;
     /**
      * 执行幂等键，用于阻止重复交易请求。
      */

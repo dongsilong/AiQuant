@@ -25,7 +25,7 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param success            操作是否成功
      * @param message            结果说明
      * @param canTrade           账户是否具备交易权限
-     * @param withdrawalDisabled 是否确认提现能力已禁用
+     * @param withdrawalDisabled 兼容字段：账户转出能力是否明确禁用，不代表 API Key 提现权限
      * @param checkedAt          检查时间
      */
     record ConnectivityResult(boolean success, String message, boolean canTrade, boolean withdrawalDisabled, Instant checkedAt) {

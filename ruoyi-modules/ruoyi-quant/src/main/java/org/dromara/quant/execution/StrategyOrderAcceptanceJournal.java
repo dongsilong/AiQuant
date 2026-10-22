@@ -27,10 +27,16 @@ public class StrategyOrderAcceptanceJournal {
     @Transactional(rollbackFor = Exception.class)
     public QuantOrder persist(Long credentialId, Long strategyId, Long instanceId, String runMode, String operation, ExchangeGateway.OrderRequest request,
                               ExchangeGateway.OrderResult result) {
+        return persist(credentialId, strategyId, instanceId, runMode, operation, request, result, null, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public QuantOrder persist(Long credentialId, Long strategyId, Long instanceId, String runMode, String operation, ExchangeGateway.OrderRequest request,
+                              ExchangeGateway.OrderResult result, Integer leverageSnapshot, java.math.BigDecimal priceTickSizeSnapshot) {
         if (credentialId == null || credentialId <= 0 || request == null || result == null) {
             throw new IllegalArgumentException("Missing accepted order identity");
         }
-        QuantOrder order = ledger.upsert(credentialId, strategyId, instanceId, request, result);
+        QuantOrder order = ledger.upsert(credentialId, strategyId, instanceId, request, result, leverageSnapshot, priceTickSizeSnapshot);
         if (order == null || order.getId() == null) {
             throw new IllegalStateException("Exchange order ledger was not persisted");
         }

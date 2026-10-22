@@ -68,6 +68,12 @@ public class OrderLedgerService {
      * 新增或更新本地订单账本。
      */
     public QuantOrder upsert(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.OrderRequest request, ExchangeGateway.OrderResult result) {
+        return upsert(credentialId, strategyId, strategyInstanceId, request, result, null, null);
+    }
+
+    /** Persist optional immutable opening metadata without changing order execution semantics. */
+    public QuantOrder upsert(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.OrderRequest request, ExchangeGateway.OrderResult result,
+                             Integer leverageSnapshot, java.math.BigDecimal priceTickSizeSnapshot) {
         String clientOrderId = result.clientOrderId() == null ? "EXCHANGE:" + result.orderId() : result.clientOrderId();
         QuantOrder entity = result.orderId() == null ? null :
             mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getExchangeOrderId, result.orderId()));
@@ -94,6 +100,14 @@ public class OrderLedgerService {
         entity.setExecutedQuantity("FILLED".equalsIgnoreCase(result.status()) ? request.quantity() : (entity.getExecutedQuantity() == null ? java.math.BigDecimal.ZERO :
             entity.getExecutedQuantity()));
         entity.setReduceOnly(request.reduceOnly());
+        if (!request.reduceOnly()) {
+            if (entity.getLeverageSnapshot() == null) {
+                entity.setLeverageSnapshot(leverageSnapshot);
+            }
+            if (entity.getPriceTickSizeSnapshot() == null) {
+                entity.setPriceTickSizeSnapshot(priceTickSizeSnapshot);
+            }
+        }
         entity.setUpdatedAt(LocalDateTime.now());
         return persistMonotonic(entity);
     }

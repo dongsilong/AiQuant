@@ -8,6 +8,7 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.dromara.quant.protection.ProtectionOrderService;
 import org.dromara.quant.execution.DispatchBlockedEvent;
+import org.dromara.quant.execution.DispatchRecoveryRequestedEvent;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -34,6 +35,8 @@ public class LivePositionEventCoordinator {
     private final ConcurrentHashMap<Long, Integer> failures = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Long> lastAttempt = new ConcurrentHashMap<>();
     private final Set<ProtectionRecoveryRequest> protectionRecoveryPending = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<ProtectionRecoveryRequest, Long> protectionRetryNotBefore = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<ProtectionRecoveryRequest, Integer> protectionRecoveryFailures = new ConcurrentHashMap<>();
     private ProtectionOrderService protectionOrderService;
     @Autowired(required = false)
     private LivePositionFreshness freshness;
@@ -134,6 +137,12 @@ public class LivePositionEventCoordinator {
                 reconciliation.refreshPositionsOnly(credential);
                 failures.remove(id);
                 retryNotBefore.remove(id);
+            } catch (TradingReconciliationService.SnapshotSupersededException ex) {
+                // 正常的快照竞争不累计网络故障退避；保留请求，下一轮按账户最小间隔重新获取。
+                failures.remove(id);
+                retryNotBefore.remove(id);
+                pending.add(id);
+                log.debug("LIVE 事件刷新快照已被更新事实取代，保留刷新请求 credentialId={}", id);
             } catch (RuntimeException ex) {
                 // Failed refresh never marks an account fresh. Periodic REST
                 // heartbeat retries independently; allow next event to queue.
@@ -152,22 +161,46 @@ public class LivePositionEventCoordinator {
             return;
         }
         for (ProtectionRecoveryRequest request : Set.copyOf(protectionRecoveryPending)) {
-            if (!protectionRecoveryPending.remove(request)) {
+            long now = System.currentTimeMillis();
+            if (now < protectionRetryNotBefore.getOrDefault(request, 0L) || !protectionRecoveryPending.remove(request)) {
                 continue;
             }
             try {
                 QuantCredential credential = credentials.selectById(request.credentialId());
                 if (credential == null || !"0".equals(credential.getStatus()) || !"LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                    protectionRecoveryFailures.remove(request);
+                    protectionRetryNotBefore.remove(request);
                     continue;
                 }
                 int recovered = recoveryService.recoverUnresolvedProtectionDispatches(request.credentialId(), request.symbol());
                 if (recovered > 0) {
                     log.info("私有流触发保护派发恢复完成 credentialId={} symbol={} recoveredCount={}", request.credentialId(), request.symbol(), recovered);
                 }
+                if (recoveryService.hasUnresolvedProtectionDispatches(request.credentialId(), request.symbol())) {
+                    retryProtectionRecovery(request, now, null);
+                } else {
+                    protectionRecoveryFailures.remove(request);
+                    protectionRetryNotBefore.remove(request);
+                }
             } catch (RuntimeException ex) {
                 log.warn("私有流触发保护派发核实失败，派发门禁保持不变 credentialId={} symbol={} errorType={}", request.credentialId(), request.symbol(),
                     ex.getClass().getSimpleName());
+                retryProtectionRecovery(request, now, ex);
             }
+        }
+    }
+
+    /** 未决票据继续保留在队列中，以有上限的指数退避重查精确交易所事实。 */
+    private void retryProtectionRecovery(ProtectionRecoveryRequest request, long now, RuntimeException failure) {
+        int count = protectionRecoveryFailures.merge(request, 1, (previous, ignored) -> Math.min(10, previous + 1));
+        long retryInMillis = Math.min(60000L, 2000L << Math.min(count - 1, 5));
+        protectionRetryNotBefore.put(request, now + retryInMillis);
+        protectionRecoveryPending.add(request);
+        if (failure == null) {
+            log.warn("保护派发仍未决，保留门禁并安排精确核实 credentialId={} symbol={} retryInMs={}", request.credentialId(), request.symbol(), retryInMillis);
+        } else {
+            log.warn("保护派发核实失败，保留门禁并安排退避重试 credentialId={} symbol={} retryInMs={} errorType={}", request.credentialId(), request.symbol(), retryInMillis,
+                failure.getClass().getSimpleName());
         }
     }
 
@@ -185,6 +218,14 @@ public class LivePositionEventCoordinator {
      */
     @EventListener
     public void onDispatchBlocked(DispatchBlockedEvent event) {
+        if (event != null && event.credentialId() != null && event.symbol() != null) {
+            protectionRecoveryPending.add(new ProtectionRecoveryRequest(event.credentialId(), event.symbol()));
+        }
+    }
+
+    /** 未知派发结果立即进入异步精确核实队列；不在订单线程中追加 REST 请求。 */
+    @EventListener
+    public void onDispatchRecoveryRequested(DispatchRecoveryRequestedEvent event) {
         if (event != null && event.credentialId() != null && event.symbol() != null) {
             protectionRecoveryPending.add(new ProtectionRecoveryRequest(event.credentialId(), event.symbol()));
         }

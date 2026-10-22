@@ -70,7 +70,7 @@ public class QuantCredential extends BaseEntity {
      */
     private Boolean tradePermission;
     /**
-     * 是否确认提现能力已禁用。
+     * 兼容字段：合约账户转出能力是否明确禁用；不代表 API Key 提现权限，不参与准入校验。
      */
     private Boolean withdrawalDisabled;
     /**

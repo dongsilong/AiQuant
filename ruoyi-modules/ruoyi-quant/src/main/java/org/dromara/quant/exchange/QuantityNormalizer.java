@@ -21,6 +21,16 @@ public final class QuantityNormalizer {
         return floor(value, rule.priceTickSize());
     }
 
+    /** 保护目标按收益不劣于目标值取整：多头向上、空头向下；普通订单仍使用 price。 */
+    public static BigDecimal protectionPrice(BigDecimal value, ExchangeGateway.SymbolRule rule, String direction) {
+        price(value, rule); // 复用价格过滤器校验。
+        if (!"LONG".equalsIgnoreCase(direction) && !"SHORT".equalsIgnoreCase(direction)) {
+            throw new IllegalArgumentException("保护价格缺少明确持仓方向");
+        }
+        return value.divide(rule.priceTickSize(), 0, "LONG".equalsIgnoreCase(direction) ? RoundingMode.CEILING : RoundingMode.FLOOR)
+            .multiply(rule.priceTickSize()).stripTrailingZeros();
+    }
+
     /**
      * 市价单必须同时满足 LOT_SIZE 与 MARKET_LOT_SIZE。
      * 两个步长采用最小公倍数合并，不能仅选其中一个，否则可能被交易所拒单。

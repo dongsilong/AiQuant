@@ -37,9 +37,20 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
      * 策略插件唯一编码。
      */
     public static final String CODE = "kline_slope_rate";
-    /**
-     * 本地兜底止损退出类型。
-     */
+    /** 仅由服务端在新持仓周期参数快照中写入；无标识的历史持仓保持原规则。 */
+    public static final String PROTECTION_POLICY_VERSION_KEY = "_quantProtectionPolicyVersion";
+
+    /** 判断冻结快照是否启用统一保护规则；运行时不会直接信任客户端提供的版本标识。 */
+    public static boolean unifiedProtection(Map<String, Object> params) {
+        return params != null && "2".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY)));
+    }
+
+    /** 新周期硬止损比例与策略参数共用校验、默认值及历史别名。 */
+    public static BigDecimal localStopLossRate(Map<String, Object> params) {
+        return rate(params, "localStopLossRate", "LocalStopLossRate", DEFAULT_LOCAL_STOP_LOSS_RATE);
+    }
+
+    /** 本地兜底止损退出类型。 */
     public static final String EXIT_LOCAL_STOP = "LOCAL_STOP_LOSS";
     /**
      * 首次分批止盈退出类型。
@@ -136,7 +147,9 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         }
         BigDecimal step = rate(params, "stepRatio", "StepRatio", DEFAULT_STEP_RATIO);
         BigDecimal favorable = maxFavorableReturn(context).max(leveragedReturn(context.direction(), context.currentPrice(), context.entryPrice(), leverage(context)));
-        return Math.max(Math.max(0, context.highestStep()), rateStep(favorable, step));
+        int reached = Math.max(Math.max(0, context.highestStep()), rateStep(favorable, step));
+        return unifiedProtection(params) && stepProtectionStarted(context, rate(params, "firstProfitTakingRate", "FirstProfitTakingRate", DEFAULT_FIRST_PROFIT_TAKING_RATE))
+            ? Math.max(1, reached) : reached;
     }
 
     /**
@@ -363,8 +376,10 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         BigDecimal step = rate(params, "stepRatio", "StepRatio", DEFAULT_STEP_RATIO);
         int leverage = leverage(context);
         List<ProtectionSignal> result = new ArrayList<>();
-        result.add(new ProtectionSignal(PROTECTION_LOCAL_STOP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
-            context.direction(), localStop.negate(), leverage), "Binance 本地止损镜像"));
+        if (!unifiedProtection(params)) {
+            result.add(new ProtectionSignal(PROTECTION_LOCAL_STOP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
+                context.direction(), localStop.negate(), leverage), "Binance 本地止损镜像"));
+        }
 
         boolean firstProfitReached = stepProtectionStarted(context, firstProfit);
         if (!context.firstTakeProfitTriggered()) {
@@ -379,6 +394,9 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
                 result.add(new ProtectionSignal(PROTECTION_STEP_TP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
                     context.direction(), locked, leverage), "Binance 阶梯追踪止盈，第" + stepIndex + "阶，锁定回报率=" + percent(locked), stepIndex));
             }
+        }
+        if (unifiedProtection(params)) {
+            result.sort(java.util.Comparator.comparingInt(signal -> "STEP_TP".equals(signal.type()) ? 0 : 1));
         }
         return result;
     }

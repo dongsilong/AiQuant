@@ -47,7 +47,9 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         List<String> actualUnique = mapper.uniqueContracts();
         List<String> leaseEpoch = mapper.leaseEpochColumns();
         List<String> entryGuardColumns = mapper.entryGuardColumns();
-        if (actualTables == null || actualUnique == null || leaseEpoch == null || entryGuardColumns == null) {
+        List<String> protectionOwnerColumns = mapper.protectionOwnerColumns();
+        List<String> positionReturnRateColumns = mapper.positionReturnRateColumns();
+        if (actualTables == null || actualUnique == null || leaseEpoch == null || entryGuardColumns == null || positionReturnRateColumns == null) {
             throw new IllegalStateException("LIVE database metadata unavailable; refuse to enable real trading");
         }
         var missingTables = new java.util.TreeSet<>(TABLES);
@@ -56,7 +58,9 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         missingUnique.removeAll(actualUnique);
         boolean missingEpoch = !leaseEpoch.contains("quant_strategy_runtime_lease|lease_epoch");
         boolean missingEntryGuardType = !entryGuardColumns.contains("quant_strategy_entry_guard|guard_type");
-        if (!missingTables.isEmpty() || !missingUnique.isEmpty() || missingEpoch || missingEntryGuardType) {
+        boolean missingProtectionOwner = protectionOwnerColumns == null || !protectionOwnerColumns.containsAll(List.of("strategy_id", "strategy_instance_id"));
+        boolean missingPositionReturnRate = !positionReturnRateColumns.contains("maximum_return_rate");
+        if (!missingTables.isEmpty() || !missingUnique.isEmpty() || missingEpoch || missingEntryGuardType || missingProtectionOwner || missingPositionReturnRate) {
             List<String> requiredMigrations = new java.util.ArrayList<>();
             if (missingTables.contains("quant_strategy_fill_journal") || missingTables.contains("quant_strategy_fill_sync_cursor")
                 || missingUnique.contains("quant_strategy_fill_journal|credential_id,symbol,exchange_trade_id")
@@ -65,6 +69,12 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
             }
             if (missingEntryGuardType) {
                 requiredMigrations.add("script/sql/quant/V20261016_01__close_candle_entry_guard.sql");
+            }
+            if (missingProtectionOwner) {
+                requiredMigrations.add("script/sql/quant/V20261020_01__protection_strategy_owner.sql");
+            }
+            if (missingPositionReturnRate) {
+                requiredMigrations.add("script/sql/quant/V20261021_01__strategy_position_maximum_return_rate.sql");
             }
             String migrationHint = requiredMigrations.isEmpty()
                 ? "apply the migrations corresponding to the missing schema contracts"
