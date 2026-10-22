@@ -2,6 +2,7 @@ package org.dromara.quant.strategy.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.domain.PageResult;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.mybatis.core.page.PageQuery;
@@ -30,6 +31,7 @@ import java.util.List;
 /**
  * 策略定义服务。
  */
+@RequiredArgsConstructor
 @Service
 public class QuantStrategyService {
     /**
@@ -50,23 +52,6 @@ public class QuantStrategyService {
     private final QuantSymbolMapper quantSymbolMapper;
     private final QuantStrategyUserMapper userMapper;
     private final JdbcTemplate jdbcTemplate;
-
-    /**
-     * 创建 QuantStrategyService 实例并初始化其依赖。
-     */
-    public QuantStrategyService(QuantStrategyMapper mapper, StrategyPluginRegistry pluginRegistry, StrategyInstanceService instanceService,
-                                QuantStrategyAccountMapper accountMapper, QuantStrategySymbolMapper symbolMapper, QuantCredentialMapper credentialMapper,
-                                QuantSymbolMapper quantSymbolMapper, QuantStrategyUserMapper userMapper, JdbcTemplate jdbcTemplate) {
-        this.mapper = mapper;
-        this.pluginRegistry = pluginRegistry;
-        this.instanceService = instanceService;
-        this.accountMapper = accountMapper;
-        this.symbolMapper = symbolMapper;
-        this.credentialMapper = credentialMapper;
-        this.quantSymbolMapper = quantSymbolMapper;
-        this.userMapper = userMapper;
-        this.jdbcTemplate = jdbcTemplate;
-    }
 
     private static boolean validRate(java.math.BigDecimal value, boolean strictLessThanOne) {
         return value != null && value.signum() > 0 && (!strictLessThanOne ? value.compareTo(java.math.BigDecimal.ONE) <= 0 : value.compareTo(java.math.BigDecimal.ONE) < 0);
@@ -98,8 +83,10 @@ public class QuantStrategyService {
     public PageResult<QuantStrategy> queryPage(PageQuery query) {
         LambdaQueryWrapper<QuantStrategy> wrapper = new LambdaQueryWrapper<QuantStrategy>().orderByDesc(QuantStrategy::getCreateTime);
         if (!LoginHelper.isSuperAdmin(LoginHelper.getUserId())) {
-            List<Long> ids =
-                userMapper.selectList(new LambdaQueryWrapper<QuantStrategyUser>().eq(QuantStrategyUser::getUserId, LoginHelper.getUserId()).eq(QuantStrategyUser::getStatus, "0")).stream().map(QuantStrategyUser::getStrategyId).toList();
+            LambdaQueryWrapper<QuantStrategyUser> lqw = new LambdaQueryWrapper<>();
+            lqw.eq(QuantStrategyUser::getUserId, LoginHelper.getUserId());
+            lqw.eq(QuantStrategyUser::getStatus, "0");
+            List<Long> ids = userMapper.selectList(lqw).stream().map(QuantStrategyUser::getStrategyId).toList();
             if (ids.isEmpty()) {
                 return PageResult.build(List.of(), 0L);
             }

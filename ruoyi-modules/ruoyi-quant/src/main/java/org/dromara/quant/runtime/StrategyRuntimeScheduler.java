@@ -1,5 +1,6 @@
 package org.dromara.quant.runtime;
 
+import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -9,17 +10,12 @@ import org.springframework.stereotype.Component;
  * <p>All trade decisions and session state remain inside StrategyRuntimeService,
  * so changing scheduling cannot bypass leases, risk, or entry idempotency.
  */
+@RequiredArgsConstructor
 @Component
 public class StrategyRuntimeScheduler {
     private final StrategyRuntimeService runtime;
 
-    public StrategyRuntimeScheduler(StrategyRuntimeService runtime) {
-        this.runtime = runtime;
-    }
-
-    /**
-     * 周期性监督策略实例并驱动运行时决策。
-     */
+    /** 周期性发现运行中的策略实例，并驱动其运行时启动或停止。 */
     @Scheduled(fixedDelayString = "#{@quantProperties.runtime.tickSeconds * 1000}", initialDelay = 5000)
     public void supervise() {
         runtime.supervise();

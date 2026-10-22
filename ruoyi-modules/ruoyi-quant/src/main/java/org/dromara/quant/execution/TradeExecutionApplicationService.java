@@ -1,6 +1,7 @@
 package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.config.QuantProperties;
@@ -26,6 +27,7 @@ import java.math.BigDecimal;
 /**
  * 交易执行应用层。所有手工/策略交易统一经过这里进入 Execution Engine。
  */
+@RequiredArgsConstructor
 @Service
 public class TradeExecutionApplicationService {
     /**
@@ -71,24 +73,6 @@ public class TradeExecutionApplicationService {
     private AccountPositionCache positionCache;
     @Autowired
     private OpenCapacityService openCapacityService;
-
-    /**
-     * 创建 TradeExecutionApplicationService 实例并初始化其依赖。
-     */
-    public TradeExecutionApplicationService(QuantCredentialMapper credentialMapper, QuantSymbolMapper symbolMapper, QuantRiskConfigMapper riskMapper,
-                                            RiskDecisionService riskDecisionService, TradeExecutionPort executionPort, QuantProperties properties, ExchangeGateway gateway,
-                                            QuantPositionMapper positionMapper, PaperTradingService paperTradingService, TradingPreparationService preparationService) {
-        this.credentialMapper = credentialMapper;
-        this.symbolMapper = symbolMapper;
-        this.riskMapper = riskMapper;
-        this.riskDecisionService = riskDecisionService;
-        this.executionPort = executionPort;
-        this.properties = properties;
-        this.gateway = gateway;
-        this.positionMapper = positionMapper;
-        this.paperTradingService = paperTradingService;
-        this.preparationService = preparationService;
-    }
 
     /**
      * 由用户手工发起统一平仓执行。

@@ -1,11 +1,14 @@
 package org.dromara.quant.exchange.binance;
 
 import com.binance.connector.client.common.websocket.adapter.stream.StreamConnectionInterface;
+import com.binance.connector.client.common.websocket.configuration.WebSocketClientConfiguration;
+import org.eclipse.jetty.websocket.api.Callback;
 import com.binance.connector.client.common.websocket.dtos.RequestWrapperDTO;
 import com.binance.connector.client.common.websocket.service.StreamBlockingQueue;
 import com.binance.connector.client.common.websocket.service.StreamBlockingQueueWrapper;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -13,10 +16,48 @@ import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BinanceSdkStreamTransportTest {
+    @Test
+    void leavesMarketReconnectToTheHubBeforeSdkPeriodicRotation() {
+        WebSocketClientConfiguration configuration = BinanceSdkStreamTransport.marketConfiguration("wss://example.test/stream", null);
+
+        assertEquals(24 * 60 * 60 * 1000, configuration.getReconnectIntervalTime());
+    }
+
+    @Test
+    void usesPublicConcreteJettyListenerType() {
+        assertTrue(Modifier.isPublic(MarketStreamConnectionWrapper.class.getModifiers()));
+    }
+
+    @Test
+    void notifiesTheMarketOwnerWhenSdkSocketClosesInsteadOfAllowingSdkReconnect() {
+        AtomicBoolean acknowledged = new AtomicBoolean();
+        AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
+        Callback callback = new Callback() {
+            @Override
+            public void succeed() {
+                acknowledged.set(true);
+            }
+
+            @Override
+            public void fail(Throwable failure) {
+                callbackFailure.set(failure);
+            }
+        };
+        AtomicBoolean disconnected = new AtomicBoolean();
+
+        BinanceSdkStreamTransport.notifyMarketSocketClosed(1006, "Session Closed", callback, () -> disconnected.set(true), "BTCUSDT", "1m");
+
+        assertTrue(disconnected.get());
+        assertTrue(acknowledged.get());
+        assertEquals(null, callbackFailure.get());
+    }
+
     @Test
     void drainsSdkQueuesWithoutWaitingOnEmptyStreamsAndKeepsFairOrder() {
         BlockingQueue<String> trades = new LinkedBlockingQueue<>();

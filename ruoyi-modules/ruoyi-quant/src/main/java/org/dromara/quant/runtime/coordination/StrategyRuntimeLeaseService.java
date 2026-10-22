@@ -1,5 +1,7 @@
 package org.dromara.quant.runtime.coordination;
 
+import lombok.NonNull;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLeaseMapper;
@@ -12,12 +14,13 @@ import java.util.UUID;
  * 基于 MySQL 的分布式策略运行租约。
  */
 @Slf4j
+@RequiredArgsConstructor
 @Service
 public class StrategyRuntimeLeaseService {
     /**
      * MyBatis 原子 SQL Mapper。
      */
-    private final StrategyRuntimeLeaseMapper mapper;
+    @NonNull private final StrategyRuntimeLeaseMapper mapper;
     /**
      * 量化模块配置。
      */
@@ -26,14 +29,6 @@ public class StrategyRuntimeLeaseService {
      * 当前节点运行租约 Owner Token 的随机前缀。
      */
     private final String ownerTokenPrefix = UUID.randomUUID().toString();
-
-    /**
-     * 创建 StrategyRuntimeLeaseService 实例并初始化其依赖。
-     */
-    public StrategyRuntimeLeaseService(StrategyRuntimeLeaseMapper mapper, QuantProperties properties) {
-        this.mapper = java.util.Objects.requireNonNull(mapper);
-        this.properties = properties;
-    }
 
     /**
      * 获取或续期策略运行租约。

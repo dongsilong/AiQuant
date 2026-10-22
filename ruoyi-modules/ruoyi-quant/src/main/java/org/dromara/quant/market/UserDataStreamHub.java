@@ -2,6 +2,7 @@ package org.dromara.quant.market;
 
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
@@ -20,6 +21,7 @@ import java.util.function.Consumer;
 /**
  * 按账户复用用户数据流，并统一处理 keepalive / 失效重建。
  */
+@RequiredArgsConstructor
 @Component
 @Slf4j
 public class UserDataStreamHub {
@@ -53,18 +55,6 @@ public class UserDataStreamHub {
     private LiveUserStreamLeaseService streamLease;
     @Autowired(required = false)
     private org.dromara.quant.reconcile.LivePositionEventCoordinator positionEvents;
-
-    /**
-     * 创建 UserDataStreamHub 实例并初始化其依赖。
-     */
-    public UserDataStreamHub(ExchangeGateway gateway, TradeExecutionApplicationService executionService, AccountPositionCache positionCache, AccountBalanceCache balanceCache,
-                             org.dromara.quant.execution.TradingPreparationService preparationService) {
-        this.gateway = gateway;
-        this.executionService = executionService;
-        this.positionCache = positionCache;
-        this.balanceCache = balanceCache;
-        this.preparationService = preparationService;
-    }
 
     /**
      * Called only after the resident subscriber acquired the DB lease.

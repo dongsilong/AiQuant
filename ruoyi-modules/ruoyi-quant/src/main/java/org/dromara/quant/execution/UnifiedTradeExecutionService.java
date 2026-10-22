@@ -1,6 +1,7 @@
 package org.dromara.quant.execution;
 
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.QuantityNormalizer;
 import org.dromara.quant.risk.LiveTradingGate;
@@ -16,6 +17,7 @@ import java.util.function.Supplier;
 /**
  * 统一交易执行引擎。顺序固定为：幂等抢占 -> 风控闸门 -> 参数标准化 -> 交易所执行 -> 本地订单账本。
  */
+@RequiredArgsConstructor
 @Service
 @Slf4j
 public class UnifiedTradeExecutionService implements TradeExecutionPort {
@@ -54,23 +56,6 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private volatile org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService runtimeLease;
     private org.dromara.quant.reconcile.LiveUserStreamLeaseService liveUserStreamLease;
     private volatile org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard closeOwnershipGuard;
-
-    /**
-     * 创建 UnifiedTradeExecutionService 实例并初始化其依赖。
-     */
-    public UnifiedTradeExecutionService(ExchangeGateway gateway, LiveTradingGate liveTradingGate, ExecutionRecordService executionRecordService,
-                                        OrderLedgerService orderLedgerService, org.dromara.quant.risk.OpenCapacityService openCapacityService,
-                                        org.dromara.quant.market.AccountPositionCache positionCache, org.dromara.quant.market.AccountBalanceCache balanceCache,
-                                        TradingPreparationService preparationService) {
-        this.gateway = gateway;
-        this.liveTradingGate = liveTradingGate;
-        this.executionRecordService = executionRecordService;
-        this.orderLedgerService = orderLedgerService;
-        this.openCapacityService = openCapacityService;
-        this.positionCache = positionCache;
-        this.balanceCache = balanceCache;
-        this.preparationService = preparationService;
-    }
 
     /**
      * 判断当前运行模式是否会真实向交易所发送订单。
@@ -697,7 +682,4 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private record QuantExecutionRecordReservation(org.dromara.quant.execution.domain.QuantExecutionRecord record, boolean owner, ExecutionResult result) {
     }
 }
-
-
-
 

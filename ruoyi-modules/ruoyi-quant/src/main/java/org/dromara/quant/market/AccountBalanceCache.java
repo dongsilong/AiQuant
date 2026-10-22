@@ -1,6 +1,7 @@
 package org.dromara.quant.market;
 
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.risk.OpenCapacityService;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -15,6 +16,7 @@ import java.util.function.BooleanSupplier;
 /**
  * 账户共享可用余额；行情线程只读，网络校准最多每账户一个任务。
  */
+@RequiredArgsConstructor
 @Component
 @Slf4j
 public class AccountBalanceCache {
@@ -23,11 +25,6 @@ public class AccountBalanceCache {
     private final ExchangeGateway gateway;
     private final OpenCapacityService capacity;
     private final Map<Long, Account> accounts = new ConcurrentHashMap<>();
-
-    public AccountBalanceCache(ExchangeGateway gateway, OpenCapacityService capacity) {
-        this.gateway = gateway;
-        this.capacity = capacity;
-    }
 
     private static void invalidate(Account account) {
         account.snapshot = null;

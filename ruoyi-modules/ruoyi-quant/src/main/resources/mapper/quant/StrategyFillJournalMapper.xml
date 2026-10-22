@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.execution.mapper.StrategyFillJournalMapper">
+    <resultMap id="strategyFillJournal" type="org.dromara.quant.execution.StrategyFillJournalRecord">
+        <id property="id" column="id"/>
+        <result property="credentialId" column="credential_id"/>
+        <result property="symbol" column="symbol"/>
+        <result property="exchangeTradeId" column="exchange_trade_id"/>
+        <result property="exchangeOrderId" column="exchange_order_id"/>
+        <result property="side" column="side"/>
+        <result property="quantity" column="quantity"/>
+        <result property="price" column="price"/>
+        <result property="commission" column="commission"/>
+        <result property="commissionAsset" column="commission_asset"/>
+        <result property="realizedPnl" column="realized_pnl"/>
+        <result property="tradeTime" column="trade_time"/>
+        <result property="attributionStatus" column="attribution_status"/>
+        <result property="statusReason" column="status_reason"/>
+        <result property="attemptCount" column="attempt_count"/>
+        <result property="lastAttemptAt" column="last_attempt_at"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+    <select id="selectByKey" timeout="3" resultMap="strategyFillJournal"><![CDATA[SELECT * FROM quant_strategy_fill_journal
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND exchange_trade_id=#{tradeId}]]></select>
+    <insert id="insertRaw" timeout="3"><![CDATA[INSERT INTO quant_strategy_fill_journal
+  (id,credential_id,symbol,exchange_trade_id,exchange_order_id,side,quantity,price,commission,commission_asset,realized_pnl,trade_time,attribution_status,attempt_count,created_at,updated_at)
+VALUES
+  (#{id},#{credentialId},#{symbol},#{exchangeTradeId},#{exchangeOrderId},#{side},#{quantity},#{price},#{commission},#{commissionAsset},#{realizedPnl},#{tradeTime},'CAPTURED',0,NOW(3),NOW(3))]]></insert>
+    <update id="updateStatus" timeout="3"><![CDATA[UPDATE quant_strategy_fill_journal
+SET attribution_status=#{status}, status_reason=#{reason}, attempt_count=attempt_count+1,
+    last_attempt_at=NOW(3), updated_at=NOW(3)
+WHERE id=#{id}]]></update>
+    <select id="selectPending" timeout="3" resultMap="strategyFillJournal"><![CDATA[SELECT * FROM quant_strategy_fill_journal
+WHERE credential_id=#{credentialId} AND attribution_status IN ('CAPTURED','WAITING_ORDER')
+ORDER BY last_attempt_at, id
+LIMIT #{limit}]]></select>
+    <select id="selectUnresolved" timeout="3" resultMap="strategyFillJournal">
+        SELECT * FROM quant_strategy_fill_journal
+        WHERE credential_id=#{credentialId} AND attribution_status&lt;&gt;'ATTRIBUTED'
+        <if test="symbol != null and symbol != ''">AND symbol=#{symbol}</if>
+        ORDER BY trade_time DESC, id DESC
+        LIMIT #{limit}
+    </select>
+    <select id="countUnresolved" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_strategy_fill_journal
+WHERE credential_id=#{credentialId} AND attribution_status!='ATTRIBUTED']]></select>
+</mapper>

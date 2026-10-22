@@ -1,5 +1,7 @@
 package org.dromara.quant.execution;
 
+import lombok.NonNull;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.springframework.stereotype.Service;
 
@@ -16,15 +18,14 @@ import java.util.*;
  * interval remains incomplete and is rejected rather than silently truncated.
  */
 @Service
+@RequiredArgsConstructor
 public class StrictBinanceTradeCollector {
     private static final Duration WINDOW = Duration.ofDays(6);
     private static final int LIMIT = 1000;
     private static final int MAX_QUERIES = 10_000;
-    private final ExchangeGateway gateway;
+    @NonNull private final ExchangeGateway gateway;
 
-    public StrictBinanceTradeCollector(ExchangeGateway gateway) {
-        this.gateway = Objects.requireNonNull(gateway);
-    }
+
 
     /**
      * 分页收集交易所成交并验证游标连续性和请求边界。

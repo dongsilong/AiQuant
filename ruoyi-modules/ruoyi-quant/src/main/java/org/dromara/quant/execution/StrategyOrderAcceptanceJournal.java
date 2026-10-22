@@ -1,5 +1,7 @@
 package org.dromara.quant.execution;
 
+import lombok.NonNull;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.springframework.stereotype.Service;
@@ -12,14 +14,12 @@ import org.springframework.transaction.annotation.Transactional;
  * dispatch ticket UNKNOWN, never "not sent".
  */
 @Service
+@RequiredArgsConstructor
 public class StrategyOrderAcceptanceJournal {
-    private final OrderLedgerService ledger;
-    private final StrategyOrderIntentService intents;
+    @NonNull private final OrderLedgerService ledger;
+    @NonNull private final StrategyOrderIntentService intents;
 
-    public StrategyOrderAcceptanceJournal(OrderLedgerService ledger, StrategyOrderIntentService intents) {
-        this.ledger = java.util.Objects.requireNonNull(ledger);
-        this.intents = java.util.Objects.requireNonNull(intents);
-    }
+
 
     /**
      * 在提交订单前写入可恢复的接受意图，并持久化本地订单状态。

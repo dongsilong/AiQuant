@@ -1,6 +1,7 @@
 package org.dromara.quant.runtime.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
 import org.dromara.quant.runtime.mapper.QuantStrategyPositionStateMapper;
 import org.springframework.stereotype.Service;
@@ -14,6 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 策略持仓运行状态持久化服务。
  */
+@RequiredArgsConstructor
 @Service
 public class StrategyPositionStateService {
     /** 状态已被其他写入者推进，调用方必须重新核实，不得重发旧状态。 */
@@ -33,13 +35,6 @@ public class StrategyPositionStateService {
      * 实例数量有限，长期持有锁对象的代价可以接受。
      */
     private final Map<Long, Object> locks = new ConcurrentHashMap<>();
-
-    /**
-     * 创建 StrategyPositionStateService 实例并初始化其依赖。
-     */
-    public StrategyPositionStateService(QuantStrategyPositionStateMapper mapper) {
-        this.mapper = mapper;
-    }
 
     /**
      * 查询策略实例对应的运行状态。

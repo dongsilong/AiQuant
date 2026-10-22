@@ -1,6 +1,7 @@
 package org.dromara.quant.execution;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.domain.R;
 import org.dromara.quant.execution.mapper.LiveOrderDispatchMapper;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,14 +16,11 @@ import java.util.Map;
  * This endpoint deliberately has no write action. All exchange/snowflake IDs are
  * represented as strings to avoid JavaScript IEEE-754 precision loss.
  */
+@RequiredArgsConstructor
 @RestController
 @RequestMapping("/quant/infrastructure/dispatch")
 public class LiveDispatchInspectionController {
     private final LiveOrderDispatchMapper mapper;
-
-    public LiveDispatchInspectionController(LiveOrderDispatchMapper mapper) {
-        this.mapper = mapper;
-    }
 
     private static String value(Map<String, Object> row, String column) {
         Object value = row.get(column);

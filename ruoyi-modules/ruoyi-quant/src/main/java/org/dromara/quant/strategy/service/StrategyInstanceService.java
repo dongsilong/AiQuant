@@ -1,6 +1,7 @@
 package org.dromara.quant.strategy.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.strategy.domain.QuantStrategyAccount;
 import org.dromara.quant.strategy.domain.QuantStrategyInstance;
 import org.dromara.quant.strategy.domain.QuantStrategySymbol;
@@ -14,6 +15,7 @@ import java.util.List;
 /**
  * 策略实例的生成与生命周期管理。
  */
+@RequiredArgsConstructor
 @Service
 public class StrategyInstanceService {
     /**
@@ -28,15 +30,6 @@ public class StrategyInstanceService {
      * 策略实例 Mapper。
      */
     private final QuantStrategyInstanceMapper instanceMapper;
-
-    /**
-     * 创建 StrategyInstanceService 实例并初始化其依赖。
-     */
-    public StrategyInstanceService(QuantStrategyAccountMapper accountMapper, QuantStrategySymbolMapper symbolMapper, QuantStrategyInstanceMapper instanceMapper) {
-        this.accountMapper = accountMapper;
-        this.symbolMapper = symbolMapper;
-        this.instanceMapper = instanceMapper;
-    }
 
     /**
      * 根据绑定关系生成或补齐运行实例。

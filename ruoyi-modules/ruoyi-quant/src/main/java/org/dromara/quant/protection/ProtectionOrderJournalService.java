@@ -1,6 +1,7 @@
 package org.dromara.quant.protection;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.StrategyOrderIntentService;
 import org.dromara.quant.order.domain.QuantOrder;
@@ -16,17 +17,12 @@ import java.util.Objects;
 import java.util.Set;
 
 /** 将已冻结的保护来源传递到 Binance 实际子订单；不按交易对或数量猜测成交归属。 */
+@RequiredArgsConstructor
 @Service
 public class ProtectionOrderJournalService {
     private final QuantProtectionOrderMapper protections;
     private final QuantOrderMapper orders;
     private final StrategyOrderIntentService intents;
-
-    public ProtectionOrderJournalService(QuantProtectionOrderMapper protections, QuantOrderMapper orders, StrategyOrderIntentService intents) {
-        this.protections = protections;
-        this.orders = orders;
-        this.intents = intents;
-    }
 
     /** 发送之前随保护意图保存来源；不能证明历史周期的记录保持未归属。 */
     public void captureOwner(QuantProtectionOrder local) {

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLeaseMapper">
+    <insert id="ensureRow" timeout="3"><![CDATA[INSERT IGNORE INTO quant_strategy_runtime_lease
+    (instance_id, credential_id, symbol, owner_token, lease_epoch, lease_until, create_time, update_time)
+VALUES (#{instanceId}, #{credentialId}, #{symbol}, #{ownerToken}, 1,
+        DATE_ADD(NOW(), INTERVAL #{leaseSeconds} SECOND), NOW(), NOW())]]></insert>
+    <update id="acquireOrRenew" timeout="3"><![CDATA[UPDATE quant_strategy_runtime_lease
+SET lease_epoch=CASE WHEN owner_token<>#{ownerToken} OR lease_until<=NOW()
+        THEN lease_epoch+1 ELSE lease_epoch END,
+    instance_id=#{instanceId}, owner_token=#{ownerToken},
+    lease_until=DATE_ADD(NOW(), INTERVAL #{leaseSeconds} SECOND),
+    update_time=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND (owner_token=#{ownerToken} OR lease_until<NOW())]]></update>
+    <update id="release" timeout="3"><![CDATA[UPDATE quant_strategy_runtime_lease
+SET lease_until=DATE_SUB(NOW(), INTERVAL 1 SECOND), update_time=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND owner_token=#{ownerToken}
+  AND lease_until>NOW()]]></update>
+    <select id="countCurrentOwner" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_strategy_runtime_lease
+WHERE instance_id=#{instanceId} AND credential_id=#{credentialId}
+  AND symbol=#{symbol} AND owner_token=#{ownerToken} AND lease_until>NOW()]]></select>
+    <select id="currentEpoch" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT lease_epoch FROM quant_strategy_runtime_lease
+WHERE instance_id=#{instanceId} AND credential_id=#{credentialId}
+  AND symbol=#{symbol} AND owner_token=#{ownerToken}
+  AND lease_until>NOW() AND lease_epoch>0]]></select>
+</mapper>

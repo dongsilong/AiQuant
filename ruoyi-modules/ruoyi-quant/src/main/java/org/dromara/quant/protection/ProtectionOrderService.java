@@ -1,6 +1,7 @@
 package org.dromara.quant.protection;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.QuantityNormalizer;
 import org.dromara.quant.execution.LiveOrderDispatcher;
@@ -26,6 +27,7 @@ import java.util.UUID;
  * 策略只给出 ProtectionSignal，不直接访问交易所。
  */
 @Service
+@RequiredArgsConstructor(onConstructor_ = @Autowired)
 public class ProtectionOrderService {
     private static final Logger log = LoggerFactory.getLogger(ProtectionOrderService.class);
     /**
@@ -51,18 +53,10 @@ public class ProtectionOrderService {
     @Autowired
     private ProtectionOrderJournalService protectionJournal;
     /**
-     * 创建 ProtectionOrderService 实例并初始化其依赖。
+     * 兼容仅提供保护目标协调器以外依赖的测试与调用方。
      */
     public ProtectionOrderService(ExchangeGateway gateway, QuantProtectionOrderMapper mapper, TradeExecutionApplicationService executionApplicationService) {
         this(gateway, mapper, executionApplicationService, null);
-    }
-    @Autowired
-    public ProtectionOrderService(ExchangeGateway gateway, QuantProtectionOrderMapper mapper, TradeExecutionApplicationService executionApplicationService,
-                                  ProtectionTargetCoordinator targets) {
-        this.gateway = gateway;
-        this.mapper = mapper;
-        this.executionApplicationService = executionApplicationService;
-        this.targets = targets;
     }
 
     /**

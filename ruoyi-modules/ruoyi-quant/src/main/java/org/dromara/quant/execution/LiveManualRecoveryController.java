@@ -2,6 +2,7 @@ package org.dromara.quant.execution;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import cn.dev33.satoken.stp.StpUtil;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.domain.R;
 import org.dromara.quant.execution.mapper.LiveRecoveryAuditMapper;
 import org.springframework.web.bind.annotation.*;
@@ -15,18 +16,13 @@ import java.util.Map;
  * requester, independent reviewer and final executor.
  * IDs are JSON strings so browsers cannot round 64-bit Snowflake IDs.
  */
+@RequiredArgsConstructor
 @RestController
 @RequestMapping("/quant/infrastructure/recovery")
 public class LiveManualRecoveryController {
     private final LiveRecoveryCaseService cases;
     private final LiveManualRecoveryExecutionService executor;
     private final LiveRecoveryAuditMapper audit;
-
-    public LiveManualRecoveryController(LiveRecoveryCaseService cases, LiveManualRecoveryExecutionService executor, LiveRecoveryAuditMapper audit) {
-        this.cases = cases;
-        this.executor = executor;
-        this.audit = audit;
-    }
 
     private static String value(Map<String, Object> row, String key) {
         Object raw = row.get(key);

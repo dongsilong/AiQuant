@@ -1,6 +1,7 @@
 package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
@@ -18,6 +19,7 @@ import java.util.List;
 /**
  * 恢复 PENDING/UNKNOWN/ACCEPTED 执行记录，避免“交易所已接受、应用未落库”后再次下单。
  */
+@RequiredArgsConstructor
 @Component
 public class ExecutionRecoveryService {
     /**
@@ -47,23 +49,6 @@ public class ExecutionRecoveryService {
     private volatile LiveOrderDispatcher liveOrderDispatcher;
     private volatile StrategyOrderCrashRecoveryService crashRecovery;
 
-    /**
-     * 创建 ExecutionRecoveryService 实例并初始化其依赖。
-     */
-    public ExecutionRecoveryService(QuantExecutionRecordMapper recordMapper, QuantCredentialMapper credentialMapper, ExchangeGateway gateway,
-                                    ExecutionRecordService recordService, OrderLedgerService orderLedgerService, QuantProperties properties) {
-        this.recordMapper = recordMapper;
-        this.credentialMapper = credentialMapper;
-        this.gateway = gateway;
-        this.recordService = recordService;
-        this.orderLedgerService = orderLedgerService;
-        this.properties = properties;
-    }
-
-    /**
-     * 注入订单意图恢复器，处理进程重启后的策略派发记录。
-     */
-    @Autowired
     public void setCrashRecovery(StrategyOrderCrashRecoveryService recovery) {
         this.crashRecovery = java.util.Objects.requireNonNull(recovery);
     }

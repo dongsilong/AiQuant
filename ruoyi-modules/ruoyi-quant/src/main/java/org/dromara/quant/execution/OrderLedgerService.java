@@ -1,6 +1,7 @@
 package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
@@ -13,6 +14,7 @@ import java.time.LocalDateTime;
 /**
  * 统一写入本地订单账本。
  */
+@RequiredArgsConstructor
 @Service
 public class OrderLedgerService {
     /**
@@ -21,13 +23,6 @@ public class OrderLedgerService {
     private final QuantOrderMapper mapper;
     @Autowired
     private TradeDecisionLogService decisionLogs;
-
-    /**
-     * 创建 OrderLedgerService 实例并初始化其依赖。
-     */
-    public OrderLedgerService(QuantOrderMapper mapper) {
-        this.mapper = mapper;
-    }
 
     /**
      * 同步对应业务事实。

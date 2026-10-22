@@ -1,6 +1,7 @@
 package org.dromara.quant.market;
 
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.risk.OpenCapacityService;
 import org.dromara.quant.util.QuantJsonMapper;
@@ -18,6 +19,7 @@ import java.util.function.BooleanSupplier;
  * 开仓容量检查使用的账户持仓事实，不用于估值或替代订单恢复账本。
  * 完整快照初始化后由私有流增量维护；未知状态禁止新开仓。
  */
+@RequiredArgsConstructor
 @Component
 @Slf4j
 public class AccountPositionCache {
@@ -25,10 +27,6 @@ public class AccountPositionCache {
     private static final long MAX_SNAPSHOT_AGE = TimeUnit.SECONDS.toNanos(90);
     private final ExchangeGateway gateway;
     private final Map<Long, Account> accounts = new ConcurrentHashMap<>();
-
-    public AccountPositionCache(ExchangeGateway gateway) {
-        this.gateway = gateway;
-    }
 
     private static void seedTimes(Account account, Collection<ExchangeGateway.PositionSnapshot> positions) {
         for (var position : positions) {

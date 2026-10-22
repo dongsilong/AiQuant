@@ -1,6 +1,7 @@
 package org.dromara.quant.exchange.binance;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.domain.R;
 import org.springframework.web.bind.annotation.*;
 
@@ -11,18 +12,12 @@ import java.util.Map;
  * No transport-switch permission is assigned to regular trading accounts by default.
  * The action interrupts active streams and forces the account/market hubs to reconnect.
  */
+@RequiredArgsConstructor
 @RestController
 @RequestMapping("/quant/infrastructure/websocket")
 public class BinanceWebSocketTransportController {
     private final BinanceGatewayAdapter adapter;
 
-    public BinanceWebSocketTransportController(BinanceGatewayAdapter adapter) {
-        this.adapter = adapter;
-    }
-
-    /**
-     * 查询当前节点使用的 WebSocket 传输实现。
-     */
     @SaCheckPermission("quant:transport:view")
     @GetMapping("/transport")
     public R<Map<String, Object>> current() {

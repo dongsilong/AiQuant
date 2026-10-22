@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.protection.mapper.QuantProtectionOrderMapper">
+    <select id="cycleOwners" resultType="map" timeout="3"><![CDATA[SELECT i.strategy_id, s.instance_id
+FROM quant_strategy_position_state s
+JOIN quant_strategy_instance i ON i.id=s.instance_id
+JOIN quant_strategy_symbol b ON b.id=i.strategy_symbol_id
+JOIN quant_symbol q ON q.id=b.symbol_id
+WHERE i.credential_id=#{credentialId} AND s.position_id=#{positionId}
+  AND s.position_cycle_key=#{cycleKey} AND q.symbol=#{symbol} AND s.direction=#{direction}]]></select>
+    <update id="bindCycleOwner" timeout="3"><![CDATA[UPDATE quant_protection_order SET strategy_id=#{strategyId}, strategy_instance_id=#{instanceId}
+WHERE id=#{id} AND credential_id=#{credentialId} AND position_cycle_key=#{cycleKey}
+  AND strategy_id IS NULL AND strategy_instance_id IS NULL]]></update>
+</mapper>

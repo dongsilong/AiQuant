@@ -2,6 +2,7 @@ package org.dromara.quant.risk;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
@@ -26,6 +27,7 @@ import java.util.List;
  * 交易前风险引擎。所有策略开仓都必须通过本服务，策略本身不实现风险限制。
  */
 @Slf4j
+@RequiredArgsConstructor
 @Service
 public class RiskDecisionService {
     /**
@@ -52,19 +54,6 @@ public class RiskDecisionService {
     private LivePositionFreshness positionFreshness;
     @Autowired(required = false)
     private AccountPositionCache positionCache;
-
-
-    /**
-     * 创建 RiskDecisionService 实例并初始化其依赖。
-     */
-    public RiskDecisionService(QuantRiskConfigMapper riskMapper, QuantPositionMapper positionMapper, QuantExecutionRecordMapper executionRecordMapper,
-                               QuantTradeMapper tradeMapper, QuantFinancialEventMapper financialEventMapper) {
-        this.riskMapper = riskMapper;
-        this.positionMapper = positionMapper;
-        this.executionRecordMapper = executionRecordMapper;
-        this.tradeMapper = tradeMapper;
-        this.financialEventMapper = financialEventMapper;
-    }
 
     /**
      * 检查开仓请求是否通过风险规则。

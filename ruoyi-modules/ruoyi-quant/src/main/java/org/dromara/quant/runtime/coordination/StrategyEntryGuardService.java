@@ -1,5 +1,6 @@
 package org.dromara.quant.runtime.coordination;
 
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.runtime.coordination.mapper.StrategyEntryGuardMapper;
 import org.springframework.stereotype.Service;
 
@@ -17,16 +18,13 @@ import java.time.ZoneOffset;
  * 唯一键不能包含 instance_id，否则不同实例可在同一根 K 线各插入一条记录，开仓唯一性被破坏。
  * 若需求为“同一根 K 线绝对只尝试一次”，请将下面的 release() 改成状态标记而不是物理删除。</p>
  */
+@RequiredArgsConstructor
 @Service
 public class StrategyEntryGuardService {
     /**
      * MyBatis Mapper preserves the database unique-key and conditional-write semantics.
      */
     private final StrategyEntryGuardMapper mapper;
-
-    public StrategyEntryGuardService(StrategyEntryGuardMapper mapper) {
-        this.mapper = mapper;
-    }
 
     /**
      * 尝试占用同账户、交易对、K 线唯一开仓保护记录。

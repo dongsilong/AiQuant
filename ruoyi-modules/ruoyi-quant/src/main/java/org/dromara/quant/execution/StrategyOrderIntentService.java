@@ -1,12 +1,13 @@
 package org.dromara.quant.execution;
 
+import lombok.NonNull;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * Durable attribution of a proven exchange-accepted strategy order.
@@ -18,12 +19,11 @@ import java.util.Objects;
  * persistence. Schema V09 must be migrated before enabling this writer.
  */
 @Service
+@RequiredArgsConstructor
 public class StrategyOrderIntentService {
-    private final StrategyOrderIntentMapper mapper;
+    @NonNull private final StrategyOrderIntentMapper mapper;
 
-    public StrategyOrderIntentService(StrategyOrderIntentMapper mapper) {
-        this.mapper = Objects.requireNonNull(mapper);
-    }
+
 
     private static boolean equalsId(Object actual, long expected) {
         return actual instanceof Number n && n.longValue() == expected;

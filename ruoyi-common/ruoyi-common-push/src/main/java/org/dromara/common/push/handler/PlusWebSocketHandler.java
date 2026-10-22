@@ -90,6 +90,9 @@ public class PlusWebSocketHandler extends AbstractWebSocketHandler {
             webSocketSessionManager.sendMessage(session, MessageConstants.PONG);
             return;
         }
+        if (MessageConstants.PONG.equalsIgnoreCase(message.getPayload())) {
+            return;
+        }
 
         // 构建客户端自定义消息并发布
         PushDTO dto = PushDTO.of(List.of(loginUser.getUserId()), PushPayloadDTO.of(
@@ -107,15 +110,6 @@ public class PlusWebSocketHandler extends AbstractWebSocketHandler {
     @Override
     protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws Exception {
         super.handleBinaryMessage(session, message);
-    }
-
-    /**
-     * 处理Pong心跳响应
-     * 维持长连接存活
-     */
-    @Override
-    protected void handlePongMessage(WebSocketSession session, PongMessage message) {
-        webSocketSessionManager.sendPongMessage(session);
     }
 
     /**

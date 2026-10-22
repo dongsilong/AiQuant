@@ -1,6 +1,7 @@
 package org.dromara.quant.execution;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.domain.R;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -13,22 +14,13 @@ import java.util.List;
  * Privileged, read-only attribution audit. This endpoint intentionally returns
  * no calculated live position or liquidation price from lifetime buy/sell totals.
  */
+@RequiredArgsConstructor
 @RestController
 @RequestMapping("/quant/infrastructure/fill-audit")
 public class StrategyFillAuditController {
     private final StrategyFillAuditService audit;
     private final StrategyFillJournalService journal;
 
-    public StrategyFillAuditController(StrategyFillAuditService audit, StrategyFillJournalService journal) {
-        this.audit = audit;
-        this.journal = journal;
-    }
-
-    /**
-     * 查询指定账户、策略或交易对的成交归属审计摘要。
-     */
-    @GetMapping("/summary")
-    @SaCheckPermission("quant:allocation:view")
     public R<StrategyFillAuditService.Summary> summary(@RequestParam String credentialId, @RequestParam String strategyId, @RequestParam String instanceId,
                                                        @RequestParam String symbol) {
         return R.ok(audit.summarize(Long.valueOf(credentialId), Long.valueOf(strategyId), Long.valueOf(instanceId), symbol));

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.protection.mapper.ProtectionTargetMapper">
+    <insert id="insertTarget" timeout="3"><![CDATA[INSERT INTO quant_protection_target
+  (target_key,credential_id,position_id,position_cycle_key,position_side,
+   protection_type,target_version,step_index,confirmed_step,updated_at)
+VALUES (#{key},#{credentialId},#{positionId},#{cycleKey},#{side},
+        #{type},0,0,0,CURRENT_TIMESTAMP)
+ON DUPLICATE KEY UPDATE target_key=target_key]]></insert>
+    <update id="acquireLease" timeout="3"><![CDATA[UPDATE quant_protection_target
+SET owner_token=#{owner},lease_until=TIMESTAMPADD(SECOND,30,CURRENT_TIMESTAMP)
+WHERE target_key=#{key} AND (owner_token IS NULL OR lease_until<CURRENT_TIMESTAMP)]]></update>
+    <select id="confirmedSteps" resultType="java.lang.Integer" timeout="3"><![CDATA[SELECT confirmed_step FROM quant_protection_target
+WHERE credential_id=#{credentialId} AND position_cycle_key=#{cycleKey}
+  AND position_side=#{side} AND protection_type='STEP_TP']]></select>
+    <update id="renewLease" timeout="3"><![CDATA[UPDATE quant_protection_target
+SET lease_until=TIMESTAMPADD(SECOND,30,CURRENT_TIMESTAMP)
+WHERE target_key=#{key} AND owner_token=#{owner} AND lease_until>CURRENT_TIMESTAMP]]></update>
+    <select id="countOwned" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_protection_target
+WHERE target_key=#{key} AND owner_token=#{owner} AND lease_until>CURRENT_TIMESTAMP]]></select>
+    <select id="getTarget" resultType="map" timeout="3"><![CDATA[SELECT * FROM quant_protection_target WHERE target_key=#{key}]]></select>
+    <select id="lockTarget" resultType="map" timeout="3"><![CDATA[SELECT * FROM quant_protection_target WHERE target_key=#{key} FOR UPDATE]]></select>
+    <update id="prepareTarget" timeout="3"><![CDATA[UPDATE quant_protection_target
+SET target_version=#{version},step_index=#{stepIndex},quantity=#{quantity},
+    trigger_price=#{triggerPrice},order_type=#{orderType},
+    pending_order_id=#{pendingId},previous_order_id=#{previousId},updated_at=CURRENT_TIMESTAMP
+WHERE target_key=#{key} AND owner_token=#{owner} AND lease_until>CURRENT_TIMESTAMP]]></update>
+    <update id="confirmTarget" timeout="3"><![CDATA[UPDATE quant_protection_target
+SET current_order_id=#{currentId},pending_order_id=NULL,step_index=#{stepIndex},
+    confirmed_step=#{confirmedStep},quantity=#{quantity},trigger_price=#{triggerPrice},
+    order_type=#{orderType},updated_at=CURRENT_TIMESTAMP
+WHERE target_key=#{key} AND owner_token=#{owner} AND lease_until>CURRENT_TIMESTAMP]]></update>
+    <update id="clearPending" timeout="3"><![CDATA[UPDATE quant_protection_target SET pending_order_id=NULL,updated_at=CURRENT_TIMESTAMP
+WHERE target_key=#{key} AND owner_token=#{owner} AND lease_until>CURRENT_TIMESTAMP]]></update>
+    <update id="clearPrevious" timeout="3"><![CDATA[UPDATE quant_protection_target SET previous_order_id=NULL,updated_at=CURRENT_TIMESTAMP
+WHERE target_key=#{key} AND owner_token=#{owner} AND lease_until>CURRENT_TIMESTAMP]]></update>
+    <update id="releaseLease" timeout="3"><![CDATA[UPDATE quant_protection_target SET owner_token=NULL,lease_until=NULL
+WHERE target_key=#{key} AND owner_token=#{owner}]]></update>
+</mapper>

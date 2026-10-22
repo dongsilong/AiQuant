@@ -22,8 +22,10 @@ import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.protection.domain.QuantProtectionOrder;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
 import org.dromara.quant.reconcile.domain.QuantReconcileRecord;
+import org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
+import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -99,13 +101,13 @@ public class TradingReconciliationService {
     @Autowired(required = false)
     private LivePositionFreshness positionFreshness;
     @Autowired
-    private org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper snapshotFence;
+    private LivePositionSnapshotFenceMapper snapshotFence;
     /**
      * Share quant_credential FOR UPDATE with OpenCapacityService.reserve().
      * This serializes position facts and new capacity reservations across nodes.
      */
     @Autowired
-    private org.dromara.quant.risk.mapper.OpenCapacityMapper openCapacityMapper;
+    private OpenCapacityMapper openCapacityMapper;
     /**
      * 创建 TradingReconciliationService 实例并初始化其依赖。
      */

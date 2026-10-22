@@ -1,6 +1,8 @@
 package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.NonNull;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
@@ -17,16 +19,13 @@ import java.util.*;
  * always-on Binance poller. Each fill commits through the idempotent projector.
  */
 @Service
+@RequiredArgsConstructor
 public class StrategyFillReplayService {
-    private final QuantOrderMapper orders;
-    private final StrategyPositionProjectionMapper provenance;
-    private final StrategyPositionProjectionService projector;
+    @NonNull private final QuantOrderMapper orders;
+    @NonNull private final StrategyPositionProjectionMapper provenance;
+    @NonNull private final StrategyPositionProjectionService projector;
 
-    public StrategyFillReplayService(QuantOrderMapper orders, StrategyPositionProjectionMapper provenance, StrategyPositionProjectionService projector) {
-        this.orders = Objects.requireNonNull(orders);
-        this.provenance = Objects.requireNonNull(provenance);
-        this.projector = Objects.requireNonNull(projector);
-    }
+
 
     /**
      * Only call after verifying the exchange history window is complete.

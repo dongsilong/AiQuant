@@ -1,6 +1,7 @@
 package org.dromara.quant.execution;
 
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.market.AccountBalanceCache;
 import org.dromara.quant.market.AccountPositionCache;
@@ -20,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * 启动/配置变化时异步准备；行情执行只读取准备令牌，不修改已有持仓的交易设置。
  */
+@RequiredArgsConstructor
 @Service
 @Slf4j
 public class TradingPreparationService {
@@ -30,12 +32,6 @@ public class TradingPreparationService {
     private final Map<String, State> states = new ConcurrentHashMap<>();
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
     private volatile LiveOrderDispatcher liveOrderDispatcher;
-    public TradingPreparationService(ExchangeGateway gateway, LiveTradingGate liveGate, AccountPositionCache positions, AccountBalanceCache balances) {
-        this.gateway = gateway;
-        this.liveGate = liveGate;
-        this.positions = positions;
-        this.balances = balances;
-    }
 
     private static String normalizeMode(String mode) {
         if (mode == null || "ISOLATED".equalsIgnoreCase(mode)) {

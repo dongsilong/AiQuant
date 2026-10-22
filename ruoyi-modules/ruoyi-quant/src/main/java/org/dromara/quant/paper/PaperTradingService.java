@@ -1,6 +1,7 @@
 package org.dromara.quant.paper;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
@@ -21,6 +22,7 @@ import java.util.List;
 /**
  * PAPER 虚拟撮合账本。PAPER 不访问交易所私有账户，也不发送真实订单。
  */
+@RequiredArgsConstructor
 @Service
 public class PaperTradingService {
     /**
@@ -43,18 +45,6 @@ public class PaperTradingService {
      * 用于执行需要数据库原子语义的 SQL 操作。
      */
     private final PaperAtomicMapper atomicMapper;
-
-    /**
-     * 创建 PaperTradingService 实例并初始化其依赖。
-     */
-    public PaperTradingService(QuantProperties properties, QuantPaperAccountMapper accountMapper, QuantPositionMapper positionMapper,
-                               QuantExecutionRecordMapper executionRecordMapper, PaperAtomicMapper atomicMapper) {
-        this.properties = properties;
-        this.accountMapper = accountMapper;
-        this.positionMapper = positionMapper;
-        this.executionRecordMapper = executionRecordMapper;
-        this.atomicMapper = atomicMapper;
-    }
 
     /**
      * 返回正数值；非法时使用默认值。

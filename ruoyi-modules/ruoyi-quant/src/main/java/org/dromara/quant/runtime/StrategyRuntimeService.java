@@ -3,6 +3,7 @@ package org.dromara.quant.runtime;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
@@ -59,6 +60,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>运行时通过 MarketStreamHub 接收实时行情；定时任务只负责发现实例、续租和 REST 对账，不再轮询每个实例的实时价格。
  */
 @Slf4j
+@RequiredArgsConstructor
 @Component
 public class StrategyRuntimeService {
     /**
@@ -163,45 +165,6 @@ public class StrategyRuntimeService {
     private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
     @Autowired
     private StrategyPositionPerformanceHub positionPerformanceHub;
-
-    /**
-     * 创建 StrategyRuntimeService 实例并初始化其依赖。
-     */
-    public StrategyRuntimeService(QuantProperties properties, QuantStrategyInstanceMapper instanceMapper, QuantStrategyMapper strategyMapper,
-                                  QuantStrategySymbolMapper strategySymbolMapper, QuantCredentialMapper credentialMapper, QuantSymbolMapper symbolMapper, QuantPositionMapper positionMapper,
-      StrategyPluginRegistry pluginRegistry, ExchangeGateway gateway, MarketStreamHub marketStreamHub, UserDataStreamHub userDataStreamHub,
-                                  StrategySlopeTelemetryHub slopeTelemetryHub, StrategyRuntimeLeaseService leaseService, StrategyEntryGuardService entryGuardService,
-        StrategyPositionStateService stateService, TradeExecutionApplicationService executionService, ProtectionOrderService protectionOrderService,
-         PaperTradingService paperTradingService, ExecutionRecordService executionRecordService, QuantTradeNotificationService notificationService,
-          StrategyRuntimeLedgerMapper runtimeLedgerMapper, org.dromara.quant.market.AccountBalanceCache balanceCache,
-                                  org.dromara.quant.risk.OpenCapacityService openCapacityService, org.dromara.quant.execution.TradingPreparationService preparationService,
-            TradingReconciliationService reconciliationService) {
-        this.properties = properties;
-        this.instanceMapper = instanceMapper;
-        this.strategyMapper = strategyMapper;
-        this.strategySymbolMapper = strategySymbolMapper;
-        this.credentialMapper = credentialMapper;
-        this.symbolMapper = symbolMapper;
-        this.positionMapper = positionMapper;
-        this.pluginRegistry = pluginRegistry;
-        this.gateway = gateway;
-        this.marketStreamHub = marketStreamHub;
-        this.userDataStreamHub = userDataStreamHub;
-        this.slopeTelemetryHub = slopeTelemetryHub;
-        this.leaseService = leaseService;
-        this.entryGuardService = entryGuardService;
-        this.stateService = stateService;
-        this.executionService = executionService;
-        this.protectionOrderService = protectionOrderService;
-        this.paperTradingService = paperTradingService;
-        this.executionRecordService = executionRecordService;
-        this.notificationService = notificationService;
-        this.runtimeLedgerMapper = runtimeLedgerMapper;
-        this.balanceCache = balanceCache;
-        this.openCapacityService = openCapacityService;
-        this.preparationService = preparationService;
-        this.reconciliationService = reconciliationService;
-    }
 
     /**
      * 返回运行时生效的保证金模式；交易对覆盖优先于策略默认值。
@@ -644,11 +607,11 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
             reconciliationCompleted = true;
         } catch (TradingReconciliationService.SnapshotSupersededException ex) {
             runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
-            log.info("较早发起的交易对持仓快照已被新快照取代，等待后续对账 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
+            log.debug("较早发起的交易对持仓快照已被新快照取代，等待后续对账 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
         } catch (ProtectionOrderService.ProtectionExecutionPendingException ex) {
             // Binance 已报告保护单正在触发或成交尚未完成；这是等待成交/持仓事实收敛的暂态，不记作运行错误。
             runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
-            log.info("保护单执行事实尚未收敛，保持决策阻断并等待重核 instanceId={} symbol={} runMode={} retryAfterSeconds=5", runtime.instance.getId(),
+            log.debug("保护单执行事实尚未收敛，保持决策阻断并等待重核 instanceId={} symbol={} runMode={} retryAfterSeconds=5", runtime.instance.getId(),
                 runtime.symbol.getSymbol(), runtime.credential.getRunMode());
         } catch (RuntimeException ex) {
             boolean stateConflict = containsMessage(ex, "策略持仓状态乐观锁冲突");
@@ -693,7 +656,7 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                     } else {
                         entryReadiness = "恢复阻断已解除，等待新鲜行情进入开仓评估（不代表信号通过或已下单）";
                     }
-                    log.info("持仓核实完成 instanceId={} credentialId={} symbol={} runMode={} position={} elapsedMs={} entryReadiness={}",
+                    log.debug("持仓核实完成 instanceId={} credentialId={} symbol={} runMode={} position={} elapsedMs={} entryReadiness={}",
                         runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
                         runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
                 }
@@ -1115,7 +1078,7 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                 long now = System.currentTimeMillis();
                 if (now >= runtime.nextPositionReconcilingLogAt) {
                     runtime.nextPositionReconcilingLogAt = now + 30_000L;
-                    log.warn("开仓暂停：账户持仓事实尚未完成核验 instanceId={} credentialId={} symbol={}", runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                    log.info("开仓暂停：账户持仓事实尚未完成核验 instanceId={} credentialId={} symbol={}", runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
                 }
                 return;
             }
@@ -1159,7 +1122,7 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
             evaluateEntry(runtime, context);
         } else {
             logEntryDecision(runtime, context, "POSITION_OPEN", "该策略实例已有持仓，不重复开仓");
-            log.warn("持仓处理：跳过开仓并检查退出条件和保护单 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
+            log.debug("持仓处理：跳过开仓并检查退出条件和保护单 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
             // 先处理已经越过阈值的本地退出，避免先挂已穿价的条件单。
             evaluateExit(runtime, context);
             if (runtime.position != null && !runtime.hasPendingAction() && System.currentTimeMillis() >= runtime.nextProtectionSyncAt) {
@@ -1471,7 +1434,7 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
         // 仅在开仓前置条件满足后占用本根 K 线；余额或持仓条件暂不满足时允许后续行情重新评估。
         if (!entryGuardService.tryClaim(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.klineOpenTime())) {
             logEntryDecision(runtime, context, "KLINE_ALREADY_CLAIMED", "本根 K 线已占用开仓保护记录");
-            log.error("策略开仓跳过：本根K线已占用开仓保护记录 instanceId={} symbol={} klineOpenTime={}", runtime.instance.getId(), runtime.symbol.getSymbol(), context.klineOpenTime());
+            log.debug("策略开仓跳过：本根K线已占用开仓保护记录 instanceId={} symbol={} klineOpenTime={}", runtime.instance.getId(), runtime.symbol.getSymbol(), context.klineOpenTime());
             return;
         }
 

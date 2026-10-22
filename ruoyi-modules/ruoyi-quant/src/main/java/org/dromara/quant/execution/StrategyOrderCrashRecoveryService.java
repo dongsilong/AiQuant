@@ -1,5 +1,7 @@
 package org.dromara.quant.execution;
 
+import lombok.NonNull;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.order.domain.QuantOrder;
@@ -17,14 +19,12 @@ import java.util.Objects;
  * an exact Binance query result. No new Binance trade request is ever sent.
  */
 @Service
+@RequiredArgsConstructor
 public class StrategyOrderCrashRecoveryService {
-    private final StrategyOrderIntentMapper intents;
-    private final OrderLedgerService ledger;
+    @NonNull private final StrategyOrderIntentMapper intents;
+    @NonNull private final OrderLedgerService ledger;
 
-    public StrategyOrderCrashRecoveryService(StrategyOrderIntentMapper intents, OrderLedgerService ledger) {
-        this.intents = Objects.requireNonNull(intents);
-        this.ledger = Objects.requireNonNull(ledger);
-    }
+
 
     private static boolean sameId(Object actual, Long expected) {
         return expected != null && actual instanceof Number n && n.longValue() == expected;

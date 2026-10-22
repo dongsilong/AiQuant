@@ -15,6 +15,7 @@ import com.binance.connector.client.derivatives_trading_usds_futures.websocket.s
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.config.QuantProperties;
 import org.eclipse.jetty.client.HttpProxy;
+import org.eclipse.jetty.websocket.api.Callback;
 
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -53,13 +54,27 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
 
     static BinanceSdkStreamTransport market(String url, String symbol, String interval, Consumer<String> events, Runnable disconnected, int backlogLimit,
                                             QuantProperties.Proxy proxy) {
-        WebSocketClientConfiguration config = configuration(url, proxy);
+        WebSocketClientConfiguration config = marketConfiguration(url, proxy);
         // 与 SDK getMarketApi() 保持相同路由；先持有连接，再让 MarketApi 执行握手。
         // 否则构造 MarketApi 时握手失败，连接无法返回给调用方，其 Jetty 客户端和重连定时器会泄漏。
         if (!config.getUrl().endsWith("/market/stream")) {
             config.setUrl(config.getUrl().replace("/stream", "/market/stream"));
         }
-        return market(new StreamConnectionWrapper(config, JSON.getGson()), symbol, interval, events, disconnected, backlogLimit);
+        StreamConnectionWrapper connection = new MarketStreamConnectionWrapper(config, JSON.getGson(), disconnected, symbol, interval);
+        return market(connection, symbol, interval, events, disconnected, backlogLimit);
+    }
+
+    static void notifyMarketSocketClosed(int statusCode, String reason, Callback callback, Runnable disconnected, String symbol, String interval) {
+        log.warn("Binance SDK 行情 WebSocket 已关闭 symbol={} interval={} closeCode={} reason={}", symbol, interval, statusCode, reason);
+        callback.succeed();
+        disconnected.run();
+    }
+
+    static WebSocketClientConfiguration marketConfiguration(String url, QuantProperties.Proxy proxy) {
+        WebSocketClientConfiguration config = configuration(url, proxy);
+        // MarketStreamHub rotates market connections before 24 hours and owns recovery/replay.
+        config.setReconnectIntervalTime((int) TimeUnit.HOURS.toMillis(24));
+        return config;
     }
 
     static BinanceSdkStreamTransport market(StreamConnectionInterface connection, String symbol, String interval,

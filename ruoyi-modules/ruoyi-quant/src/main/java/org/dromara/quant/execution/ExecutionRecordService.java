@@ -1,6 +1,7 @@
 package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.springframework.dao.DuplicateKeyException;
@@ -11,19 +12,13 @@ import java.time.LocalDateTime;
 /**
  * 数据库幂等执行记录服务。
  */
+@RequiredArgsConstructor
 @Service
 public class ExecutionRecordService {
     /**
      * 当前领域 Mapper。
      */
     private final QuantExecutionRecordMapper mapper;
-
-    /**
-     * 创建 ExecutionRecordService 实例并初始化其依赖。
-     */
-    public ExecutionRecordService(QuantExecutionRecordMapper mapper) {
-        this.mapper = mapper;
-    }
 
     /**
      * 查询符合条件的记录。

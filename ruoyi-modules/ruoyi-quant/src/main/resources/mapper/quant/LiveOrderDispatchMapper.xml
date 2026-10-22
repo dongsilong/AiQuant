@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.execution.mapper.LiveOrderDispatchMapper">
+    <insert id="ensureGuard" timeout="3"><![CDATA[INSERT IGNORE INTO quant_live_dispatch_guard
+    (credential_id, symbol, active_dispatch_key, updated_at)
+VALUES (#{credentialId}, #{symbol}, NULL, NOW())]]></insert>
+    <insert id="ensureSettingsIntent" timeout="3"><![CDATA[INSERT IGNORE INTO quant_live_account_settings_intent
+    (credential_id, symbol, margin_mode, leverage, created_at)
+VALUES (#{credentialId}, #{symbol}, #{marginMode}, #{leverage}, NOW())]]></insert>
+    <select id="matchingSettingsIntent" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_live_account_settings_intent
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND margin_mode=#{marginMode} AND leverage=#{leverage}]]></select>
+    <update id="claim" timeout="3"><![CDATA[UPDATE quant_live_dispatch_guard
+SET active_dispatch_key=#{key}, updated_at=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND active_dispatch_key IS NULL]]></update>
+    <update id="claimWithLease" timeout="3"><![CDATA[UPDATE quant_live_dispatch_guard
+SET active_dispatch_key=#{key}, updated_at=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND active_dispatch_key IS NULL
+  AND EXISTS (
+      SELECT 1 FROM quant_strategy_runtime_lease l
+      WHERE l.credential_id=#{credentialId} AND l.symbol=#{symbol}
+        AND l.instance_id=#{instanceId} AND l.lease_epoch=#{epoch}
+        AND l.lease_until>NOW() AND l.owner_token IS NOT NULL
+  )]]></update>
+    <insert id="insertTicket" timeout="3"><![CDATA[INSERT INTO quant_order_dispatch_ticket
+  (credential_id, symbol, idempotency_key, operation_type, client_order_id,
+   strategy_instance_id, lease_epoch, dispatch_status, created_at, updated_at)
+VALUES (#{credentialId}, #{symbol}, #{key}, #{operation}, #{clientOrderId},
+        #{instanceId}, #{epoch}, 'DISPATCHING', NOW(), NOW())]]></insert>
+    <insert id="insertPreDispatchIntent" timeout="3"><![CDATA[INSERT INTO quant_strategy_pre_dispatch_intent
+(credential_id,symbol,idempotency_key,client_order_id,strategy_id,
+ strategy_instance_id,operation_type,position_side,exchange_side,
+ lease_epoch,created_at)
+VALUES (#{credentialId},#{symbol},#{key},#{clientOrderId},#{strategyId},
+        #{instanceId},#{operation},#{positionSide},#{exchangeSide},
+        #{epoch},NOW(6))]]></insert>
+    <update id="acknowledge" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='ACKED', exchange_order_id=#{orderId}, updated_at=NOW()
+WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
+  AND dispatch_status='DISPATCHING']]></update>
+    <update id="acknowledgeConfiguration" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='CONFIG_APPLIED', updated_at=NOW()
+WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
+  AND symbol=#{symbol} AND operation_type='CONFIG_SETTINGS'
+  AND dispatch_status='DISPATCHING' AND exchange_order_id IS NULL]]></update>
+    <update id="notSent" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='FAILED_NOT_SENT', updated_at=NOW()
+WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
+  AND dispatch_status='DISPATCHING']]></update>
+    <update id="unknown" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='UNKNOWN', updated_at=NOW()
+WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
+  AND dispatch_status='DISPATCHING']]></update>
+    <update id="release" timeout="3"><![CDATA[UPDATE quant_live_dispatch_guard SET active_dispatch_key=NULL, updated_at=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND active_dispatch_key=#{key}]]></update>
+    <update id="recoverVerified" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='RECOVERED', exchange_order_id=#{orderId}, updated_at=NOW()
+WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
+  AND symbol=#{symbol} AND client_order_id=#{clientOrderId}
+  AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
+  AND dispatch_status IN ('DISPATCHING','UNKNOWN')
+  AND EXISTS (
+    SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key}
+  )]]></update>
+    <select id="activeProtectionTicket" resultType="java.lang.String" timeout="3"><![CDATA[SELECT g.active_dispatch_key
+FROM quant_live_dispatch_guard g
+JOIN quant_order_dispatch_ticket t ON t.credential_id=g.credential_id
+  AND t.idempotency_key=g.active_dispatch_key AND t.symbol=g.symbol
+WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+  AND t.client_order_id=#{clientOrderId} AND t.operation_type=#{operation}
+  AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')]]></select>
+    <select id="activeDispatch" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credentialId, g.symbol AS symbol,
+       g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
+       t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
+       t.exchange_order_id AS exchangeOrderId
+FROM quant_live_dispatch_guard g
+LEFT JOIN quant_order_dispatch_ticket t
+  ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
+ AND t.symbol=g.symbol
+WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+  AND g.active_dispatch_key IS NOT NULL
+LIMIT 1]]></select>
+    <select id="activeProtectionCancels" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credentialId, g.symbol AS symbol,
+       g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
+       t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
+       t.exchange_order_id AS exchangeOrderId
+FROM quant_live_dispatch_guard g
+JOIN quant_order_dispatch_ticket t
+  ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
+ AND t.symbol=g.symbol
+WHERE g.credential_id=#{credentialId}
+  AND (#{symbol} IS NULL OR g.symbol=#{symbol})
+  AND t.operation_type='PROTECT_CANCEL'
+  AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
+ORDER BY g.updated_at ASC
+LIMIT 100]]></select>
+    <select id="activeProtectionDispatches" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credentialId, g.symbol AS symbol,
+       g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
+       t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
+       t.exchange_order_id AS exchangeOrderId
+FROM quant_live_dispatch_guard g
+JOIN quant_order_dispatch_ticket t
+  ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
+ AND t.symbol=g.symbol
+WHERE g.credential_id=#{credentialId}
+  AND (#{symbol} IS NULL OR g.symbol=#{symbol})
+  AND t.operation_type IN ('PROTECT_CREATE','PROTECT_CANCEL')
+  AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
+ORDER BY g.updated_at ASC
+LIMIT 100]]></select>
+    <select id="ticketStatus" resultType="java.lang.String" timeout="3"><![CDATA[SELECT dispatch_status FROM quant_order_dispatch_ticket
+WHERE credential_id=#{credentialId} AND idempotency_key=#{key}]]></select>
+    <select id="unresolvedDispatches" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credential_id, g.symbol AS symbol,
+       g.active_dispatch_key AS dispatch_key, g.updated_at AS blocked_at,
+       t.operation_type AS operation_type, t.client_order_id AS client_order_id,
+       t.dispatch_status AS dispatch_status, t.exchange_order_id AS exchange_order_id,
+       t.strategy_instance_id AS strategy_instance_id,
+       t.lease_epoch AS lease_epoch
+FROM quant_live_dispatch_guard g
+LEFT JOIN quant_order_dispatch_ticket t
+  ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
+WHERE g.active_dispatch_key IS NOT NULL
+ORDER BY g.updated_at ASC
+LIMIT 100]]></select>
+</mapper>

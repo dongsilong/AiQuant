@@ -25,7 +25,6 @@ import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
-
 /**
  * 开仓/平仓统一邮件通知；发送失败只记录错误，不回滚已完成的交易事实。
  */

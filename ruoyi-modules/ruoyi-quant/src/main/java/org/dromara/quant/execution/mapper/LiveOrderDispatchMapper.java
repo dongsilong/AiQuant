@@ -8,12 +8,7 @@ import org.apache.ibatis.annotations.*;
  */
 @Mapper
 public interface LiveOrderDispatchMapper {
-    @Options(timeout = 3)
-    @Insert("""
-        INSERT IGNORE INTO quant_live_dispatch_guard
-            (credential_id, symbol, active_dispatch_key, updated_at)
-        VALUES (#{credentialId}, #{symbol}, NULL, NOW())
-        """)
+
     int ensureGuard(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
     /**
@@ -21,29 +16,11 @@ public interface LiveOrderDispatchMapper {
      * as the account-symbol dispatch claim. Concurrent contradictory nodes
      * cannot silently change each other's margin or leverage settings.
      */
-    @Options(timeout = 3)
-    @Insert("""
-        INSERT IGNORE INTO quant_live_account_settings_intent
-            (credential_id, symbol, margin_mode, leverage, created_at)
-        VALUES (#{credentialId}, #{symbol}, #{marginMode}, #{leverage}, NOW())
-        """)
+
     int ensureSettingsIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("marginMode") String marginMode, @Param("leverage") int leverage);
 
-    @Options(timeout = 3)
-    @Select("""
-        SELECT COUNT(*) FROM quant_live_account_settings_intent
-        WHERE credential_id=#{credentialId} AND symbol=#{symbol}
-          AND margin_mode=#{marginMode} AND leverage=#{leverage}
-        """)
     long matchingSettingsIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("marginMode") String marginMode, @Param("leverage") int leverage);
 
-    @Options(timeout = 3)
-    @Update("""
-        UPDATE quant_live_dispatch_guard
-        SET active_dispatch_key=#{key}, updated_at=NOW()
-        WHERE credential_id=#{credentialId} AND symbol=#{symbol}
-          AND active_dispatch_key IS NULL
-        """)
     int claim(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
     /**
@@ -51,30 +28,10 @@ public interface LiveOrderDispatchMapper {
      * generation. A stale node cannot claim after lease takeover.
      * The guard remains held until exact recovery; it is not a Binance-side fence.
      */
-    @Options(timeout = 3)
-    @Update("""
-        UPDATE quant_live_dispatch_guard
-        SET active_dispatch_key=#{key}, updated_at=NOW()
-        WHERE credential_id=#{credentialId} AND symbol=#{symbol}
-          AND active_dispatch_key IS NULL
-          AND EXISTS (
-              SELECT 1 FROM quant_strategy_runtime_lease l
-              WHERE l.credential_id=#{credentialId} AND l.symbol=#{symbol}
-                AND l.instance_id=#{instanceId} AND l.lease_epoch=#{epoch}
-                AND l.lease_until>NOW() AND l.owner_token IS NOT NULL
-          )
-        """)
+
     int claimWithLease(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("instanceId") Long instanceId,
                        @Param("epoch") Long epoch);
 
-    @Options(timeout = 3)
-    @Insert("""
-        INSERT INTO quant_order_dispatch_ticket
-          (credential_id, symbol, idempotency_key, operation_type, client_order_id,
-           strategy_instance_id, lease_epoch, dispatch_status, created_at, updated_at)
-        VALUES (#{credentialId}, #{symbol}, #{key}, #{operation}, #{clientOrderId},
-                #{instanceId}, #{epoch}, 'DISPATCHING', NOW(), NOW())
-        """)
     int insertTicket(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("operation") String operation, @Param(
         "clientOrderId") String clientOrderId, @Param("instanceId") Long instanceId, @Param("epoch") Long epoch);
 
@@ -82,27 +39,11 @@ public interface LiveOrderDispatchMapper {
      * Pre-send strategy provenance is inserted in the SAME transaction as
      * the durable dispatch ticket, prior to any remote Binance side effect.
      */
-    @Options(timeout = 3)
-    @Insert("""
-        INSERT INTO quant_strategy_pre_dispatch_intent
-        (credential_id,symbol,idempotency_key,client_order_id,strategy_id,
-         strategy_instance_id,operation_type,position_side,exchange_side,
-         lease_epoch,created_at)
-        VALUES (#{credentialId},#{symbol},#{key},#{clientOrderId},#{strategyId},
-                #{instanceId},#{operation},#{positionSide},#{exchangeSide},
-                #{epoch},NOW(6))
-        """)
+
     int insertPreDispatchIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("clientOrderId") String clientOrderId,
                                 @Param("strategyId") Long strategyId, @Param("instanceId") Long instanceId, @Param("operation") String operation,
                                 @Param("positionSide") String positionSide, @Param("exchangeSide") String exchangeSide, @Param("epoch") Long epoch);
 
-    @Options(timeout = 3)
-    @Update("""
-        UPDATE quant_order_dispatch_ticket
-        SET dispatch_status='ACKED', exchange_order_id=#{orderId}, updated_at=NOW()
-        WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
-          AND dispatch_status='DISPATCHING'
-        """)
     int acknowledge(@Param("credentialId") Long credentialId, @Param("key") String key, @Param("orderId") Long orderId);
 
     /**
@@ -110,56 +51,15 @@ public interface LiveOrderDispatchMapper {
      * persistent CONFIG ticket only after BOTH margin and leverage SDK
      * calls have returned explicit successful responses.
      */
-    @Options(timeout = 3)
-    @Update("""
-        UPDATE quant_order_dispatch_ticket
-        SET dispatch_status='CONFIG_APPLIED', updated_at=NOW()
-        WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
-          AND symbol=#{symbol} AND operation_type='CONFIG_SETTINGS'
-          AND dispatch_status='DISPATCHING' AND exchange_order_id IS NULL
-        """)
+
     int acknowledgeConfiguration(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
-    @Options(timeout = 3)
-    @Update("""
-        UPDATE quant_order_dispatch_ticket
-        SET dispatch_status='FAILED_NOT_SENT', updated_at=NOW()
-        WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
-          AND dispatch_status='DISPATCHING'
-        """)
     int notSent(@Param("credentialId") Long credentialId, @Param("key") String key);
 
-    @Options(timeout = 3)
-    @Update("""
-        UPDATE quant_order_dispatch_ticket
-        SET dispatch_status='UNKNOWN', updated_at=NOW()
-        WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
-          AND dispatch_status='DISPATCHING'
-        """)
     int unknown(@Param("credentialId") Long credentialId, @Param("key") String key);
 
-    @Options(timeout = 3)
-    @Update("""
-        UPDATE quant_live_dispatch_guard SET active_dispatch_key=NULL, updated_at=NOW()
-        WHERE credential_id=#{credentialId} AND symbol=#{symbol}
-          AND active_dispatch_key=#{key}
-        """)
     int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
-    @Options(timeout = 3)
-    @Update("""
-        UPDATE quant_order_dispatch_ticket
-        SET dispatch_status='RECOVERED', exchange_order_id=#{orderId}, updated_at=NOW()
-        WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
-          AND symbol=#{symbol} AND client_order_id=#{clientOrderId}
-          AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
-          AND dispatch_status IN ('DISPATCHING','UNKNOWN')
-          AND EXISTS (
-            SELECT 1 FROM quant_live_dispatch_guard g
-            WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
-              AND g.active_dispatch_key=#{key}
-          )
-        """)
     int recoverVerified(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("clientOrderId") String clientOrderId, @Param(
         "orderId") Long orderId);
 
@@ -167,98 +67,22 @@ public interface LiveOrderDispatchMapper {
      * Only the active account-symbol slot is eligible for fact-proven protection recovery.
      * It must match the exact client algo ID and operation type.
      */
-    @Options(timeout = 3)
-    @Select("""
-        SELECT g.active_dispatch_key
-        FROM quant_live_dispatch_guard g
-        JOIN quant_order_dispatch_ticket t ON t.credential_id=g.credential_id
-          AND t.idempotency_key=g.active_dispatch_key AND t.symbol=g.symbol
-        WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
-          AND t.client_order_id=#{clientOrderId} AND t.operation_type=#{operation}
-          AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
-        """)
+
     String activeProtectionTicket(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("clientOrderId") String clientOrderId,
                                   @Param("operation") String operation);
 
-    @Options(timeout = 3)
-    @Select("""
-        SELECT g.credential_id AS credentialId, g.symbol AS symbol,
-               g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
-               t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
-               t.exchange_order_id AS exchangeOrderId
-        FROM quant_live_dispatch_guard g
-        LEFT JOIN quant_order_dispatch_ticket t
-          ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
-         AND t.symbol=g.symbol
-        WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
-          AND g.active_dispatch_key IS NOT NULL
-        LIMIT 1
-        """)
     java.util.Map<String, Object> activeDispatch(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
-    @Options(timeout = 3)
-    @Select("""
-        SELECT g.credential_id AS credentialId, g.symbol AS symbol,
-               g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
-               t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
-               t.exchange_order_id AS exchangeOrderId
-        FROM quant_live_dispatch_guard g
-        JOIN quant_order_dispatch_ticket t
-          ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
-         AND t.symbol=g.symbol
-        WHERE g.credential_id=#{credentialId}
-          AND (#{symbol} IS NULL OR g.symbol=#{symbol})
-          AND t.operation_type='PROTECT_CANCEL'
-          AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
-        ORDER BY g.updated_at ASC
-        LIMIT 100
-        """)
     java.util.List<java.util.Map<String, Object>> activeProtectionCancels(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
-    @Options(timeout = 3)
-    @Select("""
-        SELECT g.credential_id AS credentialId, g.symbol AS symbol,
-               g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
-               t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
-               t.exchange_order_id AS exchangeOrderId
-        FROM quant_live_dispatch_guard g
-        JOIN quant_order_dispatch_ticket t
-          ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
-         AND t.symbol=g.symbol
-        WHERE g.credential_id=#{credentialId}
-          AND (#{symbol} IS NULL OR g.symbol=#{symbol})
-          AND t.operation_type IN ('PROTECT_CREATE','PROTECT_CANCEL')
-          AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
-        ORDER BY g.updated_at ASC
-        LIMIT 100
-        """)
     java.util.List<java.util.Map<String, Object>> activeProtectionDispatches(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
-    @Options(timeout = 3)
-    @Select("""
-        SELECT dispatch_status FROM quant_order_dispatch_ticket
-        WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
-        """)
     String ticketStatus(@Param("credentialId") Long credentialId, @Param("key") String key);
 
     /**
      * Read-only operator queue, intentionally no TTL-based recovery or unlock.
      */
-    @Options(timeout = 3)
-    @Select("""
-        SELECT g.credential_id AS credential_id, g.symbol AS symbol,
-               g.active_dispatch_key AS dispatch_key, g.updated_at AS blocked_at,
-               t.operation_type AS operation_type, t.client_order_id AS client_order_id,
-               t.dispatch_status AS dispatch_status, t.exchange_order_id AS exchange_order_id,
-               t.strategy_instance_id AS strategy_instance_id,
-               t.lease_epoch AS lease_epoch
-        FROM quant_live_dispatch_guard g
-        LEFT JOIN quant_order_dispatch_ticket t
-          ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
-        WHERE g.active_dispatch_key IS NOT NULL
-        ORDER BY g.updated_at ASC
-        LIMIT 100
-        """)
+
     java.util.List<java.util.Map<String, Object>> unresolvedDispatches();
 
 }
