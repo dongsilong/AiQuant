@@ -955,17 +955,18 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (data == null) {
             return null;
         }
+        // Do not synthesize exchange identity from query arguments. Recovery and
+        // dispatch-guard release must be based on identity fields actually returned
+        // by Binance, not on the fact that a query was issued with those identifiers.
         Long actualOrderId = number(data, "getOrderId");
-        if (actualOrderId == null) {
-            actualOrderId = orderId;
-        }
         String actualClientOrderId = string(data, "getClientOrderId");
-        if (actualClientOrderId == null || actualClientOrderId.isBlank()) {
-            actualClientOrderId = clientOrderId;
-        }
         String actualSymbol = string(data, "getSymbol");
-        if (actualSymbol == null || actualSymbol.isBlank()) {
-            actualSymbol = symbol.trim();
+        if (actualOrderId == null || actualOrderId <= 0 || actualClientOrderId == null || actualClientOrderId.isBlank()
+            || actualSymbol == null || actualSymbol.isBlank()
+            || !symbol.trim().equalsIgnoreCase(actualSymbol)
+            || orderId != null && !orderId.equals(actualOrderId)
+            || clientOrderId != null && !clientOrderId.equals(actualClientOrderId)) {
+            throw new IllegalStateException("Binance 精确订单查询缺少或返回不匹配的订单身份，保持派发恢复阻断");
         }
         String status = string(data, "getStatus");
         if (status == null || status.isBlank()) {
