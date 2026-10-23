@@ -2574,6 +2574,32 @@ class StrategyRuntimeSafetyTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void symbolRuntimeTogglePersistsStateUnderDistributedLock() throws Exception {
+        Fixture f = fixture();
+        try {
+            var binding = (QuantStrategySymbol) ReflectionTestUtils.getField(f.runtime, "strategySymbol");
+            binding.setId(10L);
+            var mapper = (org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper) ReflectionTestUtils.getField(f.service, "strategySymbolMapper");
+            var redisson = (org.redisson.api.RedissonClient) ReflectionTestUtils.getField(f.service, "redissonClient");
+            var lock = mock(org.redisson.api.RLock.class);
+            when(redisson.getLock("quant:strategy-symbol-runtime:10")).thenReturn(lock);
+            when(lock.isHeldByCurrentThread()).thenReturn(true);
+            when(mapper.selectById(10L)).thenReturn(binding);
+            when(mapper.updateById(binding)).thenReturn(1);
+
+            f.service.setStrategySymbolRuntimeEnabled(10L, false);
+
+            assertEquals(Boolean.FALSE, binding.getRuntimeEnabled());
+            assertEquals(false, ReflectionTestUtils.getField(f.runtime, "runtimeEnabled"));
+            verify(lock).lock();
+            verify(lock).unlock();
+            verify(mapper).updateById(binding);
+        } finally {
+            f.service.destroy();
+        }
+    }
+
     private Fixture fixture() throws Exception {
         var constructor = StrategyRuntimeService.class.getConstructors()[0];
         Object[] args = Arrays.stream(constructor.getParameterTypes()).map(type -> type == QuantProperties.class ? new QuantProperties() : mock(type)).toArray();
