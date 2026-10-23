@@ -162,6 +162,8 @@ public class QuantStrategyBindingController {
                 item.setStatus("0");
             }
             QuantStrategySymbol old = existing.stream().filter(e -> java.util.Objects.equals(e.getSymbolId(), item.getSymbolId())).findFirst().orElse(null);
+            // 编辑其他交易对参数时，未提交运行开关就保留原值，避免意外恢复已暂停的交易对。
+            if (item.getRuntimeEnabled() == null) item.setRuntimeEnabled(old == null ? Boolean.TRUE : old.getRuntimeEnabled());
             if (old == null) {
                 item.setId(null);
                 symbolMapper.insert(item);
@@ -258,6 +260,7 @@ public class QuantStrategyBindingController {
         if (entity.getStatus() == null) {
             entity.setStatus("0");
         }
+        if (entity.getRuntimeEnabled() == null) entity.setRuntimeEnabled(Boolean.TRUE);
         symbolMapper.insert(entity);
         return R.ok();
     }
