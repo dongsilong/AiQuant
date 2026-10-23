@@ -87,6 +87,12 @@ jobs:
           set -euo pipefail
           MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
           test -n "$MYSQL_CONTAINER"
+          # This table is part of the existing schema baseline, which this disposable DB does not load.
+          docker exec "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test -e "
+            CREATE TABLE quant_strategy_symbol (
+              id BIGINT NOT NULL PRIMARY KEY,
+              status CHAR(1) NOT NULL DEFAULT '0'
+            ) ENGINE=InnoDB;"
           for ddl in \
             script/sql/quant/V20261014_02__live_dispatch_guard.sql \
             script/sql/quant/V20261014_03__strategy_fill_allocation.sql \
@@ -97,7 +103,8 @@ jobs:
             script/sql/quant/V20261014_09__strategy_order_intent.sql \
             script/sql/quant/V20261014_10__pre_dispatch_strategy_intent.sql \
             script/sql/quant/V20261014_12__position_sync_fence.sql \
-            script/sql/quant/V20261014_13__live_user_stream_lease.sql; do
+            script/sql/quant/V20261014_13__live_user_stream_lease.sql \\
+            script/sql/quant/V20261023_14__strategy_symbol_runtime_enabled.sql; do
             docker exec -i "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test < "$ddl"
           done
           tables="$(docker exec -i "$MYSQL_CONTAINER" mysql -N -B -uroot -ponly_for_ci aiquant_ci_test -e "
@@ -109,6 +116,11 @@ jobs:
              'quant_strategy_order_intent','quant_strategy_pre_dispatch_intent',
              'quant_position_sync_fence','quant_live_user_stream_lease');" | tr -d '\r')"
           test "$tables" = 10
+          runtime_column="$(docker exec -i "$MYSQL_CONTAINER" mysql -N -B -uroot -ponly_for_ci aiquant_ci_test -e "
+            SELECT COUNT(*) FROM information_schema.columns
+            WHERE table_schema='aiquant_ci_test' AND table_name='quant_strategy_symbol'
+              AND column_name='runtime_enabled' AND column_default='1' AND is_nullable='NO';" | tr -d '\r')"
+          test "$runtime_column" = 1
       - name: Verify V12 account fence blocks concurrent InnoDB writers
         run: |
           set -euo pipefail
