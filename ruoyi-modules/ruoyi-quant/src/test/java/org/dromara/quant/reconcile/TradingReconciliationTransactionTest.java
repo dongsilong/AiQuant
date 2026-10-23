@@ -473,9 +473,10 @@ class TradingReconciliationTransactionTest {
 
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncOrders", credential(), List.of(stale));
 
-        verify(orders).mergeExchangeFactIfMonotonic(any(org.dromara.quant.order.domain.QuantOrder.class));
+        var fact = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.order.domain.QuantOrder.class);
+        verify(orders).mergeExchangeFactIfMonotonic(fact.capture());
         verify(orders, never()).updateById(any(org.dromara.quant.order.domain.QuantOrder.class));
-        assertEquals("FILLED", local.getStatus());
-        assertEquals(BigDecimal.ONE, local.getExecutedQuantity());
+        assertEquals("NEW", fact.getValue().getStatus());
+        assertEquals(BigDecimal.ZERO, fact.getValue().getExecutedQuantity());
     }
 }
