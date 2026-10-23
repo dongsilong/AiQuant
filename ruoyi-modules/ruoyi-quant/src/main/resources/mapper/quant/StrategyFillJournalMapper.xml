@@ -30,7 +30,14 @@ VALUES
     <update id="updateStatus" timeout="3"><![CDATA[UPDATE quant_strategy_fill_journal
 SET attribution_status=#{status}, status_reason=#{reason}, attempt_count=attempt_count+1,
     last_attempt_at=NOW(3), updated_at=NOW(3)
-WHERE id=#{id}]]></update>
+WHERE id=#{id}
+  AND (
+      #{status}='CONFLICT'
+      OR (
+          attribution_status <> 'CONFLICT'
+          AND (#{status}='ATTRIBUTED' OR attribution_status <> 'ATTRIBUTED')
+      )
+  )]]></update>
     <select id="selectPending" timeout="3" resultMap="strategyFillJournal"><![CDATA[SELECT * FROM quant_strategy_fill_journal
 WHERE credential_id=#{credentialId} AND attribution_status IN ('CAPTURED','WAITING_ORDER')
 ORDER BY last_attempt_at, id
