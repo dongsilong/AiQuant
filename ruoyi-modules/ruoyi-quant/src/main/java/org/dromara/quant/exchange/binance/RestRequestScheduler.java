@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 final class RestRequestScheduler {
     private final ArrayDeque<Object>[] queues;
     private final int[] rotation = {0, 1, 0, 2};
+    private static final long MANUAL_BLOCK_RETRY_HINT_MILLIS = TimeUnit.HOURS.toMillis(24);
     private final long interval;
     private long nextStart;
     private long blockedUntil;
@@ -25,7 +26,7 @@ final class RestRequestScheduler {
 
     synchronized void acquire(Kind kind) {
         if (manualBlock) {
-            throw new ExchangeMarketPort.RequestDeferredException();
+            throw new ExchangeMarketPort.RequestDeferredException(MANUAL_BLOCK_RETRY_HINT_MILLIS);
         }
         long initialNow = System.nanoTime();
         if (initialNow < blockedUntil) {
@@ -44,7 +45,7 @@ final class RestRequestScheduler {
                     throw new ExchangeMarketPort.RequestDeferredException();
                 }
                 if (manualBlock) {
-                    throw new ExchangeMarketPort.RequestDeferredException();
+                    throw new ExchangeMarketPort.RequestDeferredException(MANUAL_BLOCK_RETRY_HINT_MILLIS);
                 }
                 long now = System.nanoTime();
                 if (now < blockedUntil) {
