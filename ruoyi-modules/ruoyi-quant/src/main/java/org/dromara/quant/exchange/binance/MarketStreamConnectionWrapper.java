@@ -6,6 +6,8 @@ import com.google.gson.Gson;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.jetty.websocket.api.Callback;
 
+import java.util.UUID;
+
 /**
  * Public SDK listener type so Jetty can inspect inherited WebSocket callbacks.
  * MarketStreamHub remains the single owner of market reconnect and replay.
@@ -15,6 +17,7 @@ public class MarketStreamConnectionWrapper extends StreamConnectionWrapper {
     private final Runnable disconnected;
     private final String symbol;
     private final String interval;
+    private final String connectionId = UUID.randomUUID().toString();
 
     public MarketStreamConnectionWrapper(WebSocketClientConfiguration configuration, Gson gson, Runnable disconnected, String symbol, String interval) {
         super(configuration, gson);
@@ -30,7 +33,7 @@ public class MarketStreamConnectionWrapper extends StreamConnectionWrapper {
     @Override
     public void onWebSocketClose(int statusCode, String reason, Callback callback) {
         try {
-            BinanceSdkStreamTransport.notifyMarketSocketClosed(statusCode, reason, disconnected, symbol, interval);
+            BinanceSdkStreamTransport.notifyMarketSocketClosed(connectionId, statusCode, reason, disconnected, symbol, interval);
         } finally {
             // Complete Jetty's close callback even if the hub's disconnect handler fails.
             callback.succeed();
@@ -39,7 +42,7 @@ public class MarketStreamConnectionWrapper extends StreamConnectionWrapper {
 
     @Override
     public void onWebSocketError(Throwable cause) {
-        log.warn("Binance SDK 行情 WebSocket 传输异常 symbol={} interval={} errorType={}", symbol, interval,
+        log.warn("Binance SDK 行情 WebSocket 传输异常 connectionId={} symbol={} interval={} errorType={}", connectionId, symbol, interval,
             cause == null ? "unknown" : cause.getClass().getSimpleName());
         disconnected.run();
     }
