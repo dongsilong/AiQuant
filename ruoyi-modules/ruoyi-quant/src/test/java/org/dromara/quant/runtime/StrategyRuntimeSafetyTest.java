@@ -2537,7 +2537,7 @@ class StrategyRuntimeSafetyTest {
     }
 
     @org.junit.jupiter.api.Test
-    void disabledStrategySymbolBlocksEntryEvaluationWithoutAffectingExitManagement() throws Exception {
+    void disabledStrategySymbolBlocksEntryEvaluation() throws Exception {
         Fixture f = fixture();
         try {
             ReflectionTestUtils.setField(f.runtime, "runtimeEnabled", false);
