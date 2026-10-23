@@ -1358,7 +1358,15 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 restScheduler.acquire(kind);
                 log.debug("Binance REST 获准执行 kind={} queueMillis={}", kind,
                     java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted));
-                return chain.proceed(chain.request());
+                okhttp3.Response response = chain.proceed(chain.request());
+                // Capture Binance's actual rolling weight when exposed by the endpoint. This is
+                // diagnostic telemetry for validating budgets; never infer a universal limit from it.
+                String usedWeight = response.header("X-MBX-USED-WEIGHT-1M");
+                if (usedWeight != null || response.code() == 418 || response.code() == 429) {
+                    log.debug("Binance REST 响应 status={} kind={} usedWeight1m={} retryAfter={}", response.code(), kind, usedWeight,
+                        response.header("Retry-After"));
+                }
+                return response;
             })
             .retryOnConnectionFailure(false).build();
     }
