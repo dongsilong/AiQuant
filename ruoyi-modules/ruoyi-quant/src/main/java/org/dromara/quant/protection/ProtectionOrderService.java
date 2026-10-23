@@ -103,6 +103,15 @@ public class ProtectionOrderService {
             return recoverProtectionCreate(active);
         }
         if ("CONFIG_SETTINGS".equals(active.operationType())) {
+            // DISPATCHING means the original request may still be in flight. A matching
+            // exchange snapshot cannot prove that no later side effect is pending.
+            // Auto-recovery is therefore limited to UNKNOWN, written only after the
+            // request path has returned/failed; crash-left DISPATCHING remains fail-closed.
+            if (!"UNKNOWN".equals(active.dispatchStatus())) {
+                log.warn("配置派发仍处于非终态，无法证明原请求已停止，保持策略启动阻断 accountId={} symbol={} dispatchStatus={}",
+                    credentialId, symbol, active.dispatchStatus());
+                return false;
+            }
             return recoverConfigurationSettings(active);
         }
         log.warn("策略启动前发现不可自动恢复的派发占用，保持启动阻断 accountId={} symbol={} operation={} dispatchStatus={}", credentialId, symbol,
@@ -113,6 +122,8 @@ public class ProtectionOrderService {
     /**
      * CONFIG_SETTINGS has no exchange order ID. Release its guard only when an
      * independent Binance read proves both desired settings match the durable intent.
+     * Caller must establish UNKNOWN status first; DISPATCHING may still have an in-flight
+     * request and is intentionally not auto-recovered after a process crash.
      * A mismatch or unavailable query remains blocked for explicit manual review.
      */
     private boolean recoverConfigurationSettings(LiveOrderDispatcher.ActiveDispatch active) {
