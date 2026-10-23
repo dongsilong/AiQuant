@@ -18,6 +18,12 @@ SET execution_status='RECOVERED', exchange_order_id=COALESCE(#{orderId},exchange
     exchange_order_status=COALESCE(#{exchangeStatus},exchange_order_status), updated_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN','CONFIRMED','RECOVERED')
   AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
+  AND (
+      execution_status <> 'RECOVERED'
+      OR exchange_order_status IS NULL
+      OR exchange_order_status NOT IN ('FILLED','CANCELED','EXPIRED','REJECTED')
+      OR exchange_order_status=#{exchangeStatus}
+  )
   AND #{orderId} IS NOT NULL AND #{orderId}>0]]></update>
     <update id="annotateRecoveredCancelFill" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET error_message=#{message}, updated_at=#{now}
