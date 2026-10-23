@@ -37,6 +37,25 @@ class RestRequestSchedulerTest {
     }
 
     @Test
+    void unknown418ExpiryRequiresManualReset() {
+        assertTrue(BinanceGatewayAdapter.retryAfterMillis(418, null, "{\"code\":-1003,\"msg\":\"IP banned\"}") < 0L);
+        assertTrue(BinanceGatewayAdapter.retryAfterMillis(418, "not-a-date", null) < 0L);
+    }
+
+    @Test
+    void rateLimitRetryAfterSecondsAndFallbackAreConservative() {
+        assertTrue(BinanceGatewayAdapter.retryAfterMillis(429, "3", null) >= 3_000L);
+        assertTrue(BinanceGatewayAdapter.retryAfterMillis(429, null, null) == 60_000L);
+    }
+
+    @Test
+    void parsesBinanceBanUntilTimestamp() {
+        long banUntil = System.currentTimeMillis() + 120_000L;
+        long delay = BinanceGatewayAdapter.retryAfterMillis(418, null, "{\"msg\":\"IP banned until " + banUntil + "\"}");
+        assertTrue(delay > 0L && delay <= 120_000L, "should honor Binance's ban-until timestamp");
+    }
+
+    @Test
     void cooldownAppliesAcrossTradeAccountAndBackgroundQueues() {
         RestRequestScheduler scheduler = new RestRequestScheduler(1);
         scheduler.deferFor(5_000);
