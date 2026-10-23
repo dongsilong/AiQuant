@@ -73,13 +73,14 @@ def main() -> int:
                     violations.append(f"{path.name}:{content[:match.start()].count(chr(10))+1}: literal {key} value")
 
     common = COMMON.read_text(encoding="utf-8")
-    for key, expected in (
-        ("jwt-secret-key", "${AIQUANT_SA_TOKEN_JWT_SECRET_KEY}"),
-        ("privateKey", "${AIQUANT_API_DECRYPT_PRIVATE_KEY}"),
-    ):
-        values = re.findall(rf"(?m)^\s+{re.escape(key)}:\s*(\S.*)?$", common)
-        if not values or any((value or "").strip() != expected for value in values):
-            violations.append(f"{COMMON.name}: {key} must use its deployment secret")
+    jwt_values = re.findall(r"(?m)^\s+ jwt-secret-key:\s*(\S.*)?$", common)
+    if len(jwt_values) != 1 or (jwt_values[0] or "").strip() != "${AIQUANT_SA_TOKEN_JWT_SECRET_KEY}":
+        violations.append(f"{COMMON.name}: sa-token.jwt-secret-key must use its deployment secret")
+
+    api_decrypt = section(common, "# api接口加密")
+    private_values = re.findall(r"(?m)^\s+privateKey:\s*(\S.*)?$", api_decrypt)
+    if len(private_values) != 1 or (private_values[0] or "").strip() != "${AIQUANT_API_DECRYPT_PRIVATE_KEY}":
+        violations.append(f"{COMMON.name}: api-decrypt.privateKey must use its deployment secret")
 
     mqtt = section(common, "mqtt.client:")
     for field in ("username", "password"):
