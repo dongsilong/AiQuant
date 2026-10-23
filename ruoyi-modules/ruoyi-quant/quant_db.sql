@@ -326,6 +326,7 @@ CREATE TABLE `quant_strategy_symbol`
     `leverage`                    int                                                          NOT NULL COMMENT '杠杆倍数',
     `params_json`                 json                                                         NOT NULL COMMENT '策略参数JSON',
     `status`                      char(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci     NOT NULL DEFAULT '0' COMMENT '状态',
+    `runtime_enabled`             tinyint(1)                                                   NOT NULL DEFAULT 1 COMMENT '单交易对运行开关；关闭时禁止新开仓',
     PRIMARY KEY (`id`) USING BTREE,
     UNIQUE INDEX `uk_quant_strategy_symbol`(`strategy_id` ASC, `symbol_id` ASC) USING BTREE
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '策略交易对配置表' ROW_FORMAT = Dynamic;
