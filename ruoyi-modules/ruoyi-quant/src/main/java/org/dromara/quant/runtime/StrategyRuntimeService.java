@@ -362,8 +362,10 @@ public class StrategyRuntimeService {
             if (binding == null) {
                 throw new org.dromara.common.core.exception.ServiceException("策略交易对绑定不存在");
             }
+            boolean stateChanged = !Objects.equals(binding.getRuntimeEnabled(), enabled);
             binding.setRuntimeEnabled(enabled);
-            if (strategySymbolMapper.updateById(binding) != 1) {
+            // 相同状态的重复请求直接视为成功，避免受 JDBC affected-rows 配置影响。
+            if (stateChanged && strategySymbolMapper.updateById(binding) != 1) {
                 throw new org.dromara.common.core.exception.ServiceException("保存策略交易对运行状态失败");
             }
             activeRuntimes.values().stream()
