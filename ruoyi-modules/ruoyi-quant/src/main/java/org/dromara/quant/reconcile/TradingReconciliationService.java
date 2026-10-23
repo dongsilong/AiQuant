@@ -796,25 +796,45 @@ public class TradingReconciliationService {
             if (s.transactionId() == null) {
                 continue;
             }
+            // Missing financial facts are unknown, not zero/current-time defaults.
+            if (s.incomeType() == null || s.incomeType().isBlank() || s.amount() == null || s.asset() == null || s.asset().isBlank() || s.time() == null) {
+                throw new IllegalStateException("Binance financial event is missing required facts: credentialId="
+                    + credential.getId() + ", transactionId=" + s.transactionId());
+            }
+            LocalDateTime eventTime = LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC);
             QuantFinancialEventVo vo = financialEventMapper.selectVoOne(new LambdaQueryWrapper<QuantFinancialEvent>().eq(QuantFinancialEvent::getCredentialId,
                 credential.getId()).eq(QuantFinancialEvent::getExchangeTransactionId, s.transactionId()));
             QuantFinancialEvent entity = MapstructUtils.convert(vo, QuantFinancialEvent.class);
-            if (entity == null) {
-                entity = new QuantFinancialEvent();
-                entity.setCredentialId(credential.getId());
-                entity.setExchangeTransactionId(s.transactionId());
-                entity.setCreatedAt(LocalDateTime.now());
+            if (entity != null) {
+                // Treat the exchange ledger as immutable. A replay may confirm the
+                // original event, but must not silently rewrite a conflicting fact.
+                boolean sameTime = entity.getEventTime() != null
+                    && entity.getEventTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+                        .equals(eventTime.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+                if (!Objects.equals(entity.getSymbol(), s.symbol())
+                    || !Objects.equals(entity.getEventType(), s.incomeType())
+                    || entity.getAmount() == null || entity.getAmount().compareTo(s.amount()) != 0
+                    || !Objects.equals(entity.getAsset(), s.asset())
+                    || !Objects.equals(entity.getInfo(), s.info())
+                    || !sameTime) {
+                    throw new IllegalStateException("Binance financial event conflicts with persisted ledger: credentialId="
+                        + credential.getId() + ", transactionId=" + s.transactionId());
+                }
+                continue;
             }
+            entity = new QuantFinancialEvent();
+            entity.setCredentialId(credential.getId());
+            entity.setExchangeTransactionId(s.transactionId());
+            entity.setCreatedAt(LocalDateTime.now());
             entity.setSymbol(s.symbol());
             entity.setEventType(s.incomeType());
-            entity.setAmount(nvl(s.amount()));
+            entity.setAmount(s.amount());
             entity.setAsset(s.asset());
             entity.setInfo(s.info());
-            entity.setEventTime(s.time() == null ? LocalDateTime.now() : LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC));
-            if (entity.getId() == null) {
-                financialEventMapper.insert(entity);
-            } else {
-                financialEventMapper.updateById(entity);
+            entity.setEventTime(eventTime);
+            if (financialEventMapper.insert(entity) != 1) {
+                throw new IllegalStateException("Binance financial event was not persisted: credentialId="
+                    + credential.getId() + ", transactionId=" + s.transactionId());
             }
         }
     }
