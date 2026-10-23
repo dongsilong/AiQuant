@@ -2589,12 +2589,13 @@ class StrategyRuntimeSafetyTest {
             when(mapper.updateById(binding)).thenReturn(1);
 
             f.service.setStrategySymbolRuntimeEnabled(10L, false);
+            f.service.setStrategySymbolRuntimeEnabled(10L, false);
 
             assertEquals(Boolean.FALSE, binding.getRuntimeEnabled());
             assertEquals(false, ReflectionTestUtils.getField(f.runtime, "runtimeEnabled"));
-            verify(lock).lock();
-            verify(lock).unlock();
-            verify(mapper).updateById(binding);
+            verify(lock, times(2)).lock();
+            verify(lock, times(2)).unlock();
+            verify(mapper, times(1)).updateById(binding);
         } finally {
             f.service.destroy();
         }
