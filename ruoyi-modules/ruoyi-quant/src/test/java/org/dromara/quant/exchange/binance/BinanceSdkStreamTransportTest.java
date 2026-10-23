@@ -5,6 +5,7 @@ import com.binance.connector.client.common.websocket.configuration.WebSocketClie
 import com.binance.connector.client.common.websocket.dtos.RequestWrapperDTO;
 import com.binance.connector.client.common.websocket.service.StreamBlockingQueue;
 import com.binance.connector.client.common.websocket.service.StreamBlockingQueueWrapper;
+import org.eclipse.jetty.websocket.api.Callback;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Modifier;
@@ -18,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BinanceSdkStreamTransportTest {
@@ -31,6 +33,14 @@ class BinanceSdkStreamTransportTest {
     @Test
     void usesPublicConcreteJettyListenerType() {
         assertTrue(Modifier.isPublic(MarketStreamConnectionWrapper.class.getModifiers()));
+    }
+
+    @Test
+    void exposesOnlyJetty12CallbackBasedCloseSignature() throws NoSuchMethodException {
+        assertTrue(Modifier.isPublic(MarketStreamConnectionWrapper.class.getDeclaredMethod(
+            "onWebSocketClose", int.class, String.class, Callback.class).getModifiers()));
+        assertThrows(NoSuchMethodException.class, () -> MarketStreamConnectionWrapper.class.getDeclaredMethod(
+            "onWebSocketClose", int.class, String.class));
     }
 
     @Test
