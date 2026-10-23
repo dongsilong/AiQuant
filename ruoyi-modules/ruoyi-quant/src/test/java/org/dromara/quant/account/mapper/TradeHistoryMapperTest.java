@@ -1,7 +1,7 @@
 package org.dromara.quant.account.mapper;
 
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.scripting.xmltags.XMLLanguageDriver;
+import org.apache.ibatis.builder.xml.XMLMapperBuilder;
+import org.apache.ibatis.io.Resources;
 import org.apache.ibatis.session.Configuration;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -26,11 +26,16 @@ public class TradeHistoryMapperTest {
     }
 
     private String sql(List<Long> ids, String symbol) throws Exception {
-        var annotation = TradeHistoryMapper.class.getMethod("selectFills", List.class, String.class).getAnnotation(Select.class);
         var parameters = new java.util.HashMap<String, Object>();
         parameters.put("ids", ids);
         parameters.put("symbol", symbol);
-        return new XMLLanguageDriver().createSqlSource(new Configuration(), annotation.value()[0], Map.class).getBoundSql(parameters).getSql();
+        Configuration configuration = new Configuration();
+        String resource = "mapper/quant/TradeHistoryMapper.xml";
+        try (var input = Resources.getResourceAsStream(resource)) {
+            new XMLMapperBuilder(input, configuration, resource, configuration.getSqlFragments()).parse();
+        }
+        return configuration.getMappedStatement("org.dromara.quant.account.mapper.TradeHistoryMapper.selectFills")
+            .getBoundSql(parameters).getSql();
     }
 
     private Connection database() throws Exception {
