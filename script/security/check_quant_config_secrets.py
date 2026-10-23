@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Fail the production hardening CI if a known secret field regresses to plaintext.
-Only committed configuration is checked; deployment secret rotation is a separate task.
-"""
+"""Guard committed quant configuration against plaintext third-party credentials."""
 from pathlib import Path
 import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-FILES = (
+PROFILES = (
     ROOT / "ruoyi-admin/src/main/resources/application-dev.yml",
     ROOT / "ruoyi-admin/src/main/resources/application-prod.yml",
 )
@@ -30,39 +28,62 @@ def property_value(data: str, key: str) -> str:
     return (match.group(1) or "").strip()
 
 
+def is_external(value: str) -> bool:
+    return value.startswith("${") and value.endswith("}")
+
+
 def main() -> int:
     violations = []
-    for file in FILES:
-        content = file.read_text(encoding="utf-8")
+    for path in PROFILES:
+        content = path.read_text(encoding="utf-8")
         mail = section(content, "--- # mail ")
-        expected = {
+        for key, expected in {
             "enabled": "${AIQUANT_MAIL_ENABLED:false}",
             "from": "${AIQUANT_MAIL_FROM:}",
             "user": "${AIQUANT_MAIL_USER:}",
             "pass": "${AIQUANT_MAIL_PASSWORD:}",
-        }
-        for key, value in expected.items():
-            if property_value(mail, key) != value:
-                violations.append(f"{file.name}: mail.{key} must use the approved external value")
+        }.items():
+            if property_value(mail, key) != expected:
+                violations.append(f"{path.name}: mail.{key} must use the approved external value")
+
+        for marker, fields in (
+            ("--- # snail-job 配置", ("token",)),
+            ("--- # snail-ai 配置", ("token",)),
+            ("--- # sms ", ("access-key-id", "access-key-secret", "signature", "sdk-app-id")),
+        ):
+            block = section(content, marker)
+            for field in fields:
+                for match in re.finditer(rf"(?m)^\s+{re.escape(field)}:\s*(\S.*)?$", block):
+                    value = (match.group(1) or "").strip()
+                    if value and not is_external(value):
+                        violations.append(f"{path.name}: {marker.strip('- #')} {field} must be external")
+
+        justauth = section(content, "--- # 三方授权")
+        justauth_start = content.find("--- # 三方授权")
+        for match in re.finditer(r"(?m)^\s*client-secret:\s*(\S.*)?$", justauth):
+            value = (match.group(1) or "").strip()
+            if value and not is_external(value):
+                line = content[:justauth_start + match.start()].count("\n") + 1
+                violations.append(f"{path.name}:{line}: justauth client-secret must be external")
+
+        for key in ("secret-key", "password"):
+            for match in re.finditer(rf"(?m)^\s+{re.escape(key)}:\s*(\S.*)?$", content):
+                value = (match.group(1) or "").strip()
+                if value and not (value.startswith("${") or value.startswith("@")):
+                    violations.append(f"{path.name}:{content[:match.start()].count(chr(10))+1}: literal {key} value")
+
     common = COMMON.read_text(encoding="utf-8")
     mqtt = section(common, "mqtt.client:")
     for field in ("username", "password"):
         expected = f"${{AIQUANT_MQTT_{field.upper()}:}}"
         if property_value(mqtt, field) != expected:
             violations.append(f"{COMMON.name}: mqtt.client.{field} must be external")
-    # Reject any non-placeholder literal for critical quant secret keys in these profiles.
-    for file in FILES:
-        content = file.read_text(encoding="utf-8")
-        for key in ("secret-key", "password"):
-            for match in re.finditer(rf"(?m)^\s+{re.escape(key)}:\s*(\S.*)?$", content):
-                val = (match.group(1) or "").strip()
-                if val and not (val.startswith("${") or val.startswith("@")):
-                    violations.append(f"{file.name}:{content[:match.start()].count(chr(10))+1}: literal {key} value")
+
     if violations:
         for violation in violations:
             print("CONFIG-SECRET-ERROR:", violation, file=sys.stderr)
         return 1
-    print("PASS: critical LIVE application secrets are externally provided")
+    print("PASS: profile mail, task-service, SMS and OAuth credentials are externalized")
     return 0
 
 
