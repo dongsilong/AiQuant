@@ -342,6 +342,20 @@ public class StrategyRuntimeService {
      */
 
     /**
+     * 更新指定策略交易对的独立运行开关。等待当前开仓决策/派单临界区结束后再返回。
+     */
+    public void setStrategySymbolRuntimeEnabled(Long strategySymbolId, boolean enabled) {
+        activeRuntimes.values().stream()
+            .filter(runtime -> runtime.strategySymbol != null && strategySymbolId.equals(runtime.strategySymbol.getId()))
+            .forEach(runtime -> {
+                synchronized (runtime.entryDispatchLock) {
+                    runtime.runtimeEnabled = enabled;
+                    if (runtime.strategySymbol != null) runtime.strategySymbol.setRuntimeEnabled(enabled);
+                }
+            });
+    }
+
+    /**
      * 按配置周期发现/停止实例，并同步一次真实持仓；实时价格不在这里轮询。
      */
     public void supervise() {
@@ -707,7 +721,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             existingState != null && !"CLOSED".equals(existingState.getStatus()) && ((existingState.getPositionQty() != null && existingState.getPositionQty().signum() > 0) || existingState.getPendingAction() != null || "PROTECTION_CLEANUP".equals(existingState.getStatus()));
 
         boolean tradingAllowed =
-         "1".equals(strategy.getStatus()) && "0".equals(strategySymbol.getStatus()) && "0".equals(credential.getStatus()) && "0".equals(symbol.getStatus()) && (!"PAPER".equalsIgnoreCase(credential.getRunMode()) || properties.getPaper().isEnabled());
+         "1".equals(strategy.getStatus()) && "0".equals(strategySymbol.getStatus()) && !Boolean.FALSE.equals(strategySymbol.getRuntimeEnabled()) && "0".equals(credential.getStatus()) && "0".equals(symbol.getStatus()) && (!"PAPER".equalsIgnoreCase(credential.getRunMode()) || properties.getPaper().isEnabled());
 
         if (!hasOpenPosition && !tradingAllowed) {
             stopInactiveRuntime(instance.getId());
@@ -754,6 +768,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 current.instance = instance;
                 current.strategy = strategy;
                 current.strategySymbol = strategySymbol;
+                current.runtimeEnabled = !Boolean.FALSE.equals(strategySymbol.getRuntimeEnabled());
                 current.credential = credential;
                 current.params = refreshed;
                 current.protectionOnly = protectionOnly;
@@ -1300,7 +1315,18 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
 
     /** 在原有准入门禁后核实历史保护清理证明，再使用当前有效行情开仓。 */
     private void evaluateEntry(ActiveRuntime runtime, StrategyContext context) {
+        synchronized (runtime.entryDispatchLock) {
+            evaluateEntryLocked(runtime, context);
+        }
+    }
+
+    /** 开仓决策与实际派单共用同一临界区，避免暂停请求与开仓请求交错。 */
+    private void evaluateEntryLocked(ActiveRuntime runtime, StrategyContext context) {
         // FIXED: 策略/凭证/交易对被停用后仅保留保护，不再允许开仓。
+        if (!runtime.runtimeEnabled || Boolean.FALSE.equals(runtime.strategySymbol.getRuntimeEnabled())) {
+            logEntryDecision(runtime, context, "SYMBOL_RUNTIME_DISABLED", "该策略交易对已单独暂停开仓");
+            return;
+        }
         if (runtime.protectionOnly) {
             logEntryDecision(runtime, context, "PROTECTION_ONLY", "策略已停止开仓，仅保留持仓保护");
             return;
@@ -3931,6 +3957,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final AtomicBoolean reconciling = new AtomicBoolean();
         private final AtomicBoolean reconcileRequested = new AtomicBoolean();
         private final EntryRetryGate entryRetryGate = new EntryRetryGate();
+        /** 串行化交易对暂停操作与完整开仓决策/派单流程。 */
+        private final Object entryDispatchLock = new Object();
+        /** 单个交易对运行开关；关闭时只禁止新开仓，不停止已有持仓管理。 */
+        private volatile boolean runtimeEnabled = true;
         /**
          * FIXED: 仅保护模式；策略/凭证/交易对停用但仍有未平仓持仓时为 true。
          */
@@ -4041,6 +4071,7 @@ StrategyPlugin plugin, Map<String, Object> params) {
             this.instance = instance;
             this.strategy = strategy;
             this.strategySymbol = strategySymbol;
+            this.runtimeEnabled = !Boolean.FALSE.equals(strategySymbol.getRuntimeEnabled());
             this.credential = credential;
             this.symbol = symbol;
             this.plugin = plugin;
