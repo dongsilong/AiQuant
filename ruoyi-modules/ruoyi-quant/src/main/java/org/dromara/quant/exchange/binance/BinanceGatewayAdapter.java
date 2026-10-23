@@ -1330,21 +1330,36 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     ApiClient marketRestClient(ApiClient client) {
-        client.setHttpClient(marketHttpClient(client.getHttpClient()));
+        client.setHttpClient(restHttpClient(client.getHttpClient(), MARKET_REST_CONNECT_TIMEOUT_SECONDS, MARKET_REST_READ_TIMEOUT_SECONDS,
+            MARKET_REST_CALL_TIMEOUT_SECONDS, RestRequestScheduler.Kind.BACKGROUND));
         return client;
     }
 
     ApiClient accountRestClient(ApiClient client) {
         client.setHttpClient(restHttpClient(client.getHttpClient(), ACCOUNT_REST_CONNECT_TIMEOUT_SECONDS, ACCOUNT_REST_READ_TIMEOUT_SECONDS,
-            ACCOUNT_REST_CALL_TIMEOUT_SECONDS));
+            ACCOUNT_REST_CALL_TIMEOUT_SECONDS, RestRequestScheduler.Kind.ACCOUNT));
         return client;
     }
 
     private okhttp3.OkHttpClient restHttpClient(okhttp3.OkHttpClient client, long connectSeconds, long readSeconds, long callSeconds) {
+        return restHttpClient(client, connectSeconds, readSeconds, callSeconds, RestRequestScheduler.Kind.BACKGROUND);
+    }
+
+    private okhttp3.OkHttpClient restHttpClient(okhttp3.OkHttpClient client, long connectSeconds, long readSeconds, long callSeconds,
+                                                RestRequestScheduler.Kind kind) {
         return client.newBuilder().connectionPool(restPool).dispatcher(restDispatcher)
             .connectTimeout(connectSeconds, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(readSeconds, java.util.concurrent.TimeUnit.SECONDS)
             .callTimeout(callSeconds, java.util.concurrent.TimeUnit.SECONDS)
+            // Acquire a slot for every actual HTTP request, not merely when an SDK client is constructed.
+            // Some SDK API objects issue multiple requests, so client-construction throttling is insufficient.
+            .addInterceptor(chain -> {
+                long queueStarted = System.nanoTime();
+                restScheduler.acquire(kind);
+                log.debug("Binance REST 获准执行 kind={} queueMillis={}", kind,
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted));
+                return chain.proceed(chain.request());
+            })
             .retryOnConnectionFailure(false).build();
     }
 
@@ -1410,15 +1425,19 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             config.setSignatureConfiguration(signature);
             long offset = clockOffset(config.getUrl());
             ApiClient client = new ApiClient(config, new OffsetAuthenticationFactory(offset));
-            return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT ? accountRestClient(client) : restClient(client));
+            return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT ? accountRestClient(client) : restClient(client, kind));
         }
         ApiClient client = new ApiClient(config);
-        return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT ? accountRestClient(client) : restClient(client));
+        return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT ? accountRestClient(client) : restClient(client, kind));
     }
 
     ApiClient restClient(ApiClient client) {
+        return restClient(client, RestRequestScheduler.Kind.BACKGROUND);
+    }
+
+    private ApiClient restClient(ApiClient client, RestRequestScheduler.Kind kind) {
         // 共享连接池，仍保留 SDK 的每请求签名与代理配置；有限超时避免阻塞本地风控。
-        client.setHttpClient(restHttpClient(client.getHttpClient(), 3L, 3L, 5L));
+        client.setHttpClient(restHttpClient(client.getHttpClient(), 3L, 3L, 5L, kind));
         return client;
     }
 
@@ -1430,9 +1449,6 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     private ClientConfiguration restConfiguration(String baseUrl, RestRequestScheduler.Kind kind) {
-        long queueStarted = System.nanoTime();
-        restScheduler.acquire(kind);
-        log.debug("Binance REST 获准执行 kind={} queueMillis={}", kind, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted));
         ClientConfiguration config = new ClientConfiguration();
         config.setUrl(baseUrl);
         // SDK 默认会自动重试 429，容易放大 IP 权重；由上层低频调度和退避处理。
