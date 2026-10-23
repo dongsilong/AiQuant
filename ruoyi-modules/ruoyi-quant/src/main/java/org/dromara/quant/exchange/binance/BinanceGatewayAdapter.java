@@ -246,43 +246,48 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     private static long retryAfterMillis(com.binance.connector.client.common.ApiException error) {
+        String retryAfter = null;
         if (error.getResponseHeaders() != null) {
             for (var header : error.getResponseHeaders().entrySet()) {
-                if (!"retry-after".equalsIgnoreCase(header.getKey()) || header.getValue() == null || header.getValue().isEmpty()) {
-                    continue;
-                }
-                String value = header.getValue().getFirst();
-                try {
-                    return Math.max(1L, Math.multiplyExact(Long.parseLong(value.trim()), 1_000L));
-                } catch (RuntimeException ignored) {
-                    try {
-                        return Math.max(1L, java.time.Duration.between(java.time.Instant.now(), java.time.ZonedDateTime.parse(value,
-                            java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()).toMillis());
-                    } catch (RuntimeException ignoredDate) {
-                        // Fall through to Binance's ban-until timestamp or a conservative default.
-                    }
+                if ("retry-after".equalsIgnoreCase(header.getKey()) && header.getValue() != null && !header.getValue().isEmpty()) {
+                    retryAfter = header.getValue().getFirst();
+                    break;
                 }
             }
         }
-        String body = error.getResponseBody();
+        return retryAfterMillis(error.getCode(), retryAfter, error.getResponseBody());
+    }
+
+    private static long retryAfterMillis(int statusCode, String retryAfter, String body) {
+        if (retryAfter != null && !retryAfter.isBlank()) {
+            String value = retryAfter.trim();
+            try {
+                return Math.max(1L, Math.multiplyExact(Long.parseLong(value), 1_000L));
+            } catch (RuntimeException ignored) {
+                try {
+                    return Math.max(1L, java.time.Duration.between(java.time.Instant.now(), java.time.ZonedDateTime.parse(value,
+                        java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()).toMillis());
+                } catch (RuntimeException ignoredDate) {
+                    // Fall through to Binance's ban-until timestamp.
+                }
+            }
+        }
         if (body != null) {
             java.util.regex.Matcher bannedUntil = java.util.regex.Pattern.compile("(?i)banned until\\s+(\\d+)").matcher(body);
             if (bannedUntil.find()) {
                 try {
                     return Math.max(1L, Long.parseLong(bannedUntil.group(1)) - System.currentTimeMillis());
                 } catch (NumberFormatException ignored) {
-                    // Use the bounded fallback below.
+                    // An unparseable expiry is not safe to treat as a short ban.
                 }
             }
         }
         // Do not guess an expiry for HTTP 418: Binance IP bans can outlast a short fallback
         // and may escalate. A negative sentinel triggers a process-local manual-reset latch.
-        if (error.getCode() == 418) {
+        if (statusCode == 418) {
             return -1L;
         }
         // A 429 without a usable Retry-After header still represents a rate-limit response.
-        // A one-second fallback can create a synchronized retry storm while the one-minute
-        // request-weight window is still exhausted, so defer conservatively for 60 seconds.
         return 60_000L;
     }
 
@@ -1370,6 +1375,18 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 log.debug("Binance REST 获准执行 kind={} queueMillis={}", kind,
                     java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted));
                 okhttp3.Response response = chain.proceed(chain.request());
+                // Apply HTTP 418 cooldown/latch centrally so even SDK methods without a local
+                // ApiException wrapper cannot leave the shared REST scheduler open.
+                if (response.code() == 418) {
+                    String body = response.peekBody(64L * 1024L).string();
+                    long retryAfterMillis = retryAfterMillis(418, response.header("Retry-After"), body);
+                    if (retryAfterMillis < 0L) {
+                        restScheduler.blockUntilManualReset();
+                        log.error("Binance REST HTTP 418 has no trustworthy expiry; REST is latched closed until operator restart.");
+                    } else {
+                        restScheduler.deferFor(retryAfterMillis);
+                    }
+                }
                 // Capture Binance's actual rolling weight when exposed by the endpoint. This is
                 // diagnostic telemetry for validating budgets; never infer a universal limit from it.
                 String usedWeight = response.header("X-MBX-USED-WEIGHT-1M");
