@@ -50,7 +50,7 @@ SET dispatch_status='RECOVERED', updated_at=NOW()
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
   AND symbol=#{symbol} AND client_order_id=#{clientOrderId}
   AND operation_type='CONFIG_SETTINGS' AND exchange_order_id IS NULL
-  AND dispatch_status='UNKNOWN'
+  AND dispatch_status='CONFIG_APPLIED'
   AND EXISTS (
     SELECT 1 FROM quant_live_dispatch_guard g
     WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
