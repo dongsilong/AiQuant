@@ -961,11 +961,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         Long actualOrderId = number(data, "getOrderId");
         String actualClientOrderId = string(data, "getClientOrderId");
         String actualSymbol = string(data, "getSymbol");
-        if (actualOrderId == null || actualOrderId <= 0 || actualClientOrderId == null || actualClientOrderId.isBlank()
-            || actualSymbol == null || actualSymbol.isBlank()
-            || !symbol.trim().equalsIgnoreCase(actualSymbol)
-            || orderId != null && !orderId.equals(actualOrderId)
-            || clientOrderId != null && !clientOrderId.equals(actualClientOrderId)) {
+        if (!hasExactOrderIdentity(symbol, orderId, clientOrderId, actualOrderId, actualClientOrderId, actualSymbol)) {
             throw new IllegalStateException("Binance 精确订单查询缺少或返回不匹配的订单身份，保持派发恢复阻断");
         }
         String status = string(data, "getStatus");
@@ -1024,6 +1020,21 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return data.stream().map(item -> new ProtectionOrderSnapshot(string(item, "getSymbol"), number(item, "getAlgoId"), string(item, "getClientAlgoId"), normalizeAlgoStatus(string(item,
             "getAlgoStatus")), string(item, "getSide"), string(item, "getPositionSide"), string(item, "getOrderType"), decimal(string(item, "getQuantity")), decimal(string(item,
             "getTriggerPrice")), instant(number(item, "getUpdateTime")), null, Boolean.valueOf(string(item, "getReduceOnly")), Boolean.valueOf(string(item, "getClosePosition")))).filter(item -> symbol == null || symbol.equalsIgnoreCase(item.symbol())).toList();
+    }
+
+    /**
+     * Verify order identity using only fields returned by the exchange; never
+     * fill missing response fields from the query arguments.
+     */
+    static boolean hasExactOrderIdentity(String requestedSymbol, Long requestedOrderId, String requestedClientOrderId,
+                                         Long actualOrderId, String actualClientOrderId, String actualSymbol) {
+        return requestedSymbol != null && !requestedSymbol.isBlank()
+            && actualOrderId != null && actualOrderId > 0
+            && actualClientOrderId != null && !actualClientOrderId.isBlank()
+            && actualSymbol != null && !actualSymbol.isBlank()
+            && requestedSymbol.trim().equalsIgnoreCase(actualSymbol)
+            && (requestedOrderId == null || requestedOrderId.equals(actualOrderId))
+            && (requestedClientOrderId == null || requestedClientOrderId.equals(actualClientOrderId));
     }
 
     /**
