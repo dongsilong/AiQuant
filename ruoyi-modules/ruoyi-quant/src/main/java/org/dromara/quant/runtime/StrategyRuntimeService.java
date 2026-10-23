@@ -41,6 +41,8 @@ import org.dromara.quant.strategy.mapper.QuantStrategyInstanceMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.util.QuantJsonMapper;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -67,6 +69,8 @@ public class StrategyRuntimeService {
      * 量化模块配置。
      */
     private final QuantProperties properties;
+    /** 用于跨节点串行化交易对暂停操作与开仓派单。 */
+    private final RedissonClient redissonClient;
     /**
      * 策略实例 Mapper。
      */
@@ -347,23 +351,39 @@ public class StrategyRuntimeService {
      * 更新指定策略交易对的独立运行开关。等待当前开仓决策/派单临界区结束后再返回。
      */
     public void setStrategySymbolRuntimeEnabled(Long strategySymbolId, boolean enabled) {
-        Object symbolLock = strategySymbolLocks.computeIfAbsent(strategySymbolId, ignored -> new Object());
-        synchronized (symbolLock) {
-            QuantStrategySymbol binding = strategySymbolMapper.selectById(strategySymbolId);
-            if (binding == null) {
-                throw new org.dromara.common.core.exception.ServiceException("策略交易对绑定不存在");
-            }
-            binding.setRuntimeEnabled(enabled);
-            strategySymbolMapper.updateById(binding);
-            activeRuntimes.values().stream()
-                .filter(runtime -> runtime.strategySymbol != null && strategySymbolId.equals(runtime.strategySymbol.getId()))
-                .forEach(runtime -> {
-                    synchronized (runtime.entryDispatchLock) {
-                        runtime.runtimeEnabled = enabled;
-                        if (runtime.strategySymbol != null) runtime.strategySymbol.setRuntimeEnabled(enabled);
-                    }
-                });
+        if (strategySymbolId == null) {
+            throw new org.dromara.common.core.exception.ServiceException("策略交易对绑定标识不能为空");
         }
+        // 分布式锁让暂停接口等待其他节点正在执行的开仓决策/派单结束后再返回。
+        RLock distributedLock = redissonClient.getLock(strategySymbolRuntimeLockKey(strategySymbolId));
+        distributedLock.lock();
+        try {
+            Object symbolLock = strategySymbolLocks.computeIfAbsent(strategySymbolId, ignored -> new Object());
+            synchronized (symbolLock) {
+                QuantStrategySymbol binding = strategySymbolMapper.selectById(strategySymbolId);
+                if (binding == null) {
+                    throw new org.dromara.common.core.exception.ServiceException("策略交易对绑定不存在");
+                }
+                binding.setRuntimeEnabled(enabled);
+                if (strategySymbolMapper.updateById(binding) != 1) {
+                    throw new org.dromara.common.core.exception.ServiceException("保存策略交易对运行状态失败");
+                }
+                activeRuntimes.values().stream()
+                    .filter(runtime -> runtime.strategySymbol != null && strategySymbolId.equals(runtime.strategySymbol.getId()))
+                    .forEach(runtime -> {
+                        synchronized (runtime.entryDispatchLock) {
+                            runtime.runtimeEnabled = enabled;
+                            runtime.strategySymbol.setRuntimeEnabled(enabled);
+                        }
+                    });
+            }
+        } finally {
+            if (distributedLock.isHeldByCurrentThread()) distributedLock.unlock();
+        }
+    }
+
+    private static String strategySymbolRuntimeLockKey(Long strategySymbolId) {
+        return "quant:strategy-symbol-runtime:" + strategySymbolId;
     }
 
     /**
@@ -1335,8 +1355,22 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
 
     /** 在原有准入门禁后核实历史保护清理证明，再使用当前有效行情开仓。 */
     private void evaluateEntry(ActiveRuntime runtime, StrategyContext context) {
-        synchronized (runtime.entryDispatchLock) {
-            evaluateEntryLocked(runtime, context);
+        Long strategySymbolId = runtime.strategySymbol == null ? null : runtime.strategySymbol.getId();
+        if (strategySymbolId == null) {
+            // 未持久化的测试/构造上下文不应发起分布式锁请求；生产实例始终有绑定 ID。
+            synchronized (runtime.entryDispatchLock) {
+                evaluateEntryLocked(runtime, context);
+            }
+            return;
+        }
+        RLock distributedLock = redissonClient.getLock(strategySymbolRuntimeLockKey(strategySymbolId));
+        distributedLock.lock();
+        try {
+            synchronized (runtime.entryDispatchLock) {
+                evaluateEntryLocked(runtime, context);
+            }
+        } finally {
+            if (distributedLock.isHeldByCurrentThread()) distributedLock.unlock();
         }
     }
 
