@@ -103,12 +103,11 @@ public class ProtectionOrderService {
             return recoverProtectionCreate(active);
         }
         if ("CONFIG_SETTINGS".equals(active.operationType())) {
-            // DISPATCHING means the original request may still be in flight. A matching
-            // exchange snapshot cannot prove that no later side effect is pending.
-            // Auto-recovery is therefore limited to UNKNOWN, written only after the
-            // request path has returned/failed; crash-left DISPATCHING remains fail-closed.
-            if (!"UNKNOWN".equals(active.dispatchStatus())) {
-                log.warn("配置派发仍处于非终态，无法证明原请求已停止，保持策略启动阻断 accountId={} symbol={} dispatchStatus={}",
+            // Only CONFIG_APPLIED proves both configuration calls returned successfully and
+            // that confirmation was committed before guard release. DISPATCHING/UNKNOWN may
+            // still have a remote side effect in flight, so a matching snapshot is insufficient.
+            if (!"CONFIG_APPLIED".equals(active.dispatchStatus())) {
+                log.warn("配置派发未持久化确认完成，无法证明远端请求已结束，保持策略启动阻断 accountId={} symbol={} dispatchStatus={}",
                     credentialId, symbol, active.dispatchStatus());
                 return false;
             }
@@ -122,8 +121,8 @@ public class ProtectionOrderService {
     /**
      * CONFIG_SETTINGS has no exchange order ID. Release its guard only when an
      * independent Binance read proves both desired settings match the durable intent.
-     * Caller must establish UNKNOWN status first; DISPATCHING may still have an in-flight
-     * request and is intentionally not auto-recovered after a process crash.
+     * Caller must establish CONFIG_APPLIED status first. DISPATCHING/UNKNOWN may still
+     * have a remote side effect in flight and are intentionally not auto-recovered.
      * A mismatch or unavailable query remains blocked for explicit manual review.
      */
     private boolean recoverConfigurationSettings(LiveOrderDispatcher.ActiveDispatch active) {
