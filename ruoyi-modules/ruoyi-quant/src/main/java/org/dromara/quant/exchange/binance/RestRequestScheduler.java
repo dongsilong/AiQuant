@@ -14,6 +14,8 @@ final class RestRequestScheduler {
     private final long interval;
     private long nextStart;
     private long blockedUntil;
+    /** A 418 without a trustworthy expiry requires operator intervention; never auto-expire this latch. */
+    private boolean manualBlock;
     private int cursor;
     @SuppressWarnings("unchecked")
     RestRequestScheduler(long intervalMillis) {
@@ -22,6 +24,9 @@ final class RestRequestScheduler {
     }
 
     synchronized void acquire(Kind kind) {
+        if (manualBlock) {
+            throw new ExchangeMarketPort.RequestDeferredException();
+        }
         long initialNow = System.nanoTime();
         if (initialNow < blockedUntil) {
             throw new ExchangeMarketPort.RequestDeferredException(TimeUnit.NANOSECONDS.toMillis(blockedUntil - initialNow) + 1L);
@@ -36,6 +41,9 @@ final class RestRequestScheduler {
         try {
             for (; ; ) {
                 if (Thread.currentThread().isInterrupted()) {
+                    throw new ExchangeMarketPort.RequestDeferredException();
+                }
+                if (manualBlock) {
                     throw new ExchangeMarketPort.RequestDeferredException();
                 }
                 long now = System.nanoTime();
@@ -69,6 +77,15 @@ final class RestRequestScheduler {
             queue.remove(ticket);
             notifyAll();
         }
+    }
+
+    /**
+     * Permanently blocks REST requests for this process after an unbounded HTTP 418.
+     * Restarting the process is an explicit operator action, not an automatic expiry.
+     */
+    synchronized void blockUntilManualReset() {
+        manualBlock = true;
+        notifyAll();
     }
 
     synchronized void deferFor(long delayMillis) {
