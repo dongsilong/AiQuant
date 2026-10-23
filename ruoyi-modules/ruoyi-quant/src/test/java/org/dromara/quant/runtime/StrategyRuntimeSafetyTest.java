@@ -2536,6 +2536,28 @@ class StrategyRuntimeSafetyTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void disabledStrategySymbolBlocksEntryEvaluationWithoutAffectingExitManagement() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "runtimeEnabled", false);
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("CLOSED");
+            state.setPositionQty(BigDecimal.ZERO);
+
+            var context = new StrategyContext("BTCUSDT", "LONG", BigDecimal.ZERO, new BigDecimal("100"), BigDecimal.ONE,
+                Instant.now(), false, Instant.now(), BigDecimal.ZERO, BigDecimal.ZERO);
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, context);
+
+            verify(f.plugin, never()).evaluateEntry(any(), anyMap());
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+            verify(execution, never()).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
     private Fixture fixture() throws Exception {
         var constructor = StrategyRuntimeService.class.getConstructors()[0];
         Object[] args = Arrays.stream(constructor.getParameterTypes()).map(type -> type == QuantProperties.class ? new QuantProperties() : mock(type)).toArray();
