@@ -657,7 +657,9 @@ public class TradingReconciliationService {
             if (entity.getId() == null) {
                 orderMapper.insert(entity);
             } else {
-                orderMapper.updateById(entity);
+                // 订单历史与活动订单列表可能返回较旧快照。更新必须走 SQL 原子单调合并，
+                // 不能用 updateById 把已成交数量或终态回滚；返回 0 表示事实冲突/过期，保留现有账本。
+                orderMapper.mergeExchangeFactIfMonotonic(entity);
             }
             // 历史/当前订单快照同样可补齐受理后的成交事实；价格、数量、时间均沿用交易所返回值。
             if (decisionLogs != null) {
