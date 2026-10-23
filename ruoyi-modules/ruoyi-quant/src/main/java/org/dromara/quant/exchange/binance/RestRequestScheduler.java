@@ -89,6 +89,10 @@ final class RestRequestScheduler {
         notifyAll();
     }
 
+    synchronized boolean isManuallyBlocked() {
+        return manualBlock;
+    }
+
     synchronized void deferFor(long delayMillis) {
         long duration = TimeUnit.MILLISECONDS.toNanos(Math.max(1L, delayMillis));
         blockedUntil = Math.max(blockedUntil, System.nanoTime() + duration);
