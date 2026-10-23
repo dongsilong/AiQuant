@@ -358,25 +358,22 @@ public class StrategyRuntimeService {
         RLock distributedLock = redissonClient.getLock(strategySymbolRuntimeLockKey(strategySymbolId));
         distributedLock.lock();
         try {
-            Object symbolLock = strategySymbolLocks.computeIfAbsent(strategySymbolId, ignored -> new Object());
-            synchronized (symbolLock) {
-                QuantStrategySymbol binding = strategySymbolMapper.selectById(strategySymbolId);
-                if (binding == null) {
-                    throw new org.dromara.common.core.exception.ServiceException("策略交易对绑定不存在");
-                }
-                binding.setRuntimeEnabled(enabled);
-                if (strategySymbolMapper.updateById(binding) != 1) {
-                    throw new org.dromara.common.core.exception.ServiceException("保存策略交易对运行状态失败");
-                }
-                activeRuntimes.values().stream()
-                    .filter(runtime -> runtime.strategySymbol != null && strategySymbolId.equals(runtime.strategySymbol.getId()))
-                    .forEach(runtime -> {
-                        synchronized (runtime.entryDispatchLock) {
-                            runtime.runtimeEnabled = enabled;
-                            runtime.strategySymbol.setRuntimeEnabled(enabled);
-                        }
-                    });
+            QuantStrategySymbol binding = strategySymbolMapper.selectById(strategySymbolId);
+            if (binding == null) {
+                throw new org.dromara.common.core.exception.ServiceException("策略交易对绑定不存在");
             }
+            binding.setRuntimeEnabled(enabled);
+            if (strategySymbolMapper.updateById(binding) != 1) {
+                throw new org.dromara.common.core.exception.ServiceException("保存策略交易对运行状态失败");
+            }
+            activeRuntimes.values().stream()
+                .filter(runtime -> runtime.strategySymbol != null && strategySymbolId.equals(runtime.strategySymbol.getId()))
+                .forEach(runtime -> {
+                    synchronized (runtime.entryDispatchLock) {
+                        runtime.runtimeEnabled = enabled;
+                        runtime.strategySymbol.setRuntimeEnabled(enabled);
+                    }
+                });
         } finally {
             if (distributedLock.isHeldByCurrentThread()) distributedLock.unlock();
         }
