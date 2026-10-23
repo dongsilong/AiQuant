@@ -232,6 +232,13 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         // 不附带原始异常，避免 SDK 的 URL、签名和请求头进入日志。
         if (error != null && (error.getCode() == 418 || error.getCode() == 429)) {
             long retryAfterMillis = retryAfterMillis(error);
+            if (error.getCode() == 418 && retryAfterMillis < 0L) {
+                // Binance did not provide a parseable ban expiry. Do not guess that the ban
+                // expires after 60 seconds: require an operator-controlled process restart.
+                restScheduler.blockUntilManualReset();
+                log.error("Binance REST HTTP 418 has no trustworthy expiry; REST is latched closed until operator restart. stage={}", stage);
+                return new ExchangeMarketPort.RateLimitException(stage, error.getCode(), errorCode(error), message, 86_400_000L);
+            }
             restScheduler.deferFor(retryAfterMillis);
             return new ExchangeMarketPort.RateLimitException(stage, error.getCode(), errorCode(error), message, retryAfterMillis);
         }
@@ -268,10 +275,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 }
             }
         }
+        // Do not guess an expiry for HTTP 418: Binance IP bans can outlast a short fallback
+        // and may escalate. A negative sentinel triggers a process-local manual-reset latch.
+        if (error.getCode() == 418) {
+            return -1L;
+        }
         // A 429 without a usable Retry-After header still represents a rate-limit response.
         // A one-second fallback can create a synchronized retry storm while the one-minute
-        // request-weight window is still exhausted. Defer conservatively; 418 bans are also
-        // held for at least this long unless Binance supplied a later ban-until timestamp.
+        // request-weight window is still exhausted, so defer conservatively for 60 seconds.
         return 60_000L;
     }
 
