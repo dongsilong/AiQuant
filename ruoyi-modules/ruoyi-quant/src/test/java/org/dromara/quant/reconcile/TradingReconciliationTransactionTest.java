@@ -455,4 +455,27 @@ class TradingReconciliationTransactionTest {
         verify(fence).advance(eq(1L), any());
     }
 
+
+    @Test
+    void orderSnapshotReconciliationUsesAtomicMonotonicMergeInsteadOfBlindEntityUpdate() {
+        var local = new org.dromara.quant.order.domain.QuantOrder();
+        local.setId(88L);
+        local.setCredentialId(1L);
+        local.setSymbol("BTCUSDT");
+        local.setExchangeOrderId(88L);
+        local.setClientOrderId("client-88");
+        local.setStatus("FILLED");
+        local.setExecutedQuantity(BigDecimal.ONE);
+        when(orders.selectOne(any())).thenReturn(local);
+        when(orders.mergeExchangeFactIfMonotonic(any())).thenReturn(0);
+        var stale = new ExchangeGateway.OrderSnapshot("BTCUSDT", 88L, "client-88", "BUY", "MARKET", "NEW",
+            BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, Instant.now(), null);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncOrders", credential(), List.of(stale));
+
+        verify(orders).mergeExchangeFactIfMonotonic(any(org.dromara.quant.order.domain.QuantOrder.class));
+        verify(orders, never()).updateById(any(org.dromara.quant.order.domain.QuantOrder.class));
+        assertEquals("FILLED", local.getStatus());
+        assertEquals(BigDecimal.ONE, local.getExecutedQuantity());
+    }
 }
