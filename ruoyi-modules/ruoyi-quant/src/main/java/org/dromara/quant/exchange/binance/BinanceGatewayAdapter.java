@@ -1208,9 +1208,21 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 throw new OrderRejectedException(code, message);
             }
             throw requestFailure("PLACE_ORDER", ex);
+        } catch (RuntimeException ex) {
+            // The shared interceptor throws RequestDeferredException before chain.proceed(),
+            // so this order HTTP request was definitely not sent. All other runtime failures
+            // remain ambiguous because the SDK may already have written the request.
+            throw classifyOrderDispatchFailure(ex);
         }
         NewOrderResponse data = response.getData();
         return new OrderResult(data.getOrderId(), data.getClientOrderId(), data.getStatus());
+    }
+
+    static RuntimeException classifyOrderDispatchFailure(RuntimeException ex) {
+        if (ex instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
+            return new OrderNotSentException("REST 调度器在下单 HTTP 请求发送前拒绝派发，订单未发送；请退避 " + deferred.retryAfterMillis() + "ms");
+        }
+        return ex;
     }
 
     /**
