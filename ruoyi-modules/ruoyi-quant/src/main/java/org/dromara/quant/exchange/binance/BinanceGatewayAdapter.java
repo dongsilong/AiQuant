@@ -1378,13 +1378,23 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 // Apply HTTP 418 cooldown/latch centrally so even SDK methods without a local
                 // ApiException wrapper cannot leave the shared REST scheduler open.
                 if (response.code() == 418) {
-                    String body = response.peekBody(64L * 1024L).string();
-                    long retryAfterMillis = retryAfterMillis(418, response.header("Retry-After"), body);
-                    if (retryAfterMillis < 0L) {
+                    String body;
+                    try {
+                        body = response.peekBody(64L * 1024L).string();
+                    } catch (java.io.IOException inspectionFailure) {
+                        // If the expiry cannot be inspected, fail closed instead of guessing.
                         restScheduler.blockUntilManualReset();
-                        log.error("Binance REST HTTP 418 has no trustworthy expiry; REST is latched closed until operator restart.");
-                    } else {
-                        restScheduler.deferFor(retryAfterMillis);
+                        log.error("Binance REST HTTP 418 expiry could not be inspected; REST is latched closed until operator restart.");
+                        body = null;
+                    }
+                    if (!restScheduler.isManuallyBlocked()) {
+                        long retryAfterMillis = retryAfterMillis(418, response.header("Retry-After"), body);
+                        if (retryAfterMillis < 0L) {
+                            restScheduler.blockUntilManualReset();
+                            log.error("Binance REST HTTP 418 has no trustworthy expiry; REST is latched closed until operator restart.");
+                        } else {
+                            restScheduler.deferFor(retryAfterMillis);
+                        }
                     }
                 }
                 // Capture Binance's actual rolling weight when exposed by the endpoint. This is
