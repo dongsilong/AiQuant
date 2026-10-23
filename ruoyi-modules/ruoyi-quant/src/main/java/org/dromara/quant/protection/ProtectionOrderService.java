@@ -83,8 +83,8 @@ public class ProtectionOrderService {
     }
 
     /**
-     * 策略订阅启动前检查账户交易对门禁。只恢复持久化身份与交易所精确事实一致的保护创建/撤销；
-     * 其他未决操作或任何不确定事实都继续阻止该策略启动。
+     * 策略订阅启动前检查账户交易对门禁。只恢复持久化身份与交易所精确事实一致的保护创建/撤销，
+     * 或由交易所实际保证金模式和杠杆共同证明已生效的配置操作；其他未知状态继续阻止策略启动。
      */
     public boolean recoverDispatchBeforeStrategyStart(Long credentialId, String symbol) {
         LiveOrderDispatcher.ActiveDispatch active = requireLiveDispatcher().activeDispatch(credentialId, symbol);
@@ -136,12 +136,14 @@ public class ProtectionOrderService {
             return false;
         }
         if (expectedLeverage < 1 || expectedLeverage > 125) {
+            log.warn("配置派发票据杠杆超出有效范围，保持启动阻断 accountId={} symbol={} dispatchKey={}",
+                active.credentialId(), active.symbol(), active.dispatchKey());
             return false;
         }
         try {
             var credentialEntity = executionApplicationService.requireCredential(active.credentialId());
             ExchangeGateway.Credential credential = executionApplicationService.toCredential(credentialEntity);
-            ExchangeGateway.SymbolTradingSettings actual = gateway.querySymbolTradingSettings(credential, active.symbol());
+            org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings actual = gateway.querySymbolTradingSettings(credential, active.symbol());
             if (actual == null || actual.symbol() == null || !active.symbol().equalsIgnoreCase(actual.symbol())
                 || !identity[1].equalsIgnoreCase(actual.marginMode()) || expectedLeverage != actual.leverage()) {
                 log.warn("配置派发未知状态与交易所实际配置不一致，继续保持启动阻断 accountId={} symbol={} desiredMarginMode={} desiredLeverage={} actualMarginMode={} actualLeverage={}",
