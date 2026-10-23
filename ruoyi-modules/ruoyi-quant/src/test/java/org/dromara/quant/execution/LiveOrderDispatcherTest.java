@@ -84,6 +84,33 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
+    void configRecoveryRequiresDurableConfigAppliedStatusAndExactExchangeSettings() throws Exception {
+        var f = fixture();
+        var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-recovery", "ISOLATED", 10);
+        f.first().unknown(setup);
+
+        assertFalse(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-recovery",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
+        assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "config-recovery"));
+        assertEquals("config-recovery", f.jdbc().queryForObject(
+            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+
+        // Simulate a process crash after both Binance calls returned and CONFIG_APPLIED
+        // was committed, but before the separate guard-release transaction committed.
+        f.jdbc().update("""
+            UPDATE quant_order_dispatch_ticket SET dispatch_status='CONFIG_APPLIED'
+            WHERE credential_id=1 AND idempotency_key='config-recovery'
+            """);
+        assertFalse(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-recovery",
+            "SETTINGS:CROSSED:10", "CROSSED", 10));
+        assertTrue(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-recovery",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
+        assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "config-recovery"));
+        assertNull(f.jdbc().queryForObject(
+            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+    }
+
+    @Test
     void strategyDispatchReportsExpiredLeaseSeparatelyFromOccupiedAccountSymbolSlot() throws Exception {
         var f = fixture();
         var expired = assertThrows(LiveOrderDispatcher.DispatchBlockedException.class,
