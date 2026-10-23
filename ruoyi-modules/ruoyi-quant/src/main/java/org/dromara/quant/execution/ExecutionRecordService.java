@@ -114,13 +114,16 @@ public class ExecutionRecordService {
      */
     public void markRecovered(QuantExecutionRecord entity, Long exchangeOrderId, String exchangeStatus) {
         LocalDateTime now = LocalDateTime.now();
-        if (mapper.markRecoveredAfterFact(entity.getId(), exchangeOrderId, exchangeStatus, now) == 1) {
-            entity.setExchangeOrderId(exchangeOrderId);
-            entity.setExecutionStatus("RECOVERED");
-            if (exchangeStatus != null) {
-                entity.setExchangeOrderStatus(exchangeStatus);
-            }
-            entity.setUpdatedAt(now);
+        if (mapper.markRecoveredAfterFact(entity.getId(), exchangeOrderId, exchangeStatus, now) != 1) {
+            // Never let a caller treat a non-persisted recovery fact as durable
+            // and release the account-symbol dispatch guard.
+            throw new IllegalStateException("已核实交易所订单，但执行恢复事实未能持久化；保留派发阻断");
         }
+        entity.setExchangeOrderId(exchangeOrderId);
+        entity.setExecutionStatus("RECOVERED");
+        if (exchangeStatus != null) {
+            entity.setExchangeOrderStatus(exchangeStatus);
+        }
+        entity.setUpdatedAt(now);
     }
 }
