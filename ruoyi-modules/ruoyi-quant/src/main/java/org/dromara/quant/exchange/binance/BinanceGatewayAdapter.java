@@ -1377,18 +1377,19 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 okhttp3.Response response = chain.proceed(chain.request());
                 // Apply HTTP 418 cooldown/latch centrally so even SDK methods without a local
                 // ApiException wrapper cannot leave the shared REST scheduler open.
-                if (response.code() == 418) {
-                    String body;
-                    try {
-                        body = response.peekBody(64L * 1024L).string();
-                    } catch (java.io.IOException inspectionFailure) {
-                        // If the expiry cannot be inspected, fail closed instead of guessing.
-                        restScheduler.blockUntilManualReset();
-                        log.error("Binance REST HTTP 418 expiry could not be inspected; REST is latched closed until operator restart.");
-                        body = null;
+                if (response.code() == 418 || response.code() == 429) {
+                    String body = null;
+                    if (response.code() == 418) {
+                        try {
+                            body = response.peekBody(64L * 1024L).string();
+                        } catch (java.io.IOException inspectionFailure) {
+                            // If the expiry cannot be inspected, fail closed instead of guessing.
+                            restScheduler.blockUntilManualReset();
+                            log.error("Binance REST HTTP 418 expiry could not be inspected; REST is latched closed until operator restart.");
+                        }
                     }
                     if (!restScheduler.isManuallyBlocked()) {
-                        long retryAfterMillis = retryAfterMillis(418, response.header("Retry-After"), body);
+                        long retryAfterMillis = retryAfterMillis(response.code(), response.header("Retry-After"), body);
                         if (retryAfterMillis < 0L) {
                             restScheduler.blockUntilManualReset();
                             log.error("Binance REST HTTP 418 has no trustworthy expiry; REST is latched closed until operator restart.");
