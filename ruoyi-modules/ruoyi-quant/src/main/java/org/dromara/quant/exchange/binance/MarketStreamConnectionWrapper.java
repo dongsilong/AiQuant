@@ -4,7 +4,6 @@ import com.binance.connector.client.common.websocket.adapter.stream.StreamConnec
 import com.binance.connector.client.common.websocket.configuration.WebSocketClientConfiguration;
 import com.google.gson.Gson;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.jetty.websocket.api.Callback;
 
 /**
  * Public SDK listener type so Jetty can inspect inherited WebSocket callbacks.
@@ -24,9 +23,9 @@ public class MarketStreamConnectionWrapper extends StreamConnectionWrapper {
     }
 
     @Override
-    public void onWebSocketClose(int statusCode, String reason, Callback callback) {
-        // Do not let the SDK reconnect this generation behind the hub's recovery gate.
-        BinanceSdkStreamTransport.notifyMarketSocketClosed(statusCode, reason, callback, disconnected, symbol, interval);
+    public void onWebSocketClose(int statusCode, String reason) {
+        // Override the SDK's reconnecting callback: MarketStreamHub owns recovery and replay.
+        BinanceSdkStreamTransport.notifyMarketSocketClosed(statusCode, reason, disconnected, symbol, interval);
     }
 
     @Override
