@@ -160,10 +160,17 @@ public class LiveOrderDispatcher {
         if (ticket == null) {
             throw new IllegalArgumentException("Missing configuration dispatch ticket");
         }
+        // Persist the confirmed exchange outcome in its own transaction before releasing
+        // the guard. If the process crashes between these commits, CONFIG_APPLIED is durable
+        // and recovery can independently verify Binance state without racing an in-flight call.
         transaction.executeWithoutResult(status -> {
-            if (mapper.acknowledgeConfiguration(ticket.credentialId(), ticket.symbol(), ticket.key()) != 1 || mapper.release(ticket.credentialId(), ticket.symbol(),
-                ticket.key()) != 1) {
-                throw new IllegalStateException("账户配置未能可靠确认，保持该交易对调度阻断");
+            if (mapper.acknowledgeConfiguration(ticket.credentialId(), ticket.symbol(), ticket.key()) != 1) {
+                throw new IllegalStateException("账户配置成功结果无法持久化，保持该交易对调度阻断");
+            }
+        });
+        transaction.executeWithoutResult(status -> {
+            if (mapper.release(ticket.credentialId(), ticket.symbol(), ticket.key()) != 1) {
+                throw new IllegalStateException("账户配置已确认，但调度锁未能安全释放，保持该交易对调度阻断");
             }
         });
     }
