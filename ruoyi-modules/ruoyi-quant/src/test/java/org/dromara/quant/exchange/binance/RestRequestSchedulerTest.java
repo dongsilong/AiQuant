@@ -18,4 +18,16 @@ class RestRequestSchedulerTest {
         assertTrue(deferred.retryAfterMillis() > 0);
         assertTrue(deferred.retryAfterMillis() <= 5_000);
     }
+
+    @Test
+    void cooldownAppliesAcrossTradeAccountAndBackgroundQueues() {
+        RestRequestScheduler scheduler = new RestRequestScheduler(1);
+        scheduler.deferFor(5_000);
+
+        for (RestRequestScheduler.Kind kind : RestRequestScheduler.Kind.values()) {
+            ExchangeMarketPort.RequestDeferredException deferred = assertThrows(ExchangeMarketPort.RequestDeferredException.class,
+                () -> scheduler.acquire(kind), "cooldown must be shared across " + kind);
+            assertTrue(deferred.retryAfterMillis() > 0);
+        }
+    }
 }
