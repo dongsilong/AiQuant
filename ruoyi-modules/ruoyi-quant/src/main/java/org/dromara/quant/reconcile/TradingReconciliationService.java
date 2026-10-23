@@ -677,8 +677,8 @@ public class TradingReconciliationService {
             if (decisionLogs != null) {
                 decisionLogs.trade(credential.getId(), s);
             }
-            QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>().eq(QuantTrade::getCredentialId, credential.getId()).eq(QuantTrade::getExchangeTradeId,
-                s.tradeId()));
+            QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>().eq(QuantTrade::getCredentialId, credential.getId())
+                .eq(QuantTrade::getSymbol, s.symbol()).eq(QuantTrade::getExchangeTradeId, s.tradeId()));
             if (entity == null) {
                 entity = new QuantTrade();
                 entity.setCredentialId(credential.getId());
