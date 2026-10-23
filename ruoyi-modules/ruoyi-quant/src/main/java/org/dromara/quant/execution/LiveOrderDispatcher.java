@@ -324,7 +324,7 @@ public class LiveOrderDispatcher {
                 // A recovery worker may persist the exact exchange fact and release
                 // this ticket while the original request thread is still unwinding.
                 // Do not turn that completed race into a false UNKNOWN failure.
-                if (!java.util.Set.of("UNKNOWN", "ACKED", "RECOVERED", "FAILED_NOT_SENT").contains(current)) {
+                if (!java.util.Set.of("UNKNOWN", "ACKED", "RECOVERED", "CONFIG_APPLIED", "FAILED_NOT_SENT").contains(current)) {
                     throw new IllegalStateException("LIVE 发送结果未知且票据状态异常，禁止重新发送");
                 }
             }
