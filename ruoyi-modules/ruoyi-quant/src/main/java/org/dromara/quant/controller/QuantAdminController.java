@@ -146,8 +146,10 @@ public class QuantAdminController {
             row.put("strategyName", strategies.get(item.getStrategyId()) == null ? null : strategies.get(item.getStrategyId()).getStrategyName());
             row.put("credentialId", item.getCredentialId());
             row.put("accountName", credentials.get(item.getCredentialId()) == null ? null : credentials.get(item.getCredentialId()).getAccountName());
+            row.put("strategySymbolId", item.getStrategySymbolId());
             QuantStrategySymbol binding = strategySymbols.get(item.getStrategySymbolId());
             row.put("symbol", binding == null || symbols.get(binding.getSymbolId()) == null ? null : symbols.get(binding.getSymbolId()).getSymbol());
+            row.put("runtimeEnabled", binding == null || !Boolean.FALSE.equals(binding.getRuntimeEnabled()));
             row.put("status", item.getStatus());
             row.put("lastSignalAt", item.getLastSignalAt());
             row.put("lastError", item.getLastError());
