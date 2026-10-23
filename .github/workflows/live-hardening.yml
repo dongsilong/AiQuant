@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - hardening/live-production-20261014
+      - feature/per-symbol-runtime-toggle-20261023
   pull_request:
     branches:
       - ai-quant-dev
