@@ -242,8 +242,6 @@ public class QuantStrategyBindingController {
         if (binding == null || !strategyId.equals(binding.getStrategyId())) {
             throw new ServiceException("策略交易对绑定不存在或不属于当前策略");
         }
-        binding.setRuntimeEnabled(enabled);
-        symbolMapper.updateById(binding);
         runtimeService.setStrategySymbolRuntimeEnabled(strategySymbolId, enabled);
         return R.ok();
     }
