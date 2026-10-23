@@ -19,6 +19,12 @@ against the intended MySQL 8.x database. Inspect every result row.
 - Never use the destructive `MySqlAtomicConcurrencyTest` on any database outside the
   dedicated disposable `aiquant_ci_test`; the test explicitly rejects other names.
 
+## V14 per-strategy-symbol runtime toggle
+
+[V20261023_14__strategy_symbol_runtime_enabled.sql](V20261023_14__strategy_symbol_runtime_enabled.sql) adds `quant_strategy_symbol.runtime_enabled`, independent of the existing binding `status`. Existing rows default to enabled. The toggle only blocks new entry decisions; it must not close an existing position or disable exit/protection/reconciliation/recovery.
+
+This is a manual additive migration, not an automatic application migration. Before applying it, stop LIVE strategy supervisors on all nodes, resolve or record in-flight outbound requests, verify the actual table with `SHOW CREATE TABLE`, confirm the column is absent, back up the database, and prepare rollback. Apply once, then verify the column default and existing rows before upgrading all application nodes together. Do not run this migration blindly against an unverified production schema.
+
 ## Outstanding production migration work
 
 1. Obtain a sanitized `SHOW CREATE TABLE` for each quant table from the authoritative
