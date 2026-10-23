@@ -268,7 +268,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 }
             }
         }
-        return error.getCode() == 418 ? 60_000L : 1_000L;
+        // A 429 without a usable Retry-After header still represents a rate-limit response.
+        // A one-second fallback can create a synchronized retry storm while the one-minute
+        // request-weight window is still exhausted. Defer conservatively; 418 bans are also
+        // held for at least this long unless Binance supplied a later ban-until timestamp.
+        return 60_000L;
     }
 
     /**
