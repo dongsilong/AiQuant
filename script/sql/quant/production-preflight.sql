@@ -66,6 +66,12 @@ LEFT JOIN actual_indexes a
   ON a.table_name=r.table_name AND a.indexed_columns=r.required_columns AND a.non_unique=0
 ORDER BY r.table_name;
 
+-- Per-strategy-symbol runtime toggle must exist before deploying the corresponding entity/runtime code.
+SELECT CASE WHEN COUNT(*)=1 THEN 'OK' ELSE 'MISSING_STRATEGY_SYMBOL_RUNTIME_ENABLED' END AS status
+FROM information_schema.columns
+WHERE table_schema=DATABASE() AND table_name='quant_strategy_symbol'
+  AND column_name='runtime_enabled' AND data_type='tinyint' AND is_nullable='NO';
+
 -- Preflight rejects empty production credentials before any LIVE enablement.
 -- Index name/shape validation is independent of H2 tests, which do not test the real production schema.
 
