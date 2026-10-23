@@ -28,6 +28,7 @@ import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -704,7 +705,34 @@ public class TradingReconciliationService {
             entity.setFundingFee(BigDecimal.ZERO);
             entity.setTradeTime(s.time() == null ? LocalDateTime.now() : LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC));
             if (entity.getId() == null) {
-                tradeMapper.insert(entity);
+                try {
+                    if (tradeMapper.insert(entity) != 1) {
+                        throw new IllegalStateException("Binance成交事实未写入本地成交账本");
+                    }
+                } catch (DuplicateKeyException concurrentInsert) {
+                    // Concurrent reconciliation may have inserted this exact fill after our initial lookup.
+                    // Re-read by the full business key and accept only an identical exchange fact.
+                    QuantTrade raced = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>()
+                        .eq(QuantTrade::getCredentialId, credential.getId())
+                        .eq(QuantTrade::getSymbol, s.symbol())
+                        .eq(QuantTrade::getExchangeTradeId, s.tradeId()));
+                    if (raced == null) {
+                        // Could be an unrelated unique-key collision (for example a duplicate local ID).
+                        throw concurrentInsert;
+                    }
+                    if (!Objects.equals(raced.getExchangeOrderId(), s.orderId())
+                        || !sameText(raced.getSide(), s.side())
+                        || !sameDecimal(raced.getQuantity(), s.quantity())
+                        || !sameDecimal(raced.getPrice(), s.price())
+                        || !sameDecimal(raced.getCommission(), s.commission())
+                        || !sameDecimal(raced.getRealizedPnl(), s.realizedPnl())
+                        || !sameTradeTime(raced.getTradeTime(), s.time())) {
+                        throw new IllegalStateException("并发写入的本地成交与 Binance 原始事实冲突，拒绝覆盖: credentialId="
+                            + credential.getId() + ", symbol=" + s.symbol() + ", exchangeTradeId=" + s.tradeId(), concurrentInsert);
+                    }
+                    log.debug("并发对账已写入相同成交事实，跳过重复插入 credentialId={} symbol={} exchangeTradeId={}",
+                        credential.getId(), s.symbol(), s.tradeId());
+                }
             } else {
                 tradeMapper.updateById(entity);
             }
@@ -713,6 +741,23 @@ public class TradingReconciliationService {
             }
         }
         filledOrders.values().forEach(order -> capturePostFillBalance(credential, order));
+    }
+
+    private static boolean sameText(String left, String right) {
+        return left == null ? right == null : right != null && left.equalsIgnoreCase(right);
+    }
+
+    private static boolean sameDecimal(BigDecimal left, BigDecimal right) {
+        return left == null ? right == null : right != null && left.compareTo(right) == 0;
+    }
+
+    private static boolean sameTradeTime(LocalDateTime stored, Instant incoming) {
+        if (stored == null || incoming == null) {
+            return stored == null && incoming == null;
+        }
+        // quant_trade.trade_time is DATETIME without fractional seconds in the supported schema.
+        return stored.truncatedTo(java.time.temporal.ChronoUnit.SECONDS).equals(
+            LocalDateTime.ofInstant(incoming, ZoneOffset.UTC).truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
     }
 
     /** Capture a best-effort account wallet balance after reconciled exchange fills. */
