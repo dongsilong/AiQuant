@@ -16,7 +16,6 @@ import com.binance.connector.client.derivatives_trading_usds_futures.websocket.s
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.config.QuantProperties;
 import org.eclipse.jetty.client.HttpProxy;
-import org.eclipse.jetty.websocket.api.Callback;
 
 import java.util.List;
 import java.util.Set;
@@ -67,9 +66,8 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
         return market(connection, symbol, interval, events, disconnected, backlogLimit);
     }
 
-    static void notifyMarketSocketClosed(int statusCode, String reason, Callback callback, Runnable disconnected, String symbol, String interval) {
+    static void notifyMarketSocketClosed(int statusCode, String reason, Runnable disconnected, String symbol, String interval) {
         log.warn("Binance SDK 行情 WebSocket 已关闭 symbol={} interval={} closeCode={} reason={}", symbol, interval, statusCode, reason);
-        callback.succeed();
         disconnected.run();
     }
 

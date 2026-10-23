@@ -1309,6 +1309,8 @@ class StrategyRuntimeSafetyTest {
     void pendingOrderStillPublishesChangingSlopeWithoutTrading() throws Exception {
         Fixture f = fixture();
         var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(StrategyRuntimeService.class);
+        var originalLevel = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
         var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
         appender.start();
         logger.addAppender(appender);
@@ -1343,6 +1345,7 @@ class StrategyRuntimeSafetyTest {
         } finally {
             logger.detachAppender(appender);
             appender.stop();
+            logger.setLevel(originalLevel);
             f.service.destroy();
         }
     }
@@ -1511,6 +1514,8 @@ class StrategyRuntimeSafetyTest {
     void completedFlatReconciliationLogsEntryReevaluationReadiness() throws Exception {
         Fixture f = fixture();
         var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(StrategyRuntimeService.class);
+        var originalLevel = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
         var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
         appender.start();
         logger.addAppender(appender);
@@ -1544,6 +1549,7 @@ class StrategyRuntimeSafetyTest {
         } finally {
             logger.detachAppender(appender);
             appender.stop();
+            logger.setLevel(originalLevel);
             f.service.destroy();
         }
     }
@@ -2531,6 +2537,71 @@ class StrategyRuntimeSafetyTest {
                 assertEquals(delta > 0, ReflectionTestUtils.invokeMethod(f.service, "entryProtectionReadyForEvent", f.runtime, context));
             }
             verify(f.protection, never()).prepareEntryProtectionCleanup(any(), any(), anyBoolean());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void disabledStrategySymbolBlocksEntryEvaluation() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "runtimeEnabled", false);
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("CLOSED");
+            state.setPositionQty(BigDecimal.ZERO);
+
+            var context = new StrategyContext("BTCUSDT", "LONG", BigDecimal.ZERO, new BigDecimal("100"), BigDecimal.ONE,
+                Instant.now(), false, Instant.now(), BigDecimal.ZERO, BigDecimal.ZERO);
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, context);
+
+            verify(f.plugin, never()).evaluateEntry(any(), anyMap());
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+            verify(execution, never()).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void disabledStrategySymbolStillEvaluatesExitProtectionForExistingPosition() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "runtimeEnabled", false);
+            var context = new StrategyContext("BTCUSDT", "LONG", new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ONE,
+                Instant.now(), false, Instant.now(), BigDecimal.ZERO, BigDecimal.ZERO);
+
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateExit", f.runtime, context);
+
+            verify(f.plugin, times(1)).evaluateExit(any(), anyMap());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void symbolRuntimeTogglePersistsStateUnderDistributedLock() throws Exception {
+        Fixture f = fixture();
+        try {
+            var binding = (QuantStrategySymbol) ReflectionTestUtils.getField(f.runtime, "strategySymbol");
+            binding.setId(10L);
+            var mapper = (org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper) ReflectionTestUtils.getField(f.service, "strategySymbolMapper");
+            var redisson = (org.redisson.api.RedissonClient) ReflectionTestUtils.getField(f.service, "redissonClient");
+            var lock = mock(org.redisson.api.RLock.class);
+            when(redisson.getLock("quant:strategy-symbol-runtime:10")).thenReturn(lock);
+            when(lock.isHeldByCurrentThread()).thenReturn(true);
+            when(mapper.selectById(10L)).thenReturn(binding);
+            when(mapper.updateById(binding)).thenReturn(1);
+
+            f.service.setStrategySymbolRuntimeEnabled(10L, false);
+            f.service.setStrategySymbolRuntimeEnabled(10L, false);
+
+            assertEquals(Boolean.FALSE, binding.getRuntimeEnabled());
+            assertEquals(false, ReflectionTestUtils.getField(f.runtime, "runtimeEnabled"));
+            verify(lock, times(2)).lock();
+            verify(lock, times(2)).unlock();
+            verify(mapper, times(1)).updateById(binding);
         } finally {
             f.service.destroy();
         }

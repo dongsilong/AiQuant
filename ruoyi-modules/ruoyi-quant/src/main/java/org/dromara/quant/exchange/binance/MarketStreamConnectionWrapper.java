@@ -23,10 +23,18 @@ public class MarketStreamConnectionWrapper extends StreamConnectionWrapper {
         this.interval = interval;
     }
 
+    /**
+     * Jetty 12 requires the callback-based close signature. Do not also declare the
+     * deprecated two-argument overload: Jetty rejects endpoints exposing both forms.
+     */
     @Override
     public void onWebSocketClose(int statusCode, String reason, Callback callback) {
-        // Do not let the SDK reconnect this generation behind the hub's recovery gate.
-        BinanceSdkStreamTransport.notifyMarketSocketClosed(statusCode, reason, callback, disconnected, symbol, interval);
+        try {
+            BinanceSdkStreamTransport.notifyMarketSocketClosed(statusCode, reason, disconnected, symbol, interval);
+        } finally {
+            // Complete Jetty's close callback even if the hub's disconnect handler fails.
+            callback.succeed();
+        }
     }
 
     @Override

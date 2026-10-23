@@ -293,6 +293,10 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         if (evaluation == null) {
             return Optional.empty();
         }
+//        if("ERAUSDT".equalsIgnoreCase(context.symbol())){
+//            log.info("计算交易对：" + context.symbol());
+//        }
+//        log.info("计算交易对：" + context.symbol());
         double degrees = evaluation.rawDegrees();
         if (Math.abs(degrees) > 58 && shouldLogSlope(context.symbol(), System.currentTimeMillis())) {
             log.warn("  ***  策略实时斜率 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}°", context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(),

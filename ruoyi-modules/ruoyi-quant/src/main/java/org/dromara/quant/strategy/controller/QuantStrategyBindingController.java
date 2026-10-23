@@ -16,6 +16,7 @@ import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyUserMapper;
 import org.dromara.quant.strategy.service.QuantStrategyService;
+import org.dromara.quant.runtime.StrategyRuntimeService;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -44,6 +45,7 @@ public class QuantStrategyBindingController {
     private final QuantSymbolMapper quantSymbolMapper;
     private final QuantStrategyUserMapper userMapper;
     private final QuantStrategyService strategyService;
+    private final StrategyRuntimeService runtimeService;
 
     private void checkStrategy(Long strategyId) {
         strategyService.checkAccess(strategyMapper.selectById(strategyId));
@@ -160,6 +162,8 @@ public class QuantStrategyBindingController {
                 item.setStatus("0");
             }
             QuantStrategySymbol old = existing.stream().filter(e -> java.util.Objects.equals(e.getSymbolId(), item.getSymbolId())).findFirst().orElse(null);
+            // 编辑其他交易对参数时，未提交运行开关就保留原值，避免意外恢复已暂停的交易对。
+            if (item.getRuntimeEnabled() == null) item.setRuntimeEnabled(old == null ? Boolean.TRUE : old.getRuntimeEnabled());
             if (old == null) {
                 item.setId(null);
                 symbolMapper.insert(item);
@@ -225,6 +229,24 @@ public class QuantStrategyBindingController {
     }
 
     /**
+     * 单独暂停或恢复某个策略交易对，不改变策略整体状态和绑定有效性。
+     * 暂停操作会等待该实例正在进行的开仓决策/派单临界区完成后再返回。
+     */
+    @SaCheckPermission("quant:strategy:edit")
+    @PostMapping("/{strategyId}/symbols/{strategySymbolId}/runtime")
+    public R<Void> setSymbolRuntimeEnabled(@PathVariable Long strategyId,
+                                           @PathVariable Long strategySymbolId,
+                                           @RequestParam boolean enabled) {
+        checkStrategy(strategyId);
+        QuantStrategySymbol binding = symbolMapper.selectById(strategySymbolId);
+        if (binding == null || !strategyId.equals(binding.getStrategyId())) {
+            throw new ServiceException("策略交易对绑定不存在或不属于当前策略");
+        }
+        runtimeService.setStrategySymbolRuntimeEnabled(strategySymbolId, enabled);
+        return R.ok();
+    }
+
+    /**
      * 绑定策略交易对。
      */
     @SaCheckPermission("quant:strategy:edit")
@@ -236,6 +258,7 @@ public class QuantStrategyBindingController {
         if (entity.getStatus() == null) {
             entity.setStatus("0");
         }
+        if (entity.getRuntimeEnabled() == null) entity.setRuntimeEnabled(Boolean.TRUE);
         symbolMapper.insert(entity);
         return R.ok();
     }
