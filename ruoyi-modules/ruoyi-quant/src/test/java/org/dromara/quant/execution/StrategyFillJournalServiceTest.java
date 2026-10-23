@@ -135,6 +135,10 @@ class StrategyFillJournalServiceTest {
             org.junit.jupiter.api.Assertions.assertTrue(sql.contains("#{status}='CONFLICT'"), sql);
             org.junit.jupiter.api.Assertions.assertTrue(sql.contains("attribution_status <> 'CONFLICT'"), sql);
             org.junit.jupiter.api.Assertions.assertTrue(sql.contains("#{status}='ATTRIBUTED' OR attribution_status <> 'ATTRIBUTED'"), sql);
+            int pendingFrom = xml.indexOf("selectPending");
+            int pendingTo = xml.indexOf("</select>", pendingFrom);
+            org.junit.jupiter.api.Assertions.assertTrue(pendingFrom >= 0 && pendingTo > pendingFrom, "selectPending SQL must exist");
+            org.junit.jupiter.api.Assertions.assertTrue(xml.substring(pendingFrom, pendingTo).contains("'PENDING_FACTS'"), "recoverable incomplete facts must be retried");
         }
     }
 }
