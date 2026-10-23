@@ -630,8 +630,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     }
                     boolean protectionCleaned = cancelStaleProtection(runtime);
                     // 无条件将 state 归零：status=CLOSED + position_qty=0，从"最大持仓数"统计中排除。
-                    stateService.markClosed(runtime.state);
-                    runtime.state = stateService.findByInstance(runtime.instance.getId());
+                    QuantStrategyPositionState closedState = runtime.state;
+                    stateService.markClosed(closedState);
+                    // 正常情况下可从持久层重载关闭状态；若并发删除/测试替身返回 null，保留已标记关闭的对象，
+                    // 避免随后设置保护清理阻断时发生 NPE，并确保本地运行时仍有明确的恢复状态。
+                    QuantStrategyPositionState reloadedClosedState = stateService.findByInstance(runtime.instance.getId());
+                    runtime.state = reloadedClosedState != null ? reloadedClosedState : closedState;
                     // 清理成功必须同时解除运行时阻断；失败则保留重试标志，避免遗留保护单误触发。
                     runtime.protectionCleanupPending = !protectionCleaned;
                     if (!protectionCleaned) {
