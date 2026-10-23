@@ -103,7 +103,7 @@ jobs:
             script/sql/quant/V20261014_09__strategy_order_intent.sql \
             script/sql/quant/V20261014_10__pre_dispatch_strategy_intent.sql \
             script/sql/quant/V20261014_12__position_sync_fence.sql \
-            script/sql/quant/V20261014_13__live_user_stream_lease.sql \\
+            script/sql/quant/V20261014_13__live_user_stream_lease.sql \
             script/sql/quant/V20261023_14__strategy_symbol_runtime_enabled.sql; do
             docker exec -i "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test < "$ddl"
           done
