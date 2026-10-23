@@ -16,6 +16,7 @@ import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyUserMapper;
 import org.dromara.quant.strategy.service.QuantStrategyService;
+import org.dromara.quant.runtime.StrategyRuntimeService;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -44,6 +45,7 @@ public class QuantStrategyBindingController {
     private final QuantSymbolMapper quantSymbolMapper;
     private final QuantStrategyUserMapper userMapper;
     private final QuantStrategyService strategyService;
+    private final StrategyRuntimeService runtimeService;
 
     private void checkStrategy(Long strategyId) {
         strategyService.checkAccess(strategyMapper.selectById(strategyId));
@@ -222,6 +224,26 @@ public class QuantStrategyBindingController {
     public R<List<QuantStrategySymbol>> symbols(@PathVariable Long strategyId) {
         checkStrategy(strategyId);
         return R.ok(symbolMapper.selectList(new LambdaQueryWrapper<QuantStrategySymbol>().eq(QuantStrategySymbol::getStrategyId, strategyId)));
+    }
+
+    /**
+     * 单独暂停或恢复某个策略交易对，不改变策略整体状态和绑定有效性。
+     * 暂停操作会等待该实例正在进行的开仓决策/派单临界区完成后再返回。
+     */
+    @SaCheckPermission("quant:strategy:edit")
+    @PostMapping("/{strategyId}/symbols/{strategySymbolId}/runtime")
+    public R<Void> setSymbolRuntimeEnabled(@PathVariable Long strategyId,
+                                           @PathVariable Long strategySymbolId,
+                                           @RequestParam boolean enabled) {
+        checkStrategy(strategyId);
+        QuantStrategySymbol binding = symbolMapper.selectById(strategySymbolId);
+        if (binding == null || !strategyId.equals(binding.getStrategyId())) {
+            throw new ServiceException("策略交易对绑定不存在或不属于当前策略");
+        }
+        binding.setRuntimeEnabled(enabled);
+        symbolMapper.updateById(binding);
+        runtimeService.setStrategySymbolRuntimeEnabled(strategySymbolId, enabled);
+        return R.ok();
     }
 
     /**
