@@ -169,6 +169,31 @@ public class LiveOrderDispatcher {
     }
 
     /**
+     * Recover a CONFIG_SETTINGS ticket only after an independent exchange query
+     * proves that both persisted desired settings are already active. The exact
+     * durable intent, synthetic ticket identity and active guard must all match.
+     */
+    public boolean recoveredConfigurationFromExchange(Long credentialId, String symbol, String key, String clientOrderId, String marginMode, int leverage) {
+        String normalizedSymbol = symbol == null ? null : symbol.toUpperCase(Locale.ROOT);
+        String normalizedMode = marginMode == null ? null : marginMode.toUpperCase(Locale.ROOT);
+        if (credentialId == null || credentialId <= 0 || normalizedSymbol == null || normalizedSymbol.isBlank()
+            || key == null || key.isBlank() || normalizedMode == null
+            || !java.util.Set.of("ISOLATED", "CROSSED").contains(normalizedMode) || leverage < 1 || leverage > 125
+            || !("SETTINGS:" + normalizedMode + ":" + leverage).equals(clientOrderId)) {
+            throw new IllegalArgumentException("Cannot recover configuration dispatch without exact desired-settings identity");
+        }
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (mapper.recoverConfiguration(credentialId, normalizedSymbol, key, clientOrderId, normalizedMode, leverage) != 1) {
+                return false;
+            }
+            if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                throw new IllegalStateException("Verified configuration fact but durable dispatch guard mismatch");
+            }
+            return true;
+        }));
+    }
+
+    /**
      * Reserved for a provably NOT-SENT result. All timeouts are UNKNOWN instead.
      */
     public void notSent(Ticket ticket) {
