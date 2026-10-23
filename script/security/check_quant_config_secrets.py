@@ -73,7 +73,7 @@ def main() -> int:
                     violations.append(f"{path.name}:{content[:match.start()].count(chr(10))+1}: literal {key} value")
 
     common = COMMON.read_text(encoding="utf-8")
-    jwt_values = re.findall(r"(?m)^\s+ jwt-secret-key:\s*(\S.*)?$", common)
+    jwt_values = re.findall(r"(?m)^\s+jwt-secret-key:\s*(\S.*)?$", common)
     if len(jwt_values) != 1 or (jwt_values[0] or "").strip() != "${AIQUANT_SA_TOKEN_JWT_SECRET_KEY}":
         violations.append(f"{COMMON.name}: sa-token.jwt-secret-key must use its deployment secret")
 
