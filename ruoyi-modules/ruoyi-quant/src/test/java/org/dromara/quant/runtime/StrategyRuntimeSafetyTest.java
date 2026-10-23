@@ -2558,6 +2558,22 @@ class StrategyRuntimeSafetyTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void disabledStrategySymbolStillEvaluatesExitProtectionForExistingPosition() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "runtimeEnabled", false);
+            var context = new StrategyContext("BTCUSDT", "LONG", new BigDecimal("100"), new BigDecimal("100"), BigDecimal.ONE,
+                Instant.now(), false, Instant.now(), BigDecimal.ZERO, BigDecimal.ZERO);
+
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateExit", f.runtime, context);
+
+            verify(f.plugin, times(1)).evaluateExit(any(), anyMap());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
     private Fixture fixture() throws Exception {
         var constructor = StrategyRuntimeService.class.getConstructors()[0];
         Object[] args = Arrays.stream(constructor.getParameterTypes()).map(type -> type == QuantProperties.class ? new QuantProperties() : mock(type)).toArray();
