@@ -73,6 +73,14 @@ def main() -> int:
                     violations.append(f"{path.name}:{content[:match.start()].count(chr(10))+1}: literal {key} value")
 
     common = COMMON.read_text(encoding="utf-8")
+    for key, expected in (
+        ("jwt-secret-key", "${AIQUANT_SA_TOKEN_JWT_SECRET_KEY}"),
+        ("privateKey", "${AIQUANT_API_DECRYPT_PRIVATE_KEY}"),
+    ):
+        values = re.findall(rf"(?m)^\\s+{re.escape(key)}:\\s*(\\S.*)?$", common)
+        if not values or any((value or "").strip() != expected for value in values):
+            violations.append(f"{COMMON.name}: {key} must use its deployment secret")
+
     mqtt = section(common, "mqtt.client:")
     for field in ("username", "password"):
         expected = f"${{AIQUANT_MQTT_{field.upper()}:}}"
