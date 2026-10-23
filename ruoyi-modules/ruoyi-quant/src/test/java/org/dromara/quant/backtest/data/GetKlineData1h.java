@@ -47,7 +47,7 @@ public class GetKlineData1h {
         for (int month = 1; month <= 12; month++) {
             YearMonth ym = YearMonth.of(YEAR, month);
 
-            long monthStart = ym.atDay(1).atTime(0,0,0).atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli();
+            long monthStart = ym.atDay(1).atTime(0, 0, 0).atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli();
             long monthEnd = ym.atEndOfMonth().atTime(23, 59, 59).atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli();
 
             if (monthStart > now) {

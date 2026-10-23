@@ -2,8 +2,12 @@ package org.dromara.quant.decision;
 
 import lombok.Data;
 import org.springframework.format.annotation.DateTimeFormat;
+
 import java.time.LocalDateTime;
 
+/**
+ * 交易决策日志分页查询条件。
+ */
 @Data
 public class TradeDecisionQuery {
     private Long credentialId;

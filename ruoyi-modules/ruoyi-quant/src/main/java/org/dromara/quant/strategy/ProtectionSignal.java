@@ -14,7 +14,9 @@ import java.math.BigDecimal;
  */
 public record ProtectionSignal(String type, String orderType, BigDecimal quantityRate, QuantityBase quantityBase, BigDecimal triggerPrice, String reason, int stepIndex) {
 
-    /** 兼容非阶梯保护信号。 */
+    /**
+     * 兼容非阶梯保护信号。
+     */
     public ProtectionSignal(String type, String orderType, BigDecimal quantityRate, QuantityBase quantityBase, BigDecimal triggerPrice, String reason) {
         this(type, orderType, quantityRate, quantityBase, triggerPrice, reason, 0);
     }

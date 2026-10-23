@@ -7,7 +7,7 @@ package org.dromara.quant.execution;
  * @param systemLiveEnabled      系统是否允许 LIVE
  * @param accountLiveEnabled     凭证是否允许 LIVE
  * @param futuresTradePermission 账户是否具备合约交易权限
- * @param withdrawalDisabled     是否确认提现能力已禁用
+ * @param withdrawalDisabled     兼容的账户转出能力观测字段，不作为准入条件，也不代表 API Key 提现权限
  * @param connectivityVerified   是否已验证交易所连通性
  * @param accountAuthorized      当前业务主体是否被授权使用凭证
  * @param riskConfigured         风险配置是否完整

@@ -59,8 +59,8 @@ public class QuantSymbolServiceImpl implements IQuantSymbolService {
         lqw.apply(Boolean.TRUE.equals(bo.getFavorite()), "EXISTS (SELECT 1 FROM quant_symbol_favorite f WHERE f.symbol_id = quant_symbol.id AND f.user_id = {0})",
             LoginHelper.getUserId());
         // 在分页前排序，确保当前用户收藏的交易对优先于未收藏项。
-        lqw.last("ORDER BY EXISTS (SELECT 1 FROM quant_symbol_favorite f WHERE f.symbol_id = quant_symbol.id AND f.user_id = "
-            + LoginHelper.getUserId() + ") DESC, quant_symbol.symbol ASC");
+        lqw.last("ORDER BY EXISTS (SELECT 1 FROM quant_symbol_favorite f WHERE f.symbol_id = quant_symbol.id AND f.user_id = " + LoginHelper.getUserId() + ") DESC, quant_symbol" +
+            ".symbol ASC");
         Page<QuantSymbolVo> page = mapper.selectVoPage(query.build(), lqw);
 
         LambdaQueryWrapper<QuantSymbolFavorite> lqwf = new LambdaQueryWrapper<>();

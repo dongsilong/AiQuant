@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.paper.mapper.PaperAtomicMapper">
+    <resultMap id="lockAccountResult" type="org.dromara.quant.paper.domain.QuantPaperAccount">
+        <id property="id" column="id"/>
+        <result property="credentialId" column="credential_id"/>
+        <result property="balance" column="balance"/>
+        <result property="availableBalance" column="available_balance"/>
+        <result property="realizedPnl" column="realized_pnl"/>
+        <result property="unrealizedPnl" column="unrealized_pnl"/>
+    </resultMap>
+    <select id="lockAccount" resultMap="lockAccountResult" timeout="3"><![CDATA[SELECT * FROM quant_paper_account WHERE credential_id=#{credentialId} FOR UPDATE]]></select>
+    <update id="reserveMargin" timeout="3"><![CDATA[UPDATE quant_paper_account
+SET available_balance=available_balance-#{margin}, updated_at=NOW()
+WHERE id=#{accountId} AND available_balance>=#{margin}]]></update>
+    <update id="refundMargin" timeout="3"><![CDATA[UPDATE quant_paper_account
+SET available_balance=available_balance+#{margin}, updated_at=NOW()
+WHERE id=#{accountId}]]></update>
+    <select id="lockPosition" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT id FROM quant_position WHERE id=#{positionId} FOR UPDATE]]></select>
+    <update id="settleClose" timeout="3"><![CDATA[UPDATE quant_paper_account
+SET balance=balance+#{realized},
+    available_balance=available_balance+#{releasedMargin}+#{realized},
+    realized_pnl=realized_pnl+#{realized},
+    unrealized_pnl=unrealized_pnl-#{oldPnl},
+    updated_at=NOW()
+WHERE id=#{accountId}]]></update>
+    <update id="updateUnrealized" timeout="3"><![CDATA[UPDATE quant_paper_account SET unrealized_pnl=#{total}, updated_at=NOW()
+WHERE credential_id=#{credentialId}]]></update>
+    <update id="adjustUnrealized" timeout="3"><![CDATA[UPDATE quant_paper_account
+SET unrealized_pnl=unrealized_pnl+#{pnl}-#{oldPnl}, updated_at=NOW()
+WHERE credential_id=#{credentialId}]]></update>
+    <select id="lockExecution" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT id FROM quant_execution_record
+WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
+FOR UPDATE]]></select>
+</mapper>

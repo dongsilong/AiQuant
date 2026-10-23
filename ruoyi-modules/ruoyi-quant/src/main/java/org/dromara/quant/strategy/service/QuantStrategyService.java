@@ -2,6 +2,7 @@ package org.dromara.quant.strategy.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.domain.PageResult;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.mybatis.core.page.PageQuery;
@@ -12,12 +13,12 @@ import org.dromara.quant.market.domain.QuantSymbol;
 import org.dromara.quant.market.mapper.QuantSymbolMapper;
 import org.dromara.quant.strategy.StrategyPluginRegistry;
 import org.dromara.quant.strategy.domain.QuantStrategy;
+import org.dromara.quant.strategy.domain.QuantStrategyUser;
 import org.dromara.quant.strategy.domain.StrategyPreflightResult;
 import org.dromara.quant.strategy.mapper.QuantStrategyAccountMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyUserMapper;
-import org.dromara.quant.strategy.domain.QuantStrategyUser;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -30,6 +31,7 @@ import java.util.List;
 /**
  * 策略定义服务。
  */
+@RequiredArgsConstructor
 @Service
 public class QuantStrategyService {
     /**
@@ -51,23 +53,6 @@ public class QuantStrategyService {
     private final QuantStrategyUserMapper userMapper;
     private final JdbcTemplate jdbcTemplate;
 
-    /**
-     * 创建 QuantStrategyService 实例并初始化其依赖。
-     */
-    public QuantStrategyService(QuantStrategyMapper mapper, StrategyPluginRegistry pluginRegistry, StrategyInstanceService instanceService,
-                                QuantStrategyAccountMapper accountMapper, QuantStrategySymbolMapper symbolMapper, QuantCredentialMapper credentialMapper,
-                                QuantSymbolMapper quantSymbolMapper, QuantStrategyUserMapper userMapper, JdbcTemplate jdbcTemplate) {
-        this.mapper = mapper;
-        this.pluginRegistry = pluginRegistry;
-        this.instanceService = instanceService;
-        this.accountMapper = accountMapper;
-        this.symbolMapper = symbolMapper;
-        this.credentialMapper = credentialMapper;
-        this.quantSymbolMapper = quantSymbolMapper;
-        this.userMapper = userMapper;
-        this.jdbcTemplate = jdbcTemplate;
-    }
-
     private static boolean validRate(java.math.BigDecimal value, boolean strictLessThanOne) {
         return value != null && value.signum() > 0 && (!strictLessThanOne ? value.compareTo(java.math.BigDecimal.ONE) <= 0 : value.compareTo(java.math.BigDecimal.ONE) < 0);
     }
@@ -80,18 +65,16 @@ public class QuantStrategyService {
         return "ISOLATED".equals(normalized) || "CROSSED".equals(normalized) ? normalized : null;
     }
 
+    private static boolean changed(Object oldValue, Object newValue) {
+        return newValue != null && !java.util.Objects.equals(oldValue, newValue);
+    }
+
     private boolean validInterval(String interval) {
         if (interval == null || interval.isBlank()) {
             return false;
         }
-        Integer count = jdbcTemplate.queryForObject(
-            "SELECT COUNT(1) FROM sys_dict_data WHERE dict_type=? AND dict_value=?",
-            Integer.class, "quant_kline_period", interval);
+        Integer count = jdbcTemplate.queryForObject("SELECT COUNT(1) FROM sys_dict_data WHERE dict_type=? AND dict_value=?", Integer.class, "quant_kline_period", interval);
         return count != null && count > 0;
-    }
-
-    private static boolean changed(Object oldValue, Object newValue) {
-        return newValue != null && !java.util.Objects.equals(oldValue, newValue);
     }
 
     /**
@@ -100,9 +83,13 @@ public class QuantStrategyService {
     public PageResult<QuantStrategy> queryPage(PageQuery query) {
         LambdaQueryWrapper<QuantStrategy> wrapper = new LambdaQueryWrapper<QuantStrategy>().orderByDesc(QuantStrategy::getCreateTime);
         if (!LoginHelper.isSuperAdmin(LoginHelper.getUserId())) {
-            List<Long> ids = userMapper.selectList(new LambdaQueryWrapper<QuantStrategyUser>().eq(QuantStrategyUser::getUserId, LoginHelper.getUserId()).eq(QuantStrategyUser::getStatus, "0"))
-                .stream().map(QuantStrategyUser::getStrategyId).toList();
-            if (ids.isEmpty()) return PageResult.build(List.of(), 0L);
+            LambdaQueryWrapper<QuantStrategyUser> lqw = new LambdaQueryWrapper<>();
+            lqw.eq(QuantStrategyUser::getUserId, LoginHelper.getUserId());
+            lqw.eq(QuantStrategyUser::getStatus, "0");
+            List<Long> ids = userMapper.selectList(lqw).stream().map(QuantStrategyUser::getStrategyId).toList();
+            if (ids.isEmpty()) {
+                return PageResult.build(List.of(), 0L);
+            }
             wrapper.in(QuantStrategy::getId, ids);
         }
         Page<QuantStrategy> page = mapper.selectPage(query.build(), wrapper);
@@ -301,20 +288,31 @@ public class QuantStrategyService {
         return e;
     }
 
-    /** 校验当前用户是否获得该策略授权。 */
+    /**
+     * 校验当前用户是否获得该策略授权。
+     */
     public void checkAccess(QuantStrategy strategy) {
-        if (strategy == null) throw new ServiceException("策略不存在");
-        if (LoginHelper.isSuperAdmin(LoginHelper.getUserId())) return;
-        Long count = userMapper.selectCount(new LambdaQueryWrapper<QuantStrategyUser>().eq(QuantStrategyUser::getStrategyId, strategy.getId())
-            .eq(QuantStrategyUser::getUserId, LoginHelper.getUserId()).eq(QuantStrategyUser::getStatus, "0"));
-        if (count == null || count == 0) throw new ServiceException("当前用户未获得该策略授权");
+        if (strategy == null) {
+            throw new ServiceException("策略不存在");
+        }
+        if (LoginHelper.isSuperAdmin(LoginHelper.getUserId())) {
+            return;
+        }
+        Long count = userMapper.selectCount(new LambdaQueryWrapper<QuantStrategyUser>().eq(QuantStrategyUser::getStrategyId, strategy.getId()).eq(QuantStrategyUser::getUserId,
+            LoginHelper.getUserId()).eq(QuantStrategyUser::getStatus, "0"));
+        if (count == null || count == 0) {
+            throw new ServiceException("当前用户未获得该策略授权");
+        }
     }
 
-    /** 返回当前用户可访问的策略 ID；超级管理员返回 null 表示不限制。 */
+    /**
+     * 返回当前用户可访问的策略 ID；超级管理员返回 null 表示不限制。
+     */
     public List<Long> accessibleStrategyIds() {
-        if (LoginHelper.isSuperAdmin(LoginHelper.getUserId())) return null;
-        return userMapper.selectList(new LambdaQueryWrapper<QuantStrategyUser>().eq(QuantStrategyUser::getUserId, LoginHelper.getUserId()).eq(QuantStrategyUser::getStatus, "0"))
-            .stream().map(QuantStrategyUser::getStrategyId).toList();
+        if (LoginHelper.isSuperAdmin(LoginHelper.getUserId())) {
+            return null;
+        }
+        return userMapper.selectList(new LambdaQueryWrapper<QuantStrategyUser>().eq(QuantStrategyUser::getUserId, LoginHelper.getUserId()).eq(QuantStrategyUser::getStatus, "0")).stream().map(QuantStrategyUser::getStrategyId).toList();
     }
 
     /**

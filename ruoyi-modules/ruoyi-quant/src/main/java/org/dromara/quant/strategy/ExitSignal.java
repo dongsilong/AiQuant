@@ -15,22 +15,7 @@ import java.math.BigDecimal;
  * @param exchangeProtectionType       与本地退出等价的交易所保护类型
  * @param quantityBase                 比例数量基准：CURRENT 为当前仓位，INITIAL 为初始仓位
  */
-public record ExitSignal(String type, BigDecimal quantityRate, String reason, boolean markFirstTakeProfitTriggered,
-                         String exchangeProtectionType, QuantityBase quantityBase) {
-
-    /**
-     * QuantityBase，量化交易模块领域/基础设施对象。
-     */
-    public enum QuantityBase {
-        /**
-         * 以当前仓位为基准。
-         */
-        CURRENT,
-        /**
-         * 以初始总仓位为基准。
-         */
-        INITIAL
-    }
+public record ExitSignal(String type, BigDecimal quantityRate, String reason, boolean markFirstTakeProfitTriggered, String exchangeProtectionType, QuantityBase quantityBase) {
 
     /**
      * 创建 ExitSignal 实例并初始化其依赖。
@@ -49,8 +34,21 @@ public record ExitSignal(String type, BigDecimal quantityRate, String reason, bo
     /**
      * 创建 ExitSignal 实例并初始化其依赖。
      */
-    public ExitSignal(String type, BigDecimal quantityRate, String reason, boolean markFirstTakeProfitTriggered,
-                      String exchangeProtectionType) {
+    public ExitSignal(String type, BigDecimal quantityRate, String reason, boolean markFirstTakeProfitTriggered, String exchangeProtectionType) {
         this(type, quantityRate, reason, markFirstTakeProfitTriggered, exchangeProtectionType, QuantityBase.CURRENT);
+    }
+
+    /**
+     * QuantityBase，量化交易模块领域/基础设施对象。
+     */
+    public enum QuantityBase {
+        /**
+         * 以当前仓位为基准。
+         */
+        CURRENT,
+        /**
+         * 以初始总仓位为基准。
+         */
+        INITIAL
     }
 }

@@ -143,7 +143,8 @@ public class WebSocketSessionManager implements PushSessionManager {
     public void sendHeartbeat() {
         USER_TOKEN_SESSIONS.forEach((userId, sessionMap) -> sessionMap.entrySet().removeIf(entry -> {
             WebSocketSession session = entry.getValue();
-            if (session == null || !session.isOpen() || !sendMessage(session, new PingMessage())) {
+            if (session == null || !session.isOpen() || !sendMessage(session, new TextMessage(MessageConstants.PING))) {
+                log.warn("WebSocket 应用层心跳发送失败 userId={} sessionId={}", userId, session == null ? null : session.getId());
                 closeSession(session, CloseStatus.NORMAL);
                 return true;
             }

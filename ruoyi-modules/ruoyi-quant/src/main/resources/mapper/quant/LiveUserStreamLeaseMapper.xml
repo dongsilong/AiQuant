@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.reconcile.mapper.LiveUserStreamLeaseMapper">
+    <insert id="ensure" timeout="3"><![CDATA[INSERT IGNORE INTO quant_live_user_stream_lease
+  (credential_id, owner_token, lease_epoch, lease_until)
+VALUES (#{id}, #{owner}, 1, DATE_ADD(NOW(6), INTERVAL #{seconds} SECOND))]]></insert>
+    <update id="acquireOrRenew" timeout="3"><![CDATA[UPDATE quant_live_user_stream_lease
+SET lease_epoch=IF(owner_token<>#{owner} OR lease_until<=NOW(6), lease_epoch+1, lease_epoch),
+    owner_token=#{owner}, lease_until=DATE_ADD(NOW(6), INTERVAL #{seconds} SECOND)
+WHERE credential_id=#{id}
+  AND (owner_token=#{owner} OR lease_until<=NOW(6))]]></update>
+    <select id="currentEpoch" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT lease_epoch FROM quant_live_user_stream_lease
+WHERE credential_id=#{id} AND owner_token=#{owner} AND lease_until>NOW(6)]]></select>
+    <select id="describe" resultType="java.lang.String" timeout="3"><![CDATA[SELECT CONCAT(
+    'schema=', DATABASE(),
+    ', owner=', owner_token,
+    ', epoch=', lease_epoch,
+    ', lease_until=', DATE_FORMAT(lease_until, '%Y-%m-%d %H:%i:%s.%f'),
+    ', db_now=', DATE_FORMAT(NOW(6), '%Y-%m-%d %H:%i:%s.%f'),
+    ', remaining_ms=', TIMESTAMPDIFF(MICROSECOND, NOW(6), lease_until) DIV 1000
+)
+FROM quant_live_user_stream_lease WHERE credential_id=#{id}]]></select>
+    <select id="owns" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_live_user_stream_lease
+WHERE credential_id=#{id} AND owner_token=#{owner} AND lease_until>NOW(6)]]></select>
+    <select id="ownsEpoch" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_live_user_stream_lease
+WHERE credential_id=#{id} AND owner_token=#{owner} AND lease_epoch=#{epoch} AND lease_until>NOW(6)]]></select>
+    <update id="release" timeout="3"><![CDATA[UPDATE quant_live_user_stream_lease SET lease_until=NOW(6)
+WHERE credential_id=#{id} AND owner_token=#{owner} AND lease_until>NOW(6)]]></update>
+</mapper>

@@ -87,10 +87,19 @@ public class SqlLogInterceptor implements Interceptor {
         long startTime = System.currentTimeMillis();
         try {
             Object result = invocation.proceed();
-            printSql(mappedStatement, boundSql, System.currentTimeMillis() - startTime, null);
+            // Successful SQL is silent by default, including slow queries.
+            if (Boolean.TRUE.equals(sqlLogProperties.getLogSuccess())) {
+                printSql(mappedStatement, boundSql, System.currentTimeMillis() - startTime, null);
+            }
             return result;
         } catch (Throwable e) {
-            printSql(mappedStatement, boundSql, System.currentTimeMillis() - startTime, e);
+            if (Boolean.TRUE.equals(sqlLogProperties.getLogError())) {
+                try {
+                    printSql(mappedStatement, boundSql, System.currentTimeMillis() - startTime, e);
+                } catch (RuntimeException loggingError) {
+                    log.error("SQL execution failed; SQL formatting also failed mapper={}", mappedStatement.getId(), loggingError);
+                }
+            }
             throw e;
         }
     }
@@ -104,9 +113,12 @@ public class SqlLogInterceptor implements Interceptor {
      * @param throwable       执行异常
      */
     private void printSql(MappedStatement mappedStatement, BoundSql boundSql, long elapsedTime, Throwable throwable) {
-        String fullSql = buildFullSql(mappedStatement.getConfiguration(), boundSql);
+        // Avoid expanding successful SQL or exposing bound parameters unless explicitly enabled.
+        String fullSql = Boolean.TRUE.equals(sqlLogProperties.getIncludeSql())
+            ? buildFullSql(mappedStatement.getConfiguration(), boundSql)
+            : boundSql.getSql().replaceAll(BLANK_REGEX, " ").trim();
         String message = buildLogMessage(mappedStatement, elapsedTime, fullSql, throwable);
-        printChunk(message);
+        printChunk(message, throwable != null);
     }
 
     /**
@@ -297,13 +309,13 @@ public class SqlLogInterceptor implements Interceptor {
      *
      * @param message 日志内容
      */
-    private void printChunk(String message) {
+    private void printChunk(String message, boolean failed) {
         if (!isLogOutput()) {
             printConsole(message);
             return;
         }
         if (message.length() <= CHUNK_SIZE) {
-            print(message);
+            print(message, failed);
             return;
         }
         String sqlLogId = UUID.randomUUID().toString();
@@ -311,7 +323,7 @@ public class SqlLogInterceptor implements Interceptor {
         for (int i = 0; i < total; i++) {
             int start = i * CHUNK_SIZE;
             int end = Math.min(start + CHUNK_SIZE, message.length());
-            print(StrUtil.format("sqlLogId={} part={}/{} {}", sqlLogId, i + 1, total, message.substring(start, end)));
+            print(StrUtil.format("sqlLogId={} part={}/{} {}", sqlLogId, i + 1, total, message.substring(start, end)), failed);
         }
     }
 
@@ -320,9 +332,13 @@ public class SqlLogInterceptor implements Interceptor {
      *
      * @param message 日志内容
      */
-    private void print(String message) {
+    private void print(String message, boolean failed) {
         if (isLogOutput()) {
-            log.info(message);
+            if (failed) {
+                log.error(message);
+            } else {
+                log.info(message);
+            }
             return;
         }
         printConsole(message);

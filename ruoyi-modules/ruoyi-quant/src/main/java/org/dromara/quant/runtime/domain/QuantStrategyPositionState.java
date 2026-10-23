@@ -1,11 +1,6 @@
 package org.dromara.quant.runtime.domain;
 
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.FieldStrategy;
-import com.baomidou.mybatisplus.annotation.TableField;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
-import com.baomidou.mybatisplus.annotation.Version;
+import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -31,19 +26,31 @@ public class QuantStrategyPositionState {
      */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Long positionId;
-    /** 持仓周期标识；旧持仓为空时不得猜测恢复。 */
+    /**
+     * 持仓周期标识；旧持仓为空时不得猜测恢复。
+     */
     private String positionCycleKey;
-    /** 开仓实际成交时冻结的有效杠杆。 */
+    /**
+     * 开仓实际成交时冻结的有效杠杆。
+     */
     private Integer frozenLeverage;
-    /** 开仓冻结的交易对绑定止损比例，未配置时为空。 */
+    /**
+     * 开仓冻结的交易对绑定止损比例，未配置时为空。
+     */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private BigDecimal frozenSymbolStopLossRatio;
-    /** 规范化后的首次止盈目标数量。 */
+    /**
+     * 规范化后的首次止盈目标数量。
+     */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private BigDecimal firstTakeProfitTargetQty;
-    /** 本周期首次止盈已确认累计成交数量（本地及交易所）。 */
+    /**
+     * 本周期首次止盈已确认累计成交数量（本地及交易所）。
+     */
     private BigDecimal firstTakeProfitExecutedQty;
-    /** 本地首次止盈已确认成交量；与条件单成交分开计量防止重复累计。 */
+    /**
+     * 本地首次止盈已确认成交量；与条件单成交分开计量防止重复累计。
+     */
     private BigDecimal firstTakeProfitLocalExecutedQty;
     /**
      * 当前状态。
@@ -89,11 +96,16 @@ public class QuantStrategyPositionState {
      * 开仓后的最低实时价。
      */
     private BigDecimal lowestPriceSinceEntry;
+    /** 持仓周期内按实时标记价回报率采样得到的最大值。 */
+    @TableField(updateStrategy = FieldStrategy.NEVER)
+    private BigDecimal maximumReturnRate;
     /**
      * 当前已达到的最高收益阶梯。
      */
     private Integer highestStep;
-    /** 已经精确确认生效的阶梯保护台阶，提交未知时不推进。 */
+    /**
+     * 已经精确确认生效的阶梯保护台阶，提交未知时不推进。
+     */
     private Integer confirmedProtectionStep;
     /**
      * 首次分批止盈是否已经确认完成。

@@ -2,6 +2,11 @@
 spring.servlet.multipart.location: /ruoyi/server/temp
 
 quant:
+  binance:
+    # RAW_OKHTTP / BINANCE_SDK; SDK 路径需通过集成验证后逐步启用。
+    websocket-transport: ${QUANT_BINANCE_WEBSOCKET_TRANSPORT:BINANCE_SDK}
+    # SDK 内部无界队列积压阈值，达到后显式断线以触发订阅恢复。
+    sdk-stream-backlog-limit: ${QUANT_BINANCE_SDK_BACKLOG_LIMIT:2048}
   live:
     enabled: true
   security:
@@ -25,18 +30,17 @@ quant:
     lease-seconds: 30
     # 未确认开平仓执行记录的恢复扫描间隔，单位：秒
     recovery-seconds: 5
+  paper:
+    # 生产环境禁止模拟账本入口；历史代码与数据结构暂保留用于迁移兼容。
+    enabled: false
   # 交易所事实对账与用户数据流协调配置
   reconcile:
-    # 是否启用对账、用户数据流监督和执行恢复任务
+    # 是否启用周期账户/订单/成交全量对账及持久化执行记录恢复扫描；运行时持仓核实与用户数据流恢复仍运行
     enabled: true
-    # 持仓/订单事实对账间隔，单位：秒
+    # 周期全量对账和运行时定期持仓核实间隔，单位：秒
     interval-seconds: 60
     # 对账查询历史订单和成交的回溯范围，单位：小时
     history-hours: 48
-
-#logging:
-#  level:
-#    org.dromara.quant.strategy: debug
 
 --- # 监控中心配置
 spring.boot.admin.client:
@@ -118,10 +122,13 @@ snail-ai:
 --- # MyBatis Plus 配置
 mybatis-plus:
   sql-log:
-    # 生产环境默认关闭 SQL 内容日志
-    enabled: false
+    # 仅记录失败的 SQL；参数默认隐藏，避免泄漏凭证
+    enabled: true
     # 输出方式，可选 console、log
-    output: console
+    output: log
+    log-success: false
+    log-error: true
+    include-sql: false
 
 --- # 数据加密
 mybatis-encryptor:

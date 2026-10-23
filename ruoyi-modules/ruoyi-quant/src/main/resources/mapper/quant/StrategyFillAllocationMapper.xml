@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.execution.mapper.StrategyFillAllocationMapper">
+    <select id="getAllocation" resultType="map" timeout="3"><![CDATA[SELECT strategy_id, strategy_instance_id, exchange_order_id,
+       allocated_qty, allocated_price, allocated_fee, allocated_fee_asset, realized_pnl, side,
+       CAST(trade_time AS CHAR(19)) AS trade_time
+FROM quant_strategy_fill_allocation
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND exchange_trade_id=#{tradeId}]]></select>
+    <insert id="insertAllocation" timeout="3"><![CDATA[INSERT INTO quant_strategy_fill_allocation
+  (credential_id,symbol,exchange_trade_id,exchange_order_id,strategy_id,
+   strategy_instance_id,side,allocated_qty,allocated_price,allocated_fee,
+   allocated_fee_asset,realized_pnl,trade_time,created_at)
+VALUES (#{credentialId},#{symbol},#{tradeId},#{orderId},#{strategyId},
+        #{instanceId},#{side},#{quantity},#{price},#{fee},#{feeAsset},#{pnl},
+        #{tradeTime},NOW())]]></insert>
+    <select id="summarizeVerifiedFills" resultType="map" timeout="3"><![CDATA[SELECT COUNT(*) AS fill_count,
+       COALESCE(SUM(CASE WHEN side='BUY' THEN allocated_qty ELSE 0 END),0) AS bought_qty,
+       COALESCE(SUM(CASE WHEN side='SELL' THEN allocated_qty ELSE 0 END),0) AS sold_qty,
+       COALESCE(SUM(CASE WHEN side='BUY' THEN allocated_qty*allocated_price ELSE 0 END),0) AS bought_notional,
+       COALESCE(SUM(CASE WHEN side='SELL' THEN allocated_qty*allocated_price ELSE 0 END),0) AS sold_notional,
+       COALESCE(SUM(allocated_fee),0) AS total_fees,
+       COUNT(DISTINCT allocated_fee_asset) AS fee_asset_count,
+       MIN(allocated_fee_asset) AS fee_asset,
+       COALESCE(SUM(realized_pnl),0) AS realized_pnl
+FROM quant_strategy_fill_allocation
+WHERE credential_id=#{credentialId} AND strategy_id=#{strategyId}
+  AND strategy_instance_id=#{instanceId} AND symbol=#{symbol}]]></select>
+</mapper>

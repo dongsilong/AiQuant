@@ -2,6 +2,7 @@ package org.dromara.quant.reconcile;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Component;
  * 周期性交易所对账。
  */
 @Slf4j
+@RequiredArgsConstructor
 @Component
 public class TradingReconciliationScheduler {
     /**
@@ -28,16 +30,7 @@ public class TradingReconciliationScheduler {
     private final QuantProperties properties;
 
     /**
-     * 创建 TradingReconciliationScheduler 实例并初始化其依赖。
-     */
-    public TradingReconciliationScheduler(QuantCredentialMapper credentialMapper, TradingReconciliationService reconciliationService, QuantProperties properties) {
-        this.credentialMapper = credentialMapper;
-        this.reconciliationService = reconciliationService;
-        this.properties = properties;
-    }
-
-    /**
-     * 执行一轮交易事实对账。
+     * 执行一轮账户级交易事实对账，补齐本地成交账本与执行记录。
      */
     @Scheduled(fixedDelayString = "#{@quantProperties.reconcile.intervalSeconds * 1000}", initialDelay = 15000)
     public void reconcile() {

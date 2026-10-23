@@ -17,7 +17,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -74,7 +77,8 @@ public class TradeHistoryService {
             throw new ServiceException("成交来源关联重复，暂不能可靠汇总开平仓记录");
         }
         var result = TradeHistoryAssembler.assemble(fills.stream().map(f -> new TradeHistoryAssembler.Fill(f.getId(), f.getCredentialId(), f.getSymbol(), f.getSide(),
-            f.getPositionSide(), f.getOperationType(), f.getReduceOnly(), f.getQuantity(), f.getPrice(), f.getCommission(), f.getRealizedPnl(), f.getTradeTime())).toList(), names);
+            f.getPositionSide(), f.getOperationType(), f.getReduceOnly(), f.getQuantity(), f.getPrice(), f.getCommission(), f.getRealizedPnl(), f.getTradeTime(),
+            f.getLeverageSnapshot(), f.getPriceTickSizeSnapshot(), f.getPostFillWalletBalance(), f.getPostFillBalanceAt(), f.getCurrentPriceTickSize())).toList(), names);
         var rows = result.rows().stream().filter(row -> {
             Instant opened = Instant.parse((String) row.get("openedAt"));
             return (start == null || !opened.isBefore(start)) && (end == null || opened.isBefore(end));

@@ -14,11 +14,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 @Tag("dev")
 class BinanceGatewayPriceQueryTest {
 
+    private static void respond(com.sun.net.httpserver.HttpExchange exchange, String json) throws IOException {
+        byte[] body = json.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+    }
+
     @Test
-    void readsTypedTickerAndMarkPriceResponses() throws IOException {
+    void readsTickerV2AndMarkPriceThroughOfficialSdkModels() throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/fapi/v1/ticker/price", exchange -> respond(exchange, "{\"symbol\":\"BTCUSDT\",\"price\":\"112345.6\",\"time\":1750000000000}"));
-        server.createContext("/fapi/v1/premiumIndex", exchange -> respond(exchange, "{\"symbol\":\"BTCUSDT\",\"markPrice\":\"112340.5\",\"indexPrice\":\"112340.0\",\"estimatedSettlePrice\":\"112340.0\",\"lastFundingRate\":\"0.0001\",\"interestRate\":\"0.0001\",\"nextFundingTime\":1750000000000,\"time\":1750000000000}"));
+        server.createContext("/fapi/v2/ticker/price", exchange -> respond(exchange, "{\"symbol\":\"BTCUSDT\",\"price\":\"112345.6\",\"time\":1750000000000}"));
+        server.createContext("/fapi/v1/premiumIndex", exchange -> respond(exchange, "{\"symbol\":\"BTCUSDT\",\"markPrice\":\"112340.5\",\"indexPrice\":\"112340.0\"," +
+            "\"estimatedSettlePrice\":\"112340.0\",\"lastFundingRate\":\"0.0001\",\"interestRate\":\"0.0001\",\"nextFundingTime\":1750000000000,\"time\":1750000000000}"));
         server.start();
         try {
             QuantProperties properties = new QuantProperties();
@@ -29,13 +38,5 @@ class BinanceGatewayPriceQueryTest {
         } finally {
             server.stop(0);
         }
-    }
-
-    private static void respond(com.sun.net.httpserver.HttpExchange exchange, String json) throws IOException {
-        byte[] body = json.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json");
-        exchange.sendResponseHeaders(200, body.length);
-        exchange.getResponseBody().write(body);
-        exchange.close();
     }
 }

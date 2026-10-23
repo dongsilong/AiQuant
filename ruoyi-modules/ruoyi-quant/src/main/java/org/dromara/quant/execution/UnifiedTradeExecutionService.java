@@ -1,6 +1,7 @@
 package org.dromara.quant.execution;
 
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.QuantityNormalizer;
 import org.dromara.quant.risk.LiveTradingGate;
@@ -16,12 +17,10 @@ import java.util.function.Supplier;
 /**
  * 统一交易执行引擎。顺序固定为：幂等抢占 -> 风控闸门 -> 参数标准化 -> 交易所执行 -> 本地订单账本。
  */
+@RequiredArgsConstructor
 @Service
 @Slf4j
 public class UnifiedTradeExecutionService implements TradeExecutionPort {
-    @Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
     /**
      * 交易所统一网关。
      */
@@ -42,22 +41,21 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private final org.dromara.quant.market.AccountPositionCache positionCache;
     private final org.dromara.quant.market.AccountBalanceCache balanceCache;
     private final TradingPreparationService preparationService;
-
-    /**
-     * 创建 UnifiedTradeExecutionService 实例并初始化其依赖。
-     */
-    public UnifiedTradeExecutionService(ExchangeGateway gateway, LiveTradingGate liveTradingGate, ExecutionRecordService executionRecordService,
-                                        OrderLedgerService orderLedgerService, org.dromara.quant.risk.OpenCapacityService openCapacityService,
-                                        org.dromara.quant.market.AccountPositionCache positionCache, org.dromara.quant.market.AccountBalanceCache balanceCache, TradingPreparationService preparationService) {
-        this.gateway = gateway;
-        this.liveTradingGate = liveTradingGate;
-        this.executionRecordService = executionRecordService;
-        this.orderLedgerService = orderLedgerService;
-        this.openCapacityService = openCapacityService;
-        this.positionCache = positionCache;
-        this.balanceCache = balanceCache;
-        this.preparationService = preparationService;
-    }
+    @Autowired
+    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
+    @Autowired
+    private org.dromara.quant.credential.mapper.QuantCredentialMapper credentialMapper;
+    @Autowired
+    private org.dromara.quant.risk.mapper.QuantRiskConfigMapper riskConfigMapper;
+    @Autowired
+    private org.dromara.quant.risk.RiskDecisionService riskDecisionService;
+    @Autowired
+    private org.dromara.quant.config.QuantProperties quantProperties;
+    private volatile LiveOrderDispatcher liveDispatcher;
+    private volatile StrategyOrderAcceptanceJournal acceptanceJournal;
+    private volatile org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService runtimeLease;
+    private org.dromara.quant.reconcile.LiveUserStreamLeaseService liveUserStreamLease;
+    private volatile org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard closeOwnershipGuard;
 
     /**
      * 判断当前运行模式是否会真实向交易所发送订单。
@@ -93,65 +91,6 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     }
 
     /**
-     * 执行统一开仓流程，并通过执行记录保证幂等。
-     */
-    @Override
-    public ExecutionResult open(OpenPositionCommand command) {
-        var prepared = new java.util.concurrent.atomic.AtomicReference<TradingPreparationService.Prepared>();
-        int leverage = command.leverage() == null ? 1 : command.leverage();
-        return execute("OPEN", command.credentialId(), command.strategyId(), command.strategyInstanceId(), command.credential(), command.symbol(), command.idempotencyKey(),
-            command.runMode(), command.safety(), command.symbolRule(), () -> {
-            if (sendsToExchange(command.runMode()) && preparationService.requireReady(command.credentialId(), command.symbol(), leverage, command.marginMode()) != prepared.get()) {
-                throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("交易设置在执行准备期间变化，等待新的行情");
-            }
-        }, () -> {
-            ExchangeGateway.SymbolRule rule = command.symbolRule();
-            if (sendsToExchange(command.runMode())) {
-                var token = preparationService.requireReady(command.credentialId(), command.symbol(), leverage, command.marginMode());
-                if (token == null) { throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("交易设置未准备好"); }
-                prepared.set(token);
-                if (token.rule() != null) { rule = token.rule(); }
-            }
-            BigDecimal quantity = normalizeQuantity(command.quantity(), rule, command.runMode(), command.type());
-            BigDecimal price = normalizePrice(command.price(), rule, command.runMode());
-            if (price != null) {
-                QuantityNormalizer.requireNotional(price, quantity, rule);
-            }
-            String positionSide = command.positionSide();
-            if (sendsToExchange(command.runMode())) {
-                positionSide = prepared.get().positionMode().hedgeMode() ? ("BUY".equalsIgnoreCase(command.side()) ? "LONG" : "SHORT") : "BOTH";
-            }
-            return new ExchangeGateway.OrderRequest(command.credential(), command.symbol(), command.side(), command.type(), quantity, price, false, positionSide,
-                exchangeClientOrderId(command.idempotencyKey()), sendsToExchange(command.runMode()), command.validUntil());
-        }, command);
-    }
-
-    /**
-     * 执行减仓或全平流程。
-     */
-    @Override
-    public ExecutionResult close(ClosePositionCommand command) {
-        if (sendsToExchange(command.runMode()) && !("BOTH".equalsIgnoreCase(command.positionSide())
-            || "LONG".equalsIgnoreCase(command.positionSide()) && "SELL".equalsIgnoreCase(command.side())
-            || "SHORT".equalsIgnoreCase(command.positionSide()) && "BUY".equalsIgnoreCase(command.side()))) {
-            throw new IllegalArgumentException("平仓方向不明确或与持仓方向不匹配，拒绝交易所请求");
-        }
-        return execute("CLOSE", command.credentialId(), command.strategyId(), command.strategyInstanceId(), command.credential(), command.symbol(), command.idempotencyKey(),
-            command.runMode(), command.safety(), command.symbolRule(), () -> {
-        }, () -> {
-            ExchangeGateway.SymbolRule rule = command.symbolRule();
-            if (sendsToExchange(command.runMode())) {
-                ExchangeGateway.SymbolRule actual = gateway.queryTradingRule(command.credential(), command.symbol());
-                if (actual != null) { rule = actual; }
-            }
-            BigDecimal quantity = normalizeQuantity(command.quantity(), rule, command.runMode(), command.type());
-            BigDecimal price = normalizePrice(command.price(), rule, command.runMode());
-            return new ExchangeGateway.OrderRequest(command.credential(), command.symbol(), command.side(), command.type(), quantity, price, true, command.positionSide(),
-                exchangeClientOrderId(command.idempotencyKey()), sendsToExchange(command.runMode()));
-        }, null);
-    }
-
-    /**
      * 将内部幂等键转换为 Binance 允许的客户端订单号。
      * 内部幂等键保留完整值，交易所订单号使用确定性短哈希，确保恢复查询仍可匹配。
      */
@@ -171,6 +110,135 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
         }
     }
 
+    /**
+     * Only order TERMINAL states allow a LIVE cancel to release the account-symbol slot.
+     */
+    static boolean verifiedTerminalCancel(ExchangeGateway.OrderSnapshot actual, String symbol, Long orderId, String clientId) {
+        return actual != null && actual.orderId() != null && (orderId == null || orderId.equals(actual.orderId())) && clientId != null && clientId.equals(actual.clientOrderId()) && symbol != null && symbol.equalsIgnoreCase(actual.symbol()) && java.util.Set.of("CANCELED", "EXPIRED", "FILLED", "REJECTED").contains(actual.status() == null ? "" : actual.status().toUpperCase(java.util.Locale.ROOT)) && actual.executedQuantity() != null && actual.executedQuantity().signum() >= 0;
+    }
+
+    private void requireFresh(OpenPositionCommand command) {
+        if (command.validUntil() != null) {
+            long offsetMillis = gateway.exchangeTimeOffsetMillis(command.runMode());
+            if (!java.time.Instant.now().plusMillis(offsetMillis).isBefore(command.validUntil())) {
+                throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("开仓信号已过期，禁止按旧点位追单");
+            }
+        }
+    }
+
+    /**
+     * 注入订单接受日志，以便派发后通过持久意图恢复本地订单。
+     */
+    @Autowired
+    public void setAcceptanceJournal(StrategyOrderAcceptanceJournal journal) {
+        this.acceptanceJournal = java.util.Objects.requireNonNull(journal);
+    }
+
+    /**
+     * 注入 LIVE 订单派发器，统一串行化真实下单操作。
+     */
+    @Autowired
+    public void setLiveDispatcher(LiveOrderDispatcher dispatcher) {
+        this.liveDispatcher = java.util.Objects.requireNonNull(dispatcher);
+    }
+
+    /**
+     * 注入策略平仓归属校验，阻止实例操作不属于自己的持仓。
+     */
+    @Autowired
+    public void setCloseOwnershipGuard(org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard guard) {
+        this.closeOwnershipGuard = java.util.Objects.requireNonNull(guard);
+    }
+
+    /**
+     * Injected by Spring; direct non-Spring constructions remain fail-closed for LIVE strategy orders.
+     */
+    @Autowired
+    public void setRuntimeLease(org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService runtimeLease) {
+        this.runtimeLease = java.util.Objects.requireNonNull(runtimeLease);
+    }
+
+    /** Inject account-level LIVE user-stream fencing for final strategy entry dispatch. */
+    @Autowired
+    public void setLiveUserStreamLease(org.dromara.quant.reconcile.LiveUserStreamLeaseService lease) {
+        this.liveUserStreamLease = java.util.Objects.requireNonNull(lease);
+    }
+
+    /**
+     * 执行统一开仓流程，并通过执行记录保证幂等。
+     */
+    @Override
+    public ExecutionResult open(OpenPositionCommand command) {
+        var prepared = new java.util.concurrent.atomic.AtomicReference<TradingPreparationService.Prepared>();
+        int leverage = command.leverage() == null ? 1 : command.leverage();
+        return execute("OPEN", command.credentialId(), command.strategyId(), command.strategyInstanceId(), command.credential(), command.symbol(), command.idempotencyKey(),
+            command.runMode(), command.safety(), command.symbolRule(), () -> {
+            if (sendsToExchange(command.runMode()) && preparationService.requireReady(command.credentialId(), command.symbol(), leverage, command.marginMode()) != prepared.get()) {
+                throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("交易设置在执行准备期间变化，等待新的行情");
+            }
+        }, () -> {
+            ExchangeGateway.SymbolRule rule = command.symbolRule();
+            if (sendsToExchange(command.runMode())) {
+                var token = preparationService.requireReady(command.credentialId(), command.symbol(), leverage, command.marginMode());
+                if (token == null) {
+                    throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("交易设置未准备好");
+                }
+                if ("LIVE".equalsIgnoreCase(command.runMode()) && prepared.get() != token) {
+                    throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("交易设置在容量校验后发生变化，等待新的行情");
+                }
+                prepared.set(token);
+                if (token.rule() != null) {
+                    rule = token.rule();
+                }
+            }
+            BigDecimal quantity = normalizeQuantity(command.quantity(), rule, command.runMode(), command.type());
+            BigDecimal price = normalizePrice(command.price(), rule, command.runMode());
+            if (price != null) {
+                QuantityNormalizer.requireNotional(price, quantity, rule);
+            }
+            String positionSide = command.positionSide();
+            if (sendsToExchange(command.runMode())) {
+                positionSide = prepared.get().positionMode().hedgeMode() ? ("BUY".equalsIgnoreCase(command.side()) ? "LONG" : "SHORT") : "BOTH";
+            }
+            return new ExchangeGateway.OrderRequest(command.credential(), command.symbol(), command.side(), command.type(), quantity, price, false, positionSide,
+                exchangeClientOrderId(command.idempotencyKey()), sendsToExchange(command.runMode()), command.validUntil());
+        }, command, () -> {
+            if (!"LIVE".equalsIgnoreCase(command.runMode())) {
+                return null;
+            }
+            var token = preparationService.requireReady(command.credentialId(), command.symbol(), leverage, command.marginMode());
+            if (token == null || token.positionMode() == null) {
+                throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("未确认账户持仓模式，暂停开仓");
+            }
+            prepared.set(token);
+            return token;
+        });
+    }
+
+    /**
+     * 执行减仓或全平流程。
+     */
+    @Override
+    public ExecutionResult close(ClosePositionCommand command) {
+        if (sendsToExchange(command.runMode()) && !("BOTH".equalsIgnoreCase(command.positionSide()) || "LONG".equalsIgnoreCase(command.positionSide()) && "SELL".equalsIgnoreCase(command.side()) || "SHORT".equalsIgnoreCase(command.positionSide()) && "BUY".equalsIgnoreCase(command.side()))) {
+            throw new IllegalArgumentException("平仓方向不明确或与持仓方向不匹配，拒绝交易所请求");
+        }
+        return execute("CLOSE", command.credentialId(), command.strategyId(), command.strategyInstanceId(), command.credential(), command.symbol(), command.idempotencyKey(),
+            command.runMode(), command.safety(), command.symbolRule(), () -> {
+        }, () -> {
+            ExchangeGateway.SymbolRule rule = command.symbolRule();
+            if (sendsToExchange(command.runMode())) {
+                ExchangeGateway.SymbolRule actual = gateway.queryTradingRule(command.credential(), command.symbol());
+                if (actual != null) {
+                    rule = actual;
+                }
+            }
+            BigDecimal quantity = normalizeQuantity(command.quantity(), rule, command.runMode(), command.type());
+            BigDecimal price = normalizePrice(command.price(), rule, command.runMode());
+            return new ExchangeGateway.OrderRequest(command.credential(), command.symbol(), command.side(), command.type(), quantity, price, true, command.positionSide(),
+                exchangeClientOrderId(command.idempotencyKey()), sendsToExchange(command.runMode()));
+        }, null);
+    }
 
     /**
      * 执行撤单流程。
@@ -178,20 +246,74 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     @Override
     public ExecutionResult cancel(CancelOrderCommand command) {
         requireIdempotency(command.idempotencyKey());
-        QuantExecutionRecordReservation reservation = reserve("CANCEL", command.credentialId(), null, null, command.symbol(), command.idempotencyKey(), command.clientOrderId());
+        boolean live = "LIVE".equalsIgnoreCase(command.runMode());
+        String targetClientId = command.clientOrderId();
+        Long targetOrderId = command.orderId();
+        // The execution record and dispatch ticket MUST identify the actual order being
+        // cancelled, not a synthetic ID unrelated to that order. A missing client ID
+        // is first resolved by a precise exchange query, before any side-effect.
+        if (live && (targetClientId == null || targetClientId.isBlank())) {
+            if (targetOrderId == null) {
+                throw new IllegalArgumentException("LIVE 撤单缺少交易所订单或客户端标识");
+            }
+            var identity = gateway.queryOrder(command.credential(), command.symbol(), targetOrderId, null);
+            if (identity == null || !targetOrderId.equals(identity.orderId()) || identity.clientOrderId() == null || identity.clientOrderId().isBlank()) {
+                throw new IllegalStateException("无法证明 LIVE 撤单的真实客户端订单标识");
+            }
+            targetClientId = identity.clientOrderId();
+        }
+        QuantExecutionRecordReservation reservation = reserve("CANCEL", command.credentialId(), null, null, command.symbol(), command.idempotencyKey(), targetClientId);
         if (!reservation.owner()) {
             if (reservation.result() == null || !reservation.result().accepted()) {
                 throw new IllegalStateException("幂等取消请求仍处于未确认状态：" + command.idempotencyKey());
             }
             return reservation.result();
         }
+
+        LiveOrderDispatcher.Ticket ticket = null;
+        boolean attempted = false;
+        String resolvedClientId = targetClientId;
         try {
-            gateway.cancelOrder(new ExchangeGateway.CancelOrderRequest(command.credential(), command.symbol(), command.orderId(), command.clientOrderId(),
+            if (live) {
+                ticket = requireLiveDispatcher().begin(command.credentialId(), command.symbol(), command.idempotencyKey(), "CANCEL", resolvedClientId, null, null);
+            }
+            attempted = true;
+            gateway.cancelOrder(new ExchangeGateway.CancelOrderRequest(command.credential(), command.symbol(), targetOrderId, resolvedClientId,
                 sendsToExchange(command.runMode())));
-            executionRecordService.accepted(reservation.record(), command.orderId(), "CANCEL_ACCEPTED");
-            return new ExecutionResult(true, "CANCEL_ACCEPTED", command.orderId(), command.clientOrderId());
+            if (!live) {
+                executionRecordService.accepted(reservation.record(), targetOrderId, "CANCEL_ACCEPTED");
+                return new ExecutionResult(true, "CANCEL_ACCEPTED", targetOrderId, resolvedClientId);
+            }
+            // Binance accepting a CANCEL request is NOT proof that the order ended
+            // unfilled. The order may be FILLED or PARTIALLY_FILLED by the time
+            // cancellation reaches the exchange. Do not release the dispatch slot
+            // until a precise terminal snapshot and local ledger are both durable.
+            ExchangeGateway.OrderSnapshot actual = gateway.queryOrder(command.credential(), command.symbol(), targetOrderId, resolvedClientId);
+            if (!verifiedTerminalCancel(actual, command.symbol(), targetOrderId, resolvedClientId)) {
+                throw new IllegalStateException("LIVE 撤单没有可信的交易所终态，保留调度占用");
+            }
+            orderLedgerService.syncSnapshot(command.credentialId(), actual);
+            executionRecordService.accepted(reservation.record(), actual.orderId(), actual.status());
+            requireLiveDispatcher().acknowledged(ticket, actual.orderId());
+            ticket = null;
+            return new ExecutionResult(true, actual.status(), actual.orderId(), actual.clientOrderId());
         } catch (RuntimeException ex) {
-            executionRecordService.markUnknown(reservation.record(), ex.getMessage());
+            if (ticket != null) {
+                try {
+                    if (attempted && (ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException)) {
+                        requireLiveDispatcher().notSent(ticket);
+                    } else {
+                        requireLiveDispatcher().unknown(ticket);
+                    }
+                } catch (RuntimeException dispatchEx) {
+                    ex.addSuppressed(dispatchEx);
+                }
+            }
+            if (attempted) {
+                executionRecordService.markUnknown(reservation.record(), ex.getMessage());
+            } else {
+                executionRecordService.failed(reservation.record(), ex.getMessage());
+            }
             throw ex;
         }
     }
@@ -202,21 +324,34 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private ExecutionResult execute(String operationType, Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol,
                                     String idempotencyKey, String runMode, ExecutionSafetyContext safety, ExchangeGateway.SymbolRule rule, Runnable beforeExchangeAction,
                                     Supplier<ExchangeGateway.OrderRequest> requestSupplier, OpenPositionCommand openCommand) {
+        return execute(operationType, credentialId, strategyId, strategyInstanceId, credential, symbol, idempotencyKey, runMode, safety, rule, beforeExchangeAction, requestSupplier,
+            openCommand, null);
+    }
+
+    private ExecutionResult execute(String operationType, Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol,
+                                    String idempotencyKey, String runMode, ExecutionSafetyContext safety, ExchangeGateway.SymbolRule rule, Runnable beforeExchangeAction,
+                                    Supplier<ExchangeGateway.OrderRequest> requestSupplier, OpenPositionCommand openCommand,
+                                    Supplier<TradingPreparationService.Prepared> capacityPreparation) {
         requireIdempotency(idempotencyKey);
-        QuantExecutionRecordReservation reservation = reserve(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, exchangeClientOrderId(idempotencyKey));
+        QuantExecutionRecordReservation reservation = reserve(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey,
+            exchangeClientOrderId(idempotencyKey));
         if (!reservation.owner()) {
             if (reservation.result() == null || !reservation.result().accepted()) {
                 throw new IllegalStateException("幂等交易请求仍处于未确认状态：" + idempotencyKey);
             }
             return reservation.result();
         }
-        recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
-            "REQUESTED", "执行请求", null, null, null, null);
+        recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode, "REQUESTED", "执行请求", null, null, null, null);
         ExchangeGateway.OrderRequest logRequest = null;
         ExchangeGateway.OrderResult exchangeResult = null;
         boolean exchangeAttempted = false;
+        LiveOrderDispatcher.Ticket dispatchTicket = null;
         long startedNanos = System.nanoTime();
         org.dromara.quant.market.AccountBalanceSnapshot balance = null;
+        BigDecimal openNotional = null;
+        Long livePositionGeneration = null;
+        Long preparationEpoch = null;
+        Long accountLeaseEpoch = null;
         try {
             if (openCommand != null) {
                 requireFresh(openCommand);
@@ -225,16 +360,37 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                     ExchangeGateway.PriceSnapshot snapshot = "TESTNET".equalsIgnoreCase(runMode) ? gateway.queryPrice(runMode, symbol) : gateway.queryPrice(symbol);
                     notional = snapshot == null || snapshot.markPrice() == null ? null : openCommand.quantity().multiply(snapshot.markPrice());
                 }
+                openNotional = notional;
                 var positions = "PAPER".equalsIgnoreCase(runMode) ? null : positionCache.requirePositions(credentialId);
                 requireFresh(openCommand);
                 balance = "PAPER".equalsIgnoreCase(runMode) ? null : balanceCache.requireSnapshot(credentialId);
-                openCapacityService.reserve(openCommand, notional, positions, balance);
+                if ("LIVE".equalsIgnoreCase(runMode)) {
+                    livePositionGeneration = openCapacityService.captureLivePositionGeneration(credentialId);
+                }
+                TradingPreparationService.Prepared preparedForCapacity = capacityPreparation == null ? null : capacityPreparation.get();
+                boolean hedgeModeConfirmed = "LIVE".equalsIgnoreCase(runMode) && preparedForCapacity != null && preparedForCapacity.positionMode() != null
+                    && preparedForCapacity.positionMode().hedgeMode();
+                openCapacityService.reserve(openCommand, notional, positions, balance, hedgeModeConfirmed);
             }
             checkLive(operationType, runMode, safety, credential, rule);
+            if ("LIVE".equalsIgnoreCase(runMode) && strategyInstanceId != null) {
+                var verifier = runtimeLease;
+                if (verifier == null) {
+                    throw new IllegalStateException("LIVE 策略执行缺少租约验证器");
+                }
+                preparationEpoch = verifier.requireCurrentEpoch(strategyInstanceId, credentialId, symbol);
+            }
+            if ("LIVE".equalsIgnoreCase(runMode) && strategyInstanceId != null && openCommand != null) {
+                var verifier = liveUserStreamLease;
+                if (verifier == null) {
+                    throw new IllegalStateException("LIVE 策略开仓缺少账户级用户流租约验证器");
+                }
+                accountLeaseEpoch = verifier.requireCurrentEpoch(credentialId);
+            }
             ExchangeGateway.OrderRequest request = requestSupplier.get();
+            verifyLiveCloseOwnership(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode, request);
             logRequest = request;
-            recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
-                "REQUESTED", "执行参数已准备", request, null, null, null);
+            recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode, "REQUESTED", "执行参数已准备", request, null, null, null);
             beforeExchangeAction.run();
             if (openCommand != null) {
                 requireFresh(openCommand);
@@ -253,10 +409,74 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                     // 最后检查准备令牌，断线/外部配置变更不能靠旧设置放行。
                     beforeExchangeAction.run();
                     requireFresh(openCommand);
-                    log.debug("开仓执行耗时 credentialId={} symbol={} preparationMillis={} eventAgeMillis={} remainingSignalMillis={}", credentialId, symbol,
-                        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos),
-                        openCommand.signalEventTime() == null ? null : java.time.Duration.between(openCommand.signalEventTime(), java.time.Instant.now()).toMillis(),
-                        openCommand.validUntil() == null ? null : java.time.Duration.between(java.time.Instant.now(), openCommand.validUntil()).toMillis());
+                    java.time.Instant localNow = java.time.Instant.now();
+                    long exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(runMode);
+                    java.time.Instant exchangeNow = localNow.plusMillis(exchangeOffsetMillis);
+                    log.debug("开仓执行时间诊断 credentialId={} symbol={} runMode={} preparationMillis={} signalEventTime={} localNow={} exchangeNow={} exchangeOffsetMillis={} eventAgeMillis={} remainingSignalMillis={}",
+                        credentialId, symbol, runMode, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos), openCommand.signalEventTime(), localNow,
+                        exchangeNow, exchangeOffsetMillis, openCommand.signalEventTime() == null ? null : java.time.Duration.between(openCommand.signalEventTime(), exchangeNow).toMillis(),
+                        openCommand.validUntil() == null ? null : java.time.Duration.between(exchangeNow, openCommand.validUntil()).toMillis());
+                }
+                verifyLiveCloseOwnership(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode, request);
+                if (preparationEpoch != null) {
+                    // Reject requests prepared before lease expiry/takeover/reacquisition.
+                    // This guards the entire preparation window, not only final token ownership.
+                    long currentEpoch = runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol);
+                    if (preparationEpoch.longValue() != currentEpoch) {
+                        throw new IllegalStateException("LIVE 策略租约代次在下单准备期间变化，拒绝旧交易信号");
+                    }
+                }
+                if ("LIVE".equalsIgnoreCase(runMode)) {
+                    if (strategyId != null && strategyInstanceId != null && java.util.Set.of("LONG", "SHORT", "BOTH").contains(request.positionSide() == null ? "" :
+                        request.positionSide().toUpperCase(java.util.Locale.ROOT))) {
+                        dispatchTicket = requireLiveDispatcher().beginStrategy(credentialId, symbol, idempotencyKey, operationType, request.clientOrderId(), strategyId,
+                            strategyInstanceId, preparationEpoch, request.positionSide().toUpperCase(java.util.Locale.ROOT), request.side().toUpperCase(java.util.Locale.ROOT));
+                    } else {
+                        dispatchTicket = requireLiveDispatcher().begin(credentialId, symbol, idempotencyKey, operationType, request.clientOrderId(), strategyInstanceId,
+                            preparationEpoch);
+                    }
+                    // The durable guard transaction itself may block behind another
+                    // node. Re-check the exact lease epoch AFTER acquiring the guard
+                    // and BEFORE any network request. If ownership changed, the
+                    // request is provably NOT SENT and we can free our own guard.
+                    if (preparationEpoch != null) {
+                        try {
+                            if (runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol) != preparationEpoch.longValue()) {
+                                throw new IllegalStateException("LIVE 订单调度等待期间租约代次变化，拒绝旧节点下单");
+                            }
+                        } catch (RuntimeException stale) {
+                            try {
+                                requireLiveDispatcher().notSent(dispatchTicket);
+                                dispatchTicket = null;
+                            } catch (RuntimeException releaseFailure) {
+                                stale.addSuppressed(releaseFailure);
+                                // Leave the ticket occupied; outcome of database release is unknown.
+                                dispatchTicket = null;
+                            }
+                            throw stale;
+                        }
+                    }
+                }
+                if ("LIVE".equalsIgnoreCase(runMode) && openCommand != null) {
+                    // Dispatch guard acquisition may wait; revalidate all account facts immediately before the first network side effect.
+                    requireFresh(openCommand);
+                    positionCache.requirePositions(credentialId);
+                    if (balanceCache.requireSnapshot(credentialId) != balance) {
+                        throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("账户余额在最终发单检查期间变化，等待新的行情重新评估");
+                    }
+                    if (livePositionGeneration == null) {
+                        throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("LIVE 全账户持仓快照代次缺失，拒绝发送开仓");
+                    }
+                    openCapacityService.requireLivePositionGeneration(credentialId, livePositionGeneration);
+                }
+                if ("LIVE".equalsIgnoreCase(runMode)) {
+                    recheckLiveBeforeDispatch(operationType, credentialId, symbol, idempotencyKey, safety, rule, openNotional);
+                    if (preparationEpoch != null && runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol) != preparationEpoch.longValue()) {
+                        throw new IllegalStateException("LIVE 策略租约代次在最终派发前变化，拒绝旧节点下单");
+                    }
+                    if (accountLeaseEpoch != null) {
+                        requireCurrentAccountLease(credentialId, accountLeaseEpoch);
+                    }
                 }
                 exchangeAttempted = true;
                 long orderStarted = System.nanoTime();
@@ -265,56 +485,105 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                     java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - orderStarted));
             }
             executionRecordService.accepted(reservation.record(), exchangeResult.orderId(), exchangeResult.status());
-            recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
-                "PARTIALLY_FILLED".equals(exchangeResult.status()) ? "PARTIALLY_FILLED" : "ACCEPTED", "交易所已受理，等待成交事实", request, exchangeResult, null, null);
+            recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode, "PARTIALLY_FILLED".equals(exchangeResult.status()) ?
+                "PARTIALLY_FILLED" : "ACCEPTED", "交易所已受理，等待成交事实", request, exchangeResult, null, null);
             try {
-                orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult);
+                if ("LIVE".equalsIgnoreCase(runMode) && strategyId != null && strategyInstanceId != null) {
+                    if (acceptanceJournal == null) {
+                        throw new IllegalStateException("Missing transactional strategy order provenance journal");
+                    }
+                    acceptanceJournal.persist(credentialId, strategyId, strategyInstanceId, runMode, operationType, request, exchangeResult,
+                        openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),
+                        openCommand == null || openCommand.symbolRule() == null ? null : openCommand.symbolRule().priceTickSize());
+                } else {
+                    orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult,
+                        openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),
+                        openCommand == null || openCommand.symbolRule() == null ? null : openCommand.symbolRule().priceTickSize());
+                }
             } catch (RuntimeException ledgerEx) {
                 // 交易所已经返回订单结果；本地账本失败不能把执行事实改写为 FAILED。由恢复/对账补齐账本。
                 throw ledgerEx;
             }
+            if (dispatchTicket != null) {
+                requireLiveDispatcher().acknowledged(dispatchTicket, exchangeResult.orderId());
+                dispatchTicket = null;
+            }
             return new ExecutionResult(true, exchangeResult.status(), exchangeResult.orderId(), exchangeResult.clientOrderId());
         } catch (RuntimeException ex) {
-            String logStatus = exchangeResult != null ? "ACCEPTED" : exchangeAttempted
-                && !(ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException
-                    || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException) ? "UNKNOWN" : "FAILED";
-            recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode,
-                logStatus, org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex), logRequest, exchangeResult,
-                ex == null ? null : "EXECUTION_FAILURE", null);
-            if (exchangeResult == null && (ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException
-                || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException)) {
+            if (dispatchTicket != null) {
+                try {
+                    if (exchangeResult == null && (!exchangeAttempted || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException)) {
+                        requireLiveDispatcher().notSent(dispatchTicket);
+                    } else {
+                        requireLiveDispatcher().unknown(dispatchTicket);
+                    }
+                } catch (RuntimeException dispatchEx) {
+                    ex.addSuppressed(dispatchEx); // Unresolved guard remains blocked until verified recovery.
+                }
+            }
+            String logStatus = exchangeResult != null ? "ACCEPTED" :
+                exchangeAttempted && !(ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException) ? "UNKNOWN" : "FAILED";
+            recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode, logStatus,
+                org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex), logRequest, exchangeResult, ex == null ? null : "EXECUTION_FAILURE", null);
+            if (exchangeResult == null && (ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException)) {
                 executionRecordService.failed(reservation.record(), ex.getMessage());
-                if (openCommand != null) { openCapacityService.releaseFailed(credentialId, idempotencyKey); }
+                if (openCommand != null) {
+                    openCapacityService.releaseFailed(credentialId, idempotencyKey);
+                }
             } else if (exchangeResult == null && exchangeAttempted) {
                 // 下单请求已经发往交易所但没有拿到确定响应，禁止标记 FAILED，避免后续重复下单。
                 executionRecordService.markUnknown(reservation.record(), ex.getMessage());
             } else if (exchangeResult == null) {
                 executionRecordService.failed(reservation.record(), ex.getMessage());
-                if (openCommand != null) { openCapacityService.releaseFailed(credentialId, idempotencyKey); }
+                if (openCommand != null) {
+                    openCapacityService.releaseFailed(credentialId, idempotencyKey);
+                }
             }
             throw ex;
         }
     }
 
-    private void recordDecision(String operation, Long credentialId, Long strategyId, Long instanceId, String symbol,
-                                String executionKey, String runMode, String status, String reason,
-                                ExchangeGateway.OrderRequest request, ExchangeGateway.OrderResult result, String reasonCode, java.time.Instant tradeTime) {
-        if (decisionLogs == null) { return; }
-        decisionLogs.record(org.dromara.quant.decision.DecisionLogEvent.builder()
-            .eventKey(org.dromara.quant.decision.TradeDecisionLogRepository.executionKey(credentialId, executionKey))
-            .recordType("EXECUTION").credentialId(credentialId).strategyId(strategyId).strategyInstanceId(instanceId)
-            .symbol(symbol).runMode(runMode).operation(operation).status(status)
-            .direction(request == null ? null : ("OPEN".equals(operation) == "BUY".equals(request.side()) ? "LONG" : "SHORT"))
-            .quantity(request == null ? null : request.quantity()).price(request == null ? null : request.price())
-            .reasonCode(reasonCode == null ? "EXECUTION_RESULT" : reasonCode).reason(reason).idempotencyKey(executionKey)
-            .orderId(result == null ? null : result.orderId()).clientOrderId(result == null ? exchangeClientOrderId(executionKey) : result.clientOrderId())
-            .eventTime(java.time.Instant.now()).tradeTime(tradeTime).build());
+    void requireCurrentAccountLease(Long credentialId, Long expectedEpoch) {
+        if (expectedEpoch == null) {
+            return;
+        }
+        var verifier = liveUserStreamLease;
+        if (verifier == null) {
+            throw new IllegalStateException("LIVE 策略开仓缺少账户级用户流租约验证器");
+        }
+        verifier.requireCurrentEpoch(credentialId, expectedEpoch);
     }
 
-    private static void requireFresh(OpenPositionCommand command) {
-        if (command.validUntil() != null && !java.time.Instant.now().isBefore(command.validUntil())) {
-            throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("开仓信号已过期，禁止按旧点位追单");
+    private LiveOrderDispatcher requireLiveDispatcher() {
+        LiveOrderDispatcher value = liveDispatcher;
+        if (value == null) {
+            throw new IllegalStateException("LIVE 订单调度器不可用，拒绝直接调用交易所");
         }
+        return value;
+    }
+
+    /**
+     * State is re-read directly before the exchange call; stale strategy shares fail closed.
+     */
+    private void verifyLiveCloseOwnership(String operation, Long credentialId, Long strategyId, Long instanceId, String symbol, String idempotencyKey, String runMode,
+                                          ExchangeGateway.OrderRequest request) {
+        if (!"LIVE".equalsIgnoreCase(runMode) || !"CLOSE".equals(operation) || instanceId == null) {
+            return;
+        }
+        var guard = closeOwnershipGuard;
+        if (guard == null) {
+            throw new IllegalStateException("LIVE 策略平仓缺少持仓归属验证器");
+        }
+        guard.requireOwnedClose(credentialId, strategyId, instanceId, symbol, request.side(), request.quantity(), idempotencyKey);
+    }
+
+    private void recordDecision(String operation, Long credentialId, Long strategyId, Long instanceId, String symbol, String executionKey, String runMode, String status,
+                                String reason, ExchangeGateway.OrderRequest request, ExchangeGateway.OrderResult result, String reasonCode, java.time.Instant tradeTime) {
+        if (decisionLogs == null) {
+            return;
+        }
+        decisionLogs.record(org.dromara.quant.decision.DecisionLogEvent.builder().eventKey(org.dromara.quant.decision.TradeDecisionLogRepository.executionKey(credentialId,
+            executionKey)).recordType("EXECUTION").credentialId(credentialId).strategyId(strategyId).strategyInstanceId(instanceId).symbol(symbol).runMode(runMode).operation(operation).status(status).direction(request == null ? null : ("OPEN".equals(operation) == "BUY".equals(request.side()) ? "LONG" : "SHORT")).quantity(request == null ? null : request.quantity()).price(request == null ? null : request.price()).reasonCode(reasonCode == null ? "EXECUTION_RESULT" : reasonCode).reason(reason).idempotencyKey(executionKey).orderId(result == null ? null : result.orderId()).clientOrderId(result == null ? exchangeClientOrderId(executionKey) : result.clientOrderId()).eventTime(java.time.Instant.now()).tradeTime(tradeTime).build());
     }
 
     /**
@@ -374,6 +643,36 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     }
 
     /**
+     * 派发票据持久化后重新读取账户和风控状态，尽量缩小配置变化到 Binance 发单之间的窗口。
+     */
+    private void recheckLiveBeforeDispatch(String operationType, Long credentialId, String symbol, String idempotencyKey, ExecutionSafetyContext safety,
+                                          ExchangeGateway.SymbolRule rule, BigDecimal notional) {
+        boolean closing = "CLOSE".equalsIgnoreCase(operationType);
+        var latestCredential = credentialMapper == null ? null : credentialMapper.selectById(credentialId);
+        var latestRisk = riskConfigMapper == null ? null : riskConfigMapper.selectOne(
+            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<org.dromara.quant.risk.domain.QuantRiskConfig>()
+                .eq(org.dromara.quant.risk.domain.QuantRiskConfig::getCredentialId, credentialId));
+        if (latestCredential == null || !"0".equals(latestCredential.getStatus()) || !"LIVE".equalsIgnoreCase(latestCredential.getRunMode())) {
+            throw new LiveTradingGate.LiveTradingBlockedException(java.util.List.of("LIVE 账户状态已变化或凭证不可用"));
+        }
+        boolean approved = closing;
+        if (!closing) {
+            if (latestRisk == null || riskDecisionService == null || notional == null || notional.signum() <= 0) {
+                throw new LiveTradingGate.LiveTradingBlockedException(java.util.List.of("最终派发缺少最新风控配置或有效订单金额"));
+            }
+            riskDecisionService.requireOpenApproved(credentialId, symbol, notional, "LIVE", idempotencyKey);
+            approved = true;
+        }
+        if (safety == null || quantProperties == null) {
+            throw new LiveTradingGate.LiveTradingBlockedException();
+        }
+        liveTradingGate.check(new LiveTradingGate.Checkpoint(closing || quantProperties.getLive().isEnabled(), true,
+            Boolean.TRUE.equals(latestCredential.getTradePermission()), Boolean.TRUE.equals(latestCredential.getWithdrawalDisabled()),
+            "NORMAL".equalsIgnoreCase(latestCredential.getConnectionStatus()), safety.accountAuthorized(), closing || latestRisk != null,
+            closing || rule != null && rule.minNotional() != null && rule.minNotional().signum() > 0, approved));
+    }
+
+    /**
      * 统一执行幂等抢占结果。
      *
      * @param record 执行幂等记录
@@ -383,7 +682,4 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private record QuantExecutionRecordReservation(org.dromara.quant.execution.domain.QuantExecutionRecord record, boolean owner, ExecutionResult result) {
     }
 }
-
-
-
 

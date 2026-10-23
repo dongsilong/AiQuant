@@ -22,17 +22,29 @@ public class QuantProtectionOrder {
      * 交易凭证主键。
      */
     private Long credentialId;
+    /** 创建保护意图时冻结的策略来源；未知的历史来源保持为空。 */
+    private Long strategyId;
+    /** 创建保护意图时冻结的策略实例，不能按当前交易对反推旧周期归属。 */
+    private Long strategyInstanceId;
     /**
      * 本地持仓主键。
      */
     private Long positionId;
-    /** 所属持仓周期，防止同一持仓行复用时认领旧订单。 */
+    /**
+     * 所属持仓周期，防止同一持仓行复用时认领旧订单。
+     */
     private String positionCycleKey;
-    /** 所属保护目标版本。 */
+    /**
+     * 所属保护目标版本。
+     */
     private Long targetVersion;
-    /** 保护意图覆盖的最高台阶，非阶梯保护为0。 */
+    /**
+     * 保护意图覆盖的最高台阶，非阶梯保护为0。
+     */
     private Integer stepIndex;
-    /** 该条件单已精确确认的累计成交量，不因重复查询累加。 */
+    /**
+     * 该条件单已精确确认的累计成交量，不因重复查询累加。
+     */
     private BigDecimal executedQuantity;
     /**
      * 交易对，例如 BTCUSDT。

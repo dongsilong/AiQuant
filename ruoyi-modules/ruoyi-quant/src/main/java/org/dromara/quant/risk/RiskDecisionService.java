@@ -2,6 +2,7 @@ package org.dromara.quant.risk;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
@@ -9,10 +10,13 @@ import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.dromara.quant.finance.domain.QuantFinancialEvent;
 import org.dromara.quant.finance.mapper.QuantFinancialEventMapper;
+import org.dromara.quant.market.AccountPositionCache;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
+import org.dromara.quant.reconcile.LivePositionFreshness;
 import org.dromara.quant.risk.domain.QuantRiskConfig;
 import org.dromara.quant.risk.mapper.QuantRiskConfigMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -23,6 +27,7 @@ import java.util.List;
  * 交易前风险引擎。所有策略开仓都必须通过本服务，策略本身不实现风险限制。
  */
 @Slf4j
+@RequiredArgsConstructor
 @Service
 public class RiskDecisionService {
     /**
@@ -45,18 +50,10 @@ public class RiskDecisionService {
      * 财务事件 Mapper。
      */
     private final QuantFinancialEventMapper financialEventMapper;
-
-    /**
-     * 创建 RiskDecisionService 实例并初始化其依赖。
-     */
-    public RiskDecisionService(QuantRiskConfigMapper riskMapper, QuantPositionMapper positionMapper, QuantExecutionRecordMapper executionRecordMapper,
-                               QuantTradeMapper tradeMapper, QuantFinancialEventMapper financialEventMapper) {
-        this.riskMapper = riskMapper;
-        this.positionMapper = positionMapper;
-        this.executionRecordMapper = executionRecordMapper;
-        this.tradeMapper = tradeMapper;
-        this.financialEventMapper = financialEventMapper;
-    }
+    @Autowired(required = false)
+    private LivePositionFreshness positionFreshness;
+    @Autowired(required = false)
+    private AccountPositionCache positionCache;
 
     /**
      * 检查开仓请求是否通过风险规则。
@@ -72,6 +69,34 @@ public class RiskDecisionService {
         return approveOpen(credentialId, symbol, notional, runMode, null);
     }
 
+    /**
+     * 捕获通过核验的 LIVE 全账户持仓快照代次，供最终派发前再次确认。
+     */
+    public long captureLivePositionGeneration(Long credentialId) {
+        if (positionFreshness == null) {
+            throw new ServiceException("LIVE 账户持仓快照核验服务不可用");
+        }
+        try {
+            return positionFreshness.requireFreshGeneration(credentialId);
+        } catch (IllegalStateException ex) {
+            throw new ServiceException(ex.getMessage());
+        }
+    }
+
+    /**
+     * 确认 LIVE 全账户持仓快照在开仓准备期间没有失效或被新事件替代。
+     */
+    public void requireLivePositionGeneration(Long credentialId, long expectedGeneration) {
+        if (positionFreshness == null) {
+            throw new ServiceException("LIVE 账户持仓快照核验服务不可用");
+        }
+        try {
+            positionFreshness.requireFreshGeneration(credentialId, expectedGeneration);
+        } catch (IllegalStateException ex) {
+            throw new ServiceException(ex.getMessage());
+        }
+    }
+
     private boolean approveOpen(Long credentialId, String symbol, BigDecimal notional, String runMode, String currentKey) {
         return refusalReason(credentialId, symbol, notional, runMode, currentKey) == null;
     }
@@ -79,48 +104,65 @@ public class RiskDecisionService {
     private String refusalReason(Long credentialId, String symbol, BigDecimal notional, String runMode, String currentKey) {
         QuantRiskConfig risk = riskMapper.selectOne(new LambdaQueryWrapper<QuantRiskConfig>().eq(QuantRiskConfig::getCredentialId, credentialId));
         if (risk == null) {
-            log.warn("交易前风控未通过[未配置风控] credentialId={} symbol={} runMode={} notional={}",
-                credentialId, symbol, runMode, notional);
+            log.warn("交易前风控未通过[未配置风控] credentialId={} symbol={} runMode={} notional={}", credentialId, symbol, runMode, notional);
             return "未配置账户风控";
         }
         if (!Boolean.TRUE.equals(risk.getWhitelist())) {
-            log.warn("交易前风控未通过[白名单未开启] credentialId={} symbol={} runMode={} notional={} whitelist={}",
-                credentialId, symbol, runMode, notional, risk.getWhitelist());
+            log.warn("交易前风控未通过[白名单未开启] credentialId={} symbol={} runMode={} notional={} whitelist={}", credentialId, symbol, runMode, notional, risk.getWhitelist());
             return "账户未启用交易白名单";
         }
         if ("LIVE".equalsIgnoreCase(runMode) && !Boolean.TRUE.equals(risk.getLiveEnabled())) {
-            log.warn("交易前风控未通过[实盘交易未启用] credentialId={} symbol={} runMode={} notional={} liveEnabled={}",
-                credentialId, symbol, runMode, notional, risk.getLiveEnabled());
+            log.warn("交易前风控未通过[实盘交易未启用] credentialId={} symbol={} runMode={} notional={} liveEnabled={}", credentialId, symbol, runMode, notional, risk.getLiveEnabled());
             return "账户未启用实盘交易";
         }
         if (risk.getMaxOrderNotional() != null && risk.getMaxOrderNotional().signum() > 0 && notional.compareTo(risk.getMaxOrderNotional()) > 0) {
-            log.warn("交易前风控未通过[单笔名义价值超限] credentialId={} symbol={} runMode={} notional={} maxOrderNotional={}",
-                credentialId, symbol, runMode, notional, risk.getMaxOrderNotional());
+            log.warn("交易前风控未通过[单笔名义价值超限] credentialId={} symbol={} runMode={} notional={} maxOrderNotional={}", credentialId, symbol, runMode, notional,
+                risk.getMaxOrderNotional());
             return "单笔订单名义金额超限";
         }
+        // Stale or absent full Binance snapshot MUST NOT permit new LIVE exposure.
+        // Closing/reducing exposure does not use requireOpenApproved.
+        if ("LIVE".equalsIgnoreCase(runMode) && (positionFreshness == null || !positionFreshness.fresh(credentialId))) {
+            log.warn("交易前风控未通过[交易所持仓快照缺失或过期] credentialId={} symbol={}", credentialId, symbol);
+            return "交易所持仓快照缺失或过期";
+        }
         if (risk.getMaxOpenPositions() != null && risk.getMaxOpenPositions() > 0) {
-            Long count = positionMapper.selectCount(new LambdaQueryWrapper<QuantPosition>().eq(QuantPosition::getCredentialId, credentialId).gt(QuantPosition::getQuantity,
+            long count;
+            if ("PAPER".equalsIgnoreCase(runMode)) {
+                count = positionMapper.selectCount(new LambdaQueryWrapper<QuantPosition>().eq(QuantPosition::getCredentialId, credentialId).ne(QuantPosition::getQuantity,
                     BigDecimal.ZERO));
+            } else {
+                if (positionCache == null) {
+                    log.warn("交易前风控未通过[交易所持仓缓存不可用] credentialId={} symbol={} runMode={}", credentialId, symbol, runMode);
+                    return "交易所持仓缓存不可用";
+                }
+                try {
+                    count = positionCache.requirePositions(credentialId).stream().filter(position -> position.quantity() != null && position.quantity().signum() != 0).count();
+                } catch (OpenCapacityService.CapacityBlockedException ex) {
+                    log.warn("交易前风控未通过[交易所持仓快照未知或过期] credentialId={} symbol={} runMode={}", credentialId, symbol, runMode);
+                    return "交易所持仓快照未知或过期";
+                }
+            }
             if (count >= risk.getMaxOpenPositions()) {
-                log.warn("交易前风控未通过[最大持仓数达到上限] credentialId={} symbol={} runMode={} notional={} currentOpenPositions={} maxOpenPositions={}",
-                    credentialId, symbol, runMode, notional, count, risk.getMaxOpenPositions());
+                log.warn("交易前风控未通过[最大持仓数达到上限] credentialId={} symbol={} runMode={} notional={} currentOpenPositions={} maxOpenPositions={}", credentialId, symbol, runMode,
+                    notional, count, risk.getMaxOpenPositions());
                 return "账户持仓数量达到上限";
             }
         }
         if (risk.getMaxOrdersPerMinute() != null && risk.getMaxOrdersPerMinute() > 0) {
             LocalDateTime since = LocalDateTime.now().minusMinutes(1);
-            Long count = executionRecordMapper.selectCount(new LambdaQueryWrapper<QuantExecutionRecord>().eq(QuantExecutionRecord::getCredentialId, credentialId)
-                        .ge(QuantExecutionRecord::getCreatedAt, since).ne(QuantExecutionRecord::getExecutionStatus, "FAILED").ne(currentKey != null, QuantExecutionRecord::getIdempotencyKey, currentKey));
+            Long count =
+                executionRecordMapper.selectCount(new LambdaQueryWrapper<QuantExecutionRecord>().eq(QuantExecutionRecord::getCredentialId, credentialId).ge(QuantExecutionRecord::getCreatedAt, since).ne(QuantExecutionRecord::getExecutionStatus, "FAILED").ne(currentKey != null, QuantExecutionRecord::getIdempotencyKey, currentKey));
             if (count >= risk.getMaxOrdersPerMinute()) {
-                log.warn("交易前风控未通过[每分钟下单频率超限] credentialId={} symbol={} runMode={} notional={} ordersLastMinute={} maxOrdersPerMinute={}",
-                    credentialId, symbol, runMode, notional, count, risk.getMaxOrdersPerMinute());
+                log.warn("交易前风控未通过[每分钟下单频率超限] credentialId={} symbol={} runMode={} notional={} ordersLastMinute={} maxOrdersPerMinute={}", credentialId, symbol, runMode,
+                    notional, count, risk.getMaxOrdersPerMinute());
                 return "每分钟开仓次数达到上限";
             }
         }
         if (risk.getDailyLossLimit() != null && risk.getDailyLossLimit().signum() > 0) {
             LocalDateTime startOfDay = LocalDateTime.now().toLocalDate().atStartOfDay();
             List<QuantFinancialEvent> events = financialEventMapper.selectList(new LambdaQueryWrapper<QuantFinancialEvent>().select(QuantFinancialEvent::getAmount,
-                    QuantFinancialEvent::getEventType).eq(QuantFinancialEvent::getCredentialId, credentialId).ge(QuantFinancialEvent::getEventTime, startOfDay).in(QuantFinancialEvent::getEventType, "REALIZED_PNL", "COMMISSION", "FUNDING_FEE"));
+                QuantFinancialEvent::getEventType).eq(QuantFinancialEvent::getCredentialId, credentialId).ge(QuantFinancialEvent::getEventTime, startOfDay).in(QuantFinancialEvent::getEventType, "REALIZED_PNL", "COMMISSION", "FUNDING_FEE"));
             BigDecimal realized = BigDecimal.ZERO;
             if (!events.isEmpty()) {
                 for (QuantFinancialEvent event : events) {
@@ -129,16 +171,17 @@ public class RiskDecisionService {
             } else {
                 // 兼容刚升级、Income History 尚未首次对账的数据库。
                 List<QuantTrade> trades =
-                        tradeMapper.selectList(new LambdaQueryWrapper<QuantTrade>().select(QuantTrade::getRealizedPnl, QuantTrade::getFundingFee).eq(QuantTrade::getCredentialId,
-                                credentialId).ge(QuantTrade::getTradeTime, startOfDay));
+                    tradeMapper.selectList(new LambdaQueryWrapper<QuantTrade>().select(QuantTrade::getRealizedPnl, QuantTrade::getFundingFee).eq(QuantTrade::getCredentialId,
+                        credentialId).ge(QuantTrade::getTradeTime, startOfDay));
                 for (QuantTrade trade : trades) {
-                    realized = realized.add(trade.getRealizedPnl() == null ? BigDecimal.ZERO : trade.getRealizedPnl()).add(trade.getFundingFee() == null ? BigDecimal.ZERO : trade.getFundingFee());
+                    realized = realized.add(trade.getRealizedPnl() == null ? BigDecimal.ZERO : trade.getRealizedPnl()).add(trade.getFundingFee() == null ? BigDecimal.ZERO :
+                        trade.getFundingFee());
                 }
             }
             boolean blocked = realized.compareTo(risk.getDailyLossLimit().negate()) <= 0;
             if (blocked) {
-                log.warn("交易前风控未通过[当日亏损达到上限] credentialId={} symbol={} runMode={} notional={} realized={} dailyLossLimit={}",
-                    credentialId, symbol, runMode, notional, realized, risk.getDailyLossLimit());
+                log.warn("交易前风控未通过[当日亏损达到上限] credentialId={} symbol={} runMode={} notional={} realized={} dailyLossLimit={}", credentialId, symbol, runMode, notional, realized,
+                    risk.getDailyLossLimit());
                 return "当日亏损达到上限";
             }
         }

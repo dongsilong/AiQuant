@@ -8,14 +8,20 @@ import com.binance.connector.client.derivatives_trading_usds_futures.rest.api.De
 
 import java.io.IOException;
 
-/** API examples for MarketDataApi */
+/**
+ * API examples for MarketDataApi
+ */
 public class TestConnectivityExample {
     private DerivativesTradingUsdsFuturesRestApi api;
 
+    public static void main(String[] args) throws IOException {
+        TestConnectivityExample example = new TestConnectivityExample();
+        example.testConnectivityExample();
+    }
+
     public DerivativesTradingUsdsFuturesRestApi getApi() {
         if (api == null) {
-            ClientConfiguration clientConfiguration =
-                    DerivativesTradingUsdsFuturesRestApiUtil.getClientConfiguration();
+            ClientConfiguration clientConfiguration = DerivativesTradingUsdsFuturesRestApiUtil.getClientConfiguration();
             SignatureConfiguration signatureConfiguration = new SignatureConfiguration();
             clientConfiguration.setSignatureConfiguration(signatureConfiguration);
             api = new DerivativesTradingUsdsFuturesRestApi(clientConfiguration);
@@ -32,10 +38,5 @@ public class TestConnectivityExample {
      */
     public void testConnectivityExample() throws ApiException, IOException {
         getApi().testConnectivity();
-    }
-
-    public static void main(String[] args) throws IOException {
-        TestConnectivityExample example = new TestConnectivityExample();
-        example.testConnectivityExample();
     }
 }

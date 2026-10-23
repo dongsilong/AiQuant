@@ -6,8 +6,12 @@ import org.apache.fesod.sheet.ExcelWriter;
 import org.apache.fesod.sheet.FastExcel;
 import org.apache.fesod.sheet.write.metadata.WriteSheet;
 import org.dromara.common.core.utils.DateUtils;
-import org.dromara.quant.backtest.*;
-import org.dromara.quant.backtest.bak.*;
+import org.dromara.quant.backtest.KlineData;
+import org.dromara.quant.backtest.TrendPeriod;
+import org.dromara.quant.backtest.bak.BearishTrendData;
+import org.dromara.quant.backtest.bak.BullishTrendData;
+import org.dromara.quant.backtest.bak.KlineFileData;
+import org.dromara.quant.backtest.bak.TrendType;
 import org.ta4j.core.Bar;
 import org.ta4j.core.BaseBarSeries;
 import org.ta4j.core.BaseBarSeriesBuilder;
@@ -92,6 +96,15 @@ public class QushiPanduanDayCountNew {
     private double lowestPriceAfterMa20Touch;
     private double lowestPriceAfterMa30Touch;
 
+    public static void main(String[] args) {
+        try {
+            QushiPanduanDayCountNew analyzer = new QushiPanduanDayCountNew();
+            analyzer.analyzeTrend();
+        } catch (Exception e) {
+            log.error("分析过程中发生错误", e);
+        }
+    }
+
     /**
      * 获取当前 MA7 值（需要从上下文中获取）
      */
@@ -106,15 +119,6 @@ public class QushiPanduanDayCountNew {
     private double getCurrentMa5Value() {
         // 这个方法需要在调用时设置当前 MA5 值
         return 0;
-    }
-
-    public static void main(String[] args) {
-        try {
-            QushiPanduanDayCountNew analyzer = new QushiPanduanDayCountNew();
-            analyzer.analyzeTrend();
-        } catch (Exception e) {
-            log.error("分析过程中发生错误", e);
-        }
     }
 
     /**
@@ -138,9 +142,7 @@ public class QushiPanduanDayCountNew {
         SMAIndicator ma30 = new SMAIndicator(closePriceInd, 30);
 
         int period = 20;    // 布林带周期
-        BollingerBandsMiddleIndicator middle = new BollingerBandsMiddleIndicator(
-            new SMAIndicator(closePriceInd, 20)
-        );
+        BollingerBandsMiddleIndicator middle = new BollingerBandsMiddleIndicator(new SMAIndicator(closePriceInd, 20));
 
         // 标准差
         StandardDeviationIndicator stdDev = new StandardDeviationIndicator(closePriceInd, period);
@@ -168,8 +170,8 @@ public class QushiPanduanDayCountNew {
 
             TrendType trend = judgeTrend(openTimeStr, closePrice, ma5Value, ma7Value, ma15Value, ma20Value, ma30Value);
 
-            recordTrendPeriod(trend, index, openTimeStr, allData.get(index), closePrice, highPrice, lowPrice,
-                ma5Value, ma7Value, ma15Value, ma20Value, ma30Value, upperRailValue, lowerRailValue);
+            recordTrendPeriod(trend, index, openTimeStr, allData.get(index), closePrice, highPrice, lowPrice, ma5Value, ma7Value, ma15Value, ma20Value, ma30Value, upperRailValue
+                , lowerRailValue);
         }
 
         if (currentPeriod != null) {
@@ -198,25 +200,22 @@ public class QushiPanduanDayCountNew {
 
         List<KlineData> allData = new ArrayList<>();
 
-        Files.list(dataDir)
-            .filter(path -> path.toString().endsWith(".json"))
-            .sorted()
-            .forEach(path -> {
-                try {
-                    byte[] bytes = Files.readAllBytes(path);
-                    String content = new String(bytes);
+        Files.list(dataDir).filter(path -> path.toString().endsWith(".json")).sorted().forEach(path -> {
+            try {
+                byte[] bytes = Files.readAllBytes(path);
+                String content = new String(bytes);
 
-                    KlineFileData fileData = MAPPER.readValue(content, KlineFileData.class);
+                KlineFileData fileData = MAPPER.readValue(content, KlineFileData.class);
 
-                    if (fileData.getData() != null && !fileData.getData().isEmpty()) {
-                        allData.addAll(fileData.getData());
-                    } else {
-                        log.warn("文件{}中没有数据", path.getFileName());
-                    }
-                } catch (IOException e) {
-                    log.error("读取文件失败：{}", path.getFileName(), e);
+                if (fileData.getData() != null && !fileData.getData().isEmpty()) {
+                    allData.addAll(fileData.getData());
+                } else {
+                    log.warn("文件{}中没有数据", path.getFileName());
                 }
-            });
+            } catch (IOException e) {
+                log.error("读取文件失败：{}", path.getFileName(), e);
+            }
+        });
 
         allData.sort(Comparator.comparingLong(KlineData::getOpenTime));
 
@@ -234,15 +233,8 @@ public class QushiPanduanDayCountNew {
                 Instant beginTime = Instant.ofEpochMilli(kline.getOpenTime());
                 Instant endTime = Instant.ofEpochMilli(kline.getCloseTime());
 
-                Bar bar = series.barBuilder()
-                    .beginTime(beginTime)
-                    .endTime(endTime)
-                    .openPrice(kline.getOpen())
-                    .highPrice(kline.getHigh())
-                    .lowPrice(kline.getLow())
-                    .closePrice(kline.getClose())
-                    .volume(kline.getVolume())
-                    .build();
+                Bar bar =
+                    series.barBuilder().beginTime(beginTime).endTime(endTime).openPrice(kline.getOpen()).highPrice(kline.getHigh()).lowPrice(kline.getLow()).closePrice(kline.getClose()).volume(kline.getVolume()).build();
 
                 series.addBar(bar);
             } catch (Exception e) {
@@ -290,32 +282,25 @@ public class QushiPanduanDayCountNew {
     /**
      * 记录趋势时间段
      */
-    private void recordTrendPeriod(TrendType trend, int index, String openTimeStr, KlineData data,
-                                   double closePrice, double highPrice, double lowPrice,
-                                   double ma5Value, double ma7Value, double ma15Value,
-                                   double ma20Value, double ma30Value,
-                                   double upperRailValue, double lowerRailValue) {
+    private void recordTrendPeriod(TrendType trend, int index, String openTimeStr, KlineData data, double closePrice, double highPrice, double lowPrice, double ma5Value,
+                                   double ma7Value, double ma15Value, double ma20Value, double ma30Value, double upperRailValue, double lowerRailValue) {
         if (currentPeriod == null) {
             initCurrentPeriod(trend, index, openTimeStr, data, highPrice, lowPrice);
-            checkMaTouches(trend, closePrice, lowPrice, highPrice, openTimeStr,
-                ma5Value, ma7Value, ma15Value, ma20Value, ma30Value, upperRailValue, lowerRailValue);
+            checkMaTouches(trend, closePrice, lowPrice, highPrice, openTimeStr, ma5Value, ma7Value, ma15Value, ma20Value, ma30Value, upperRailValue, lowerRailValue);
         } else if (currentPeriod.getTrendType() != trend) {
             finalizeCurrentPeriod();
             initCurrentPeriod(trend, index, openTimeStr, data, highPrice, lowPrice);
-            checkMaTouches(trend, closePrice, lowPrice, highPrice, openTimeStr,
-                ma5Value, ma7Value, ma15Value, ma20Value, ma30Value, upperRailValue, lowerRailValue);
+            checkMaTouches(trend, closePrice, lowPrice, highPrice, openTimeStr, ma5Value, ma7Value, ma15Value, ma20Value, ma30Value, upperRailValue, lowerRailValue);
         } else {
             updateCurrentPeriod(index, openTimeStr, data, highPrice, lowPrice);
-            checkMaTouches(trend, closePrice, lowPrice, highPrice, openTimeStr,
-                ma5Value, ma7Value, ma15Value, ma20Value, ma30Value, upperRailValue, lowerRailValue);
+            checkMaTouches(trend, closePrice, lowPrice, highPrice, openTimeStr, ma5Value, ma7Value, ma15Value, ma20Value, ma30Value, upperRailValue, lowerRailValue);
         }
     }
 
     /**
      * 初始化当前趋势段
      */
-    private void initCurrentPeriod(TrendType trend, int index, String openTimeStr, KlineData data,
-                                   double highPrice, double lowPrice) {
+    private void initCurrentPeriod(TrendType trend, int index, String openTimeStr, KlineData data, double highPrice, double lowPrice) {
         currentIndex++;
 
         currentPeriod = new TrendPeriod();
@@ -339,8 +324,7 @@ public class QushiPanduanDayCountNew {
     /**
      * 更新当前趋势段
      */
-    private void updateCurrentPeriod(int index, String openTimeStr, KlineData data,
-                                     double highPrice, double lowPrice) {
+    private void updateCurrentPeriod(int index, String openTimeStr, KlineData data, double highPrice, double lowPrice) {
         currentPeriod.setEndOpenTime(openTimeStr);
         currentPeriod.setEndCloseTime(DateUtils.formatDateTime(new Date(data.getCloseTime())));
         currentPeriod.setEndIndex(index + 1);
@@ -360,10 +344,8 @@ public class QushiPanduanDayCountNew {
     /**
      * 检查是否回踩 MA5（带 MA7 值）
      */
-    private void checkMa5TouchWithValues(TrendType trend, double lowPrice, double highPrice,
-                                         double ma5Value, double ma7Value, String openTimeStr,
-                                         double upperRailValue, double lowerRailValue,
-                                         double ma30Value) {
+    private void checkMa5TouchWithValues(TrendType trend, double lowPrice, double highPrice, double ma5Value, double ma7Value, String openTimeStr, double upperRailValue,
+                                         double lowerRailValue, double ma30Value) {
         if (ma5Touched || !isTrendType(trend)) {
             return;
         }
@@ -401,8 +383,7 @@ public class QushiPanduanDayCountNew {
     /**
      * 检查是否回踩 MA7（带 MA5 值）
      */
-    private void checkMa7TouchWithValues(TrendType trend, double lowPrice, double highPrice,
-                                         double ma7Value, double ma5Value, String openTimeStr) {
+    private void checkMa7TouchWithValues(TrendType trend, double lowPrice, double highPrice, double ma7Value, double ma5Value, String openTimeStr) {
         if (ma7Touched || !isTrendType(trend)) {
             return;
         }
@@ -537,12 +518,9 @@ public class QushiPanduanDayCountNew {
     /**
      * 检查是否回踩各均线
      */
-    private void checkMaTouches(TrendType trend, double closePrice, double lowPrice, double highPrice,
-                                String openTimeStr, double ma5Value, double ma7Value,
-                                double ma15Value, double ma20Value, double ma30Value,
-                                double upperRailValue, double lowerRailValue) {
-        checkMa5TouchWithValues(trend, lowPrice, highPrice, ma5Value, ma7Value, openTimeStr,
-            upperRailValue, lowerRailValue, ma30Value);
+    private void checkMaTouches(TrendType trend, double closePrice, double lowPrice, double highPrice, String openTimeStr, double ma5Value, double ma7Value, double ma15Value,
+                                double ma20Value, double ma30Value, double upperRailValue, double lowerRailValue) {
+        checkMa5TouchWithValues(trend, lowPrice, highPrice, ma5Value, ma7Value, openTimeStr, upperRailValue, lowerRailValue, ma30Value);
         checkMa7TouchWithValues(trend, lowPrice, highPrice, ma7Value, ma5Value, openTimeStr);
         checkMa15Touch(trend, lowPrice, highPrice, ma15Value, openTimeStr);
         checkMa20Touch(trend, lowPrice, highPrice, ma20Value, openTimeStr);
@@ -594,8 +572,7 @@ public class QushiPanduanDayCountNew {
     /**
      * 检查是否回踩MA5
      */
-    private void checkMa5Touch(TrendType trend, double lowPrice, double highPrice,
-                               double ma5Value, String openTimeStr) {
+    private void checkMa5Touch(TrendType trend, double lowPrice, double highPrice, double ma5Value, String openTimeStr) {
         if (ma5Touched || !isTrendType(trend)) {
             return;
         }
@@ -621,8 +598,7 @@ public class QushiPanduanDayCountNew {
     /**
      * 检查是否回踩MA7
      */
-    private void checkMa7Touch(TrendType trend, double lowPrice, double highPrice,
-                               double ma7Value, String openTimeStr) {
+    private void checkMa7Touch(TrendType trend, double lowPrice, double highPrice, double ma7Value, String openTimeStr) {
         if (ma7Touched || !isTrendType(trend)) {
             return;
         }
@@ -648,8 +624,7 @@ public class QushiPanduanDayCountNew {
     /**
      * 检查是否回踩MA15
      */
-    private void checkMa15Touch(TrendType trend, double lowPrice, double highPrice,
-                                double ma15Value, String openTimeStr) {
+    private void checkMa15Touch(TrendType trend, double lowPrice, double highPrice, double ma15Value, String openTimeStr) {
         if (ma15Touched || !isTrendType(trend)) {
             return;
         }
@@ -666,8 +641,7 @@ public class QushiPanduanDayCountNew {
     /**
      * 检查是否回踩MA20
      */
-    private void checkMa20Touch(TrendType trend, double lowPrice, double highPrice,
-                                double ma20Value, String openTimeStr) {
+    private void checkMa20Touch(TrendType trend, double lowPrice, double highPrice, double ma20Value, String openTimeStr) {
         if (ma20Touched || !isTrendType(trend)) {
             return;
         }
@@ -684,8 +658,7 @@ public class QushiPanduanDayCountNew {
     /**
      * 检查是否回踩MA30
      */
-    private void checkMa30Touch(TrendType trend, double lowPrice, double highPrice,
-                                double ma30Value, String openTimeStr) {
+    private void checkMa30Touch(TrendType trend, double lowPrice, double highPrice, double ma30Value, String openTimeStr) {
         if (ma30Touched || !isTrendType(trend)) {
             return;
         }
@@ -703,8 +676,7 @@ public class QushiPanduanDayCountNew {
      * 判断是否为趋势类型（多头或空头）
      */
     private boolean isTrendType(TrendType trend) {
-        return trend == TrendType.STRONG_BULL || trend == TrendType.WEAK_BULL ||
-            trend == TrendType.STRONG_BEAR || trend == TrendType.WEAK_BEAR;
+        return trend == TrendType.STRONG_BULL || trend == TrendType.WEAK_BULL || trend == TrendType.STRONG_BEAR || trend == TrendType.WEAK_BEAR;
     }
 
     /**
@@ -866,7 +838,8 @@ public class QushiPanduanDayCountNew {
             "回踩MA15", "MA15后最高", "MA15收益%", "MA15后最低", "MA15损益%",
             "回踩MA20", "MA20后最高", "MA20收益%", "MA20后最低", "MA20损益%",
             "回踩MA30", "MA30后最高", "MA30收益%", "MA30后最低", "MA30损益%", "持续周数");
-        log.info("-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
+        log.info
+        ("-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
         for (int i = 0; i < duoPeriods.size(); i++) {
             TrendPeriod period = duoPeriods.get(i);
             printBullishPeriodInfo(i, period);
@@ -881,7 +854,8 @@ public class QushiPanduanDayCountNew {
             "回踩MA15", "MA15后最高", "MA15收益%", "MA15后最低", "MA15损益%",
             "回踩MA20", "MA20后最高", "MA20收益%", "MA20后最低", "MA20损益%",
             "回踩MA30", "MA30后最高", "MA30收益%", "MA30后最低", "MA30损益%", "持续周数");
-        log.info("-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
+        log.info
+        ("-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
         for (int i = 0; i < kongPeriods.size(); i++) {
             TrendPeriod period = kongPeriods.get(i);
             printBearishPeriodInfo(i, period);
@@ -907,10 +881,10 @@ public class QushiPanduanDayCountNew {
 
         log.info("\n==================== 多头首次回踩MA5/MA7 差值统计 ====================");
         log.info("共 {} 个多头趋势阶段:", duoPeriods.size());
-        log.info("{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{}",
-            "序号", "首次回踩MA5", "首次回踩MA7", "MA5/MA7 差值", "差值%",
-            "上轨", "下轨", "轨道差", "轨道差%", "MA30 值", "MA5-MA30 差", "差值%", "MA5 后最高", "收益点数", "收益率%", "MA5 时间", "MA7 时间");
-        log.info("---------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
+        log.info("{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{}", "序号", "首次回踩MA5", "首次回踩MA7", "MA5/MA7 差值", "差值%", "上轨", "下轨", "轨道差", "轨道差%"
+            , "MA30 值", "MA5-MA30 差", "差值%", "MA5 后最高", "收益点数", "收益率%", "MA5 时间", "MA7 时间");
+        log.info(
+            "---------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
         for (int i = 0; i < duoPeriods.size(); i++) {
             TrendPeriod period = duoPeriods.get(i);
             printFirstMa5Ma7DiffInfo(i, period, true);
@@ -918,10 +892,10 @@ public class QushiPanduanDayCountNew {
 
         log.info("\n==================== 空头首次回踩MA5/MA7 差值统计 ====================");
         log.info("共 {} 个空头趋势阶段:", kongPeriods.size());
-        log.info("{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{}",
-            "序号", "首次回踩MA5", "首次回踩MA7", "MA5/MA7 差值", "差值%",
-            "上轨", "下轨", "轨道差", "轨道差%", "MA30 值", "MA5-MA30 差", "差值%", "MA5 后最低", "收益点数", "收益率%", "MA5 时间", "MA7 时间");
-        log.info("---------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
+        log.info("{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{}", "序号", "首次回踩MA5", "首次回踩MA7", "MA5/MA7 差值", "差值%", "上轨", "下轨", "轨道差", "轨道差%"
+            , "MA30 值", "MA5-MA30 差", "差值%", "MA5 后最低", "收益点数", "收益率%", "MA5 时间", "MA7 时间");
+        log.info(
+            "---------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
         for (int i = 0; i < kongPeriods.size(); i++) {
             TrendPeriod period = kongPeriods.get(i);
             printFirstMa5Ma7DiffInfo(i, period, false);
@@ -939,30 +913,21 @@ public class QushiPanduanDayCountNew {
      */
     private void printFirstMa5Ma7DiffInfo(int index, TrendPeriod period, boolean isBullish) {
         if (period.getFirstMa5TouchPrice() > 0 && period.getFirstMa7TouchPrice() > 0) {
-            String ma5Info = DF.format(period.getFirstMa5TouchPrice()) +
-                (period.getFirstMa5TouchTime() != null ? "(" + period.getFirstMa5TouchTime() + ")" : "");
-            String ma7Info = DF.format(period.getFirstMa7TouchPrice()) +
-                (period.getFirstMa7TouchTime() != null ? "(" + period.getFirstMa7TouchTime() + ")" : "");
+            String ma5Info = DF.format(period.getFirstMa5TouchPrice()) + (period.getFirstMa5TouchTime() != null ? "(" + period.getFirstMa5TouchTime() + ")" : "");
+            String ma7Info = DF.format(period.getFirstMa7TouchPrice()) + (period.getFirstMa7TouchTime() != null ? "(" + period.getFirstMa7TouchTime() + ")" : "");
             String priceDiff = DF.format(period.getFirstMa5Ma7PriceDiff());
             String diffPercent = DF.format(period.getFirstMa5Ma7PriceDiffPercent()) + "%";
 
             // Bull 线轨道信息
-            String upperRail = period.getBullUpperRailAtFirstMa5Touch() > 0 ?
-                DF.format(period.getBullUpperRailAtFirstMa5Touch()) : "无";
-            String lowerRail = period.getBullLowerRailAtFirstMa5Touch() > 0 ?
-                DF.format(period.getBullLowerRailAtFirstMa5Touch()) : "无";
-            String railDiff = period.getBullRailDiff() > 0 ?
-                DF.format(period.getBullRailDiff()) : "无";
-            String railDiffPercent = period.getBullRailDiffPercent() > 0 ?
-                DF.format(period.getBullRailDiffPercent()) + "%" : "无";
+            String upperRail = period.getBullUpperRailAtFirstMa5Touch() > 0 ? DF.format(period.getBullUpperRailAtFirstMa5Touch()) : "无";
+            String lowerRail = period.getBullLowerRailAtFirstMa5Touch() > 0 ? DF.format(period.getBullLowerRailAtFirstMa5Touch()) : "无";
+            String railDiff = period.getBullRailDiff() > 0 ? DF.format(period.getBullRailDiff()) : "无";
+            String railDiffPercent = period.getBullRailDiffPercent() > 0 ? DF.format(period.getBullRailDiffPercent()) + "%" : "无";
 
             // MA30 信息
-            String ma30Value = period.getMa30ValueAtFirstMa5Touch() > 0 ?
-                DF.format(period.getMa30ValueAtFirstMa5Touch()) : "无";
-            String ma5Ma30Diff = period.getMa5Ma30Diff() > 0 || period.getMa5Ma30Diff() < 0 ?
-                DF.format(period.getMa5Ma30Diff()) : "无";
-            String ma5Ma30DiffPercent = period.getMa5Ma30DiffPercent() > 0 || period.getMa5Ma30DiffPercent() < 0 ?
-                DF.format(period.getMa5Ma30DiffPercent()) + "%" : "无";
+            String ma30Value = period.getMa30ValueAtFirstMa5Touch() > 0 ? DF.format(period.getMa30ValueAtFirstMa5Touch()) : "无";
+            String ma5Ma30Diff = period.getMa5Ma30Diff() > 0 || period.getMa5Ma30Diff() < 0 ? DF.format(period.getMa5Ma30Diff()) : "无";
+            String ma5Ma30DiffPercent = period.getMa5Ma30DiffPercent() > 0 || period.getMa5Ma30DiffPercent() < 0 ? DF.format(period.getMa5Ma30DiffPercent()) + "%" : "无";
 
             String extremePrice;
             String profitPoints;
@@ -970,48 +935,27 @@ public class QushiPanduanDayCountNew {
 
             if (isBullish) {
                 // 多头：显示最高点
-                extremePrice = period.getHighestPriceAfterFirstMa5Touch() > 0 ?
-                    DF.format(period.getHighestPriceAfterFirstMa5Touch()) : "无";
-                profitPoints = period.getProfitFromFirstMa5Touch() > 0 ?
-                    DF.format(period.getProfitFromFirstMa5Touch()) : "无";
-                profitPercent = period.getProfitPercentFromFirstMa5Touch() > 0 ?
-                    DF.format(period.getProfitPercentFromFirstMa5Touch()) + "%" : "无";
+                extremePrice = period.getHighestPriceAfterFirstMa5Touch() > 0 ? DF.format(period.getHighestPriceAfterFirstMa5Touch()) : "无";
+                profitPoints = period.getProfitFromFirstMa5Touch() > 0 ? DF.format(period.getProfitFromFirstMa5Touch()) : "无";
+                profitPercent = period.getProfitPercentFromFirstMa5Touch() > 0 ? DF.format(period.getProfitPercentFromFirstMa5Touch()) + "%" : "无";
             } else {
                 // 空头：显示最低点
                 extremePrice = period.getLowestPriceAfterFirstMa5Touch() < Double.MAX_VALUE && period.getLowestPriceAfterFirstMa5Touch() > 0 ?
                     DF.format(period.getLowestPriceAfterFirstMa5Touch()) : "无";
-                profitPoints = period.getProfitFromFirstMa5Touch() > 0 ?
-                    DF.format(period.getProfitFromFirstMa5Touch()) : "无";
-                profitPercent = period.getProfitPercentFromFirstMa5Touch() > 0 ?
-                    DF.format(period.getProfitPercentFromFirstMa5Touch()) + "%" : "无";
+                profitPoints = period.getProfitFromFirstMa5Touch() > 0 ? DF.format(period.getProfitFromFirstMa5Touch()) : "无";
+                profitPercent = period.getProfitPercentFromFirstMa5Touch() > 0 ? DF.format(period.getProfitPercentFromFirstMa5Touch()) + "%" : "无";
             }
 
             String ma5TimeStr = period.getFirstMa5TouchTime() != null ? period.getFirstMa5TouchTime() : "无";
             String ma7TimeStr = period.getFirstMa7TouchTime() != null ? period.getFirstMa7TouchTime() : "无";
 
-            log.info("{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{}",
-                index + 1,
-                ma5Info,
-                ma7Info,
-                priceDiff,
-                diffPercent,
-                upperRail,
-                lowerRail,
-                railDiff,
-                railDiffPercent,
-                ma30Value,
-                ma5Ma30Diff,
-                ma5Ma30DiffPercent,
-                extremePrice,
-                profitPoints,
-                profitPercent,
-                ma5TimeStr,
-                ma7TimeStr);
+            log.info("{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{}", index + 1, ma5Info, ma7Info, priceDiff, diffPercent, upperRail,
+                lowerRail, railDiff, railDiffPercent, ma30Value, ma5Ma30Diff, ma5Ma30DiffPercent, extremePrice, profitPoints, profitPercent, ma5TimeStr, ma7TimeStr);
         } else {
-//            String ma5TimeStr = period.getFirstMa5TouchTime() != null ? period.getFirstMa5TouchTime() : "无";
-//            String ma7TimeStr = period.getFirstMa7TouchTime() != null ? period.getFirstMa7TouchTime() : "无";
-//            log.info("{} \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t{} \t{}",
-//                index + 1, ma5TimeStr, ma7TimeStr);
+            //            String ma5TimeStr = period.getFirstMa5TouchTime() != null ? period.getFirstMa5TouchTime() : "无";
+            //            String ma7TimeStr = period.getFirstMa7TouchTime() != null ? period.getFirstMa7TouchTime() : "无";
+            //            log.info("{} \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t无 \t{} \t{}",
+            //                index + 1, ma5TimeStr, ma7TimeStr);
         }
     }
 
@@ -1044,40 +988,13 @@ public class QushiPanduanDayCountNew {
         String ma30Low = formatMaLow(period.getLowestPriceAfterMa30Touch());
         String ma30Profit = formatMaProfitAndLoss(period.getMa30TouchPrice(), period.getMa30ProfitPercent(), true);
 
-        log.info("{} \t{} \t{} \t{} \t{} \t{} \t{}% \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{}",
-            index + 1,
-            period.getStartOpenTime(),
-            period.getEndOpenTime(),
-            DF.format(period.getStartPrice()),
-            DF.format(period.getHighestPrice()),
-            DF.format(period.getPriceChange()),
-            DF.format(period.getPriceChangePercent()),
-            ma5Info,
-            ma5High,
-            ma5Profit,
-            ma5Low,
-            formatMaLoss(period.getMa5TouchPrice(), period.getLowestPriceAfterMa5Touch(), true),
-            ma7Info,
-            ma7High,
-            ma7Profit,
-            ma7Low,
-            formatMaLoss(period.getMa7TouchPrice(), period.getLowestPriceAfterMa7Touch(), true),
-            ma15Info,
-            ma15High,
-            ma15Profit,
-            ma15Low,
-            formatMaLoss(period.getMa15TouchPrice(), period.getLowestPriceAfterMa15Touch(), true),
-            ma20Info,
-            ma20High,
-            ma20Profit,
-            ma20Low,
-            formatMaLoss(period.getMa20TouchPrice(), period.getLowestPriceAfterMa20Touch(), true),
-            ma30Info,
-            ma30High,
-            ma30Profit,
-            ma30Low,
-            formatMaLoss(period.getMa30TouchPrice(), period.getLowestPriceAfterMa30Touch(), true),
-            period.getBarCount());
+        log.info("{} \t{} \t{} \t{} \t{} \t{} \t{}% \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} " +
+            "\t{}", index + 1, period.getStartOpenTime(), period.getEndOpenTime(), DF.format(period.getStartPrice()), DF.format(period.getHighestPrice()),
+            DF.format(period.getPriceChange()), DF.format(period.getPriceChangePercent()), ma5Info, ma5High, ma5Profit, ma5Low, formatMaLoss(period.getMa5TouchPrice(),
+                period.getLowestPriceAfterMa5Touch(), true), ma7Info, ma7High, ma7Profit, ma7Low, formatMaLoss(period.getMa7TouchPrice(), period.getLowestPriceAfterMa7Touch(),
+                true), ma15Info, ma15High, ma15Profit, ma15Low, formatMaLoss(period.getMa15TouchPrice(), period.getLowestPriceAfterMa15Touch(), true), ma20Info, ma20High,
+            ma20Profit, ma20Low, formatMaLoss(period.getMa20TouchPrice(), period.getLowestPriceAfterMa20Touch(), true), ma30Info, ma30High, ma30Profit, ma30Low,
+            formatMaLoss(period.getMa30TouchPrice(), period.getLowestPriceAfterMa30Touch(), true), period.getBarCount());
     }
 
     /**
@@ -1109,40 +1026,13 @@ public class QushiPanduanDayCountNew {
         String ma30Low = formatMaLow(period.getLowestPriceAfterMa30Touch());
         String ma30Profit = formatMaProfitAndLoss(period.getMa30TouchPrice(), period.getMa30ProfitPercent(), false);
 
-        log.info("{} \t{} \t{} \t{} \t{} \t{} \t{}% \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{}",
-            index + 1,
-            period.getStartOpenTime(),
-            period.getEndOpenTime(),
-            DF.format(period.getStartPrice()),
-            DF.format(period.getLowestPrice()),
-            DF.format(period.getPriceChange()),
-            DF.format(period.getPriceChangePercent()),
-            ma5Info,
-            ma5High,
-            ma5Profit,
-            ma5Low,
-            formatMaLoss(period.getMa5TouchPrice(), period.getLowestPriceAfterMa5Touch(), false),
-            ma7Info,
-            ma7High,
-            ma7Profit,
-            ma7Low,
-            formatMaLoss(period.getMa7TouchPrice(), period.getLowestPriceAfterMa7Touch(), false),
-            ma15Info,
-            ma15High,
-            ma15Profit,
-            ma15Low,
-            formatMaLoss(period.getMa15TouchPrice(), period.getLowestPriceAfterMa15Touch(), false),
-            ma20Info,
-            ma20High,
-            ma20Profit,
-            ma20Low,
-            formatMaLoss(period.getMa20TouchPrice(), period.getLowestPriceAfterMa20Touch(), false),
-            ma30Info,
-            ma30High,
-            ma30Profit,
-            ma30Low,
-            formatMaLoss(period.getMa30TouchPrice(), period.getLowestPriceAfterMa30Touch(), false),
-            period.getBarCount());
+        log.info("{} \t{} \t{} \t{} \t{} \t{} \t{}% \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} \t{} " +
+            "\t{}", index + 1, period.getStartOpenTime(), period.getEndOpenTime(), DF.format(period.getStartPrice()), DF.format(period.getLowestPrice()),
+            DF.format(period.getPriceChange()), DF.format(period.getPriceChangePercent()), ma5Info, ma5High, ma5Profit, ma5Low, formatMaLoss(period.getMa5TouchPrice(),
+                period.getLowestPriceAfterMa5Touch(), false), ma7Info, ma7High, ma7Profit, ma7Low, formatMaLoss(period.getMa7TouchPrice(), period.getLowestPriceAfterMa7Touch(),
+                false), ma15Info, ma15High, ma15Profit, ma15Low, formatMaLoss(period.getMa15TouchPrice(), period.getLowestPriceAfterMa15Touch(), false), ma20Info, ma20High,
+            ma20Profit, ma20Low, formatMaLoss(period.getMa20TouchPrice(), period.getLowestPriceAfterMa20Touch(), false), ma30Info, ma30High, ma30Profit, ma30Low,
+            formatMaLoss(period.getMa30TouchPrice(), period.getLowestPriceAfterMa30Touch(), false), period.getBarCount());
     }
 
     /**
@@ -1222,17 +1112,13 @@ public class QushiPanduanDayCountNew {
 
             try (ExcelWriter excelWriter = FastExcel.write(file).build()) {
                 if (bullishDataList != null && !bullishDataList.isEmpty()) {
-                    WriteSheet sheet1 = FastExcel.writerSheet("多头趋势")
-                        .head(BullishTrendData.class)
-                        .build();
+                    WriteSheet sheet1 = FastExcel.writerSheet("多头趋势").head(BullishTrendData.class).build();
                     excelWriter.write(bullishDataList, sheet1);
                     log.info("多头趋势数据导出成功，共 {} 条记录", bullishDataList.size());
                 }
 
                 if (bearishDataList != null && !bearishDataList.isEmpty()) {
-                    WriteSheet sheet2 = FastExcel.writerSheet("空头趋势")
-                        .head(BearishTrendData.class)
-                        .build();
+                    WriteSheet sheet2 = FastExcel.writerSheet("空头趋势").head(BearishTrendData.class).build();
                     excelWriter.write(bearishDataList, sheet2);
                     log.info("空头趋势数据导出成功，共 {} 条记录", bearishDataList.size());
                 }
@@ -1248,10 +1134,11 @@ public class QushiPanduanDayCountNew {
 
     /**
      * 导出单个工作表
-     * @param dataList 数据列表
+     *
+     * @param dataList  数据列表
      * @param sheetName 工作表名称
-     * @param clazz 数据类型
-     * @param <T> 数据类型泛型
+     * @param clazz     数据类型
+     * @param <T>       数据类型泛型
      */
     private <T> void exportSheet(List<T> dataList, String sheetName, Class<T> clazz) {
         if (dataList == null || dataList.isEmpty()) {

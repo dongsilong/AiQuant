@@ -34,7 +34,7 @@ public class QuantProperties {
      */
     private Reconcile reconcile = new Reconcile();
     /**
-     * PAPER 模式配置。
+     * 历史 PAPER 模式配置：保留以兼容已有调用和配置绑定，生产环境禁用。
      */
     private Paper paper = new Paper();
     /**
@@ -45,14 +45,20 @@ public class QuantProperties {
      * 行情流健康检查和重连配置。
      */
     private Market market = new Market();
-    /** 保护单成交确认等待窗口。 */
+    /**
+     * 保护单成交确认等待窗口。
+     */
     private Protection protection = new Protection();
 
     @Data
     public static class Protection {
-        /** 触发保护后给予交易所的成交确认时间，毫秒；等待不占用行情线程。 */
+        /**
+         * 触发保护后给予交易所的成交确认时间，毫秒；等待不占用行情线程。
+         */
         private long confirmationWaitMillis = 1000L;
-        /** 本地退出等待已在途保护任务的上限；超时保留未知请求并交由恢复，不盲目补平。 */
+        /**
+         * 本地退出等待已在途保护任务的上限；超时保留未知请求并交由恢复，不盲目补平。
+         */
         private long syncWaitMillis = 5000L;
     }
 
@@ -69,11 +75,27 @@ public class QuantProperties {
          * 交易所测试网 API 基础地址。
          */
         private String testnetUrl = "https://demo-fapi.binance.com";
-        /** 正式网组合行情流地址。 */
+        /**
+         * WebSocket 连接实现：BINANCE_SDK（默认，官方 12.1.1 Streams + HTTP 代理 + 积压阈值故障断开）
+         * 或 RAW_OKHTTP（显式备用传输，原始流、有界业务队列）。
+         * 仅影响新建连接。切换已有连接须主动重新订阅/安全滚动重启。
+         */
+        private String websocketTransport = "BINANCE_SDK";
+        /**
+         * SDK 无界内部队列的过载断开阈值；不得小于 64。
+         */
+        private int sdkStreamBacklogLimit = 2048;
+        /**
+         * 正式网组合行情流地址。
+         */
         private String marketStreamUrl = "wss://fstream.binance.com/market/stream";
-        /** 测试网组合行情流地址，与测试网订单环境一致。 */
+        /**
+         * 测试网组合行情流地址，与测试网订单环境一致。
+         */
         private String testnetMarketStreamUrl = "wss://demo-fstream.binance.com/market/stream";
-        /** 测试网账户事件流前缀，与测试网REST使用同一环境。 */
+        /**
+         * 测试网账户事件流前缀，与测试网REST使用同一环境。
+         */
         private String testnetUserDataStreamUrl = "wss://demo-fstream.binance.com/private/ws/";
     }
 
@@ -111,7 +133,7 @@ public class QuantProperties {
         /**
          * 是否启用。
          */
-        private boolean enabled;
+        private boolean enabled = true;
     }
 
     /**
@@ -143,7 +165,7 @@ public class QuantProperties {
     @Data
     public static class Paper {
         /**
-         * 是否启用。
+         * PAPER 默认值用于兼容开发配置；生产配置必须显式设置为 false。
          */
         private boolean enabled = true;
         /**
@@ -169,13 +191,21 @@ public class QuantProperties {
 
     @Data
     public static class Market {
-        /** 每个订阅的最大排队事件数，溢出时显式断线并补偿。 */
+        /**
+         * 每个订阅的最大排队事件数，溢出时显式断线并补偿。
+         */
         private int queueCapacity = 2048;
-        /** Binance事件产生至策略决策允许的最大年龄（毫秒）。 */
+        /**
+         * Binance事件产生至策略决策允许的最大年龄（毫秒）。
+         */
         private long maxEventAgeMillis = 3000;
-        /** 行情无事件后判定断连的秒数。 */
+        /**
+         * 行情无事件后判定断连的秒数。
+         */
         private int idleTimeoutSeconds = 15;
-        /** 行情断连后的首次重连等待秒数。 */
+        /**
+         * 行情断连后的首次重连等待秒数。
+         */
         private int reconnectDelaySeconds = 3;
     }
 
@@ -185,11 +215,12 @@ public class QuantProperties {
     @Data
     public static class Reconcile {
         /**
-         * 是否启用。
+         * 是否启用周期账户/订单/成交全量对账和持久化执行记录恢复扫描。
+         * 运行时必需的持仓核实及用户数据流触发恢复不受此开关控制。
          */
         private boolean enabled = true;
         /**
-         * 对账调度间隔，单位秒。
+         * 周期全量对账和运行时持仓核实调度间隔，单位秒。
          */
         private int intervalSeconds = 60;
         /**

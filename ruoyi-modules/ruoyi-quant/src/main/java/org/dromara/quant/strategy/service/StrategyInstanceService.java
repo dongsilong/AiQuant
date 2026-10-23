@@ -1,6 +1,7 @@
 package org.dromara.quant.strategy.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.strategy.domain.QuantStrategyAccount;
 import org.dromara.quant.strategy.domain.QuantStrategyInstance;
 import org.dromara.quant.strategy.domain.QuantStrategySymbol;
@@ -14,6 +15,7 @@ import java.util.List;
 /**
  * 策略实例的生成与生命周期管理。
  */
+@RequiredArgsConstructor
 @Service
 public class StrategyInstanceService {
     /**
@@ -28,15 +30,6 @@ public class StrategyInstanceService {
      * 策略实例 Mapper。
      */
     private final QuantStrategyInstanceMapper instanceMapper;
-
-    /**
-     * 创建 StrategyInstanceService 实例并初始化其依赖。
-     */
-    public StrategyInstanceService(QuantStrategyAccountMapper accountMapper, QuantStrategySymbolMapper symbolMapper, QuantStrategyInstanceMapper instanceMapper) {
-        this.accountMapper = accountMapper;
-        this.symbolMapper = symbolMapper;
-        this.instanceMapper = instanceMapper;
-    }
 
     /**
      * 根据绑定关系生成或补齐运行实例。
@@ -70,8 +63,7 @@ public class StrategyInstanceService {
         // 交易对或账户绑定被删除/停用后保留实例记录用于审计，但不得继续保持可运行状态。
         List<QuantStrategyInstance> instances = instanceMapper.selectList(new LambdaQueryWrapper<QuantStrategyInstance>().eq(QuantStrategyInstance::getStrategyId, strategyId));
         for (QuantStrategyInstance instance : instances) {
-            if (!activeBindings.contains(bindingKey(instance.getStrategySymbolId(), instance.getCredentialId()))
-                && !"STOPPED".equals(instance.getStatus())) {
+            if (!activeBindings.contains(bindingKey(instance.getStrategySymbolId(), instance.getCredentialId())) && !"STOPPED".equals(instance.getStatus())) {
                 instance.setStatus("STOPPED");
                 instance.setLastError("策略交易对或账户绑定已失效");
                 instanceMapper.updateById(instance);

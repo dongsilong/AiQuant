@@ -5,7 +5,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
 
-/** 每个订阅独立串行消费；满队列明确触发恢复，不阻塞网络读取线程。 */
+/**
+ * 每个订阅独立串行消费；满队列明确触发恢复，不阻塞网络读取线程。
+ */
 final class StreamEventConsumer<T> implements AutoCloseable {
     private final ArrayBlockingQueue<T> queue;
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -24,7 +26,13 @@ final class StreamEventConsumer<T> implements AutoCloseable {
                 try {
                     T event = queue.take();
                     if (!closed.get()) {
-                        try { listener.accept(event); processed.increment(); } catch (RuntimeException ex) { failed.increment(); failure.accept(ex); }
+                        try {
+                            listener.accept(event);
+                            processed.increment();
+                        } catch (RuntimeException ex) {
+                            failed.increment();
+                            failure.accept(ex);
+                        }
                     }
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
@@ -35,7 +43,9 @@ final class StreamEventConsumer<T> implements AutoCloseable {
     }
 
     void accept(T event) {
-        if (closed.get()) { return; }
+        if (closed.get()) {
+            return;
+        }
         received.increment();
         if (!queue.offer(event)) {
             dropped.add(queue.size() + 1L);
@@ -44,9 +54,13 @@ final class StreamEventConsumer<T> implements AutoCloseable {
         }
     }
 
-    /** 回放可对恢复线程施加背压，但不能阻塞WebSocket线程。 */
+    /**
+     * 回放可对恢复线程施加背压，但不能阻塞WebSocket线程。
+     */
     void acceptReplay(T event) {
-        if (closed.get()) { return; }
+        if (closed.get()) {
+            return;
+        }
         received.increment();
         try {
             if (!queue.offer(event, 3, java.util.concurrent.TimeUnit.SECONDS)) {
@@ -69,6 +83,9 @@ final class StreamEventConsumer<T> implements AutoCloseable {
         queue.clear();
     }
 
+    /**
+     * 停止队列消费并释放消费者持有的资源。
+     */
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {

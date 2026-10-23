@@ -1,8 +1,10 @@
 package org.dromara.quant.runtime.coordination;
 
+import lombok.NonNull;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.config.QuantProperties;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLeaseMapper;
 import org.springframework.stereotype.Service;
 
 import java.util.Locale;
@@ -12,12 +14,13 @@ import java.util.UUID;
  * 基于 MySQL 的分布式策略运行租约。
  */
 @Slf4j
+@RequiredArgsConstructor
 @Service
 public class StrategyRuntimeLeaseService {
     /**
-     * 用于执行需要数据库原子语义的 SQL 操作。
+     * MyBatis 原子 SQL Mapper。
      */
-    private final JdbcTemplate jdbcTemplate;
+    @NonNull private final StrategyRuntimeLeaseMapper mapper;
     /**
      * 量化模块配置。
      */
@@ -26,16 +29,6 @@ public class StrategyRuntimeLeaseService {
      * 当前节点运行租约 Owner Token 的随机前缀。
      */
     private final String ownerTokenPrefix = UUID.randomUUID().toString();
-
-    /**
-     * 创建 StrategyRuntimeLeaseService 实例并初始化其依赖。
-     */
-    public StrategyRuntimeLeaseService(JdbcTemplate jdbcTemplate, QuantProperties properties) {
-        // 使用独立模板，避免修改其他业务共享模板的超时。
-        this.jdbcTemplate = new JdbcTemplate(java.util.Objects.requireNonNull(jdbcTemplate.getDataSource()));
-        this.jdbcTemplate.setQueryTimeout(3);
-        this.properties = properties;
-    }
 
     /**
      * 获取或续期策略运行租约。
@@ -48,15 +41,41 @@ public class StrategyRuntimeLeaseService {
         int leaseSeconds = Math.max(15, properties.getRuntime().getLeaseSeconds());
         String ownerToken = ownerToken(instanceId);
         try {
-            jdbcTemplate.update("INSERT IGNORE INTO quant_strategy_runtime_lease (instance_id, credential_id, symbol, owner_token, lease_until, create_time, update_time) " +
-                "VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL ? SECOND), NOW(), NOW())", instanceId, credentialId, normalized, ownerToken, leaseSeconds);
-            int updated = jdbcTemplate.update("UPDATE quant_strategy_runtime_lease SET instance_id=?, owner_token=?, lease_until=DATE_ADD(NOW(), INTERVAL ? SECOND), " +
-                "update_time=NOW() " + "WHERE credential_id=? AND symbol=? AND (owner_token=? OR lease_until<NOW())", instanceId, ownerToken, leaseSeconds, credentialId,
-                normalized, ownerToken);
+            mapper.ensureRow(instanceId, credentialId, normalized, ownerToken, leaseSeconds);
+            int updated = mapper.acquireOrRenew(instanceId, credentialId, normalized, ownerToken, leaseSeconds);
             return updated == 1;
         } catch (Exception ex) {
-            log.error( "策略运行租约 SQL 执行失败 instanceId={} credentialId={} symbol={}", instanceId, credentialId, normalized, ex);
+            log.error("策略运行租约 SQL 执行失败 instanceId={} credentialId={} symbol={}", instanceId, credentialId, normalized, ex);
             return false;
+        }
+    }
+
+    /**
+     * Required at the final outbound strategy order boundary.
+     * A missing/expired/mismatched owner always blocks the order; database errors fail closed.
+     * This does NOT provide an atomic fence between the SQL read and a remote Binance request.
+     */
+    public void requireCurrentOwner(Long instanceId, Long credentialId, String symbol) {
+        requireCurrentEpoch(instanceId, credentialId, symbol);
+    }
+
+    /**
+     * Returns the nonzero database fencing epoch for this node's current unexpired lease.
+     * Calling the method twice around trade preparation detects a takeover/reacquisition.
+     * It cannot fence a remote HTTP already in flight; that requires serialized dispatch.
+     */
+    public long requireCurrentEpoch(Long instanceId, Long credentialId, String symbol) {
+        if (instanceId == null || credentialId == null || symbol == null || symbol.isBlank()) {
+            throw new IllegalStateException("策略最终下单缺少租约所有权上下文");
+        }
+        try {
+            Long epoch = mapper.currentEpoch(instanceId, credentialId, symbol.toUpperCase(Locale.ROOT), ownerToken(instanceId));
+            if (epoch == null || epoch <= 0) {
+                throw new IllegalStateException("策略运行租约已失效或转移，拒绝最终交易所下单");
+            }
+            return epoch;
+        } catch (RuntimeException ex) {
+            throw new IllegalStateException("无法证明策略租约所有权代次，拒绝最终交易所下单", ex);
         }
     }
 
@@ -67,8 +86,7 @@ public class StrategyRuntimeLeaseService {
         if (instanceId == null || credentialId == null || symbol == null) {
             return;
         }
-        jdbcTemplate.update("DELETE FROM quant_strategy_runtime_lease WHERE credential_id=? AND symbol=? AND owner_token=?", credentialId, symbol.toUpperCase(Locale.ROOT),
-            ownerToken(instanceId));
+        mapper.release(credentialId, symbol.toUpperCase(Locale.ROOT), ownerToken(instanceId));
     }
 
     /**

@@ -1,45 +1,82 @@
 package org.dromara.quant.runtime.coordination;
 
+import org.apache.ibatis.annotations.Insert;
+import org.apache.ibatis.annotations.Options;
+import org.apache.ibatis.annotations.Update;
 import org.dromara.quant.config.QuantProperties;
+import org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLeaseMapper;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.springframework.jdbc.core.JdbcTemplate;
-
-import javax.sql.DataSource;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.SQLTimeoutException;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @Tag("dev")
 class StrategyRuntimeLeaseServiceTest {
     @Test
-    void leaseStatementsHaveTimeoutWithoutChangingSharedTemplate() throws Exception {
-        DataSource source = mock(DataSource.class);
-        Connection connection = mock(Connection.class);
-        PreparedStatement statement = mock(PreparedStatement.class);
-        when(source.getConnection()).thenReturn(connection);
-        when(connection.prepareStatement(anyString())).thenReturn(statement);
-        when(statement.executeUpdate()).thenReturn(1);
-        JdbcTemplate shared = new JdbcTemplate(source);
-        StrategyRuntimeLeaseService service = new StrategyRuntimeLeaseService(shared, new QuantProperties());
-        assertTrue(service.acquireOrRenew(1L, 2L, "BTCUSDT"));
-        verify(statement, times(2)).setQueryTimeout(3);
-        assertEquals(-1, shared.getQueryTimeout());
+    void leaseStatementsAreAtomicAndTimeoutBounded() throws Exception {
+        var type = StrategyRuntimeLeaseMapper.class;
+        var insert = type.getMethod("ensureRow", Long.class, Long.class, String.class, String.class, int.class);
+        var acquire = type.getMethod("acquireOrRenew", Long.class, Long.class, String.class, String.class, int.class);
+        var release = type.getMethod("release", Long.class, String.class, String.class);
+        assertEquals(3, insert.getAnnotation(Options.class).timeout());
+        assertEquals(3, acquire.getAnnotation(Options.class).timeout());
+        assertEquals(3, release.getAnnotation(Options.class).timeout());
+        assertTrue(insert.getAnnotation(Insert.class).value()[0].contains("INSERT IGNORE"));
+        assertTrue(acquire.getAnnotation(Update.class).value()[0].contains("lease_until<NOW()"));
+        assertTrue(acquire.getAnnotation(Update.class).value()[0].contains("owner_token=#{ownerToken}"));
+        assertTrue(release.getAnnotation(Update.class).value()[0].contains("lease_until=DATE_SUB"));
+        assertTrue(acquire.getAnnotation(Update.class).value()[0].contains("lease_epoch+1"));
     }
 
     @Test
-    void timedOutRenewalDoesNotClaimOwnership() throws Exception {
-        DataSource source = mock(DataSource.class);
-        Connection connection = mock(Connection.class);
-        PreparedStatement statement = mock(PreparedStatement.class);
-        when(source.getConnection()).thenReturn(connection);
-        when(connection.prepareStatement(anyString())).thenReturn(statement);
-        when(statement.executeUpdate()).thenThrow(new SQLTimeoutException("test timeout"));
-        StrategyRuntimeLeaseService service = new StrategyRuntimeLeaseService(new JdbcTemplate(source), new QuantProperties());
+    void acquireOnlySucceedsWhenConditionalUpdateSucceeds() {
+        StrategyRuntimeLeaseMapper mapper = mock(StrategyRuntimeLeaseMapper.class);
+        var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
+        when(mapper.acquireOrRenew(eq(1L), eq(2L), eq("BTCUSDT"), anyString(), anyInt())).thenReturn(1, 0);
+        assertTrue(service.acquireOrRenew(1L, 2L, "btcusdt"));
         assertFalse(service.acquireOrRenew(1L, 2L, "BTCUSDT"));
+        verify(mapper, times(2)).ensureRow(eq(1L), eq(2L), eq("BTCUSDT"), anyString(), anyInt());
+    }
+
+    @Test
+    void databaseErrorFailsClosed() {
+        StrategyRuntimeLeaseMapper mapper = mock(StrategyRuntimeLeaseMapper.class);
+        doThrow(new IllegalStateException("database timeout")).when(mapper).ensureRow(anyLong(), anyLong(), anyString(), anyString(), anyInt());
+        var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
+        assertFalse(service.acquireOrRenew(1L, 2L, "BTCUSDT"));
+        verify(mapper, never()).acquireOrRenew(anyLong(), anyLong(), anyString(), anyString(), anyInt());
+    }
+
+    @Test
+    void finalOwnerCheckUsesSameTokenAndRejectsExpiredOrStolenLease() {
+        var mapper = mock(StrategyRuntimeLeaseMapper.class);
+        var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
+        when(mapper.currentEpoch(eq(1L), eq(2L), eq("BTCUSDT"), anyString())).thenReturn(1L, 0L);
+        service.requireCurrentOwner(1L, 2L, "btcusdt");
+        assertThrows(IllegalStateException.class, () -> service.requireCurrentOwner(1L, 2L, "BTCUSDT"));
+        var captor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(mapper, times(2)).currentEpoch(eq(1L), eq(2L), eq("BTCUSDT"), captor.capture());
+        assertEquals(captor.getAllValues().get(0), captor.getAllValues().get(1));
+    }
+
+    @Test
+    void finalOwnerCheckFailsClosedOnDatabaseTimeout() {
+        var mapper = mock(StrategyRuntimeLeaseMapper.class);
+        doThrow(new IllegalStateException("db unavailable")).when(mapper).currentEpoch(anyLong(), anyLong(), anyString(), anyString());
+        var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
+        assertThrows(IllegalStateException.class, () -> service.requireCurrentOwner(1L, 2L, "BTCUSDT"));
+    }
+
+    @Test
+    void releaseOnlyUsesSameOwnerTokenAndNormalizedSymbol() {
+        StrategyRuntimeLeaseMapper mapper = mock(StrategyRuntimeLeaseMapper.class);
+        var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
+        service.acquireOrRenew(1L, 2L, "btcusdt");
+        service.release(1L, 2L, "btcusdt");
+        var token = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(mapper).ensureRow(eq(1L), eq(2L), eq("BTCUSDT"), token.capture(), anyInt());
+        verify(mapper).release(2L, "BTCUSDT", token.getValue());
     }
 }

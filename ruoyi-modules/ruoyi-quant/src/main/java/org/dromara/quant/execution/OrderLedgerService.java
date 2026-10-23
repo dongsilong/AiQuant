@@ -1,9 +1,12 @@
 package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
+import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -11,22 +14,15 @@ import java.time.LocalDateTime;
 /**
  * 统一写入本地订单账本。
  */
+@RequiredArgsConstructor
 @Service
 public class OrderLedgerService {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
     /**
      * 当前领域 Mapper。
      */
     private final QuantOrderMapper mapper;
-
-    /**
-     * 创建 OrderLedgerService 实例并初始化其依赖。
-     */
-    public OrderLedgerService(QuantOrderMapper mapper) {
-        this.mapper = mapper;
-    }
+    @Autowired
+    private TradeDecisionLogService decisionLogs;
 
     /**
      * 同步对应业务事实。
@@ -35,7 +31,9 @@ public class OrderLedgerService {
         if (snapshot == null) {
             return null;
         }
-        if (decisionLogs != null) { decisionLogs.order(credentialId, snapshot); }
+        if (decisionLogs != null) {
+            decisionLogs.order(credentialId, snapshot);
+        }
         String clientOrderId = snapshot.clientOrderId() == null ? "EXCHANGE:" + snapshot.orderId() : snapshot.clientOrderId();
         QuantOrder entity = snapshot.orderId() == null ? null :
             mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getExchangeOrderId, snapshot.orderId()));
@@ -58,18 +56,19 @@ public class OrderLedgerService {
         entity.setOriginalQuantity(snapshot.originalQuantity());
         entity.setExecutedQuantity(snapshot.executedQuantity());
         entity.setUpdatedAt(snapshot.updateTime() == null ? LocalDateTime.now() : LocalDateTime.ofInstant(snapshot.updateTime(), java.time.ZoneOffset.UTC));
-        if (entity.getId() == null) {
-            mapper.insert(entity);
-        } else {
-            mapper.updateById(entity);
-        }
-        return entity;
+        return persistMonotonic(entity);
     }
 
     /**
      * 新增或更新本地订单账本。
      */
     public QuantOrder upsert(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.OrderRequest request, ExchangeGateway.OrderResult result) {
+        return upsert(credentialId, strategyId, strategyInstanceId, request, result, null, null);
+    }
+
+    /** Persist optional immutable opening metadata without changing order execution semantics. */
+    public QuantOrder upsert(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.OrderRequest request, ExchangeGateway.OrderResult result,
+                             Integer leverageSnapshot, java.math.BigDecimal priceTickSizeSnapshot) {
         String clientOrderId = result.clientOrderId() == null ? "EXCHANGE:" + result.orderId() : result.clientOrderId();
         QuantOrder entity = result.orderId() == null ? null :
             mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getExchangeOrderId, result.orderId()));
@@ -96,12 +95,43 @@ public class OrderLedgerService {
         entity.setExecutedQuantity("FILLED".equalsIgnoreCase(result.status()) ? request.quantity() : (entity.getExecutedQuantity() == null ? java.math.BigDecimal.ZERO :
             entity.getExecutedQuantity()));
         entity.setReduceOnly(request.reduceOnly());
-        entity.setUpdatedAt(LocalDateTime.now());
-        if (entity.getId() == null) {
-            mapper.insert(entity);
-        } else {
-            mapper.updateById(entity);
+        if (!request.reduceOnly()) {
+            if (entity.getLeverageSnapshot() == null) {
+                entity.setLeverageSnapshot(leverageSnapshot);
+            }
+            if (entity.getPriceTickSizeSnapshot() == null) {
+                entity.setPriceTickSizeSnapshot(priceTickSizeSnapshot);
+            }
         }
-        return entity;
+        entity.setUpdatedAt(LocalDateTime.now());
+        return persistMonotonic(entity);
     }
+
+    /**
+     * Never let a stale Binance event regress terminal order status, cumulative
+     * executed quantity, confirmed order identity or strategy ownership.
+     * The comparison/update is one database statement, not a stale read-then-write.
+     */
+    private QuantOrder persistMonotonic(QuantOrder entity) {
+        if (entity.getId() == null) {
+            if (mapper.insert(entity) != 1) {
+                throw new IllegalStateException("无法持久化新的交易所订单事实");
+            }
+            return entity;
+        }
+        if (mapper.mergeExchangeFactIfMonotonic(entity) == 1) {
+            return entity;
+        }
+        QuantOrder current = mapper.selectById(entity.getId());
+        if (current == null) {
+            throw new IllegalStateException("订单对账期间本地订单消失，等待重试");
+        }
+        if (entity.getExchangeOrderId() != null && current.getExchangeOrderId() != null && !entity.getExchangeOrderId().equals(current.getExchangeOrderId()) || entity.getStrategyInstanceId() != null && current.getStrategyInstanceId() != null && !entity.getStrategyInstanceId().equals(current.getStrategyInstanceId())) {
+            throw new IllegalStateException("交易所订单身份或策略归属冲突，禁止覆盖");
+        }
+        // Returning the freshest DB state (rather than the stale in-memory entity)
+        // ensures downstream reconciliation never assumes a rejected snapshot won.
+        return current;
+    }
+
 }

@@ -1,20 +1,25 @@
 package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.market.AccountPositionCache;
 import org.dromara.quant.market.domain.QuantSymbol;
 import org.dromara.quant.market.mapper.QuantSymbolMapper;
 import org.dromara.quant.paper.PaperTradingService;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
+import org.dromara.quant.risk.OpenCapacityService;
 import org.dromara.quant.risk.RiskDecisionService;
 import org.dromara.quant.risk.domain.QuantRiskConfig;
 import org.dromara.quant.risk.mapper.QuantRiskConfigMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -22,16 +27,9 @@ import java.math.BigDecimal;
 /**
  * 交易执行应用层。所有手工/策略交易统一经过这里进入 Execution Engine。
  */
+@RequiredArgsConstructor
 @Service
 public class TradeExecutionApplicationService {
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
-
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.market.AccountPositionCache positionCache;
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.dromara.quant.risk.OpenCapacityService openCapacityService;
-
     /**
      * 交易凭证 Mapper。
      */
@@ -69,24 +67,12 @@ public class TradeExecutionApplicationService {
      */
     private final PaperTradingService paperTradingService;
     private final TradingPreparationService preparationService;
-
-    /**
-     * 创建 TradeExecutionApplicationService 实例并初始化其依赖。
-     */
-    public TradeExecutionApplicationService(QuantCredentialMapper credentialMapper, QuantSymbolMapper symbolMapper, QuantRiskConfigMapper riskMapper,
-                                            RiskDecisionService riskDecisionService, TradeExecutionPort executionPort, QuantProperties properties, ExchangeGateway gateway,
-                                            QuantPositionMapper positionMapper, PaperTradingService paperTradingService, TradingPreparationService preparationService) {
-        this.credentialMapper = credentialMapper;
-        this.symbolMapper = symbolMapper;
-        this.riskMapper = riskMapper;
-        this.riskDecisionService = riskDecisionService;
-        this.executionPort = executionPort;
-        this.properties = properties;
-        this.gateway = gateway;
-        this.positionMapper = positionMapper;
-        this.paperTradingService = paperTradingService;
-        this.preparationService = preparationService;
-    }
+    @Autowired
+    private TradeDecisionLogService decisionLogs;
+    @Autowired
+    private AccountPositionCache positionCache;
+    @Autowired
+    private OpenCapacityService openCapacityService;
 
     /**
      * 由用户手工发起统一平仓执行。
@@ -98,9 +84,8 @@ public class TradeExecutionApplicationService {
         try {
             return closeByUserAuthorized(request, credential);
         } catch (RuntimeException ex) {
-            String logStatus = ex instanceof org.dromara.common.core.exception.ServiceException
-                || ex instanceof IllegalArgumentException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException
-                || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException ? "FAILED" : "UNKNOWN";
+            String logStatus =
+                ex instanceof org.dromara.common.core.exception.ServiceException || ex instanceof IllegalArgumentException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException ? "FAILED" : "UNKNOWN";
             recordManualClose(request, credential, logStatus, org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex), null, null, false);
             throw ex;
         }
@@ -124,8 +109,8 @@ public class TradeExecutionApplicationService {
                 request.getQuantity(), null, position.getPositionSide(), request.getIdempotencyKey(), credential.getRunMode(), symbolRule(symbol), safety(credential, null, true)));
             paperTradingService.settlePaperExecution(credential.getId(), request.getIdempotencyKey(), position.getId(), request.getQuantity(), position.getMarkPrice() == null ?
                 position.getEntryPrice() : position.getMarkPrice());
-            recordManualClose(request, credential, "FILLED", "手动平仓", position.getPositionSide(),
-                position.getMarkPrice() == null ? position.getEntryPrice() : position.getMarkPrice(), true);
+            recordManualClose(request, credential, "FILLED", "手动平仓", position.getPositionSide(), position.getMarkPrice() == null ? position.getEntryPrice() :
+                position.getMarkPrice(), true);
             return result;
         }
         ExchangeGateway.PositionSnapshot position =
@@ -141,17 +126,12 @@ public class TradeExecutionApplicationService {
             null, positionSide, request.getIdempotencyKey(), credential.getRunMode(), symbolRule(symbol), safety(credential, risk, true)));
     }
 
-    private void recordManualClose(ClosePositionRequest request, QuantCredential credential, String status, String reason,
-                                   String direction, BigDecimal price, boolean filled) {
-        if (decisionLogs == null) { return; }
-        decisionLogs.record(org.dromara.quant.decision.DecisionLogEvent.builder()
-            .eventKey(org.dromara.quant.decision.TradeDecisionLogRepository.executionKey(credential.getId(), request.getIdempotencyKey()))
-            .recordType("EXECUTION").credentialId(credential.getId()).accountName(credential.getAccountName())
-            .strategyName("手动操作").runMode(credential.getRunMode()).symbol(request.getSymbol()).operation("CLOSE")
-            .direction(direction == null ? ("BOTH".equalsIgnoreCase(request.getPositionSide()) ? null : request.getPositionSide()) : direction).quantity(request.getQuantity()).price(price)
-            .status(status).reasonCode("REQUESTED".equals(status) || filled ? "MANUAL_CLOSE" : "EXECUTION_FAILURE")
-            .reason(reason).idempotencyKey(request.getIdempotencyKey()).eventTime(java.time.Instant.now())
-            .tradeTime(filled ? java.time.Instant.now() : null).build());
+    private void recordManualClose(ClosePositionRequest request, QuantCredential credential, String status, String reason, String direction, BigDecimal price, boolean filled) {
+        if (decisionLogs == null) {
+            return;
+        }
+        decisionLogs.record(org.dromara.quant.decision.DecisionLogEvent.builder().eventKey(org.dromara.quant.decision.TradeDecisionLogRepository.executionKey(credential.getId(),
+            request.getIdempotencyKey())).recordType("EXECUTION").credentialId(credential.getId()).accountName(credential.getAccountName()).strategyName("手动操作").runMode(credential.getRunMode()).symbol(request.getSymbol()).operation("CLOSE").direction(direction == null ? ("BOTH".equalsIgnoreCase(request.getPositionSide()) ? null : request.getPositionSide()) : direction).quantity(request.getQuantity()).price(price).status(status).reasonCode("REQUESTED".equals(status) || filled ? "MANUAL_CLOSE" : "EXECUTION_FAILURE").reason(reason).idempotencyKey(request.getIdempotencyKey()).eventTime(java.time.Instant.now()).tradeTime(filled ? java.time.Instant.now() : null).build());
     }
 
     /**
@@ -186,47 +166,59 @@ public class TradeExecutionApplicationService {
         return openByRuntime(credentialId, strategyId, strategyInstanceId, symbol, side, positionSide, quantity, price, leverage, marginMode, idempotencyKey, null);
     }
 
-    /** 运行时信号带上截止时间，REST 等待后不得按过期点位追单。 */
+    /**
+     * 运行时信号带上截止时间，REST 等待后不得按过期点位追单。
+     */
     public ExecutionResult openByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
-                                        BigDecimal price, int leverage, String marginMode, String idempotencyKey, java.time.Instant eventTime) {
+                                         BigDecimal price, int leverage, String marginMode, String idempotencyKey, java.time.Instant eventTime) {
         QuantCredential credential = requireCredential(credentialId);
         QuantSymbol symbolEntity = requireSymbol(symbol);
         ExchangeGateway.Credential exchangeCredential = toCredential(credential);
         if (leverage <= 0) {
             throw new ServiceException("杠杆必须大于 0");
         }
-        BigDecimal notional = quantity.multiply(price == null ? ("TESTNET".equalsIgnoreCase(credential.getRunMode())
-            ? gateway.queryPrice(credential.getRunMode(), symbol) : gateway.queryPrice(symbol)).markPrice() : price);
+        BigDecimal notional = quantity.multiply(price == null ? ("TESTNET".equalsIgnoreCase(credential.getRunMode()) ? gateway.queryPrice(credential.getRunMode(), symbol) :
+            gateway.queryPrice(symbol)).markPrice() : price);
         // 最终风险审批在统一执行入口与容量占位的同一短事务中完成，避免重复查询和过期审批。
         QuantRiskConfig risk = riskMapper.selectOne(new LambdaQueryWrapper<QuantRiskConfig>().eq(QuantRiskConfig::getCredentialId, credentialId));
-        String resolvedPositionSide = "PAPER".equalsIgnoreCase(credential.getRunMode())
-            ? normalizePositionSide(exchangeCredential, side, positionSide) : positionSide;
+        String resolvedPositionSide = "PAPER".equalsIgnoreCase(credential.getRunMode()) ? normalizePositionSide(exchangeCredential, side, positionSide) : positionSide;
         return executionPort.open(new OpenPositionCommand(credentialId, strategyId, strategyInstanceId, exchangeCredential, symbol, side, "MARKET", quantity, null,
             resolvedPositionSide, idempotencyKey, credential.getRunMode(), symbolRule(symbolEntity), leverage, marginMode, safety(credential, risk, true), notional,
             eventTime == null ? null : eventTime.plusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())), eventTime));
     }
 
-    /** 只读取可信缓存，在覆盖旧 CLOSED 状态之前清理已确认关闭的开仓预留。 */
+    /**
+     * 只读取可信缓存，在覆盖旧 CLOSED 状态之前清理已确认关闭的开仓预留。
+     */
     public void releaseClosedOpenReservationsForRuntime(Long credentialId, Long instanceId, String symbol, String runMode) {
-        var positions = "PAPER".equalsIgnoreCase(runMode) ? java.util.List.<ExchangeGateway.PositionSnapshot>of()
-            : positionCache.requirePositions(credentialId);
+        var positions = "PAPER".equalsIgnoreCase(runMode) ? java.util.List.<ExchangeGateway.PositionSnapshot>of() : positionCache.requirePositions(credentialId);
         openCapacityService.releaseClosedForInstance(credentialId, instanceId, symbol, positions);
     }
 
-    /** 只读重试准入校验，复用可信缓存及容量规则，不产生交易请求或账本记录。 */
-    public void requireOpenCapacityForRuntime(Long credentialId, Long strategyId, Long instanceId, String symbol, String side,
-                                             BigDecimal quantity, BigDecimal price, int leverage, String runMode,
-                                             org.dromara.quant.market.AccountBalanceSnapshot balance) {
+    /**
+     * 只读重试准入校验，复用可信缓存及容量规则，不产生交易请求或账本记录。
+     */
+    public void requireOpenCapacityForRuntime(Long credentialId, Long strategyId, Long instanceId, String symbol, String side, BigDecimal quantity, BigDecimal price,
+                                              int leverage, String marginMode, String runMode, org.dromara.quant.market.AccountBalanceSnapshot balance) {
         var positions = "PAPER".equalsIgnoreCase(runMode) ? null : positionCache.requirePositions(credentialId);
-        var command = new OpenPositionCommand(credentialId, strategyId, instanceId, null, symbol, side, "MARKET", quantity, null,
-            null, "RETRY_CHECK:" + instanceId, runMode, null, leverage, null, null);
-        openCapacityService.requireCanReserve(command, quantity.multiply(price), positions, balance);
+        var command = new OpenPositionCommand(credentialId, strategyId, instanceId, null, symbol, side, "MARKET", quantity, null, null, "RETRY_CHECK:" + instanceId, runMode,
+            null, leverage, null, null);
+        boolean hedgeModeConfirmed = false;
+        if ("LIVE".equalsIgnoreCase(runMode)) {
+            var prepared = preparationService.requireReady(credentialId, symbol, leverage, marginMode);
+            hedgeModeConfirmed = prepared.positionMode() != null && prepared.positionMode().hedgeMode();
+        }
+        openCapacityService.requireCanReserve(command, quantity.multiply(price), positions, balance, hedgeModeConfirmed);
     }
 
-    /** 由启动/配置刷新线程调用，交易所请求由准备服务异步执行。 */
+    /**
+     * 由启动/配置刷新线程调用，交易所请求由准备服务异步执行。
+     */
     public void prepareOpenForRuntime(Long credentialId, String symbol, int leverage, String marginMode) {
         QuantCredential credential = requireCredential(credentialId);
-        if ("PAPER".equalsIgnoreCase(credential.getRunMode())) { return; }
+        if ("PAPER".equalsIgnoreCase(credential.getRunMode())) {
+            return;
+        }
         QuantRiskConfig risk = riskMapper.selectOne(new LambdaQueryWrapper<QuantRiskConfig>().eq(QuantRiskConfig::getCredentialId, credentialId));
         preparationService.request(credentialId, toCredential(credential), symbol, leverage, marginMode, safety(credential, risk, true));
     }

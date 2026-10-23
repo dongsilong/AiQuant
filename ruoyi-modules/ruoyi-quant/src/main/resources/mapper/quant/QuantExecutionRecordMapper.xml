@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.execution.mapper.QuantExecutionRecordMapper">
+    <update id="markAccepted" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='CONFIRMED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
+    exchange_order_status=#{exchangeStatus}, updated_at=#{now}
+WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN')
+  AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
+  AND #{orderId} IS NOT NULL AND #{orderId}>0]]></update>
+    <update id="markFailedBeforeSend" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='FAILED', error_message=#{message}, updated_at=#{now}
+WHERE id=#{id} AND execution_status='PENDING']]></update>
+    <update id="markUnknownIfUnresolved" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='UNKNOWN', error_message=#{message}, updated_at=#{now}
+WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN')]]></update>
+    <update id="markRecoveredAfterFact" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='RECOVERED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
+    exchange_order_status=COALESCE(#{exchangeStatus},exchange_order_status), updated_at=#{now}
+WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN','CONFIRMED')
+  AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
+  AND #{orderId} IS NOT NULL AND #{orderId}>0]]></update>
+    <update id="annotateRecoveredCancelFill" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET error_message=#{message}, updated_at=#{now}
+WHERE id=#{id} AND operation_type='CANCEL'
+  AND execution_status='RECOVERED' AND exchange_order_status=#{exchangeStatus}
+  AND exchange_order_id=#{orderId}]]></update>
+    <update id="recordRecoveryAttempt" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET recovery_attempts=COALESCE(recovery_attempts,0)+1,
+    last_recovery_at=#{now}, updated_at=#{now}
+WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN','CONFIRMED')]]></update>
+    <select id="strandedRecoveredDispatches" resultType="org.dromara.quant.execution.domain.QuantExecutionRecord" timeout="3"><![CDATA[SELECT e.id, e.credential_id AS credentialId,
+       e.symbol, e.idempotency_key AS idempotencyKey,
+       e.client_order_id AS clientOrderId,
+       e.exchange_order_id AS exchangeOrderId,
+       e.operation_type AS operationType,
+       e.execution_status AS executionStatus
+FROM quant_execution_record e
+JOIN quant_live_dispatch_guard g
+  ON g.credential_id=e.credential_id AND g.symbol=e.symbol
+  AND g.active_dispatch_key=e.idempotency_key
+JOIN quant_order_dispatch_ticket t
+  ON t.credential_id=e.credential_id AND t.symbol=e.symbol
+  AND t.idempotency_key=e.idempotency_key
+  AND t.client_order_id=e.client_order_id
+WHERE e.execution_status='RECOVERED'
+  AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
+  AND t.operation_type IN ('OPEN','CLOSE','CANCEL')
+ORDER BY g.updated_at ASC
+LIMIT 100]]></select>
+</mapper>

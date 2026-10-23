@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.runtime.mapper.QuantStrategyPositionStateMapper">
+    <update id="updateMaximumReturnRate">
+        <![CDATA[UPDATE quant_strategy_position_state SET maximum_return_rate = GREATEST(COALESCE(maximum_return_rate, 0), #{rate}), updated_at = CURRENT_TIMESTAMP(6) WHERE instance_id = #{instanceId} AND position_id = #{positionId} AND position_cycle_key = #{cycleKey} AND status <> 'CLOSED']]></update>
+    <update id="resetClosedMaximumReturnRate">
+        <![CDATA[UPDATE quant_strategy_position_state SET maximum_return_rate = 0 WHERE instance_id = #{instanceId} AND status = 'CLOSED']]></update>
+</mapper>

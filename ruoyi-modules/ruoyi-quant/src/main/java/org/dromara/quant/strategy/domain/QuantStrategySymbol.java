@@ -55,7 +55,11 @@ public class QuantStrategySymbol {
      */
     private String paramsJson;
     /**
-     * 当前状态。
+     * 绑定状态：0 启用，其他值停用；不代表运行时开关。
      */
     private String status;
+    /**
+     * 单个策略交易对的运行开关。关闭时禁止新开仓，但继续管理已有持仓；旧记录为空按启用兼容。
+     */
+    private Boolean runtimeEnabled;
 }

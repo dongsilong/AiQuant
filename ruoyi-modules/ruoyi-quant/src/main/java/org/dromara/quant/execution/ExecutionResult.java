@@ -8,7 +8,9 @@ package org.dromara.quant.execution;
  * @param orderId       交易所订单主键
  * @param clientOrderId 客户端订单号
  */
-public record ExecutionResult(boolean accepted, String status, Long orderId, String clientOrderId) {
+public record ExecutionResult(boolean accepted, String status,
+                              @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId,
+                              String clientOrderId) {
     /**
      * 构建一条未通过风控或执行检查的拒绝结果。
      */

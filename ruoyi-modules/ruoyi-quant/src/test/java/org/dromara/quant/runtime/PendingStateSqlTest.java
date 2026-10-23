@@ -5,8 +5,11 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.apache.ibatis.scripting.xmltags.XMLLanguageDriver;
 import org.apache.ibatis.session.Configuration;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
+
 import java.util.Map;
-import static org.junit.jupiter.api.Assertions.*;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @org.junit.jupiter.api.Tag("dev")
 class PendingStateSqlTest {
@@ -19,8 +22,8 @@ class PendingStateSqlTest {
         var state = new QuantStrategyPositionState();
         state.setId(1L);
         state.setStatus(status);
-        var source = new XMLLanguageDriver().createSqlSource(configuration,
-            "<script>UPDATE " + info.getTableName() + " <set>" + info.getAllSqlSet(false, "et.") + "</set> WHERE id=#{et.id}</script>", Map.class);
+        var source = new XMLLanguageDriver().createSqlSource(configuration, "<script>UPDATE " + info.getTableName() + " <set>" + info.getAllSqlSet(false, "et.") + "</set> WHERE " +
+            "id=#{et.id}</script>", Map.class);
         var bound = source.getBoundSql(Map.of("et", state));
         for (String field : new String[]{"pending_action", "pending_idempotency_key", "pending_client_order_id", "pending_order_id", "pending_order_time"}) {
             assertTrue(bound.getSql().contains(field + "="), bound.getSql());

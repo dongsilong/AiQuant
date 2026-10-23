@@ -7,7 +7,7 @@ import lombok.Data;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class KlineData {
     private Long openTime;
-//    private String openTime;
+    //    private String openTime;
     private Double open;
     private Double high;
     private Double low;

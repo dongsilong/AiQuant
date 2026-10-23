@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.execution.StrategyPositionProjectionMapper">
+    <select id="verifiedIntent" resultType="map" timeout="3"><![CDATA[SELECT strategy_id,strategy_instance_id,position_side,fill_role,
+       exchange_side,client_order_id
+FROM quant_strategy_order_intent
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND exchange_order_id=#{orderId}]]></select>
+    <insert id="ensure" timeout="3"><![CDATA[INSERT IGNORE INTO quant_strategy_position_inventory
+(credential_id,symbol,strategy_instance_id,position_side,strategy_id,updated_at)
+VALUES (#{credentialId},#{symbol},#{instanceId},#{side},#{strategyId},NOW(6))]]></insert>
+    <select id="lock" resultType="map" timeout="3"><![CDATA[SELECT strategy_id,open_quantity,cost_basis,realized_pnl,commissions,commission_asset,
+       cycle_number,cycle_id,last_trade_time,last_trade_id
+FROM quant_strategy_position_inventory
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND strategy_instance_id=#{instanceId} AND position_side=#{side}
+FOR UPDATE]]></select>
+    <select id="existing" resultType="map" timeout="3"><![CDATA[SELECT strategy_id,strategy_instance_id,exchange_order_id,position_side,
+       fill_role,exchange_side,quantity,fill_price,commission,commission_asset,realized_pnl,trade_time
+FROM quant_strategy_position_fill_event
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND exchange_trade_id=#{tradeId}]]></select>
+    <insert id="openCycle" timeout="3"><![CDATA[INSERT INTO quant_strategy_position_cycle
+(id,credential_id,symbol,strategy_instance_id,position_side,
+ cycle_number,opened_at)
+VALUES (#{id},#{credentialId},#{symbol},#{instanceId},#{side},#{cycle},#{openedAt})]]></insert>
+    <update id="closeCycle" timeout="3"><![CDATA[UPDATE quant_strategy_position_cycle SET closed_at=#{closedAt}
+WHERE id=#{cycleId} AND closed_at IS NULL]]></update>
+    <insert id="insertFill" timeout="3"><![CDATA[INSERT INTO quant_strategy_position_fill_event
+(id,credential_id,symbol,strategy_id,strategy_instance_id,cycle_id,
+ exchange_trade_id,exchange_order_id,position_side,fill_role,exchange_side,
+ quantity,fill_price,commission,commission_asset,realized_pnl,trade_time)
+VALUES (#{id},#{credentialId},#{symbol},#{strategyId},#{instanceId},
+        #{cycleId},#{tradeId},#{orderId},#{side},#{role},#{exchangeSide},
+        #{quantity},#{price},#{fee},#{feeAsset},#{pnl},#{tradeTime})]]></insert>
+    <update id="update" timeout="3"><![CDATA[UPDATE quant_strategy_position_inventory
+SET open_quantity=#{quantity},cost_basis=#{cost},
+    realized_pnl=#{pnl},commissions=#{fees},commission_asset=#{feeAsset},
+    cycle_number=#{cycle},cycle_id=#{cycleId},
+    last_trade_time=#{tradeTime},last_trade_id=#{tradeId},updated_at=NOW(6)
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND strategy_instance_id=#{instanceId} AND position_side=#{side}
+  AND strategy_id=#{strategyId}
+  AND (commission_asset IS NULL OR commission_asset=#{feeAsset})]]></update>
+</mapper>

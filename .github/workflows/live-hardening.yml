@@ -1,0 +1,157 @@
+name: LIVE Hardening - Backend
+
+on:
+  push:
+    branches:
+      - hardening/live-production-20261014
+  pull_request:
+    branches:
+      - ai-quant-dev
+
+jobs:
+  quant-critical-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Reject committed plaintext credentials in trading configuration
+        run: python3 script/security/check_quant_config_secrets.py
+      - name: Test release-evidence integrity gate
+        run: python3 -m unittest script/security/test_live_release_evidence.py
+      - name: Compile and test critical trade invariants
+        run: >-
+          bash mvnw -B -ntp
+          -pl ruoyi-modules/ruoyi-quant -am
+          -Dtest=BeijingTimeTest,UserDataStreamLeaseGateTest,UserDataStreamHubTest,BinanceGatewayUserDataEventTest,LivePositionStreamSingleNodeGateTest,LivePositionGenerationFenceTest,LivePositionEventCoordinatorTest,LivePositionFreshnessRiskTest,LiveStartupPositionRefreshTest,QuantCredentialSingleUserTest,QuantLiveDefaultsTest,ProtectionOrderServiceTest,UnifiedTradeExecutionServiceTest,UnifiedCancelRecoveryTest,TradingPreparationServiceTest,BinanceSymbolSettingsContractTest,OrderLedgerMonotonicTest,LiveDispatchInspectionControllerTest,LiveOrderDispatcherTest,LivePreDispatchIntentTest,LiveDispatchLeaseEpochSqlTest,StrategyFillAllocationServiceTest,StrategyPositionAccountingTest,StrategyPositionProjectionContractTest,StrategyPositionProjectionValidationTest,StrategyOrderIntentServiceTest,StrategyOrderAcceptanceJournalTest,StrategyOrderCrashRecoveryServiceTest,StrategyFillReplayServiceTest,StrictBinanceTradeCollectorTest,StrategyPositionReconciliationTest,StrategyFillAuditServiceTest,ExecutionRecoveryValidationTest,RecoveredDispatchRestartTest,RecoveredDispatchSqlTest,StrategyEntryGuardServiceTest,StrategyRuntimeLeaseServiceTest,StrategyCloseOwnershipGuardTest,StrategyCloseOwnershipMapperTest,OpenCapacityServiceTest,RiskSignedPositionCountTest,PaperAtomicMapperTest,ProtectionTargetCoordinatorTest,ExecutionRecoveryServiceTest,TradingReconciliationTransactionTest,ExecutionStatusTransitionTest,LiveDispatchRecoveryGuardSqlTest,LiveRecoveryApprovalSqlContractTest,LiveRecoveryCaseServiceTest,LiveManualRecoveryExecutionServiceTest,LiveRecoveryAuditSecurityTest,LiveSchemaStartupGuardTest,ExchangeIdJsonPrecisionTest,BinanceGatewayClockOffsetTest,BinanceGatewayConnectivityTest,BinanceGatewayMarketEnvironmentTest,MarketStreamHubIsolationTest,KlineSlopeRateStrategyTest,BinanceSdkContractTest,BinanceWebSocketTransportSelectionTest,BinanceTransportPermissionTest,StrategyRuntimeSafetyTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+          test
+
+  full-quant-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Run all tagged quant development regressions
+        run: >-
+          bash mvnw -B -ntp
+          -pl ruoyi-modules/ruoyi-quant -am
+          -Dgroups=dev
+          test
+
+  mysql-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: only_for_ci
+          MYSQL_DATABASE: aiquant_ci_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -uroot -ponly_for_ci"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=15
+    env:
+      AIQUANT_MYSQL_URL: jdbc:mysql://127.0.0.1:3306/aiquant_ci_test?useSSL=false&allowPublicKeyRetrieval=true
+      AIQUANT_MYSQL_USERNAME: root
+      AIQUANT_MYSQL_PASSWORD: only_for_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Smoke-test strategy allocation migrations on disposable MySQL 8.4
+        run: |
+          set -euo pipefail
+          MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
+          test -n "$MYSQL_CONTAINER"
+          for ddl in \
+            script/sql/quant/V20261014_02__live_dispatch_guard.sql \
+            script/sql/quant/V20261014_03__strategy_fill_allocation.sql \
+            script/sql/quant/V20261014_05__recovery_case_audit.sql \
+            script/sql/quant/V20261014_06__recovery_audit_immutability.sql \
+            script/sql/quant/V20261014_07__strategy_position_cycles.sql \
+            script/sql/quant/V20261014_08__strategy_position_inventory.sql \
+            script/sql/quant/V20261014_09__strategy_order_intent.sql \
+            script/sql/quant/V20261014_10__pre_dispatch_strategy_intent.sql \
+            script/sql/quant/V20261014_12__position_sync_fence.sql \
+            script/sql/quant/V20261014_13__live_user_stream_lease.sql; do
+            docker exec -i "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test < "$ddl"
+          done
+          tables="$(docker exec -i "$MYSQL_CONTAINER" mysql -N -B -uroot -ponly_for_ci aiquant_ci_test -e "
+            SELECT COUNT(*) FROM information_schema.tables
+            WHERE table_schema='aiquant_ci_test' AND table_name IN
+            ('quant_strategy_fill_allocation','quant_live_recovery_case',
+             'quant_live_recovery_audit','quant_strategy_position_cycle',
+             'quant_strategy_position_fill_event','quant_strategy_position_inventory',
+             'quant_strategy_order_intent','quant_strategy_pre_dispatch_intent',
+             'quant_position_sync_fence','quant_live_user_stream_lease');" | tr -d '\r')"
+          test "$tables" = 10
+      - name: Verify V12 account fence blocks concurrent InnoDB writers
+        run: |
+          set -euo pipefail
+          MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
+          test -n "$MYSQL_CONTAINER"
+          docker exec "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test -e "
+            INSERT IGNORE INTO quant_position_sync_fence(credential_id) VALUES (987654);"
+          docker exec "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test -e "
+            START TRANSACTION;
+            SELECT credential_id FROM quant_position_sync_fence WHERE credential_id=987654 FOR UPDATE;
+            DO SLEEP(5);
+            COMMIT;" >/tmp/position-fence-lock-holder.log 2>&1 &
+          holder=$!
+          trap 'wait "$holder" || true' EXIT
+          sleep 2
+          if docker exec "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test -e "
+            SET innodb_lock_wait_timeout=1;
+            START TRANSACTION;
+            SELECT credential_id FROM quant_position_sync_fence WHERE credential_id=987654 FOR UPDATE;" >/tmp/position-fence-contender.log 2>&1; then
+            echo "ERROR: second node bypassed the account row lock" >&2
+            exit 1
+          fi
+          grep -q '1205' /tmp/position-fence-contender.log
+          wait "$holder"
+          trap - EXIT
+      - name: Verify account stream DB lease takeover and stale node exclusion
+        run: |
+          set -euo pipefail
+          export MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
+          test -n "$MYSQL_CONTAINER"
+          bash script/sql/quant/ci-user-stream-lease-takeover.sh
+      - name: Disaster drill - verify backup, restore and UNKNOWN dispatch protection
+        env:
+          MYSQL_CI_PASSWORD: only_for_ci
+          AIQUANT_DISPOSABLE_CI: YES_I_CONFIRM_DISPOSABLE
+        run: |
+          set -euo pipefail
+          export MYSQL_CONTAINER="$(docker ps --filter 'ancestor=mysql:8.4' --format '{{.ID}}' | head -n 1)"
+          test -n "$MYSQL_CONTAINER"
+          bash script/sql/quant/ci-mysql-backup-restore-drill.sh
+      - name: Validate real InnoDB locks, account capacity and lease ownership
+        run: >-
+          bash mvnw -B -ntp
+          -pl ruoyi-modules/ruoyi-quant -am
+          -Dtest=MySqlAtomicConcurrencyTest,MySqlLiveCapacityRaceTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+          test

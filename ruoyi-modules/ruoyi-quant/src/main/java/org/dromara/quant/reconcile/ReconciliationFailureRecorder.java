@@ -1,5 +1,6 @@
 package org.dromara.quant.reconcile;
 
+import lombok.RequiredArgsConstructor;
 import org.dromara.quant.reconcile.domain.QuantReconcileRecord;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.util.QuantJsonMapper;
@@ -13,15 +14,11 @@ import java.util.Map;
 /**
  * 独立事务写入对账失败事实，避免外层回滚事务吞掉失败记录。
  */
+@RequiredArgsConstructor
 @Service
 public class ReconciliationFailureRecorder {
     private final QuantReconcileRecordMapper mapper;
 
-    public ReconciliationFailureRecorder(QuantReconcileRecordMapper mapper) {
-        this.mapper = mapper;
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(Long credentialId, String message) {
         QuantReconcileRecord record = new QuantReconcileRecord();
         record.setCredentialId(credentialId);

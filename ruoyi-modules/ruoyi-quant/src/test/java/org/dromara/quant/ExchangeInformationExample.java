@@ -16,21 +16,9 @@ import java.util.List;
 public class ExchangeInformationExample {
     private DerivativesTradingUsdsFuturesRestApi api;
 
-    public DerivativesTradingUsdsFuturesRestApi getApi() {
-        if (api == null) {
-            ClientConfiguration clientConfiguration =
-                    DerivativesTradingUsdsFuturesRestApiUtil.getClientConfiguration();
-            SignatureConfiguration signatureConfiguration = new SignatureConfiguration();
-            // 公共市场数据无需 API Key，下面两行保持注释即可
-            // signatureConfiguration.setApiKey("apiKey");
-            // signatureConfiguration.setPrivateKey("path/to/private.key");
-            clientConfiguration.setSignatureConfiguration(signatureConfiguration);
-            api = new DerivativesTradingUsdsFuturesRestApi(clientConfiguration);
-        }
-        return api;
-    }
-
-    /** 去除小数末尾无意义的零，例如 "0.01000000" -> "0.01"，"1.00000000" -> "1" */
+    /**
+     * 去除小数末尾无意义的零，例如 "0.01000000" -> "0.01"，"1.00000000" -> "1"
+     */
     private static String trimTrailingZeros(String value) {
         if (value == null || value.isEmpty()) {
             return value;
@@ -44,17 +32,35 @@ public class ExchangeInformationExample {
         return value;
     }
 
+    public static void main(String[] args) throws IOException, ApiException {
+        new ExchangeInformationExample().exchangeInformationExample();
+    }
+
+    public DerivativesTradingUsdsFuturesRestApi getApi() {
+        if (api == null) {
+            ClientConfiguration clientConfiguration = DerivativesTradingUsdsFuturesRestApiUtil.getClientConfiguration();
+            SignatureConfiguration signatureConfiguration = new SignatureConfiguration();
+            // 公共市场数据无需 API Key，下面两行保持注释即可
+            // signatureConfiguration.setApiKey("apiKey");
+            // signatureConfiguration.setPrivateKey("path/to/private.key");
+            clientConfiguration.setSignatureConfiguration(signatureConfiguration);
+            api = new DerivativesTradingUsdsFuturesRestApi(clientConfiguration);
+        }
+        return api;
+    }
+
     public void exchangeInformationExample() throws ApiException, IOException {
         ApiResponse<ExchangeInformationResponse> response = getApi().exchangeInformation();
         ExchangeInformationResponse data = response.getData();
         List<ExchangeInformationResponseSymbolsInner> symbols = data.getSymbols();
 
         System.out.println("共获取到 " + symbols.size() + " 个 U 本位合约交易对：");
-        System.out.println(
-                "========================================================================================================================");
+        System.out.println("========================================================================================================================");
 
         for (ExchangeInformationResponseSymbolsInner s : symbols) {
-            if (!"TRADING".equals(s.getStatus())) continue;
+            if (!"TRADING".equals(s.getStatus())) {
+                continue;
+            }
 
             // 默认值
             String tickSize = "N/A";
@@ -79,26 +85,12 @@ public class ExchangeInformationExample {
                 }
             }
 
-            System.out.printf(
-                    "%-18s | tick: %-14s | step: %-14s | mktStep: %-14s | minNotional: %-12s | 类型:"
-                            + " %-12s | 基础: %-6s | 计价: %-6s | 状态: %s%n",
-                    s.getSymbol(),
-                    tickSize,
-                    stepSize,
-                    marketStepSize,
-                    minNotional,
-                    s.getContractType() != null ? s.getContractType() : "N/A",
-                    s.getBaseAsset() != null ? s.getBaseAsset() : "N/A",
-                    s.getQuoteAsset() != null ? s.getQuoteAsset() : "N/A",
-                    s.getStatus());
+            System.out.printf("%-18s | tick: %-14s | step: %-14s | mktStep: %-14s | minNotional: %-12s | 类型:" + " %-12s | 基础: %-6s | 计价: %-6s | 状态: %s%n", s.getSymbol(),
+                tickSize, stepSize, marketStepSize, minNotional, s.getContractType() != null ? s.getContractType() : "N/A", s.getBaseAsset() != null ? s.getBaseAsset() : "N/A",
+                s.getQuoteAsset() != null ? s.getQuoteAsset() : "N/A", s.getStatus());
         }
 
-        System.out.println(
-                "========================================================================================================================");
+        System.out.println("========================================================================================================================");
         System.out.println("注：最大杠杆需单独调用 GET /fapi/v1/leverageBracket 获取。");
-    }
-
-    public static void main(String[] args) throws IOException, ApiException {
-        new ExchangeInformationExample().exchangeInformationExample();
     }
 }
