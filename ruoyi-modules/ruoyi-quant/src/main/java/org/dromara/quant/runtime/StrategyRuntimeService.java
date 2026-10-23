@@ -153,6 +153,8 @@ public class StrategyRuntimeService {
      * 当前 JVM 节点正在运行的策略实例上下文。
      */
     private final Map<Long, ActiveRuntime> activeRuntimes = new ConcurrentHashMap<>();
+    /** 同一策略交易对的实例初始化与运行开关更新使用同一把锁。 */
+    private final ConcurrentHashMap<Long, Object> strategySymbolLocks = new ConcurrentHashMap<>();
     /**
      * Limit repeated blocked LIVE startup diagnostics to one per strategy per minute.
      */
@@ -345,14 +347,23 @@ public class StrategyRuntimeService {
      * 更新指定策略交易对的独立运行开关。等待当前开仓决策/派单临界区结束后再返回。
      */
     public void setStrategySymbolRuntimeEnabled(Long strategySymbolId, boolean enabled) {
-        activeRuntimes.values().stream()
-            .filter(runtime -> runtime.strategySymbol != null && strategySymbolId.equals(runtime.strategySymbol.getId()))
-            .forEach(runtime -> {
-                synchronized (runtime.entryDispatchLock) {
-                    runtime.runtimeEnabled = enabled;
-                    if (runtime.strategySymbol != null) runtime.strategySymbol.setRuntimeEnabled(enabled);
-                }
-            });
+        Object symbolLock = strategySymbolLocks.computeIfAbsent(strategySymbolId, ignored -> new Object());
+        synchronized (symbolLock) {
+            QuantStrategySymbol binding = strategySymbolMapper.selectById(strategySymbolId);
+            if (binding == null) {
+                throw new org.dromara.common.core.exception.ServiceException("策略交易对绑定不存在");
+            }
+            binding.setRuntimeEnabled(enabled);
+            strategySymbolMapper.updateById(binding);
+            activeRuntimes.values().stream()
+                .filter(runtime -> runtime.strategySymbol != null && strategySymbolId.equals(runtime.strategySymbol.getId()))
+                .forEach(runtime -> {
+                    synchronized (runtime.entryDispatchLock) {
+                        runtime.runtimeEnabled = enabled;
+                        if (runtime.strategySymbol != null) runtime.strategySymbol.setRuntimeEnabled(enabled);
+                    }
+                });
+        }
     }
 
     /**
@@ -703,6 +714,15 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      * FIXED: 策略/凭证/交易对被停用但存在未平仓持仓时，进入保护模式而不是完全停止。
      */
     private boolean ensureRuntime(QuantStrategyInstance instance) {
+        Long strategySymbolId = instance.getStrategySymbolId();
+        if (strategySymbolId == null) return ensureRuntimeLocked(instance);
+        Object symbolLock = strategySymbolLocks.computeIfAbsent(strategySymbolId, ignored -> new Object());
+        synchronized (symbolLock) {
+            return ensureRuntimeLocked(instance);
+        }
+    }
+
+    private boolean ensureRuntimeLocked(QuantStrategyInstance instance) {
         QuantStrategy strategy = strategyMapper.selectById(instance.getStrategyId());
         QuantStrategySymbol strategySymbol = strategySymbolMapper.selectById(instance.getStrategySymbolId());
         QuantCredential credential = credentialMapper.selectById(instance.getCredentialId());
