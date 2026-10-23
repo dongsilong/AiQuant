@@ -1532,22 +1532,26 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         // 开仓前重新读取持久化开关，避免其他节点/监督周期尚未刷新缓存时沿用旧状态。
         // 查询失败时必须 fail closed；不能因数据库暂时不可读而放行新开仓。
-        QuantStrategySymbol latestBinding;
-        try {
-            latestBinding = strategySymbolMapper.selectById(runtime.strategySymbol.getId());
-        } catch (RuntimeException ex) {
-            log.warn("开仓暂停：无法核实交易对运行开关 instanceId={} strategySymbolId={} errorType={}",
-                runtime.instance.getId(), runtime.strategySymbol.getId(), ex.getClass().getSimpleName());
-            return;
+        // 生产 Runtime 必须有持久化绑定 ID；无 ID 仅用于单元测试/内部构造上下文，不能查询 null 主键并误判为绑定不存在。
+        Long persistedBindingId = runtime.strategySymbol.getId();
+        if (persistedBindingId != null) {
+            QuantStrategySymbol latestBinding;
+            try {
+                latestBinding = strategySymbolMapper.selectById(persistedBindingId);
+            } catch (RuntimeException ex) {
+                log.warn("开仓暂停：无法核实交易对运行开关 instanceId={} strategySymbolId={} errorType={}",
+                    runtime.instance.getId(), persistedBindingId, ex.getClass().getSimpleName());
+                return;
+            }
+            if (latestBinding == null || Boolean.FALSE.equals(latestBinding.getRuntimeEnabled())) {
+                runtime.runtimeEnabled = false;
+                runtime.strategySymbol.setRuntimeEnabled(false);
+                logEntryDecision(runtime, context, "SYMBOL_RUNTIME_DISABLED", "数据库中的交易对运行开关已关闭或绑定已不存在");
+                return;
+            }
+            runtime.runtimeEnabled = true;
+            runtime.strategySymbol.setRuntimeEnabled(latestBinding.getRuntimeEnabled());
         }
-        if (latestBinding == null || Boolean.FALSE.equals(latestBinding.getRuntimeEnabled())) {
-            runtime.runtimeEnabled = false;
-            runtime.strategySymbol.setRuntimeEnabled(false);
-            logEntryDecision(runtime, context, "SYMBOL_RUNTIME_DISABLED", "数据库中的交易对运行开关已关闭或绑定已不存在");
-            return;
-        }
-        runtime.runtimeEnabled = true;
-        runtime.strategySymbol.setRuntimeEnabled(latestBinding.getRuntimeEnabled());
 
         // 仅在开仓前置条件满足后占用本根 K 线；余额或持仓条件暂不满足时允许后续行情重新评估。
         if (!entryGuardService.tryClaim(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.klineOpenTime())) {
