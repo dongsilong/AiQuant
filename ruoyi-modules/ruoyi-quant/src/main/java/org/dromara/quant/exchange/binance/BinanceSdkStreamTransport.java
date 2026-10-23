@@ -66,8 +66,9 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
         return market(connection, symbol, interval, events, disconnected, backlogLimit);
     }
 
-    static void notifyMarketSocketClosed(int statusCode, String reason, Runnable disconnected, String symbol, String interval) {
-        log.warn("Binance SDK 行情 WebSocket 已关闭 symbol={} interval={} closeCode={} reason={}", symbol, interval, statusCode, reason);
+    static void notifyMarketSocketClosed(String connectionId, int statusCode, String reason, Runnable disconnected, String symbol, String interval) {
+        log.warn("Binance SDK 行情 WebSocket 已关闭 connectionId={} symbol={} interval={} closeCode={} reason={}", connectionId, symbol, interval,
+            statusCode, reason);
         disconnected.run();
     }
 
