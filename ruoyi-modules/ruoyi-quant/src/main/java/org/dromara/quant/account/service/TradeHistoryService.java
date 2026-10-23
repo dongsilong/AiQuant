@@ -18,9 +18,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -72,13 +74,21 @@ public class TradeHistoryService {
         if (fills.size() > 20000) {
             throw new ServiceException("成交账本超过单次汇总上限，请选择客户及交易对后查询，避免截断持仓链");
         }
-        // SQL 关联若出现多对多，拒绝重复计入成交，不能用 DISTINCT 隐藏来源歧义。
-        if (fills.stream().map(f -> f.getId()).distinct().count() != fills.size()) {
-            throw new ServiceException("成交来源关联重复，暂不能可靠汇总开平仓记录");
+
+        // Validate source uniqueness and map each fill in one pass; do not hide ambiguous joins with DISTINCT.
+        Set<Long> seenFillIds = new HashSet<>(fills.size());
+        List<TradeHistoryAssembler.Fill> assemblerFills = new ArrayList<>(fills.size());
+        for (TradeHistoryFill fill : fills) {
+            if (!seenFillIds.add(fill.getId())) {
+                throw new ServiceException("成交来源关联重复，暂不能可靠汇总开平仓记录");
+            }
+            assemblerFills.add(new TradeHistoryAssembler.Fill(fill.getId(), fill.getCredentialId(), fill.getSymbol(), fill.getSide(),
+                fill.getPositionSide(), fill.getOperationType(), fill.getReduceOnly(), fill.getQuantity(), fill.getPrice(), fill.getCommission(),
+                fill.getRealizedPnl(), fill.getTradeTime(), fill.getLeverageSnapshot(), fill.getPriceTickSizeSnapshot(), fill.getPostFillWalletBalance(),
+                fill.getPostFillBalanceAt(), fill.getCurrentPriceTickSize()));
         }
-        var result = TradeHistoryAssembler.assemble(fills.stream().map(f -> new TradeHistoryAssembler.Fill(f.getId(), f.getCredentialId(), f.getSymbol(), f.getSide(),
-            f.getPositionSide(), f.getOperationType(), f.getReduceOnly(), f.getQuantity(), f.getPrice(), f.getCommission(), f.getRealizedPnl(), f.getTradeTime(),
-            f.getLeverageSnapshot(), f.getPriceTickSizeSnapshot(), f.getPostFillWalletBalance(), f.getPostFillBalanceAt(), f.getCurrentPriceTickSize())).toList(), names);
+
+        var result = TradeHistoryAssembler.assemble(assemblerFills, names);
         var rows = result.rows().stream().filter(row -> {
             Instant opened = Instant.parse((String) row.get("openedAt"));
             return (start == null || !opened.isBefore(start)) && (end == null || opened.isBefore(end));
