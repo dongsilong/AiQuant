@@ -49,6 +49,12 @@ class StrategyFillReplayServiceTest {
     }
 
     @Test
+    void duplicateTradeIdsFailBeforeAnyAttributionOrProjection() {
+        assertThrows(IllegalStateException.class, () -> replay.replay(1L, "BTCUSDT", List.of(trade(1), trade(1)), true));
+        verifyNoInteractions(mapper, orders, projector);
+    }
+
+    @Test
     void firstMissingOriginQuarantinesWithoutProjection() {
         var result = replay.replay(1L, "BTCUSDT", List.of(trade(3), trade(2)), true);
         assertEquals(0, result.projected());

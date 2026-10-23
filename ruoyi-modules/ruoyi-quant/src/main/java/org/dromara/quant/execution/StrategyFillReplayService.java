@@ -44,6 +44,12 @@ public class StrategyFillReplayService {
         if (sorted.stream().anyMatch(t -> t == null || t.time() == null || t.tradeId() == null || t.tradeId() <= 0 || !symbol.equalsIgnoreCase(t.symbol()) || t.orderId() == null || t.commissionAsset() == null || !t.commissionAsset().matches("[A-Z0-9]{2,20}"))) {
             throw new IllegalStateException("Invalid Binance fill in replay window");
         }
+        Set<Long> tradeIds = new HashSet<>();
+        for (var trade : sorted) {
+            if (!tradeIds.add(trade.tradeId())) {
+                throw new IllegalStateException("Duplicate Binance trade ID in replay window: " + trade.tradeId());
+            }
+        }
         sorted.sort(Comparator.comparing(ExchangeGateway.TradeSnapshot::time).thenComparing(ExchangeGateway.TradeSnapshot::tradeId));
 
         String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
