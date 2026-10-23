@@ -27,7 +27,7 @@ class RestRequestSchedulerTest {
         for (RestRequestScheduler.Kind kind : RestRequestScheduler.Kind.values()) {
             ExchangeMarketPort.RequestDeferredException deferred = assertThrows(ExchangeMarketPort.RequestDeferredException.class,
                 () -> scheduler.acquire(kind), "manual block must be shared across " + kind);
-            assertTrue(deferred.retryAfterMillis() > 0);
+            assertTrue(deferred.retryAfterMillis() >= 86_400_000L, "manual latch must not suggest a short automatic retry");
         }
 
         // A later finite cooldown must not clear the manual latch.
