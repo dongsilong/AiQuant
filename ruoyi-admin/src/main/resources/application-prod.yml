@@ -374,3 +374,13 @@ justauth:
       client-id: 10**********6
       client-secret: ${AIQUANT_JUSTAUTH_GITEA_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=gitea
+
+--- # 生产环境管理端点收敛
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: NEVER
