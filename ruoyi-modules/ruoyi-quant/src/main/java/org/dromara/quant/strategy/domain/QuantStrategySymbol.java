@@ -61,5 +61,5 @@ public class QuantStrategySymbol {
     /**
      * 单个策略交易对的运行开关。关闭时禁止新开仓，但继续管理已有持仓；旧记录为空按启用兼容。
      */
-    private Boolean runtimeEnabled = true;
+    private Boolean runtimeEnabled;
 }
