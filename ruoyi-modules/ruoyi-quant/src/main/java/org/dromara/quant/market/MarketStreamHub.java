@@ -262,7 +262,7 @@ public class MarketStreamHub {
         }
 
         /**
-         * REST 在独立线程执行；锁只保护游标合并，实时事件在有界 ingress 中等待。
+         * REST 在独立线程执行；实时事件由 ingress 消费后进入有界恢复缓冲区，避免阻塞上游入口。
          */
         private void restoreHistory(long attempt) {
             try {
@@ -566,9 +566,6 @@ public class MarketStreamHub {
                     return;
                 }
                 recoveryBuffer.addLast(new Incoming(attempt, event));
-                return;
-            }
-            if (closed || attempt != generation || event == null) {
                 return;
             }
             if ("DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
