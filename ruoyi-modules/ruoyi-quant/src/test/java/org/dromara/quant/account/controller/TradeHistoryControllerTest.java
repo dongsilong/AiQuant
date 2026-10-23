@@ -1,8 +1,8 @@
 package org.dromara.quant.account.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
-import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.scripting.xmltags.XMLLanguageDriver;
+import org.apache.ibatis.builder.xml.XMLMapperBuilder;
+import org.apache.ibatis.io.Resources;
 import org.apache.ibatis.session.Configuration;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.mybatis.core.page.PageQuery;
@@ -137,9 +137,13 @@ class TradeHistoryControllerTest {
         var permission =
             TradeHistoryController.class.getMethod("page", PageQuery.class, Long.class, String.class, String.class, String.class).getAnnotation(SaCheckPermission.class);
         assertArrayEquals(new String[]{"quant:trade:list"}, permission.value());
-        var annotation = TradeHistoryMapper.class.getMethod("selectFills", List.class, String.class).getAnnotation(Select.class);
-        var source = new XMLLanguageDriver().createSqlSource(new Configuration(), annotation.value()[0], Map.class);
-        var sql = source.getBoundSql(Map.of("ids", List.of(10L, 11L), "symbol", "BTCUSDT"));
+        Configuration configuration = new Configuration();
+        String resource = "mapper/quant/TradeHistoryMapper.xml";
+        try (var input = Resources.getResourceAsStream(resource)) {
+            new XMLMapperBuilder(input, configuration, resource, configuration.getSqlFragments()).parse();
+        }
+        var sql = configuration.getMappedStatement("org.dromara.quant.account.mapper.TradeHistoryMapper.selectFills")
+            .getBoundSql(Map.of("ids", List.of(10L, 11L), "symbol", "BTCUSDT"));
         assertTrue(sql.getSql().contains("LIMIT 20001"));
         assertFalse(sql.getSql().contains("BTCUSDT"));
         assertEquals(3, sql.getParameterMappings().size());
