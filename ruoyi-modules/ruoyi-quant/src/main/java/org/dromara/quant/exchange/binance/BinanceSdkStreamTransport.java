@@ -3,6 +3,8 @@ package org.dromara.quant.exchange.binance;
 import com.binance.connector.client.common.websocket.adapter.stream.StreamConnectionInterface;
 import com.binance.connector.client.common.websocket.adapter.stream.StreamConnectionWrapper;
 import com.binance.connector.client.common.websocket.configuration.WebSocketClientConfiguration;
+import com.binance.connector.client.common.websocket.dtos.RequestWrapperDTO;
+import com.binance.connector.client.common.websocket.service.StreamBlockingQueue;
 import com.binance.connector.client.common.websocket.service.StreamBlockingQueueWrapper;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.DerivativesTradingUsdsFuturesWebSocketStreamsUtil;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.JSON;
@@ -11,13 +13,14 @@ import com.binance.connector.client.derivatives_trading_usds_futures.websocket.s
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.model.AggregateTradeStreamsRequest;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.model.Interval;
 import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.model.KlineCandlestickStreamsRequest;
-import com.binance.connector.client.derivatives_trading_usds_futures.websocket.stream.model.MarkPriceStreamRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.config.QuantProperties;
 import org.eclipse.jetty.client.HttpProxy;
 import org.eclipse.jetty.websocket.api.Callback;
 
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -42,10 +45,10 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
     private final AtomicBoolean connected = new AtomicBoolean();
     private final Thread consumer;
 
-    private BinanceSdkStreamTransport(StreamConnectionInterface connection, List<StreamBlockingQueueWrapper<?>> queues, Consumer<String> events, Runnable disconnected,
+    private BinanceSdkStreamTransport(StreamConnectionInterface connection, List<? extends BlockingQueue<String>> rawQueues, Consumer<String> events, Runnable disconnected,
                                       int backlogLimit) {
         this.connection = connection;
-        this.rawQueues = queues.stream().map(StreamBlockingQueueWrapper::getInnerQueue).toList();
+        this.rawQueues = List.copyOf(rawQueues);
         this.events = events;
         this.disconnected = disconnected;
         this.backlogLimit = Math.max(64, backlogLimit);
@@ -83,9 +86,9 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
             var api = new MarketApi(connection);
             ensureConnected(connection);
             var trades = api.aggregateTradeStreams(new AggregateTradeStreamsRequest().symbol(symbol));
-            var marks = api.markPriceStream(new MarkPriceStreamRequest().symbol(symbol));
+            var marks = subscribeMarkPriceAtOneSecond(connection, symbol);
             var klines = api.klineCandlestickStreams(new KlineCandlestickStreamsRequest().symbol(symbol).interval(Interval.fromValue(interval)));
-            return new BinanceSdkStreamTransport(connection, List.of(trades, marks, klines), events, disconnected, backlogLimit);
+            return new BinanceSdkStreamTransport(connection, List.of(trades.getInnerQueue(), marks, klines.getInnerQueue()), events, disconnected, backlogLimit);
         } catch (RuntimeException ex) {
             // 未连通也必须 stop，SDK stop() 会禁止重连、取消定时器并释放客户端线程。
             stop(connection);
@@ -101,13 +104,27 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
             connection = client.getConnection();
             ensureConnected(connection);
             var queue = client.userData(listenKey);
-            return new BinanceSdkStreamTransport(connection, List.of(queue), events, disconnected, backlogLimit);
+            return new BinanceSdkStreamTransport(connection, List.of(queue.getInnerQueue()), events, disconnected, backlogLimit);
         } catch (RuntimeException ex) {
             if (connection != null) {
                 stop(connection);
             }
             throw ex;
         }
+    }
+
+    private static StreamBlockingQueue<String> subscribeMarkPriceAtOneSecond(StreamConnectionInterface connection, String symbol) {
+        String stream = symbol + "@markPrice@1s";
+        var request = new RequestWrapperDTO.Builder<Set<String>, Object>()
+            .id(UUID.randomUUID().toString())
+            .method("SUBSCRIBE")
+            .params(Set.of(stream))
+            .build();
+        StreamBlockingQueue<String> queue = connection.subscribe(request).get(stream);
+        if (queue == null) {
+            throw new IllegalStateException("Binance SDK 未创建 1 秒标记价格订阅队列");
+        }
+        return queue;
     }
 
     static void ensureConnected(StreamConnectionInterface connection) {

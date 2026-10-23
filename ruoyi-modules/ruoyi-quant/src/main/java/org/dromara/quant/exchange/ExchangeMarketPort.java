@@ -87,7 +87,7 @@ public interface ExchangeMarketPort {
         }
 
         public RequestDeferredException(long retryAfterMillis) {
-            super("Binance REST 请求受限，延后执行");
+            super("REST 请求被本地调度器延后，当前调用尚未发送");
             this.retryAfterMillis = Math.max(1L, retryAfterMillis);
         }
 

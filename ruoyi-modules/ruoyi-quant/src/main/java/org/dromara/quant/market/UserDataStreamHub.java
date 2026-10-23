@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.TradingPreparationService;
 import org.dromara.quant.reconcile.LiveUserStreamLeaseService;
@@ -25,6 +26,7 @@ import java.util.function.Consumer;
 @Component
 @Slf4j
 public class UserDataStreamHub {
+    private static final long LISTEN_KEY_SAFE_RENEWAL_MILLIS = TimeUnit.MINUTES.toMillis(55);
     /**
      * 交易所统一网关。
      */
@@ -193,6 +195,10 @@ public class UserDataStreamHub {
          * 用户数据流 listenKey 保活任务。
          */
         private volatile ScheduledFuture<?> keepaliveTask;
+        private volatile ScheduledFuture<?> keepaliveRetryTask;
+        private volatile ScheduledFuture<?> startRetryTask;
+        private volatile long startRetryNotBeforeNanos;
+        private volatile Instant lastKeepaliveSuccessAt;
         /**
          * 组件/Runtime 是否已经关闭。
          */
@@ -235,11 +241,15 @@ public class UserDataStreamHub {
             if (closed || session != null) {
                 return;
             }
+            if (System.nanoTime() < startRetryNotBeforeNanos) {
+                return;
+            }
             if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && !ownsLiveStream(credential.getId())) {
                 return;
             }
             try {
                 long attempt = ++generation;
+                Instant listenKeyCreatedAt = Instant.now();
                 ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
                 positionCache.begin(credential.getId(), exchangeCredential, () -> {
                     ExchangeGateway.UserDataStreamSession currentSession = session;
@@ -265,6 +275,7 @@ public class UserDataStreamHub {
                     throw new IllegalStateException("LIVE private stream lease lost during connection establishment");
                 }
                 lastEventAt = Instant.now();
+                lastKeepaliveSuccessAt = listenKeyCreatedAt;
                 onEvent(new ExchangeGateway.UserDataEvent("CONNECTED", lastEventAt, null));
                 if (keepaliveTask != null) {
                     keepaliveTask.cancel(false);
@@ -292,6 +303,12 @@ public class UserDataStreamHub {
                 positionCache.disconnect(credential.getId());
                 balanceCache.disconnect(credential.getId());
                 preparationService.invalidate(credential.getId());
+                long retryAfterMillis = throttleRetryAfterMillis(ex);
+                if (retryAfterMillis > 0 && !closed && !listeners.isEmpty()) {
+                    scheduleStartRetry(retryAfterMillis);
+                    log.warn("用户数据流启动被 REST 调度或交易所限流延后，按退避时间重试 credentialId={} errorType={} retryAfterMs={}",
+                        credential.getId(), ex.getClass().getSimpleName(), retryAfterMillis);
+                }
             }
         }
 
@@ -318,23 +335,95 @@ public class UserDataStreamHub {
             }
         }
 
-        private void keepAlive() {
+        private synchronized void keepAlive() {
             ExchangeGateway.UserDataStreamSession current = session;
             if (current == null) {
                 return;
             }
+            if (!current.isConnected()) {
+                restart();
+                return;
+            }
+            Instant lastSuccess = lastKeepaliveSuccessAt;
+            if (lastSuccess == null || !Instant.now().isBefore(lastSuccess.plusMillis(LISTEN_KEY_SAFE_RENEWAL_MILLIS))) {
+                log.warn("用户数据流保活超过安全续期间隔，失效账户缓存并重建 credentialId={}", credential.getId());
+                restart();
+                return;
+            }
             try {
                 current.keepAlive();
+                lastKeepaliveSuccessAt = Instant.now();
+                cancelKeepaliveRetry();
             } catch (RuntimeException ex) {
+                long retryAfterMillis = throttleRetryAfterMillis(ex);
+                if (retryAfterMillis > 0 && current == session && !closed) {
+                    long safeDeadlineRemaining = Math.max(0L, java.time.Duration.between(Instant.now(), lastSuccess.plusMillis(LISTEN_KEY_SAFE_RENEWAL_MILLIS)).toMillis());
+                    if (safeDeadlineRemaining > 0) {
+                        long jitterMillis = ThreadLocalRandom.current().nextLong(0, 1_001L);
+                        long retryDelayMillis = Math.max(1L, Math.min(safeDeadlineRemaining, retryAfterMillis + jitterMillis));
+                        scheduleKeepaliveRetry(retryDelayMillis);
+                        log.warn("用户数据流保活被 REST 调度或交易所限流延后，保留当前连接并限时重试 credentialId={} errorType={} retryAfterMs={} retryInMs={} safeDeadlineMs={}",
+                            credential.getId(), ex.getClass().getSimpleName(), retryAfterMillis, retryDelayMillis, safeDeadlineRemaining);
+                        return;
+                    }
+                }
                 log.warn("用户数据流保活失败 credentialId={}: {}", credential.getId(), ex.getMessage());
                 restart();
             }
         }
 
-        private void checkHealth() {
+        private void scheduleKeepaliveRetry(long delayMillis) {
+            cancelKeepaliveRetry();
+            keepaliveRetryTask = scheduler.schedule(() -> {
+                synchronized (SharedUserStream.this) {
+                    keepaliveRetryTask = null;
+                }
+                keepAlive();
+            }, delayMillis, TimeUnit.MILLISECONDS);
+        }
+
+        private void cancelKeepaliveRetry() {
+            ScheduledFuture<?> retry = keepaliveRetryTask;
+            keepaliveRetryTask = null;
+            if (retry != null) {
+                retry.cancel(false);
+            }
+        }
+
+        private void scheduleStartRetry(long delayMillis) {
+            if (startRetryTask != null) {
+                startRetryTask.cancel(false);
+            }
+            startRetryNotBeforeNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(delayMillis);
+            startRetryTask = scheduler.schedule(() -> {
+                synchronized (SharedUserStream.this) {
+                    startRetryTask = null;
+                    startRetryNotBeforeNanos = 0L;
+                    start();
+                }
+            }, delayMillis, TimeUnit.MILLISECONDS);
+        }
+
+        private long throttleRetryAfterMillis(Throwable error) {
+            for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+                if (cause instanceof ExchangeMarketPort.RequestDeferredException deferred) {
+                    return deferred.retryAfterMillis();
+                }
+                if (cause instanceof ExchangeMarketPort.RateLimitException rateLimit) {
+                    return rateLimit.retryAfterMillis();
+                }
+            }
+            return 0L;
+        }
+
+        private synchronized void checkHealth() {
             ExchangeGateway.UserDataStreamSession current = session;
+            Instant lastSuccess = lastKeepaliveSuccessAt;
             if (current == null && !listeners.isEmpty()) {
                 start();
+            } else if (current != null && (lastSuccess == null || !Instant.now().isBefore(lastSuccess.plusMillis(LISTEN_KEY_SAFE_RENEWAL_MILLIS)))) {
+                log.warn("用户数据流未能在安全期限内续期，失效账户缓存并重建 credentialId={}", credential.getId());
+                restart();
             } else if (current != null && !current.isConnected()) {
                 onEvent(new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
             }
@@ -347,6 +436,13 @@ public class UserDataStreamHub {
             balanceCache.disconnect(credential.getId());
             preparationService.invalidate(credential.getId());
             ++generation;
+            cancelKeepaliveRetry();
+            if (startRetryTask != null) {
+                startRetryTask.cancel(false);
+                startRetryTask = null;
+            }
+            startRetryNotBeforeNanos = 0L;
+            lastKeepaliveSuccessAt = null;
             ExchangeGateway.UserDataStreamSession current = session;
             session = null;
             if (current != null) {
@@ -369,6 +465,13 @@ public class UserDataStreamHub {
             balanceCache.remove(credential.getId());
             preparationService.remove(credential.getId());
             ++generation;
+            cancelKeepaliveRetry();
+            if (startRetryTask != null) {
+                startRetryTask.cancel(false);
+                startRetryTask = null;
+            }
+            startRetryNotBeforeNanos = 0L;
+            lastKeepaliveSuccessAt = null;
             listeners.forEach(StreamEventConsumer::close);
             listeners.clear();
             if (keepaliveTask != null) {

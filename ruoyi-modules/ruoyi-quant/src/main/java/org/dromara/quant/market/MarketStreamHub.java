@@ -13,10 +13,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 
 /**
@@ -32,6 +29,11 @@ public class MarketStreamHub {
     private final java.util.concurrent.Semaphore recoveryReads = new java.util.concurrent.Semaphore(1, true);
     private final Map<Key, SharedStream> streams = new ConcurrentHashMap<>();
     private final java.util.concurrent.ExecutorService recoveryExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
+    static long reconnectDelayMillis(int reconnectDelaySeconds, long jitterMillis) {
+        long baseDelayMillis = TimeUnit.SECONDS.toMillis(Math.max(1, reconnectDelaySeconds));
+        return baseDelayMillis + Math.min(baseDelayMillis, Math.max(0L, jitterMillis));
+    }
 
     public MarketStreamHub(ExchangeGateway gateway, @Qualifier("quantScheduledExecutorService") ScheduledExecutorService scheduler, QuantProperties properties) {
         this.gateway = gateway;
@@ -361,8 +363,8 @@ public class MarketStreamHub {
          */
         private boolean networkFailure(Throwable error) {
             for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-                if (cause instanceof java.io.IOException || cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException ||
-                    cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException) {
+                if (cause instanceof java.io.IOException || cause instanceof ExchangeMarketPort.RequestDeferredException ||
+                    cause instanceof ExchangeMarketPort.RateLimitException) {
                     return true;
                 }
             }
@@ -372,9 +374,10 @@ public class MarketStreamHub {
         private long recoveryRetryDelayMillis(Throwable error) {
             long delay = TimeUnit.SECONDS.toMillis(Math.max(1, properties.getMarket().getReconnectDelaySeconds()));
             for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-                if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
+                if (cause instanceof ExchangeMarketPort.RequestDeferredException deferred) {
                     delay = Math.max(delay, deferred.retryAfterMillis());
-                } else if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException rateLimit) {
+                    delay += java.util.concurrent.ThreadLocalRandom.current().nextLong(0, 1_001L);
+                } else if (cause instanceof ExchangeMarketPort.RateLimitException rateLimit) {
                     delay = Math.max(delay, rateLimit.retryAfterMillis());
                     delay += java.util.concurrent.ThreadLocalRandom.current().nextLong(0, 1_001L);
                 }
@@ -384,7 +387,7 @@ public class MarketStreamHub {
 
         private boolean rateLimited(Throwable error) {
             for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-                if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException) {
+                if (cause instanceof ExchangeMarketPort.RateLimitException) {
                     return true;
                 }
             }
@@ -393,7 +396,7 @@ public class MarketStreamHub {
 
         private boolean requestDeferred(Throwable error) {
             for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-                if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException) {
+                if (cause instanceof ExchangeMarketPort.RequestDeferredException) {
                     return true;
                 }
             }
@@ -402,8 +405,8 @@ public class MarketStreamHub {
 
         private boolean clockUnavailable(Throwable error) {
             for (Throwable cause = error; cause != null; cause = cause.getCause()) {
-                if (cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException ||
-                    cause instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException) {
+                if (cause instanceof ExchangeMarketPort.RequestDeferredException ||
+                    cause instanceof ExchangeMarketPort.RateLimitException) {
                     return true;
                 }
             }
@@ -871,12 +874,15 @@ public class MarketStreamHub {
             publish(status("DISCONNECTED"));
             ExchangeGateway.MarketStreamSession old = upstream;
             upstream = null;
+            int baseReconnectDelay = Math.max(1, properties.getMarket().getReconnectDelaySeconds());
+            long jitterMillis = ThreadLocalRandom.current().nextLong(0, TimeUnit.SECONDS.toMillis(baseReconnectDelay) + 1L);
+            long reconnectDelay = reconnectDelayMillis(baseReconnectDelay, jitterMillis);
             reconnect = scheduler.schedule(() -> {
                 synchronized (this) {
                     reconnect = null;
                     start();
                 }
-            }, Math.max(1, properties.getMarket().getReconnectDelaySeconds()), TimeUnit.SECONDS);
+            }, reconnectDelay, TimeUnit.MILLISECONDS);
             if (old != null) {
                 try {
                     old.close();

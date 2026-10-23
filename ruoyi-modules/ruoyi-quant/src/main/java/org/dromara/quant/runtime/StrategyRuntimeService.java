@@ -213,6 +213,19 @@ public class StrategyRuntimeService {
     }
 
     /**
+     * 持仓减仓或平仓事实已确认后再入队通知；通知设施异常不能回滚或阻断交易状态恢复。
+     */
+    private void notifyCloseSafely(ActiveRuntime runtime, String direction, BigDecimal quantity, BigDecimal entryPrice, BigDecimal closePrice,
+                                   BigDecimal profitAmount, BigDecimal profitRate, String closeType, String reason) {
+        try {
+            notificationService.notifyClose(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), direction, quantity, entryPrice, closePrice,
+                profitAmount, profitRate, closeType, reason);
+        } catch (RuntimeException ex) {
+            log.error("已确认平仓通知处理失败 instanceId={} symbol={} closeType={}", runtime.instance.getId(), runtime.symbol.getSymbol(), closeType, ex);
+        }
+    }
+
+    /**
      * 清理已确认完成的待执行动作。
      */
     private static void clearPending(QuantStrategyPositionState state) {
@@ -527,8 +540,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         BigDecimal closePrice = runtime.currentPrice() != null ? runtime.currentPrice() : runtime.position.getMarkPrice();
                         BigDecimal profitRate = leveragedReturnRate(runtime, previousPosition.getPositionSide(), closePrice, previousPosition.getEntryPrice());
                         BigDecimal profitAmount = calculateProfitAmount(previousPosition.getPositionSide(), closePrice, previousPosition.getEntryPrice(), closedQty);
-                        notificationService.notifyClose(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), previousPosition.getPositionSide(), closedQty,
-previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANGE_PARTIAL_CLOSE", "交易所保护单/外部操作导致部分减仓，经 REST 对账确认");
+                        notifyCloseSafely(runtime, previousPosition.getPositionSide(), closedQty, previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate,
+                            "EXCHANGE_PARTIAL_CLOSE", "交易所保护单/外部操作导致部分减仓，经 REST 对账确认");
                     }
                     if (firstExecuted != null) {
                         PositionProtectionState.confirmExchangeFirstProfit(runtime.state, firstExecuted);
@@ -554,17 +567,24 @@ previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANG
                             runtime.instance.getId(), runtime.symbol.getSymbol(), runtime.state.getStatus());
                         return;
                     }
-                    boolean protectionCleaned = cancelStaleProtection(runtime);
                     if (previousPosition != null) {
                         recordPositionDecrease(runtime, previousPosition, previousPosition.getQuantity(), "交易所保护单或外部操作导致持仓关闭，具体触发原因待确认");
                         BigDecimal closePrice = runtime.currentPrice() != null ? runtime.currentPrice() : previousPosition.getMarkPrice();
                         BigDecimal profitRate = leveragedReturnRate(runtime, previousPosition.getPositionSide(), closePrice, previousPosition.getEntryPrice());
                         BigDecimal profitAmount = calculateProfitAmount(previousPosition.getPositionSide(), closePrice, previousPosition.getEntryPrice(),
                          previousPosition.getQuantity());
-                        notificationService.notifyClose(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), previousPosition.getPositionSide(),
-            previousPosition.getQuantity(), previousPosition.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANGE_PROTECTION_OR_EXTERNAL",
-                         "交易所保护单/外部操作导致持仓关闭，经 REST 对账确认");
+                        notifyCloseSafely(runtime, previousPosition.getPositionSide(), previousPosition.getQuantity(), previousPosition.getEntryPrice(), closePrice,
+                            profitAmount, profitRate, "EXCHANGE_PROTECTION_OR_EXTERNAL", "交易所保护单/外部操作导致持仓关闭，经 REST 对账确认");
+                    } else if (runtime.state.getPositionQty() != null && runtime.state.getPositionQty().signum() > 0
+                        && runtime.state.getEntryPrice() != null && runtime.state.getDirection() != null) {
+                        BigDecimal closePrice = runtime.currentPrice() != null ? runtime.currentPrice() : runtime.state.getEntryPrice();
+                        BigDecimal qty = runtime.state.getPositionQty();
+                        BigDecimal profitRate = leveragedReturnRate(runtime, runtime.state.getDirection(), closePrice, runtime.state.getEntryPrice());
+                        BigDecimal profitAmount = calculateProfitAmount(runtime.state.getDirection(), closePrice, runtime.state.getEntryPrice(), qty);
+                        notifyCloseSafely(runtime, runtime.state.getDirection(), qty, runtime.state.getEntryPrice(), closePrice, profitAmount, profitRate,
+                            "EXCHANGE_PROTECTION_OR_EXTERNAL", "策略恢复时经账户快照确认持仓已关闭");
                     }
+                    boolean protectionCleaned = cancelStaleProtection(runtime);
                     // 无条件将 state 归零：status=CLOSED + position_qty=0，从"最大持仓数"统计中排除。
                     stateService.markClosed(runtime.state);
                     runtime.state = stateService.findByInstance(runtime.instance.getId());
@@ -2019,6 +2039,9 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                  runtime.position.getId(), quantity, context.currentPrice());
                 recordTradeDecision(runtime, context, "CLOSE", direction, quantity, null, idempotencyKey, "FILLED", "EXECUTION_RESULT", exit.reason(), executionResult, true);
                 runtime.position = settlement.position();
+                BigDecimal profitRate = leveragedReturnRate(runtime, directionBeforeClose, context.currentPrice(), entryPriceBeforeClose);
+                BigDecimal profitAmount = calculateProfitAmount(directionBeforeClose, context.currentPrice(), entryPriceBeforeClose, quantity);
+                notifyCloseSafely(runtime, directionBeforeClose, quantity, entryPriceBeforeClose, context.currentPrice(), profitAmount, profitRate, exit.type(), exit.reason());
                 blockCloseCandle(runtime, klineOpenTime);
                 if (runtime.position == null) {
                     if (!cancelStaleProtection(runtime)) {
@@ -2049,6 +2072,12 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                 blockCloseCandleForExecution(runtime, executionResult, klineOpenTime);
                 blockCloseCandle(runtime, klineOpenTime);
                 if (runtime.position == null) {
+                    if (previousQuantity != null && previousQuantity.signum() > 0) {
+                        BigDecimal profitRate = leveragedReturnRate(runtime, directionBeforeClose, context.currentPrice(), entryPriceBeforeClose);
+                        BigDecimal profitAmount = calculateProfitAmount(directionBeforeClose, context.currentPrice(), entryPriceBeforeClose, previousQuantity);
+                        notifyCloseSafely(runtime, directionBeforeClose, previousQuantity, entryPriceBeforeClose, context.currentPrice(), profitAmount, profitRate,
+                            exit.type(), exit.reason());
+                    }
                     if (!cancelStaleProtection(runtime)) {
                         return;
                     }
@@ -2062,6 +2091,13 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                     stateService.save(state);
                     return;
                 } else {
+                    BigDecimal closedQuantity = previousQuantity.subtract(runtime.position.getQuantity()).max(BigDecimal.ZERO);
+                    if (closedQuantity.signum() > 0) {
+                        BigDecimal profitRate = leveragedReturnRate(runtime, directionBeforeClose, context.currentPrice(), entryPriceBeforeClose);
+                        BigDecimal profitAmount = calculateProfitAmount(directionBeforeClose, context.currentPrice(), entryPriceBeforeClose, closedQuantity);
+                        notifyCloseSafely(runtime, directionBeforeClose, closedQuantity, entryPriceBeforeClose, context.currentPrice(), profitAmount, profitRate,
+                            exit.type(), exit.reason());
+                    }
                     state.setStatus("OPEN");
                     state.setPositionQty(runtime.position.getQuantity());
                     if (exit.markFirstTakeProfitTriggered()) {
@@ -2081,10 +2117,6 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                 syncPluginProtections(runtime, buildContext(runtime, context.currentPrice(), new ExchangeGateway.MarketEvent("TRADE", runtime.symbol.getSymbol(),
                     runtime.strategySymbol.getIntervalCode(), context.currentPrice(), null, context.eventTime())));
             }
-            BigDecimal profitRate = leveragedReturnRate(runtime, directionBeforeClose, context.currentPrice(), entryPriceBeforeClose);
-            BigDecimal profitAmount = calculateProfitAmount(directionBeforeClose, context.currentPrice(), entryPriceBeforeClose, quantity);
-            notificationService.notifyClose(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), directionBeforeClose, quantity, entryPriceBeforeClose,
-             context.currentPrice(), profitAmount, profitRate, exit.type(), exit.reason());
             log.info("实时策略平仓 instanceId={} symbol={} type={} price={} quantity={} reason={}", runtime.instance.getId(), runtime.symbol.getSymbol(), exit.type(),
             context.currentPrice(), quantity, exit.reason());
         } catch (RuntimeException ex) {
@@ -2155,6 +2187,11 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
             blockCloseCandle(runtime, context.klineOpenTime());
             runtime.position = null;
             recordPositionDecrease(runtime, before, before.getQuantity(), "持仓关闭；本地同时满足退出条件：" + exit.reason());
+            BigDecimal closePrice = context.currentPrice();
+            BigDecimal profitRate = leveragedReturnRate(runtime, before.getPositionSide(), closePrice, before.getEntryPrice());
+            BigDecimal profitAmount = calculateProfitAmount(before.getPositionSide(), closePrice, before.getEntryPrice(), before.getQuantity());
+            notifyCloseSafely(runtime, before.getPositionSide(), before.getQuantity(), before.getEntryPrice(), closePrice, profitAmount, profitRate,
+                "EXCHANGE_" + exit.type(), "Binance 条件单已执行并关闭持仓：" + exit.reason());
             if (!cancelStaleProtection(runtime)) {
                 return true;
             }
@@ -2162,11 +2199,6 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                 stateService.markClosed(runtime.state);
                 runtime.state = stateService.findByInstance(runtime.instance.getId());
             }
-            BigDecimal closePrice = context.currentPrice();
-            BigDecimal profitRate = leveragedReturnRate(runtime, before.getPositionSide(), closePrice, before.getEntryPrice());
-            BigDecimal profitAmount = calculateProfitAmount(before.getPositionSide(), closePrice, before.getEntryPrice(), before.getQuantity());
-            notificationService.notifyClose(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), before.getPositionSide(), before.getQuantity(),
-             before.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANGE_" + exit.type(), "Binance 条件单已执行并关闭持仓：" + exit.reason());
             return true;
         }
         BigDecimal totalFirst = firstExecuted.add(runtime.state.getFirstTakeProfitLocalExecutedQty() == null ? BigDecimal.ZERO :
@@ -2188,8 +2220,8 @@ before.getEntryPrice());
             BigDecimal profitRate = leveragedReturnRate(runtime, before.getPositionSide(), closePrice, before.getEntryPrice());
             BigDecimal profitAmount = calculateProfitAmount(before.getPositionSide(), closePrice, before.getEntryPrice(), closedQty);
 
-            notificationService.notifyClose(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), before.getPositionSide(), closedQty, before.getEntryPrice(),
-                closePrice, profitAmount, profitRate, "EXCHANGE_" + exit.type(), "Binance 条件单已执行部分减仓：" + exit.reason());
+            notifyCloseSafely(runtime, before.getPositionSide(), closedQty, before.getEntryPrice(), closePrice, profitAmount, profitRate, "EXCHANGE_" + exit.type(),
+                "Binance 条件单已执行部分减仓：" + exit.reason());
         }
         if (before.getQuantity() != null && refreshed.getQuantity() != null && refreshed.getQuantity().compareTo(before.getQuantity()) > 0) {
             // 出现外部加仓/事实异常时不按旧数量继续 fallback，交给恢复链路处理。

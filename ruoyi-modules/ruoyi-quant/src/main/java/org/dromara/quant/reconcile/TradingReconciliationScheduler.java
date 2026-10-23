@@ -29,6 +29,10 @@ public class TradingReconciliationScheduler {
      */
     private final QuantProperties properties;
 
+    /**
+     * 执行一轮账户级交易事实对账，补齐本地成交账本与执行记录。
+     */
+    @Scheduled(fixedDelayString = "#{@quantProperties.reconcile.intervalSeconds * 1000}", initialDelay = 15000)
     public void reconcile() {
         if (!properties.getReconcile().isEnabled()) {
             return;

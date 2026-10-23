@@ -26,7 +26,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 /**
- * 开仓/平仓统一邮件通知；发送失败只记录错误，不回滚已完成的交易事实。
+ * 开仓/平仓统一通知；投递失败进入 Outbox 重试，不回滚已完成的交易事实。
  */
 @Slf4j
 @Service
@@ -149,30 +149,36 @@ public class QuantTradeNotificationService {
     }
 
     /**
-     * 把邮件写入 Outbox；交易调用线程不执行 SMTP 网络请求。
+     * 站内消息和邮件先写入 Outbox；邮件 SMTP 网络请求由后台任务执行。
      */
     private void send(Long credentialId, String subject, String content) {
-        // 1. 保留原：写 quant_notification 存根记录
+        // 站内消息也走 Outbox，避免即时推送失败后仍被误标记为已发送。
         QuantNotification systemNotification = new QuantNotification();
         systemNotification.setCredentialId(credentialId);
         systemNotification.setChannel("SYSTEM");
         systemNotification.setRecipient("TERMINAL");
         systemNotification.setSubject(subject);
         systemNotification.setContent(content);
-        systemNotification.setStatus("SENT");
+        systemNotification.setStatus("PENDING");
         systemNotification.setRetryCount(0);
+        systemNotification.setNextRetryAt(LocalDateTime.now());
         systemNotification.setCreatedAt(LocalDateTime.now());
         try {
             notificationMapper.insert(systemNotification);
+            if (systemNotification.getId() != null) {
+                claimAndDeliver(systemNotification);
+            }
         } catch (RuntimeException ex) {
-            log.error("量化交易站内通知写入失败 credentialId={} subject={}", credentialId, subject, ex);
+            log.error("量化交易站内通知入队或即时投递失败 credentialId={} subject={}", credentialId, subject, ex);
         }
 
-        // 2. 新增：推送到系统消息中心
-        publishSystemMessage(credentialId, subject, content);
-
-        // 3. 保留原：邮件发送
-        List<String> recipients = recipients(credentialId);
+        List<String> recipients;
+        try {
+            recipients = recipients(credentialId);
+        } catch (RuntimeException ex) {
+            log.error("量化交易通知邮箱解析失败 credentialId={} subject={}", credentialId, subject, ex);
+            return;
+        }
         if (recipients.isEmpty()) {
             log.warn("未配置量化交易通知邮箱，邮件未发送: subject={}", subject);
             return;
@@ -199,38 +205,34 @@ public class QuantTradeNotificationService {
     }
 
     /**
-     * 通过系统内置消息中心推送通知；失败只记录日志，不影响交易与邮件。
+     * 通过系统内置消息中心推送通知；失败由 Outbox 记录并重试。
      * 收件人：
      * 1. 凭证所属用户（若可解析）
      * 2. 系统管理员（兜底）
      * 保证交易账户所有者无论如何都能收到。
      */
     private void publishSystemMessage(Long credentialId, String subject, String content) {
-        try {
-            java.util.LinkedHashSet<Long> recipients = new java.util.LinkedHashSet<>();
-            if (credentialId != null) {
-                try {
-                    Long ownerId = jdbcTemplate.queryForObject("SELECT user_id FROM quant_credential WHERE id=? AND del_flag='0'", Long.class, credentialId);
-                    if (ownerId != null) {
-                        recipients.add(ownerId);
-                    }
-                } catch (org.springframework.dao.EmptyResultDataAccessException ignored) {
-                    // 凭证不存在或已删除：交给管理员兜底
+        java.util.LinkedHashSet<Long> recipients = new java.util.LinkedHashSet<>();
+        if (credentialId != null) {
+            try {
+                Long ownerId = jdbcTemplate.queryForObject("SELECT user_id FROM quant_credential WHERE id=? AND del_flag='0'", Long.class, credentialId);
+                if (ownerId != null) {
+                    recipients.add(ownerId);
                 }
+            } catch (org.springframework.dao.EmptyResultDataAccessException ignored) {
+                // 凭证不存在或已删除：交给管理员兜底
             }
-            List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur " + "JOIN sys_role r ON r.role_id=ur.role_id " + "JOIN sys_user u ON u" +
-                ".user_id=ur.user_id " + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
-            recipients.addAll(admins);
-
-            if (recipients.isEmpty()) {
-                log.warn("量化交易系统消息无有效接收人 credentialId={} subject={}", credentialId, subject);
-                return;
-            }
-            messageService.publishMessage(new java.util.ArrayList<>(recipients), PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, subject + "\n" + content, null,
-                "/quant/terminal/index"));
-        } catch (RuntimeException ex) {
-            log.error("量化交易系统消息推送失败 credentialId={} subject={}", credentialId, subject, ex);
         }
+        List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur " + "JOIN sys_role r ON r.role_id=ur.role_id " + "JOIN sys_user u ON u" +
+            ".user_id=ur.user_id " + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
+        if (admins != null) {
+            recipients.addAll(admins);
+        }
+        if (recipients.isEmpty()) {
+            throw new IllegalStateException("量化交易系统消息没有有效接收人");
+        }
+        messageService.publishMessage(new java.util.ArrayList<>(recipients), PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, subject + "\n" + content, null,
+            "/quant/terminal/index"));
     }
 
     /**
@@ -252,9 +254,12 @@ public class QuantTradeNotificationService {
      */
     @Scheduled(fixedDelay = 30000L, initialDelay = 30000L)
     public void retryPendingNotifications() {
-        List<QuantNotification> pending =
-            notificationMapper.selectList(new LambdaQueryWrapper<QuantNotification>().eq(QuantNotification::getChannel, "EMAIL").in(QuantNotification::getStatus, "PENDING",
-                "RETRY").le(QuantNotification::getNextRetryAt, LocalDateTime.now()).orderByAsc(QuantNotification::getCreatedAt).last("LIMIT 50"));
+        LocalDateTime now = LocalDateTime.now();
+        List<QuantNotification> pending = notificationMapper.selectList(new LambdaQueryWrapper<QuantNotification>()
+            .in(QuantNotification::getChannel, "EMAIL", "SYSTEM")
+            .and(query -> query.in(QuantNotification::getStatus, "PENDING", "RETRY").le(QuantNotification::getNextRetryAt, now)
+                .or().eq(QuantNotification::getStatus, "SENDING").lt(QuantNotification::getLeaseUntil, now))
+            .orderByAsc(QuantNotification::getCreatedAt).last("LIMIT 50"));
         String ownerToken = UUID.randomUUID().toString();
         LocalDateTime leaseUntil = LocalDateTime.now().plusMinutes(2);
         for (QuantNotification notification : pending) {
@@ -278,11 +283,15 @@ public class QuantTradeNotificationService {
     }
 
     /**
-     * 执行实际邮件投递并更新 Outbox 状态。
+     * 执行实际通知投递并更新 Outbox 状态。
      */
     private void deliver(QuantNotification notification) {
         try {
-            MailBuilder.of().to(notification.getRecipient()).subject(notification.getSubject()).text(notification.getContent()).send();
+            if ("SYSTEM".equalsIgnoreCase(notification.getChannel())) {
+                publishSystemMessage(notification.getCredentialId(), notification.getSubject(), notification.getContent());
+            } else {
+                MailBuilder.of().to(notification.getRecipient()).subject(notification.getSubject()).text(notification.getContent()).send();
+            }
             notification.setStatus("SENT");
             notification.setNextRetryAt(null);
             notification.setOwnerToken(null);
@@ -304,7 +313,7 @@ public class QuantTradeNotificationService {
             } catch (RuntimeException dbEx) {
                 log.error("更新通知重试状态失败 notificationId={}", notification.getId(), dbEx);
             }
-            log.error("量化交易邮件发送失败，将自动重试 notificationId={} recipient={} subject={}", notification.getId(), notification.getRecipient(), notification.getSubject(), ex);
+            log.error("量化交易通知发送失败，将自动重试 notificationId={} channel={} recipient={} subject={}", notification.getId(), notification.getChannel(), notification.getRecipient(), notification.getSubject(), ex);
         }
     }
 
@@ -314,9 +323,13 @@ public class QuantTradeNotificationService {
     private List<String> recipients(Long credentialId) {
         String raw = null;
         if (credentialId != null) {
-            QuantRiskConfig risk = riskConfigMapper.selectOne(new LambdaQueryWrapper<QuantRiskConfig>().eq(QuantRiskConfig::getCredentialId, credentialId));
-            if (risk != null && risk.getNotificationEmails() != null && !risk.getNotificationEmails().isBlank()) {
-                raw = risk.getNotificationEmails();
+            try {
+                QuantRiskConfig risk = riskConfigMapper.selectOne(new LambdaQueryWrapper<QuantRiskConfig>().eq(QuantRiskConfig::getCredentialId, credentialId));
+                if (risk != null && risk.getNotificationEmails() != null && !risk.getNotificationEmails().isBlank()) {
+                    raw = risk.getNotificationEmails();
+                }
+            } catch (RuntimeException ex) {
+                log.error("量化交易通知邮箱配置查询失败，尝试使用默认邮箱 credentialId={}", credentialId, ex);
             }
         }
         if ((raw == null || raw.isBlank()) && properties.getNotification() != null) {

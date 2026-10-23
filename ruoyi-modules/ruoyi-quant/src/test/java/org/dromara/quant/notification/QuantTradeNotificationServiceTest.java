@@ -8,7 +8,9 @@ import org.dromara.system.api.MessageService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -19,7 +21,7 @@ import static org.mockito.Mockito.*;
 @Tag("dev")
 class QuantTradeNotificationServiceTest {
     @Test
-    void tradingCallerOnlyPersistsMailAndBackgroundWorkerClaimsIt() {
+    void tradingCallerQueuesEmailAndBackgroundWorkerClaimsIt() {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
@@ -27,6 +29,10 @@ class QuantTradeNotificationServiceTest {
         properties.getNotification().setDefaultEmails("test@example.invalid");
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, properties,
             mock(MessageService.class), mock(JdbcTemplate.class));
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId((long) invocation.getArgument(0, QuantNotification.class).getChannel().hashCode());
+            return 1;
+        });
 
         service.notifyOpen(null, null, "BTCUSDT", "LONG", BigDecimal.ONE, BigDecimal.TEN, 5, BigDecimal.ONE, "test");
 
@@ -35,12 +41,44 @@ class QuantTradeNotificationServiceTest {
         var mail = rows.getAllValues().stream().filter(row -> "EMAIL".equals(row.getChannel())).findFirst().orElseThrow();
         assertEquals("PENDING", mail.getStatus());
         assertNotNull(mail.getNextRetryAt());
-        verify(mapper, never()).claim(any(), any(), any());
+        verify(mapper).claim(eq((long) "SYSTEM".hashCode()), any(), any());
 
-        mail.setId(1L);
+        mail.setId((long) "EMAIL".hashCode());
         when(mapper.selectList(any())).thenReturn(List.of(mail));
         // 未抢占成功时不发送邮件；验证调度器仍消费持久化 Outbox。
         service.retryPendingNotifications();
-        verify(mapper).claim(eq(1L), any(), any());
+        verify(mapper).claim(eq((long) "EMAIL".hashCode()), any(), any());
+    }
+
+    @Test
+    void failedSystemMessageIsPersistedForRetryInsteadOfMarkedSent() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-retry-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var messageService = mock(MessageService.class);
+        var properties = new QuantProperties();
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, properties, messageService, jdbc);
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(42L);
+            return 1;
+        });
+        when(mapper.claim(eq(42L), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Long.class), any())).thenReturn(7L);
+        when(jdbc.query(anyString(), ArgumentMatchers.<RowMapper<Long>>any())).thenReturn(List.of(9L));
+        doThrow(new IllegalStateException("temporary message bus failure"))
+            .when(messageService).publishMessage(anyList(), any());
+
+        assertDoesNotThrow(() -> service.notifyClose(null, null, "BTCUSDT", "LONG", BigDecimal.ONE, BigDecimal.TEN,
+            BigDecimal.valueOf(11), BigDecimal.ONE, BigDecimal.valueOf(0.1), "STOP", "test"));
+
+        var rows = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper).insert(rows.capture());
+        assertEquals("SYSTEM", rows.getValue().getChannel());
+        var updated = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper).updateById(updated.capture());
+        assertEquals("RETRY", updated.getValue().getStatus());
+        assertEquals(1, updated.getValue().getRetryCount());
+        assertNotNull(updated.getValue().getNextRetryAt());
     }
 }

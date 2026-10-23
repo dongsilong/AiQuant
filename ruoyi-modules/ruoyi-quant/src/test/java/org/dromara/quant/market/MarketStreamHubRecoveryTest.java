@@ -21,6 +21,12 @@ import static org.mockito.Mockito.*;
 
 @Tag("dev")
 class MarketStreamHubRecoveryTest {
+    @Test
+    void reconnectDelayUsesJitterWindowToAvoidSynchronizedRestRecovery() {
+        assertEquals(3_000L, MarketStreamHub.reconnectDelayMillis(3, 0));
+        assertEquals(6_000L, MarketStreamHub.reconnectDelayMillis(3, 3_000));
+    }
+
     private final ExchangeGateway gateway = mock(ExchangeGateway.class);
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final AtomicReference<Consumer<ExchangeGateway.MarketEvent>> callback = new AtomicReference<>();

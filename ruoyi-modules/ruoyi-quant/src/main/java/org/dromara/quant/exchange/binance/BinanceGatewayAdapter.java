@@ -233,7 +233,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (error != null && (error.getCode() == 418 || error.getCode() == 429)) {
             long retryAfterMillis = retryAfterMillis(error);
             restScheduler.deferFor(retryAfterMillis);
-            return new org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException(stage, error.getCode(), errorCode(error), message, retryAfterMillis);
+            return new ExchangeMarketPort.RateLimitException(stage, error.getCode(), errorCode(error), message, retryAfterMillis);
         }
         return new ExchangeRequestException(stage, error == null ? null : error.getCode(), error == null ? null : errorCode(error), message);
     }
@@ -1247,7 +1247,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     @Override
     public UserDataStreamSession subscribeUserData(Credential credential, Consumer<UserDataEvent> listener) {
         requireCredential(credential);
-        String listenKey = api(credential).startUserDataStream().getData().getListenKey();
+        String listenKey;
+        try {
+            listenKey = api(credential, RestRequestScheduler.Kind.ACCOUNT).startUserDataStream().getData().getListenKey();
+        } catch (RuntimeException ex) {
+            throw requestFailure("START_USER_DATA_STREAM", ex);
+        }
         if (listenKey == null || listenKey.isBlank()) {
             throw new IllegalStateException("Binance 用户数据流未返回 listenKey");
         }
@@ -1269,7 +1274,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                     } catch (RuntimeException ignored) {
                     }
                 }, disconnected);
-                return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(), managed::close, sdk::connected);
+                return new UserDataStreamSession(listenKey, Instant.now(), () -> keepAliveUserDataStream(credential), managed::close, sdk::connected);
             } catch (RuntimeException ex) {
                 // Preserve the raw transport fallback for SDK startup/session failures;
                 // BinanceSdkStreamTransport opens the SDK connection before SUBSCRIBE.
@@ -1291,7 +1296,15 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             } catch (RuntimeException ignored) {
             }
         }, disconnected);
-        return new UserDataStreamSession(listenKey, Instant.now(), () -> api(credential).keepaliveUserDataStream(), managed::close, socket.connected::get);
+        return new UserDataStreamSession(listenKey, Instant.now(), () -> keepAliveUserDataStream(credential), managed::close, socket.connected::get);
+    }
+
+    private void keepAliveUserDataStream(Credential credential) {
+        try {
+            api(credential, RestRequestScheduler.Kind.ACCOUNT).keepaliveUserDataStream();
+        } catch (RuntimeException ex) {
+            throw requestFailure("KEEPALIVE_USER_DATA_STREAM", ex);
+        }
     }
 
     private UserDataEvent parseUserDataEvent(String text) {
@@ -1351,8 +1364,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         try {
             return clockOffset(baseUrl);
         } catch (RuntimeException ex) {
-            if (!(ex instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException ||
-                ex instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException)) {
+            if (!(ex instanceof ExchangeMarketPort.RequestDeferredException ||
+                ex instanceof ExchangeMarketPort.RateLimitException)) {
                 throw ex;
             }
             ClockOffset cached = clockOffsets.get(baseUrl);
