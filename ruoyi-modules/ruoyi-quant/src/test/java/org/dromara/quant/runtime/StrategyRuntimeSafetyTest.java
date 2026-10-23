@@ -1345,6 +1345,7 @@ class StrategyRuntimeSafetyTest {
         } finally {
             logger.detachAppender(appender);
             appender.stop();
+            logger.setLevel(originalLevel);
             f.service.destroy();
         }
     }
@@ -1513,6 +1514,8 @@ class StrategyRuntimeSafetyTest {
     void completedFlatReconciliationLogsEntryReevaluationReadiness() throws Exception {
         Fixture f = fixture();
         var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(StrategyRuntimeService.class);
+        var originalLevel = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
         var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
         appender.start();
         logger.addAppender(appender);
