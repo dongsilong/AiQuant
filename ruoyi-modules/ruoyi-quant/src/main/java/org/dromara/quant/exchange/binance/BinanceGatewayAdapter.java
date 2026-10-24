@@ -1013,7 +1013,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     @Override
     public List<ProtectionOrderSnapshot> queryProtectionOrders(Credential credential, String symbol) {
         requireCredential(credential);
-        var data = api(credential).currentAllAlgoOpenOrders("CONDITIONAL", symbol, null, RECV_WINDOW_MILLIS).getData();
+        var data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+            client -> client.currentAllAlgoOpenOrders("CONDITIONAL", symbol, null, RECV_WINDOW_MILLIS).getData());
         if (data == null) {
             return List.of();
         }
