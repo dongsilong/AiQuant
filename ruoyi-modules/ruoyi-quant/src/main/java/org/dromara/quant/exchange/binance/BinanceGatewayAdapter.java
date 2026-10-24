@@ -1073,10 +1073,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         long endTime = System.currentTimeMillis();
         long startTime = endTime - java.time.Duration.ofDays(7).toMillis() + 1;
-        var client = api(credential, RestRequestScheduler.Kind.ACCOUNT);
         if (orderId != null && orderId > 0) {
-            var response = client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), orderId, startTime, endTime, (long) ALGO_HISTORY_PAGE_SIZE,
-                RECV_WINDOW_MILLIS);
+            var response = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), orderId, startTime, endTime,
+                    (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS));
             var data = response == null ? null : response.getData();
             ProtectionOrderSnapshot exact = findExactAlgoHistory(data, symbol, orderId, clientOrderId);
             if (exact != null) {
@@ -1084,7 +1084,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             }
         }
         AlgoHistoryResult result = collectCompleteAlgoHistory(startTime, endTime, (from, to) -> {
-            var response = client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), null, from, to, (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS);
+            var response = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), null, from, to,
+                    (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS));
             return response == null ? null : response.getData();
         });
         // A full page at one millisecond resolution may still be truncated.
