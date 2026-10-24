@@ -105,8 +105,10 @@ class FinancialEventLedgerRegressionTest {
         stored.setEventTime(LocalDateTime.of(2026, 10, 20, 0, 0));
         when(financialEvents.selectVoOne(any(LambdaQueryWrapper.class))).thenReturn(stored);
 
-        assertThrows(IllegalStateException.class,
+        IllegalStateException conflict = assertThrows(IllegalStateException.class,
             () -> sync(List.of(income(new BigDecimal("-0.125"), Instant.parse("2026-10-20T00:00:00Z")))));
+        assertTrue(conflict.getMessage().contains("fields=amount"),
+            "conflict diagnostics should identify the exact mismatched financial field");
         verify(financialEvents, never()).insert(any(QuantFinancialEvent.class));
     }
 
