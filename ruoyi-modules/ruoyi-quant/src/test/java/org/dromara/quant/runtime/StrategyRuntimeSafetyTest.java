@@ -2686,6 +2686,7 @@ class StrategyRuntimeSafetyTest {
         ReflectionTestUtils.setField(runtime, "state", state);
         ReflectionTestUtils.setField(runtime, "lastEvaluatedKlineOpenTime", Instant.now());
         ReflectionTestUtils.setField(runtime, "nextLeaseRenewAt", Long.MAX_VALUE);
+        ReflectionTestUtils.setField(runtime, "leaseValid", true);
         ((java.util.Map) ReflectionTestUtils.getField(service, "activeRuntimes")).put(1L, runtime);
         return new Fixture(service, runtime, plugin, instance, (ProtectionOrderService) ReflectionTestUtils.getField(service, "protectionOrderService"));
     }
