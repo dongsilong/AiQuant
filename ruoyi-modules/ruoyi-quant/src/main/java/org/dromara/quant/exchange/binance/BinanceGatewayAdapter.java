@@ -1046,7 +1046,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         requireCredential(credential);
         com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAlgoOrderResponse data;
         try {
-            data = api(credential).queryAlgoOrder(orderId, clientOrderId, RECV_WINDOW_MILLIS).getData();
+            data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.queryAlgoOrder(orderId, clientOrderId, RECV_WINDOW_MILLIS).getData());
         } catch (com.binance.connector.client.common.ApiException ex) {
             if (!isProtectionOrderAbsent(ex)) {
                 throw ex;
