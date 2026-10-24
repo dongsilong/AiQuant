@@ -113,6 +113,8 @@ public class StrategyRuntimeService {
     private final org.dromara.quant.execution.TradingPreparationService preparationService;
     private final TradingReconciliationService reconciliationService;
     private final ExecutorService recoveryExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    /** Dedicated executor prevents slow account renewals from serializing unrelated strategy leases. */
+    private final ExecutorService leaseRenewalExecutor = Executors.newVirtualThreadPerTaskExecutor();
     /**
      * 策略斜率结果 SSE 事件中心。
      */
@@ -441,14 +443,28 @@ public class StrategyRuntimeService {
      */
     public void renewActiveRuntimeLeases() {
         for (ActiveRuntime runtime : activeRuntimes.values()) {
-            if (runtime == null || runtime.closed || "PAPER".equalsIgnoreCase(runtime.credential.getRunMode())) {
+            if (runtime == null || runtime.closed || "PAPER".equalsIgnoreCase(runtime.credential.getRunMode())
+                || !runtime.leaseRenewing.compareAndSet(false, true)) {
                 continue;
             }
-            boolean renewed = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
-            runtime.leaseValid = renewed;
-            if (!renewed) {
-                log.error("策略运行租约独立续期失败，已阻止行情驱动决策 instanceId={} credentialId={} symbol={}",
-                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+            try {
+                leaseRenewalExecutor.execute(() -> {
+                    try {
+                        boolean renewed = !runtime.closed && leaseService.acquireOrRenew(
+                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                        runtime.leaseValid = renewed;
+                        if (!renewed) {
+                            log.error("策略运行租约独立续期失败，已阻止行情驱动决策 instanceId={} credentialId={} symbol={}",
+                                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                        }
+                    } finally {
+                        runtime.leaseRenewing.set(false);
+                    }
+                });
+            } catch (RuntimeException ex) {
+                runtime.leaseRenewing.set(false);
+                runtime.leaseValid = false;
+                log.error("策略运行租约续期任务无法提交，已阻止行情驱动决策 instanceId={}", runtime.instance.getId(), ex);
             }
         }
     }
@@ -3850,6 +3866,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     public void destroy() {
         stopAll();
         recoveryExecutor.shutdownNow();
+        leaseRenewalExecutor.shutdownNow();
     }
 
     /**
@@ -4053,6 +4070,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final AtomicBoolean protectionRequested = new AtomicBoolean();
         private final AtomicBoolean dynamicProtectionRequested = new AtomicBoolean();
         private final AtomicBoolean reconciling = new AtomicBoolean();
+        private final AtomicBoolean leaseRenewing = new AtomicBoolean();
         private final AtomicBoolean reconcileRequested = new AtomicBoolean();
         private final EntryRetryGate entryRetryGate = new EntryRetryGate();
         /** 串行化交易对暂停操作与完整开仓决策/派单流程。 */
