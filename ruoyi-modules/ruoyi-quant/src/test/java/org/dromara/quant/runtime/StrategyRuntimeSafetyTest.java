@@ -346,6 +346,24 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void marketEventLeaseGateDoesNotPerformSynchronousLeaseRenewal() throws Exception {
+        Fixture f = fixture();
+        try {
+            var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+            ReflectionTestUtils.setField(f.runtime, "leaseValid", false);
+            assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime),
+                "an unverified lease must fail closed");
+            verify(lease, never()).acquireOrRenew(any(), any(), any());
+
+            ReflectionTestUtils.setField(f.runtime, "leaseValid", true);
+            assertTrue((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime));
+            verify(lease, never()).acquireOrRenew(any(), any(), any());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void persistedStepIsRestoredAndExtremaAdvanceItWithoutRegression() throws Exception {
         Fixture f = fixture();
         try {
