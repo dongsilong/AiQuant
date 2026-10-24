@@ -95,6 +95,25 @@ class FinancialEventLedgerRegressionTest {
     }
 
     @Test
+    void allowsDifferentIncomeTypesToShareBinanceTransactionId() throws Exception {
+        when(financialEvents.selectVoOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+        when(financialEvents.insert(any(QuantFinancialEvent.class))).thenReturn(1);
+        Instant timestamp = Instant.parse("2026-10-20T00:00:00Z");
+
+        ExchangeGateway.IncomeSnapshot commission =
+            new ExchangeGateway.IncomeSnapshot("BTCUSDT", "COMMISSION", new BigDecimal("-0.125"), "USDT", 7001L, "commission", timestamp);
+        ExchangeGateway.IncomeSnapshot funding =
+            new ExchangeGateway.IncomeSnapshot("BTCUSDT", "FUNDING_FEE", new BigDecimal("0.125"), "USDT", 7001L, "funding", timestamp);
+
+        sync(List.of(commission, funding));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(QuantFinancialEvent.class);
+        verify(financialEvents, times(2)).insert(captor.capture());
+        assertEquals(List.of("COMMISSION", "FUNDING_FEE"),
+            captor.getAllValues().stream().map(QuantFinancialEvent::getEventType).toList());
+    }
+
+    @Test
     void rejectsReplayThatConflictsWithPersistedExchangeFact() throws Exception {
         QuantFinancialEventVo stored = new QuantFinancialEventVo();
         stored.setSymbol("BTCUSDT");
