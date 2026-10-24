@@ -802,8 +802,13 @@ public class TradingReconciliationService {
                     + credential.getId() + ", transactionId=" + s.transactionId());
             }
             LocalDateTime eventTime = LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC);
-            QuantFinancialEventVo vo = financialEventMapper.selectVoOne(new LambdaQueryWrapper<QuantFinancialEvent>().eq(QuantFinancialEvent::getCredentialId,
-                credential.getId()).eq(QuantFinancialEvent::getExchangeTransactionId, s.transactionId()));
+            // Binance tranId is only unique within the same incomeType. Different
+            // financial event types may legally share a transaction ID, so the
+            // idempotency key must include eventType as well as credential and tranId.
+            QuantFinancialEventVo vo = financialEventMapper.selectVoOne(new LambdaQueryWrapper<QuantFinancialEvent>()
+                .eq(QuantFinancialEvent::getCredentialId, credential.getId())
+                .eq(QuantFinancialEvent::getExchangeTransactionId, s.transactionId())
+                .eq(QuantFinancialEvent::getEventType, s.incomeType()));
             QuantFinancialEvent entity = MapstructUtils.convert(vo, QuantFinancialEvent.class);
             if (entity != null) {
                 // Treat the exchange ledger as immutable. A replay may confirm the
