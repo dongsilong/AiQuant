@@ -811,14 +811,17 @@ public class TradingReconciliationService {
                 boolean sameTime = entity.getEventTime() != null
                     && entity.getEventTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
                         .equals(eventTime.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
-                if (!Objects.equals(entity.getSymbol(), s.symbol())
-                    || !Objects.equals(entity.getEventType(), s.incomeType())
-                    || entity.getAmount() == null || entity.getAmount().compareTo(s.amount()) != 0
-                    || !Objects.equals(entity.getAsset(), s.asset())
-                    || !Objects.equals(entity.getInfo(), s.info())
-                    || !sameTime) {
+                List<String> conflictingFields = new ArrayList<>();
+                if (!Objects.equals(entity.getSymbol(), s.symbol())) conflictingFields.add("symbol");
+                if (!Objects.equals(entity.getEventType(), s.incomeType())) conflictingFields.add("eventType");
+                if (entity.getAmount() == null || entity.getAmount().compareTo(s.amount()) != 0) conflictingFields.add("amount");
+                if (!Objects.equals(entity.getAsset(), s.asset())) conflictingFields.add("asset");
+                if (!Objects.equals(entity.getInfo(), s.info())) conflictingFields.add("info");
+                if (!sameTime) conflictingFields.add("eventTime");
+                if (!conflictingFields.isEmpty()) {
+                    // Keep the ledger immutable while identifying the exact conflicting facts.
                     throw new IllegalStateException("Binance financial event conflicts with persisted ledger: credentialId="
-                        + credential.getId() + ", transactionId=" + s.transactionId());
+                        + credential.getId() + ", transactionId=" + s.transactionId() + ", fields=" + String.join(",", conflictingFields));
                 }
                 continue;
             }
