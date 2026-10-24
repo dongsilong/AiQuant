@@ -1160,7 +1160,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 }
                 return;
             }
-            long positionFactsMaxAgeMillis = Math.max(1, properties.getReconcile().getIntervalSeconds()) * 1_000L + 5_000L;
+            // Allow bounded scheduler/network jitter while retaining fail-closed behavior for sustained staleness.
+            long positionFactsMaxAgeMillis = Math.max(1, properties.getReconcile().getIntervalSeconds()) * 1_000L + 15_000L;
             if (System.currentTimeMillis() - runtime.positionFactsVerifiedAt > positionFactsMaxAgeMillis) {
                 logEntryDecision(runtime, context, "POSITION_FACTS_STALE", "账户持仓事实已过期，等待新快照后再开仓");
                 long now = System.currentTimeMillis();
