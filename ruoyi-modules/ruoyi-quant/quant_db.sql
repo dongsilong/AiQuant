@@ -417,7 +417,7 @@ CREATE TABLE `quant_financial_event`
     `event_time`              datetime        NOT NULL COMMENT '事件时间',
     `created_at`              datetime        NOT NULL COMMENT '创建时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_quant_financial_event` (`credential_id`,`exchange_transaction_id`),
+    UNIQUE KEY `uk_quant_financial_event` (`credential_id`,`exchange_transaction_id`,`event_type`),
     KEY                       `idx_quant_financial_event_time` (`credential_id`,`event_time`),
     KEY                       `idx_quant_financial_event_strategy` (`strategy_instance_id`,`event_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='交易财务事件账本';
