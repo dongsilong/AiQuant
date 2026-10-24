@@ -850,8 +850,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 current.credential = credential;
                 current.params = refreshed;
                 current.protectionOnly = protectionOnly;
-                    current.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
-                current.leaseValid = true;
+                    current.leaseValid = true;
             }
             prepareTrading(current);
             resumeRecoveryIfNeeded(current);
@@ -931,7 +930,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             throw ex;
         }
-        runtime.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
         resumeRecoveryIfNeeded(runtime);
         log.info("策略运行时已启动 instanceId={} strategy={} plugin={} symbol={} interval={} mode={} protectionOnly={}", instance.getId(), strategy.getStrategyName(),
                 strategy.getPluginCode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), credential.getRunMode(), protectionOnly);
@@ -983,14 +981,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (runtime != null) {
             closeRuntime(runtime);
         }
-    }
-
-    /**
-     * 根据租约有效期计算安全续租周期。
-     */
-    private long leaseRenewIntervalMillis() {
-        long leaseSeconds = Math.max(3L, properties.getRuntime().getLeaseSeconds());
-        return Math.max(1_000L, leaseSeconds * 1_000L / 3L);
     }
 
     /**
@@ -4159,7 +4149,6 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /**
          * 下一次运行租约续期时间。
          */
-        private volatile long nextLeaseRenewAt;
         /**
          * REST 账户余额查询失败后的下一次允许查询时间。
          */
