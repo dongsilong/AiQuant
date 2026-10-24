@@ -54,6 +54,13 @@ public interface LiveOrderDispatchMapper {
 
     int acknowledgeConfiguration(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
+    /**
+     * Recover an uncertain configuration ticket only when the exact durable
+     * desired settings intent and the account-symbol guard still match.
+     */
+    int recoverConfiguration(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key,
+                             @Param("clientOrderId") String clientOrderId, @Param("marginMode") String marginMode, @Param("leverage") int leverage);
+
     int notSent(@Param("credentialId") Long credentialId, @Param("key") String key);
 
     int unknown(@Param("credentialId") Long credentialId, @Param("key") String key);

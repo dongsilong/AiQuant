@@ -47,6 +47,18 @@ class StrategyPositionProjectionValidationTest {
     }
 
     @Test
+    void rejectsMalformedExchangeFinancialFactsBeforeDatabaseAccess() {
+        var o = order();
+        var malformed = new ExchangeGateway.TradeSnapshot("BTCUSDT", 11L, 9L, "BUY", null, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO,
+            Instant.parse("2026-10-14T02:00:00Z"));
+        assertThrows(IllegalStateException.class, () -> service.project(5L, o, malformed, PositionSide.LONG, Role.OPEN));
+        var unknownSide = new ExchangeGateway.TradeSnapshot("BTCUSDT", 11L, 9L, "UNKNOWN", BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO,
+            Instant.parse("2026-10-14T02:00:00Z"));
+        assertThrows(IllegalStateException.class, () -> service.project(5L, o, unknownSide, PositionSide.LONG, Role.OPEN));
+        verifyNoInteractions(mapper);
+    }
+
+    @Test
     void rejectsForeignTradeAndMissingHedgeSide() {
         var o = order();
         o.setExchangeOrderId(999L);

@@ -16,7 +16,9 @@ import java.util.*;
  * reassigns trade ownership from aggregate positions.
  * <p>
  * This is deliberately an explicit, bounded replay API, not an automatic
- * always-on Binance poller. Each fill commits through the idempotent projector.
+ * always-on Binance poller. Provenance is preflighted for the complete batch
+ * before projection begins; a later projection failure can still leave
+ * idempotently replayable partial progress.
  */
 @Service
 @RequiredArgsConstructor
@@ -25,12 +27,11 @@ public class StrategyFillReplayService {
     @NonNull private final StrategyPositionProjectionMapper provenance;
     @NonNull private final StrategyPositionProjectionService projector;
 
-
-
     /**
      * Only call after verifying the exchange history window is complete.
-     * A missing historical page, ambiguous order or unsupported accounting
-     * mode makes the whole batch ineligible. No partial unsafe attribution.
+     * All fills must have an unambiguous immutable strategy intent before any
+     * fill is projected. Projection failures are propagated so callers do not
+     * mistake a partial replay for a complete one.
      */
     public ReplayResult replay(long credentialId, String symbol, List<ExchangeGateway.TradeSnapshot> exchangeFills, boolean completeHistoryVerified) {
         if (credentialId <= 0 || symbol == null || symbol.isBlank() || exchangeFills == null || !completeHistoryVerified) {
@@ -43,40 +44,60 @@ public class StrategyFillReplayService {
         if (sorted.stream().anyMatch(t -> t == null || t.time() == null || t.tradeId() == null || t.tradeId() <= 0 || !symbol.equalsIgnoreCase(t.symbol()) || t.orderId() == null || t.commissionAsset() == null || !t.commissionAsset().matches("[A-Z0-9]{2,20}"))) {
             throw new IllegalStateException("Invalid Binance fill in replay window");
         }
-        sorted.sort(Comparator.comparing(ExchangeGateway.TradeSnapshot::time).thenComparing(ExchangeGateway.TradeSnapshot::tradeId));
-        int projected = 0;
-        List<Long> quarantined = new ArrayList<>();
-        for (var t : sorted) {
-            Map<String, Object> origin = provenance.verifiedIntent(credentialId, symbol.toUpperCase(java.util.Locale.ROOT), t.orderId());
-            if (origin == null || !(origin.get("position_side") instanceof String) || !(origin.get("fill_role") instanceof String)) {
-                quarantined.add(t.tradeId());
-                break;
+        Set<Long> tradeIds = new HashSet<>();
+        for (var trade : sorted) {
+            if (!tradeIds.add(trade.tradeId())) {
+                throw new IllegalStateException("Duplicate Binance trade ID in replay window: " + trade.tradeId());
             }
-            QuantOrder order = orders.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getSymbol,
-                symbol.toUpperCase(java.util.Locale.ROOT)).eq(QuantOrder::getExchangeOrderId, t.orderId()));
-            if (order == null || order.getClientOrderId() == null || !order.getClientOrderId().equals(origin.get("client_order_id")) || !Objects.equals(order.getStrategyId(),
-                origin.get("strategy_id")) || !Objects.equals(order.getStrategyInstanceId(), origin.get("strategy_instance_id"))) {
-                quarantined.add(t.tradeId());
-                break;
-            }
-            try {
-                var side = StrategyPositionAccounting.PositionSide.valueOf((String) origin.get("position_side"));
-                var role = StrategyPositionAccounting.Role.valueOf((String) origin.get("fill_role"));
-                projector.project(credentialId, order, t, side, role);
-                projected++;
-            } catch (IllegalArgumentException invalidOrigin) {
-                quarantined.add(t.tradeId());
-                break;
-            }
-            // SQL, inconsistency, and time-gap failures stop replay. Never
-            // silently advance a checkpoint past a failed projection.
         }
-        return new ReplayResult(projected, quarantined.size(), List.copyOf(quarantined));
+        sorted.sort(Comparator.comparing(ExchangeGateway.TradeSnapshot::time).thenComparing(ExchangeGateway.TradeSnapshot::tradeId));
+
+        String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
+        List<VerifiedFill> verified = new ArrayList<>(sorted.size());
+        for (var trade : sorted) {
+            Map<String, Object> origin = provenance.verifiedIntent(credentialId, normalizedSymbol, trade.orderId());
+            if (origin == null || !(origin.get("position_side") instanceof String) || !(origin.get("fill_role") instanceof String)) {
+                return quarantined(trade.tradeId());
+            }
+            QuantOrder order = orders.selectOne(new LambdaQueryWrapper<QuantOrder>()
+                .eq(QuantOrder::getCredentialId, credentialId)
+                .eq(QuantOrder::getSymbol, normalizedSymbol)
+                .eq(QuantOrder::getExchangeOrderId, trade.orderId()));
+            if (order == null || order.getClientOrderId() == null
+                || !order.getClientOrderId().equals(origin.get("client_order_id"))
+                || !Objects.equals(order.getStrategyId(), origin.get("strategy_id"))
+                || !Objects.equals(order.getStrategyInstanceId(), origin.get("strategy_instance_id"))) {
+                return quarantined(trade.tradeId());
+            }
+            final StrategyPositionAccounting.PositionSide side;
+            final StrategyPositionAccounting.Role role;
+            try {
+                side = StrategyPositionAccounting.PositionSide.valueOf((String) origin.get("position_side"));
+                role = StrategyPositionAccounting.Role.valueOf((String) origin.get("fill_role"));
+            } catch (IllegalArgumentException invalidOrigin) {
+                return quarantined(trade.tradeId());
+            }
+            verified.add(new VerifiedFill(order, trade, side, role));
+        }
+
+        // Do not catch projection/database failures as attribution quarantine:
+        // they may indicate a gap or invariant violation and must reach caller.
+        for (VerifiedFill fill : verified) {
+            projector.project(credentialId, fill.order(), fill.trade(), fill.side(), fill.role());
+        }
+        return new ReplayResult(verified.size(), 0, List.of());
     }
 
-    /**
-     * 成交回放的投影数量及隔离成交明细。
-     */
+    private static ReplayResult quarantined(long tradeId) {
+        return new ReplayResult(0, 1, List.of(tradeId));
+    }
+
+    private record VerifiedFill(QuantOrder order, ExchangeGateway.TradeSnapshot trade,
+                                StrategyPositionAccounting.PositionSide side,
+                                StrategyPositionAccounting.Role role) {
+    }
+
+    /** 成交回放的投影数量及隔离成交明细。 */
     public record ReplayResult(int projected, int quarantined, List<Long> quarantineTradeIds) {
     }
 }

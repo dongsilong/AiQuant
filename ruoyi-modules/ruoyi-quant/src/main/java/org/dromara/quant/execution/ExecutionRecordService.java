@@ -60,12 +60,15 @@ public class ExecutionRecordService {
     public void accepted(QuantExecutionRecord entity, Long exchangeOrderId, String exchangeStatus) {
         String status = exchangeStatus == null ? "ACCEPTED" : exchangeStatus;
         LocalDateTime now = LocalDateTime.now();
-        if (mapper.markAccepted(entity.getId(), exchangeOrderId, status, now) == 1) {
-            entity.setExchangeOrderId(exchangeOrderId);
-            entity.setExecutionStatus("CONFIRMED");
-            entity.setExchangeOrderStatus(status);
-            entity.setUpdatedAt(now);
+        if (mapper.markAccepted(entity.getId(), exchangeOrderId, status, now) != 1) {
+            // Binance has already returned an order result. A failed durable transition
+            // must stop the caller before it can acknowledge/release the dispatch guard.
+            throw new IllegalStateException("交易所已返回订单结果，但执行幂等记录未能可靠确认；保留派发阻断并等待恢复");
         }
+        entity.setExchangeOrderId(exchangeOrderId);
+        entity.setExecutionStatus("CONFIRMED");
+        entity.setExchangeOrderStatus(status);
+        entity.setUpdatedAt(now);
     }
 
     /**
@@ -111,13 +114,16 @@ public class ExecutionRecordService {
      */
     public void markRecovered(QuantExecutionRecord entity, Long exchangeOrderId, String exchangeStatus) {
         LocalDateTime now = LocalDateTime.now();
-        if (mapper.markRecoveredAfterFact(entity.getId(), exchangeOrderId, exchangeStatus, now) == 1) {
-            entity.setExchangeOrderId(exchangeOrderId);
-            entity.setExecutionStatus("RECOVERED");
-            if (exchangeStatus != null) {
-                entity.setExchangeOrderStatus(exchangeStatus);
-            }
-            entity.setUpdatedAt(now);
+        if (mapper.markRecoveredAfterFact(entity.getId(), exchangeOrderId, exchangeStatus, now) != 1) {
+            // Never let a caller treat a non-persisted recovery fact as durable
+            // and release the account-symbol dispatch guard.
+            throw new IllegalStateException("已核实交易所订单，但执行恢复事实未能持久化；保留派发阻断");
         }
+        entity.setExchangeOrderId(exchangeOrderId);
+        entity.setExecutionStatus("RECOVERED");
+        if (exchangeStatus != null) {
+            entity.setExchangeOrderStatus(exchangeStatus);
+        }
+        entity.setUpdatedAt(now);
     }
 }

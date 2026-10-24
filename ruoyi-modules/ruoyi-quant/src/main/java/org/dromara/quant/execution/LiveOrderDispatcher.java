@@ -160,12 +160,44 @@ public class LiveOrderDispatcher {
         if (ticket == null) {
             throw new IllegalArgumentException("Missing configuration dispatch ticket");
         }
+        // Persist the confirmed exchange outcome in its own transaction before releasing
+        // the guard. If the process crashes between these commits, CONFIG_APPLIED is durable
+        // and recovery can independently verify Binance state without racing an in-flight call.
         transaction.executeWithoutResult(status -> {
-            if (mapper.acknowledgeConfiguration(ticket.credentialId(), ticket.symbol(), ticket.key()) != 1 || mapper.release(ticket.credentialId(), ticket.symbol(),
-                ticket.key()) != 1) {
-                throw new IllegalStateException("账户配置未能可靠确认，保持该交易对调度阻断");
+            if (mapper.acknowledgeConfiguration(ticket.credentialId(), ticket.symbol(), ticket.key()) != 1) {
+                throw new IllegalStateException("账户配置成功结果无法持久化，保持该交易对调度阻断");
             }
         });
+        transaction.executeWithoutResult(status -> {
+            if (mapper.release(ticket.credentialId(), ticket.symbol(), ticket.key()) != 1) {
+                throw new IllegalStateException("账户配置已确认，但调度锁未能安全释放，保持该交易对调度阻断");
+            }
+        });
+    }
+
+    /**
+     * Recover a CONFIG_SETTINGS ticket only after an independent exchange query
+     * proves that both persisted desired settings are already active. The exact
+     * durable intent, synthetic ticket identity and active guard must all match.
+     */
+    public boolean recoveredConfigurationFromExchange(Long credentialId, String symbol, String key, String clientOrderId, String marginMode, int leverage) {
+        String normalizedSymbol = symbol == null ? null : symbol.toUpperCase(Locale.ROOT);
+        String normalizedMode = marginMode == null ? null : marginMode.toUpperCase(Locale.ROOT);
+        if (credentialId == null || credentialId <= 0 || normalizedSymbol == null || normalizedSymbol.isBlank()
+            || key == null || key.isBlank() || normalizedMode == null
+            || !java.util.Set.of("ISOLATED", "CROSSED").contains(normalizedMode) || leverage < 1 || leverage > 125
+            || !("SETTINGS:" + normalizedMode + ":" + leverage).equals(clientOrderId)) {
+            throw new IllegalArgumentException("Cannot recover configuration dispatch without exact desired-settings identity");
+        }
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (mapper.recoverConfiguration(credentialId, normalizedSymbol, key, clientOrderId, normalizedMode, leverage) != 1) {
+                return false;
+            }
+            if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                throw new IllegalStateException("Verified configuration fact but durable dispatch guard mismatch");
+            }
+            return true;
+        }));
     }
 
     /**
@@ -292,7 +324,7 @@ public class LiveOrderDispatcher {
                 // A recovery worker may persist the exact exchange fact and release
                 // this ticket while the original request thread is still unwinding.
                 // Do not turn that completed race into a false UNKNOWN failure.
-                if (!java.util.Set.of("UNKNOWN", "ACKED", "RECOVERED", "FAILED_NOT_SENT").contains(current)) {
+                if (!java.util.Set.of("UNKNOWN", "ACKED", "RECOVERED", "CONFIG_APPLIED", "FAILED_NOT_SENT").contains(current)) {
                     throw new IllegalStateException("LIVE 发送结果未知且票据状态异常，禁止重新发送");
                 }
             }

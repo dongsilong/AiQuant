@@ -45,6 +45,22 @@ SET dispatch_status='CONFIG_APPLIED', updated_at=NOW()
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
   AND symbol=#{symbol} AND operation_type='CONFIG_SETTINGS'
   AND dispatch_status='DISPATCHING' AND exchange_order_id IS NULL]]></update>
+    <update id="recoverConfiguration" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='RECOVERED', updated_at=NOW()
+WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
+  AND symbol=#{symbol} AND client_order_id=#{clientOrderId}
+  AND operation_type='CONFIG_SETTINGS' AND exchange_order_id IS NULL
+  AND dispatch_status='CONFIG_APPLIED'
+  AND EXISTS (
+    SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key}
+  )
+  AND EXISTS (
+    SELECT 1 FROM quant_live_account_settings_intent i
+    WHERE i.credential_id=#{credentialId} AND i.symbol=#{symbol}
+      AND i.margin_mode=#{marginMode} AND i.leverage=#{leverage}
+  )]]></update>
     <update id="notSent" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
 SET dispatch_status='FAILED_NOT_SENT', updated_at=NOW()
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}

@@ -83,8 +83,8 @@ public class ProtectionOrderService {
     }
 
     /**
-     * 策略订阅启动前检查账户交易对门禁。只恢复持久化身份与交易所精确事实一致的保护创建/撤销；
-     * 其他未决操作或任何不确定事实都继续阻止该策略启动。
+     * 策略订阅启动前检查账户交易对门禁。只恢复持久化身份与交易所精确事实一致的保护创建/撤销，
+     * 或由交易所实际保证金模式和杠杆共同证明已生效的配置操作；其他未知状态继续阻止策略启动。
      */
     public boolean recoverDispatchBeforeStrategyStart(Long credentialId, String symbol) {
         LiveOrderDispatcher.ActiveDispatch active = requireLiveDispatcher().activeDispatch(credentialId, symbol);
@@ -102,9 +102,80 @@ public class ProtectionOrderService {
         if ("PROTECT_CREATE".equals(active.operationType())) {
             return recoverProtectionCreate(active);
         }
+        if ("CONFIG_SETTINGS".equals(active.operationType())) {
+            // Only CONFIG_APPLIED proves both configuration calls returned successfully and
+            // that confirmation was committed before guard release. DISPATCHING/UNKNOWN may
+            // still have a remote side effect in flight, so a matching snapshot is insufficient.
+            if (!"CONFIG_APPLIED".equals(active.dispatchStatus())) {
+                log.warn("配置派发未持久化确认完成，无法证明远端请求已结束，保持策略启动阻断 accountId={} symbol={} dispatchStatus={}",
+                    credentialId, symbol, active.dispatchStatus());
+                return false;
+            }
+            return recoverConfigurationSettings(active);
+        }
         log.warn("策略启动前发现不可自动恢复的派发占用，保持启动阻断 accountId={} symbol={} operation={} dispatchStatus={}", credentialId, symbol,
             active.operationType(), active.dispatchStatus());
         return false;
+    }
+
+    /**
+     * CONFIG_SETTINGS has no exchange order ID. Release its guard only when an
+     * independent Binance read proves both desired settings match the durable intent.
+     * Caller must establish CONFIG_APPLIED status first. DISPATCHING/UNKNOWN may still
+     * have a remote side effect in flight and are intentionally not auto-recovered.
+     * A mismatch or unavailable query remains blocked for explicit manual review.
+     */
+    private boolean recoverConfigurationSettings(LiveOrderDispatcher.ActiveDispatch active) {
+        if (active == null || active.credentialId() == null || active.symbol() == null || active.dispatchKey() == null
+            || active.clientOrderId() == null) {
+            return false;
+        }
+        String[] identity = active.clientOrderId().split(":", -1);
+        if (identity.length != 3 || !"SETTINGS".equals(identity[0])
+            || !Set.of("ISOLATED", "CROSSED").contains(identity[1])) {
+            log.warn("配置派发票据缺少可核实的目标配置身份，保持启动阻断 accountId={} symbol={} dispatchKey={}",
+                active.credentialId(), active.symbol(), active.dispatchKey());
+            return false;
+        }
+        final int expectedLeverage;
+        try {
+            expectedLeverage = Integer.parseInt(identity[2]);
+        } catch (NumberFormatException ex) {
+            log.warn("配置派发票据杠杆字段无效，保持启动阻断 accountId={} symbol={} dispatchKey={}",
+                active.credentialId(), active.symbol(), active.dispatchKey());
+            return false;
+        }
+        if (expectedLeverage < 1 || expectedLeverage > 125) {
+            log.warn("配置派发票据杠杆超出有效范围，保持启动阻断 accountId={} symbol={} dispatchKey={}",
+                active.credentialId(), active.symbol(), active.dispatchKey());
+            return false;
+        }
+        try {
+            var credentialEntity = executionApplicationService.requireCredential(active.credentialId());
+            ExchangeGateway.Credential credential = executionApplicationService.toCredential(credentialEntity);
+            org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings actual = gateway.querySymbolTradingSettings(credential, active.symbol());
+            if (actual == null || actual.symbol() == null || !active.symbol().equalsIgnoreCase(actual.symbol())
+                || !identity[1].equalsIgnoreCase(actual.marginMode()) || expectedLeverage != actual.leverage()) {
+                log.warn("配置派发未知状态与交易所实际配置不一致，继续保持启动阻断 accountId={} symbol={} desiredMarginMode={} desiredLeverage={} actualMarginMode={} actualLeverage={}",
+                    active.credentialId(), active.symbol(), identity[1], expectedLeverage,
+                    actual == null ? null : actual.marginMode(), actual == null ? null : actual.leverage());
+                return false;
+            }
+            boolean recovered = requireLiveDispatcher().recoveredConfigurationFromExchange(active.credentialId(), active.symbol(), active.dispatchKey(),
+                active.clientOrderId(), identity[1], expectedLeverage);
+            if (recovered) {
+                log.info("配置派发未知状态已通过交易所实际配置核实并恢复 accountId={} symbol={} marginMode={} leverage={}",
+                    active.credentialId(), active.symbol(), identity[1], expectedLeverage);
+            } else {
+                log.warn("交易所配置已匹配，但派发票据或持久化配置意图不匹配，继续保持启动阻断 accountId={} symbol={} dispatchKey={}",
+                    active.credentialId(), active.symbol(), active.dispatchKey());
+            }
+            return recovered;
+        } catch (RuntimeException ex) {
+            log.warn("配置派发未知状态核实失败，继续保持启动阻断 accountId={} symbol={} dispatchKey={} errorType={}",
+                active.credentialId(), active.symbol(), active.dispatchKey(), ex.getClass().getSimpleName());
+            return false;
+        }
     }
 
     private boolean recoverProtectionCreate(LiveOrderDispatcher.ActiveDispatch active) {

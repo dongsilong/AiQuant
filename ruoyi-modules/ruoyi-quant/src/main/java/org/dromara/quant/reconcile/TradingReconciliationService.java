@@ -28,6 +28,7 @@ import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -657,7 +658,9 @@ public class TradingReconciliationService {
             if (entity.getId() == null) {
                 orderMapper.insert(entity);
             } else {
-                orderMapper.updateById(entity);
+                // 订单历史与活动订单列表可能返回较旧快照。更新必须走 SQL 原子单调合并，
+                // 不能用 updateById 把已成交数量或终态回滚；返回 0 表示事实冲突/过期，保留现有账本。
+                orderMapper.mergeExchangeFactIfMonotonic(entity);
             }
             // 历史/当前订单快照同样可补齐受理后的成交事实；价格、数量、时间均沿用交易所返回值。
             if (decisionLogs != null) {
@@ -675,8 +678,8 @@ public class TradingReconciliationService {
             if (decisionLogs != null) {
                 decisionLogs.trade(credential.getId(), s);
             }
-            QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>().eq(QuantTrade::getCredentialId, credential.getId()).eq(QuantTrade::getExchangeTradeId,
-                s.tradeId()));
+            QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>().eq(QuantTrade::getCredentialId, credential.getId())
+                .eq(QuantTrade::getSymbol, s.symbol()).eq(QuantTrade::getExchangeTradeId, s.tradeId()));
             if (entity == null) {
                 entity = new QuantTrade();
                 entity.setCredentialId(credential.getId());
@@ -702,7 +705,34 @@ public class TradingReconciliationService {
             entity.setFundingFee(BigDecimal.ZERO);
             entity.setTradeTime(s.time() == null ? LocalDateTime.now() : LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC));
             if (entity.getId() == null) {
-                tradeMapper.insert(entity);
+                try {
+                    if (tradeMapper.insert(entity) != 1) {
+                        throw new IllegalStateException("Binance成交事实未写入本地成交账本");
+                    }
+                } catch (DuplicateKeyException concurrentInsert) {
+                    // Concurrent reconciliation may have inserted this exact fill after our initial lookup.
+                    // Re-read by the full business key and accept only an identical exchange fact.
+                    QuantTrade raced = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>()
+                        .eq(QuantTrade::getCredentialId, credential.getId())
+                        .eq(QuantTrade::getSymbol, s.symbol())
+                        .eq(QuantTrade::getExchangeTradeId, s.tradeId()));
+                    if (raced == null) {
+                        // Could be an unrelated unique-key collision (for example a duplicate local ID).
+                        throw concurrentInsert;
+                    }
+                    if (!Objects.equals(raced.getExchangeOrderId(), s.orderId())
+                        || !sameText(raced.getSide(), s.side())
+                        || !sameDecimal(raced.getQuantity(), s.quantity())
+                        || !sameDecimal(raced.getPrice(), s.price())
+                        || !sameDecimal(raced.getCommission(), s.commission())
+                        || !sameDecimal(raced.getRealizedPnl(), s.realizedPnl())
+                        || !sameTradeTime(raced.getTradeTime(), s.time())) {
+                        throw new IllegalStateException("并发写入的本地成交与 Binance 原始事实冲突，拒绝覆盖: credentialId="
+                            + credential.getId() + ", symbol=" + s.symbol() + ", exchangeTradeId=" + s.tradeId(), concurrentInsert);
+                    }
+                    log.debug("并发对账已写入相同成交事实，跳过重复插入 credentialId={} symbol={} exchangeTradeId={}",
+                        credential.getId(), s.symbol(), s.tradeId());
+                }
             } else {
                 tradeMapper.updateById(entity);
             }
@@ -711,6 +741,23 @@ public class TradingReconciliationService {
             }
         }
         filledOrders.values().forEach(order -> capturePostFillBalance(credential, order));
+    }
+
+    private static boolean sameText(String left, String right) {
+        return left == null ? right == null : right != null && left.equalsIgnoreCase(right);
+    }
+
+    private static boolean sameDecimal(BigDecimal left, BigDecimal right) {
+        return left == null ? right == null : right != null && left.compareTo(right) == 0;
+    }
+
+    private static boolean sameTradeTime(LocalDateTime stored, Instant incoming) {
+        if (stored == null || incoming == null) {
+            return stored == null && incoming == null;
+        }
+        // quant_trade.trade_time is DATETIME without fractional seconds in the supported schema.
+        return stored.truncatedTo(java.time.temporal.ChronoUnit.SECONDS).equals(
+            LocalDateTime.ofInstant(incoming, ZoneOffset.UTC).truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
     }
 
     /** Capture a best-effort account wallet balance after reconciled exchange fills. */
@@ -749,25 +796,53 @@ public class TradingReconciliationService {
             if (s.transactionId() == null) {
                 continue;
             }
-            QuantFinancialEventVo vo = financialEventMapper.selectVoOne(new LambdaQueryWrapper<QuantFinancialEvent>().eq(QuantFinancialEvent::getCredentialId,
-                credential.getId()).eq(QuantFinancialEvent::getExchangeTransactionId, s.transactionId()));
-            QuantFinancialEvent entity = MapstructUtils.convert(vo, QuantFinancialEvent.class);
-            if (entity == null) {
-                entity = new QuantFinancialEvent();
-                entity.setCredentialId(credential.getId());
-                entity.setExchangeTransactionId(s.transactionId());
-                entity.setCreatedAt(LocalDateTime.now());
+            // Missing financial facts are unknown, not zero/current-time defaults.
+            if (s.incomeType() == null || s.incomeType().isBlank() || s.amount() == null || s.asset() == null || s.asset().isBlank() || s.time() == null) {
+                throw new IllegalStateException("Binance financial event is missing required facts: credentialId="
+                    + credential.getId() + ", transactionId=" + s.transactionId());
             }
+            LocalDateTime eventTime = LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC);
+            // Binance tranId is only unique within the same incomeType. Different
+            // financial event types may legally share a transaction ID, so the
+            // idempotency key must include eventType as well as credential and tranId.
+            QuantFinancialEventVo vo = financialEventMapper.selectVoOne(new LambdaQueryWrapper<QuantFinancialEvent>()
+                .eq(QuantFinancialEvent::getCredentialId, credential.getId())
+                .eq(QuantFinancialEvent::getExchangeTransactionId, s.transactionId())
+                .eq(QuantFinancialEvent::getEventType, s.incomeType()));
+            QuantFinancialEvent entity = MapstructUtils.convert(vo, QuantFinancialEvent.class);
+            if (entity != null) {
+                // Treat the exchange ledger as immutable. A replay may confirm the
+                // original event, but must not silently rewrite a conflicting fact.
+                boolean sameTime = entity.getEventTime() != null
+                    && entity.getEventTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+                        .equals(eventTime.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+                List<String> conflictingFields = new ArrayList<>();
+                if (!Objects.equals(entity.getSymbol(), s.symbol())) conflictingFields.add("symbol");
+                if (!Objects.equals(entity.getEventType(), s.incomeType())) conflictingFields.add("eventType");
+                if (entity.getAmount() == null || entity.getAmount().compareTo(s.amount()) != 0) conflictingFields.add("amount");
+                if (!Objects.equals(entity.getAsset(), s.asset())) conflictingFields.add("asset");
+                if (!Objects.equals(entity.getInfo(), s.info())) conflictingFields.add("info");
+                if (!sameTime) conflictingFields.add("eventTime");
+                if (!conflictingFields.isEmpty()) {
+                    // Keep the ledger immutable while identifying the exact conflicting facts.
+                    throw new IllegalStateException("Binance financial event conflicts with persisted ledger: credentialId="
+                        + credential.getId() + ", transactionId=" + s.transactionId() + ", fields=" + String.join(",", conflictingFields));
+                }
+                continue;
+            }
+            entity = new QuantFinancialEvent();
+            entity.setCredentialId(credential.getId());
+            entity.setExchangeTransactionId(s.transactionId());
+            entity.setCreatedAt(LocalDateTime.now());
             entity.setSymbol(s.symbol());
             entity.setEventType(s.incomeType());
-            entity.setAmount(nvl(s.amount()));
+            entity.setAmount(s.amount());
             entity.setAsset(s.asset());
             entity.setInfo(s.info());
-            entity.setEventTime(s.time() == null ? LocalDateTime.now() : LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC));
-            if (entity.getId() == null) {
-                financialEventMapper.insert(entity);
-            } else {
-                financialEventMapper.updateById(entity);
+            entity.setEventTime(eventTime);
+            if (financialEventMapper.insert(entity) != 1) {
+                throw new IllegalStateException("Binance financial event was not persisted: credentialId="
+                    + credential.getId() + ", transactionId=" + s.transactionId());
             }
         }
     }

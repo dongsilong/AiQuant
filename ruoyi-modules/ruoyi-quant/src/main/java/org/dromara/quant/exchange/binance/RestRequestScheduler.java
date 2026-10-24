@@ -11,9 +11,12 @@ import java.util.concurrent.TimeUnit;
 final class RestRequestScheduler {
     private final ArrayDeque<Object>[] queues;
     private final int[] rotation = {0, 1, 0, 2};
+    private static final long MANUAL_BLOCK_RETRY_HINT_MILLIS = TimeUnit.HOURS.toMillis(24);
     private final long interval;
     private long nextStart;
     private long blockedUntil;
+    /** A 418 without a trustworthy expiry requires operator intervention; never auto-expire this latch. */
+    private boolean manualBlock;
     private int cursor;
     @SuppressWarnings("unchecked")
     RestRequestScheduler(long intervalMillis) {
@@ -22,6 +25,9 @@ final class RestRequestScheduler {
     }
 
     synchronized void acquire(Kind kind) {
+        if (manualBlock) {
+            throw new ExchangeMarketPort.RequestDeferredException(MANUAL_BLOCK_RETRY_HINT_MILLIS);
+        }
         long initialNow = System.nanoTime();
         if (initialNow < blockedUntil) {
             throw new ExchangeMarketPort.RequestDeferredException(TimeUnit.NANOSECONDS.toMillis(blockedUntil - initialNow) + 1L);
@@ -37,6 +43,9 @@ final class RestRequestScheduler {
             for (; ; ) {
                 if (Thread.currentThread().isInterrupted()) {
                     throw new ExchangeMarketPort.RequestDeferredException();
+                }
+                if (manualBlock) {
+                    throw new ExchangeMarketPort.RequestDeferredException(MANUAL_BLOCK_RETRY_HINT_MILLIS);
                 }
                 long now = System.nanoTime();
                 if (now < blockedUntil) {
@@ -69,6 +78,19 @@ final class RestRequestScheduler {
             queue.remove(ticket);
             notifyAll();
         }
+    }
+
+    /**
+     * Permanently blocks REST requests for this process after an unbounded HTTP 418.
+     * Restarting the process is an explicit operator action, not an automatic expiry.
+     */
+    synchronized void blockUntilManualReset() {
+        manualBlock = true;
+        notifyAll();
+    }
+
+    synchronized boolean isManuallyBlocked() {
+        return manualBlock;
     }
 
     synchronized void deferFor(long delayMillis) {

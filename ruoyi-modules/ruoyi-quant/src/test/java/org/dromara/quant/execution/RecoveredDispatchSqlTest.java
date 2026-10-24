@@ -13,6 +13,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Tag("dev")
 class RecoveredDispatchSqlTest {
@@ -72,5 +74,21 @@ class RecoveredDispatchSqlTest {
         assertEquals("BTCUSDT", records.getFirst().getSymbol());
         assertEquals("cid1", records.getFirst().getClientOrderId());
         assertEquals(9007199254740993L, records.getFirst().getExchangeOrderId());
+    }
+
+    @Test
+    void recoveredExecutionSqlRejectsStaleTerminalStatusRegression() throws Exception {
+        try (var stream = getClass().getClassLoader().getResourceAsStream("mapper/quant/QuantExecutionRecordMapper.xml")) {
+            assertNotNull(stream, "execution record mapper XML must be available to the test");
+            String xml = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            String start = "<update id=\"markRecoveredAfterFact\"";
+            int from = xml.indexOf(start);
+            int to = xml.indexOf("</update>", from);
+            assertTrue(from >= 0 && to > from, "recovery SQL statement must exist");
+            String sql = xml.substring(from, to);
+            assertTrue(sql.contains("execution_status <> 'RECOVERED'"), sql);
+            assertTrue(sql.contains("exchange_order_status NOT IN ('FILLED','CANCELED','EXPIRED','REJECTED')"), sql);
+            assertTrue(sql.contains("OR exchange_order_status=#{exchangeStatus}"), sql);
+        }
     }
 }

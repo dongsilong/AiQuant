@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS `quant_financial_event`
     UNIQUE KEY `uk_quant_financial_event`
 (
     `credential_id`,
-    `exchange_transaction_id`
+    `exchange_transaction_id`,
+    `event_type`
 ),
     KEY `idx_quant_financial_event_time`
 (

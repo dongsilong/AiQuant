@@ -102,6 +102,11 @@ public class MarketStreamHub {
         private final Map<String, Instant> lastReceived = new ConcurrentHashMap<>();
         private final Map<String, Instant> lastEventTime = new ConcurrentHashMap<>();
         private final java.util.NavigableMap<Instant, ExchangeGateway.Kline> referenceKlines = new java.util.TreeMap<>();
+        /**
+         * Holds live events while REST recovery is running without blocking the ingress consumer.
+         * Bounded independently; overflow invalidates this stream and triggers the existing safe replay.
+         */
+        private final java.util.ArrayDeque<Incoming> recoveryBuffer = new java.util.ArrayDeque<>();
         private final Map<UUID, Consumer<Boolean>> healthListeners = new ConcurrentHashMap<>();
         private final java.util.concurrent.atomic.LongAccumulator maxNetworkLag = new java.util.concurrent.atomic.LongAccumulator(Long::max, 0);
         private final java.util.concurrent.atomic.LongAccumulator maxQueueLag = new java.util.concurrent.atomic.LongAccumulator(Long::max, 0);
@@ -257,7 +262,7 @@ public class MarketStreamHub {
         }
 
         /**
-         * REST 在独立线程执行；锁只保护游标合并，实时事件在有界 ingress 中等待。
+         * REST 在独立线程执行；实时事件由 ingress 消费后进入有界恢复缓冲区，避免阻塞上游入口。
          */
         private void restoreHistory(long attempt) {
             try {
@@ -332,6 +337,12 @@ public class MarketStreamHub {
                     // REST只确认K线状态，不能刷新WS的MARK心跳。
                     lastReceived.put("KLINE", Instant.now());
                     notifyAll();
+                    // Replay buffered live events in arrival order after REST has restored the baseline.
+                    // Keep the lock while draining so newer ingress events cannot overtake the buffer.
+                    while (!recoveryBuffer.isEmpty() && !closed && attempt == generation && !recovering) {
+                        Incoming buffered = recoveryBuffer.removeFirst();
+                        onEvent(buffered.generation(), buffered.event());
+                    }
                 }
                 log.info("行情历史恢复完成，等待当前周期K线有效和新鲜MARK: symbol={}, interval={}, lastOpen={}", key.symbol(), key.interval(), lastKlineOpen);
             } catch (RuntimeException ex) {
@@ -545,15 +556,16 @@ public class MarketStreamHub {
          * 接收上游事件，过滤旧代次消息并更新连续性与新鲜度状态。
          */
         private synchronized void onEvent(long attempt, ExchangeGateway.MarketEvent event) {
-            while (recovering && !closed && attempt == generation) {
-                try {
-                    wait();
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
+            if (closed || attempt != generation || event == null) {
+                return;
+            }
+            if (recovering) {
+                int capacity = Math.max(1, properties.getMarket().getQueueCapacity());
+                if (recoveryBuffer.size() >= capacity) {
+                    scheduleDisconnect("行情恢复期间实时事件缓冲区溢出，必须重新补偿");
                     return;
                 }
-            }
-            if (closed || attempt != generation || event == null) {
+                recoveryBuffer.addLast(new Incoming(attempt, event));
                 return;
             }
             if ("DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
@@ -870,6 +882,7 @@ public class MarketStreamHub {
             lastKlineOpen = consumedKlineOpens.values().stream().min(Instant::compareTo).orElse(lastKlineOpen);
             lastKlineClosed = false;
             ingress.clear();
+            recoveryBuffer.clear();
             listeners.values().forEach(StreamEventConsumer::clear);
             publish(status("DISCONNECTED"));
             ExchangeGateway.MarketStreamSession old = upstream;
@@ -916,6 +929,7 @@ public class MarketStreamHub {
                 upstream = null;
             }
             ingress.close();
+            recoveryBuffer.clear();
             listeners.values().forEach(StreamEventConsumer::close);
             listeners.clear();
         }
@@ -941,6 +955,7 @@ public class MarketStreamHub {
             }
             nextQuietCheckAt = 0L;
             ingress.clear();
+            recoveryBuffer.clear();
             listeners.values().forEach(StreamEventConsumer::clear);
             log.error("交易环境拒绝该行情交易对，已暂停该标的并停止自动重连: mode={} symbol={} interval={}", key.runMode(), key.symbol(), key.interval(), cause);
             publish(status("ERROR"));

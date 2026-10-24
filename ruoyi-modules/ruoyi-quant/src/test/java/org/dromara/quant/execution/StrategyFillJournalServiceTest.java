@@ -121,4 +121,24 @@ class StrategyFillJournalServiceTest {
         verify(allocations).allocate(fill, order, 1L);
         verify(journal).updateStatus(77L, "ATTRIBUTED", null);
     }
+
+    @Test
+    void fillJournalSqlPreventsStaleWorkersFromRegressingAttributedOrConflictStates() throws Exception {
+        try (var stream = getClass().getClassLoader().getResourceAsStream("mapper/quant/StrategyFillJournalMapper.xml")) {
+            org.junit.jupiter.api.Assertions.assertNotNull(stream, "fill journal mapper XML must be available");
+            String xml = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            String start = "<update id=" + "\"updateStatus\"";
+            int from = xml.indexOf(start);
+            int to = xml.indexOf("</update>", from);
+            org.junit.jupiter.api.Assertions.assertTrue(from >= 0 && to > from, "updateStatus SQL must exist");
+            String sql = xml.substring(from, to);
+            org.junit.jupiter.api.Assertions.assertTrue(sql.contains("#{status}='CONFLICT'"), sql);
+            org.junit.jupiter.api.Assertions.assertTrue(sql.contains("attribution_status <> 'CONFLICT'"), sql);
+            org.junit.jupiter.api.Assertions.assertTrue(sql.contains("#{status}='ATTRIBUTED' OR attribution_status <> 'ATTRIBUTED'"), sql);
+            int pendingFrom = xml.indexOf("selectPending");
+            int pendingTo = xml.indexOf("</select>", pendingFrom);
+            org.junit.jupiter.api.Assertions.assertTrue(pendingFrom >= 0 && pendingTo > pendingFrom, "selectPending SQL must exist");
+            org.junit.jupiter.api.Assertions.assertTrue(xml.substring(pendingFrom, pendingTo).contains("'PENDING_FACTS'"), "recoverable incomplete facts must be retried");
+        }
+    }
 }

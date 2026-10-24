@@ -11,6 +11,32 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BinanceGatewayAdapterTest {
     @Test
+    void localRestDeferralIsClassifiedAsDefinitelyNotSent() {
+        var deferred = new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException(5_000L);
+        RuntimeException classified = BinanceGatewayAdapter.classifyOrderDispatchFailure(deferred);
+
+        assertInstanceOf(org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException.class, classified);
+        assertTrue(classified.getMessage().contains("5000ms"));
+    }
+
+    @Test
+    void ambiguousRuntimeOrderFailureRemainsAmbiguous() {
+        var ambiguous = new IllegalStateException("transport failed after dispatch may have started");
+
+        assertSame(ambiguous, BinanceGatewayAdapter.classifyOrderDispatchFailure(ambiguous));
+    }
+
+    @Test
+    void exactOrderIdentityRequiresExchangeReturnedFieldsAndMatchingQueryIdentity() {
+        assertTrue(BinanceGatewayAdapter.hasExactOrderIdentity("ETHUSDT", 123L, "client-123", 123L, "client-123", "ETHUSDT"));
+        assertFalse(BinanceGatewayAdapter.hasExactOrderIdentity("ETHUSDT", 123L, "client-123", null, "client-123", "ETHUSDT"));
+        assertFalse(BinanceGatewayAdapter.hasExactOrderIdentity("ETHUSDT", 123L, "client-123", 123L, null, "ETHUSDT"));
+        assertFalse(BinanceGatewayAdapter.hasExactOrderIdentity("ETHUSDT", 123L, "client-123", 123L, "client-123", null));
+        assertFalse(BinanceGatewayAdapter.hasExactOrderIdentity("ETHUSDT", 123L, "client-123", 124L, "client-123", "ETHUSDT"));
+        assertFalse(BinanceGatewayAdapter.hasExactOrderIdentity("ETHUSDT", 123L, "client-123", 123L, "other-client", "ETHUSDT"));
+        assertFalse(BinanceGatewayAdapter.hasExactOrderIdentity("ETHUSDT", 123L, "client-123", 123L, "client-123", "BTCUSDT"));
+    }
+    @Test
     void rateLimitResponseBlocksFurtherRestRequestsAndPreservesRetryAfter() {
         var adapter = new BinanceGatewayAdapter(new org.dromara.quant.config.QuantProperties());
         var apiException = new ApiException(418, "I'm a teapot", java.util.Map.of("retry-after", List.of("5")),
