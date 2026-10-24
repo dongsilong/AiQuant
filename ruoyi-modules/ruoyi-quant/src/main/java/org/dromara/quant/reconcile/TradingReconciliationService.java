@@ -295,10 +295,15 @@ public class TradingReconciliationService {
         if (existing != null) {
             long waitStartedAt = System.nanoTime();
             List<ExchangeGateway.PositionSnapshot> snapshots = joinPositionRefresh(existing);
-            log.debug("运行时等待共享账户持仓快照 credentialId={} trigger={} waitMs={}", credentialId, trigger,
-                java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStartedAt));
+            long waitMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStartedAt);
+            if (waitMs >= 1_000L) {
+                log.warn("等待共享账户持仓快照超过一秒 credentialId={} trigger={} waitMs={}", credentialId, trigger, waitMs);
+            } else {
+                log.debug("运行时等待共享账户持仓快照 credentialId={} trigger={} waitMs={}", credentialId, trigger, waitMs);
+            }
             return snapshots;
         }
+        long refreshStartedAtNanos = System.nanoTime();
         try {
             long generation = positionGeneration(credentialId);
             long runtimeGeneration = runtimeSnapshotGeneration(credentialId);
@@ -316,7 +321,15 @@ public class TradingReconciliationService {
             created.completeExceptionally(ex);
             throw ex;
         } catch (RuntimeException ex) {
-            failureRecorder.record(credentialId, ex.getMessage());
+            long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - refreshStartedAtNanos);
+            try {
+                failureRecorder.record(credentialId, ex.getMessage());
+            } catch (RuntimeException recorderFailure) {
+                // Failure telemetry must not leave coalesced waiters blocked on an incomplete future.
+                ex.addSuppressed(recorderFailure);
+            }
+            log.warn("账户级持仓快照刷新失败 credentialId={} trigger={} elapsedMs={} errorType={}",
+                credentialId, trigger, elapsedMs, ex.getClass().getSimpleName(), ex);
             created.completeExceptionally(ex);
             throw ex;
         } finally {

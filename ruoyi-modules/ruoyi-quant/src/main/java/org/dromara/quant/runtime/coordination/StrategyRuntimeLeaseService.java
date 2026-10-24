@@ -51,6 +51,43 @@ public class StrategyRuntimeLeaseService {
     }
 
     /**
+     * 仅用于策略启动/显式接管：初始化租约行后再尝试原子获取或续期。
+     * 正常心跳必须调用 renew()，避免每个续期周期重复执行 INSERT IGNORE。
+     */
+    public boolean renew(Long instanceId, Long credentialId, String symbol) {
+        if (instanceId == null || credentialId == null || symbol == null || symbol.isBlank()) {
+            return false;
+        }
+        String normalized = symbol.toUpperCase(Locale.ROOT);
+        int leaseSeconds = Math.max(15, properties.getRuntime().getLeaseSeconds());
+        String ownerToken = ownerToken(instanceId);
+        try {
+            return mapper.acquireOrRenew(instanceId, credentialId, normalized, ownerToken, leaseSeconds) == 1;
+        } catch (Exception ex) {
+            // 调用方维护连续失败计数并做限频告警；此处保留诊断堆栈但不在每秒重试时刷 ERROR。
+            log.debug("策略运行租约 SQL 续期异常 instanceId={} credentialId={} symbol={}", instanceId, credentialId, normalized, ex);
+            return false;
+        }
+    }
+
+    /**
+     * 只读所有权检查，不改变租约有效期；数据库异常按不拥有租约处理。
+     */
+    public boolean isCurrentOwner(Long instanceId, Long credentialId, String symbol) {
+        if (instanceId == null || credentialId == null || symbol == null || symbol.isBlank()) {
+            return false;
+        }
+        try {
+            Long count = mapper.countCurrentOwner(instanceId, credentialId, symbol.toUpperCase(Locale.ROOT), ownerToken(instanceId));
+            return count != null && count > 0;
+        } catch (RuntimeException ex) {
+            log.warn("无法核实策略运行租约所有权 instanceId={} credentialId={} symbol={} errorType={}",
+                instanceId, credentialId, symbol, ex.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /**
      * Required at the final outbound strategy order boundary.
      * A missing/expired/mismatched owner always blocks the order; database errors fail closed.
      * This does NOT provide an atomic fence between the SQL read and a remote Binance request.

@@ -52,9 +52,15 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.*;
+import jakarta.annotation.PostConstruct;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -113,6 +119,19 @@ public class StrategyRuntimeService {
     private final org.dromara.quant.execution.TradingPreparationService preparationService;
     private final TradingReconciliationService reconciliationService;
     private final ExecutorService recoveryExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    /** 独立于行情和恢复任务的租约扫描器；扫描线程只派发续租任务，不执行阻塞 SQL。 */
+    private final ScheduledExecutorService leaseRenewalScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "quant-runtime-lease-scheduler");
+        thread.setDaemon(true);
+        return thread;
+    });
+    /** 有界续租执行池，避免数据库变慢时无限堆积续租任务。 */
+    private final ThreadPoolExecutor leaseRenewalExecutor = new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+        new ArrayBlockingQueue<>(256), r -> {
+            Thread thread = new Thread(r, "quant-runtime-lease-renewal");
+            thread.setDaemon(true);
+            return thread;
+        }, new ThreadPoolExecutor.AbortPolicy());
     /**
      * 策略斜率结果 SSE 事件中心。
      */
@@ -385,6 +404,183 @@ public class StrategyRuntimeService {
         return "quant:strategy-symbol-runtime:" + strategySymbolId;
     }
 
+    /** 启动独立租约续期调度；行情是否到达不影响续租触发。 */
+    @PostConstruct
+    public void startLeaseRenewalScheduler() {
+        leaseRenewalScheduler.scheduleWithFixedDelay(this::dispatchDueLeaseRenewals, 500L, 500L, TimeUnit.MILLISECONDS);
+    }
+
+    /** 扫描到期租约并派发到有界工作池；扫描线程本身不执行数据库 SQL。 */
+    private void dispatchDueLeaseRenewals() {
+        try {
+            long now = System.currentTimeMillis();
+            for (ActiveRuntime runtime : activeRuntimes.values()) {
+                if (runtime.closed || now < runtime.nextLeaseRenewAt || !runtime.leaseRenewing.compareAndSet(false, true)) {
+                    continue;
+                }
+                try {
+                    leaseRenewalExecutor.execute(() -> renewRuntimeLease(runtime));
+                } catch (RejectedExecutionException rejected) {
+                    runtime.leaseRenewing.set(false);
+                    synchronized (runtime) {
+                        runtime.leaseRenewalHealthy = false;
+                        runtime.leaseRecoveryRequired = true;
+                        runtime.leaseRecoveryDispatchVerified = false;
+                        runtime.leaseRecoveryGeneration.incrementAndGet();
+                        runtime.nextLeaseRenewAt = System.currentTimeMillis() + 1_000L;
+                    }
+                    log.error("策略租约续期任务队列已满，运行时进入租约不健康状态 instanceId={} credentialId={} symbol={}",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                }
+            }
+        } catch (RuntimeException ex) {
+            // ScheduledExecutorService 会在未捕获异常时停止后续周期；扫描器必须保持存活并报警。
+            log.error("策略运行租约调度扫描异常，后续周期将继续重试", ex);
+        }
+    }
+
+    /** 续期失败立即 fail closed；只有后续续期成功才能恢复交易。 */
+    private void renewRuntimeLease(ActiveRuntime runtime) {
+        long attemptStartedNanos = System.nanoTime();
+        boolean recoverBeforeTrading = false;
+        try {
+            boolean renewed = leaseService.renew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+            if (!renewed) {
+                // Publish the fail-closed state before waiting for the Runtime monitor; an in-flight market callback must see it at its final gate.
+                runtime.leaseRenewalHealthy = false;
+                runtime.leaseRecoveryRequired = true;
+                runtime.leaseRecoveryDispatchVerified = false;
+            }
+            synchronized (runtime) {
+                if (runtime.closed) {
+                    return;
+                }
+                if (renewed) {
+                    runtime.leaseRenewalHealthy = true;
+                    runtime.leaseRenewFailureCount = 0;
+                    runtime.leaseLastSuccessAtMillis = System.currentTimeMillis();
+                    runtime.leaseValidUntilNanos = attemptStartedNanos + leaseSafetyWindowNanos();
+                    runtime.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
+                    recoverBeforeTrading = runtime.leaseRecoveryRequired;
+                    log.debug("策略运行租约续期成功 instanceId={} credentialId={} symbol={} nextRenewInMs={} recoveryRequired={}",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), leaseRenewIntervalMillis(), runtime.leaseRecoveryRequired);
+                } else {
+                    runtime.leaseRenewalHealthy = false;
+                    runtime.leaseRecoveryRequired = true;
+                    runtime.leaseRecoveryDispatchVerified = false;
+                    runtime.leaseRecoveryGeneration.incrementAndGet();
+                    runtime.leaseRenewFailureCount++;
+                    runtime.nextLeaseRenewAt = System.currentTimeMillis() + 1_000L;
+                    if (runtime.leaseRenewFailureCount == 1 || runtime.leaseRenewFailureCount % 10 == 0) {
+                        log.error("策略运行租约续期未确认，已阻断该运行时交易 instanceId={} credentialId={} symbol={} consecutiveFailures={}",
+                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.leaseRenewFailureCount);
+                    }
+                }
+            }
+        } catch (RuntimeException ex) {
+            // Publish failure before taking the Runtime monitor so market processing cannot pass a stale local gate.
+            runtime.leaseRenewalHealthy = false;
+            runtime.leaseRecoveryRequired = true;
+            runtime.leaseRecoveryDispatchVerified = false;
+            synchronized (runtime) {
+                if (!runtime.closed) {
+                    runtime.leaseRenewalHealthy = false;
+                    runtime.leaseRecoveryRequired = true;
+                    runtime.leaseRecoveryDispatchVerified = false;
+                    runtime.leaseRecoveryGeneration.incrementAndGet();
+                    runtime.leaseRenewFailureCount++;
+                    runtime.nextLeaseRenewAt = System.currentTimeMillis() + 1_000L;
+                }
+            }
+            if (runtime.leaseRenewFailureCount == 1 || runtime.leaseRenewFailureCount % 10 == 0) {
+                log.error("策略运行租约续期异常，已阻断该运行时交易 instanceId={} credentialId={} symbol={} consecutiveFailures={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.leaseRenewFailureCount, ex);
+            }
+        } finally {
+            runtime.leaseRenewing.set(false);
+        }
+        if (recoverBeforeTrading) {
+            scheduleLeaseRecovery(runtime);
+        }
+    }
+
+    /**
+     * 租约续期曾失败或到期后重新确认时，先恢复在途派发事实，再核对账户持仓，期间禁止新交易。
+     */
+    private void scheduleLeaseRecovery(ActiveRuntime runtime) {
+        if (runtime.closed || !runtime.leaseRecoveryRunning.compareAndSet(false, true)) {
+            return;
+        }
+        long recoveryGeneration = runtime.leaseRecoveryGeneration.get();
+        try {
+            recoveryExecutor.execute(() -> {
+                try {
+                    if (runtime.closed) {
+                        return;
+                    }
+                    if (!isLeaseTimeValid(runtime)
+                        || !leaseService.isCurrentOwner(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+                        synchronized (runtime) {
+                            runtime.leaseRenewalHealthy = false;
+                            runtime.leaseRecoveryRequired = true;
+                            runtime.leaseRecoveryDispatchVerified = false;
+                            runtime.leaseRecoveryGeneration.incrementAndGet();
+                            runtime.nextLeaseRenewAt = System.currentTimeMillis() + 1_000L;
+                        }
+                        return;
+                    }
+                    boolean dispatchVerified = runtime.leaseRecoveryDispatchVerified
+                        && runtime.leaseRecoveryDispatchGeneration == recoveryGeneration;
+                    if (!dispatchVerified) {
+                        if (!"PAPER".equalsIgnoreCase(runtime.credential.getRunMode())
+                            && !protectionOrderService.recoverDispatchBeforeStrategyStart(runtime.credential.getId(), runtime.symbol.getSymbol())) {
+                            log.warn("租约恢复后在途订单尚未完成核对，继续阻断交易 instanceId={} credentialId={} symbol={}",
+                                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                            return;
+                        }
+                    }
+                    if (runtime.leaseRecoveryGeneration.get() != recoveryGeneration || !isLeaseTimeValid(runtime)
+                        || !leaseService.isCurrentOwner(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+                        return;
+                    }
+                    synchronized (runtime) {
+                        if (runtime.closed || runtime.leaseRecoveryGeneration.get() != recoveryGeneration || !isLeaseTimeValid(runtime)) {
+                            return;
+                        }
+                        runtime.leaseRecoveryDispatchGeneration = recoveryGeneration;
+                        runtime.leaseRecoveryDispatchVerified = true;
+                        runtime.positionFactsReady = false;
+                        runtime.nextReconcileAt = 0L;
+                    }
+                    requestReconciliation(runtime);
+                } catch (RuntimeException ex) {
+                    log.error("租约恢复后的派发/持仓核对失败，继续阻断交易 instanceId={} credentialId={} symbol={}",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), ex);
+                } finally {
+                    runtime.leaseRecoveryRunning.set(false);
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            runtime.leaseRecoveryRunning.set(false);
+            log.error("无法调度租约恢复核对任务，继续阻断交易 instanceId={} credentialId={} symbol={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), rejected);
+        }
+    }
+
+    /** 本地截止时间从请求开始计算，并预留两秒安全余量。 */
+    private long leaseSafetyWindowNanos() {
+        long leaseSeconds = Math.max(15L, properties.getRuntime().getLeaseSeconds());
+        return TimeUnit.SECONDS.toNanos(Math.max(1L, leaseSeconds - 2L));
+    }
+
+    private boolean isLeaseTimeValid(ActiveRuntime runtime) {
+        return runtime.leaseRenewalHealthy && System.nanoTime() < runtime.leaseValidUntilNanos;
+    }
+
+    private boolean isLeaseLocallyUsable(ActiveRuntime runtime) {
+        return isLeaseTimeValid(runtime) && !runtime.leaseRecoveryRequired;
+    }
+
     /**
      * 按配置周期发现/停止实例，并同步一次真实持仓；实时价格不在这里轮询。
      */
@@ -510,7 +706,7 @@ public class StrategyRuntimeService {
                 expectedPosition = runtime.position;
                 expectedQuantity = expectedPosition == null ? null : expectedPosition.getQuantity();
             }
-            if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+            if (!leaseService.isCurrentOwner(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
                 return;
             }
             // 在REST前捕获数据库基线；慢查询或并发平仓后只能条件更新，不能覆盖新账本。
@@ -560,7 +756,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             boolean firstTpFilled =
              firstExecuted != null && expectedState.getFirstTakeProfitTargetQty() != null && firstExecuted.add(expectedState.getFirstTakeProfitLocalExecutedQty() == null ?
             BigDecimal.ZERO : expectedState.getFirstTakeProfitLocalExecutedQty()).compareTo(expectedState.getFirstTakeProfitTargetQty()) >= 0;
-            boolean leaseHeld = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+            boolean leaseHeld = leaseService.isCurrentOwner(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
             synchronized (runtime) {
                 if (runtime.exitCoordinating.get() || runtime.state != expectedState || runtime.hasPendingAction() != expectedPending || !Objects.equals(expectedPendingIdentity, runtime.state == null ?
 List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosition || runtime.position != null && !Objects.equals(runtime.position.getQuantity(), expectedQuantity)) {
@@ -709,6 +905,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             synchronized (runtime) {
                 runtime.positionReconciling = false;
                 if (reconciliationCompleted) {
+                    if (runtime.leaseRecoveryRequired && runtime.leaseRecoveryDispatchVerified
+                        && runtime.leaseRecoveryDispatchGeneration == runtime.leaseRecoveryGeneration.get() && isLeaseTimeValid(runtime)) {
+                        runtime.leaseRecoveryRequired = false;
+                        runtime.leaseRecoveryDispatchVerified = false;
+                        log.info("租约恢复后的派发与持仓核对完成，恢复策略决策 instanceId={} credentialId={} symbol={}",
+                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                    }
                     runtime.stateRefreshRequired = false;
                     runtime.positionFactsReady = true;
                     runtime.positionFactsVerifiedAt = System.currentTimeMillis();
@@ -795,13 +998,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return false;
         }
 
-        if (!leaseService.acquireOrRenew(instance.getId(), credential.getId(), symbol.getSymbol())) {
-            // 无法确认物理仓位独占权时保守停止本地运行时，避免两个实例同时操作同一交易所仓位。
-            log.warn("策略运行时获取租约失败 instanceId={} credentialId={} symbol={}", instance.getId(), credential.getId(), symbol.getSymbol());
-            stopInactiveRuntime(instance.getId());
-            return false;
-        }
-
         ActiveRuntime current = activeRuntimes.get(instance.getId());
         if (current != null && current.matches(strategy.getPluginCode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), credential.getId())) {
             synchronized (current) {
@@ -815,7 +1011,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 current.credential = credential;
                 current.params = refreshed;
                 current.protectionOnly = protectionOnly;
-                current.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
             }
             prepareTrading(current);
             resumeRecoveryIfNeeded(current);
@@ -824,9 +1019,14 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (current != null) {
             closeRuntime(current);
             activeRuntimes.remove(instance.getId(), current);
-            if (!leaseService.acquireOrRenew(instance.getId(), credential.getId(), symbol.getSymbol())) {
-                return false;
-            }
+        }
+
+        // 仅新建/重建运行时才获取租约；活动运行时由独立续期器负责续租。
+        long leaseAcquisitionStartedNanos = System.nanoTime();
+        if (!leaseService.acquireOrRenew(instance.getId(), credential.getId(), symbol.getSymbol())) {
+            log.warn("策略运行时获取租约失败 instanceId={} credentialId={} symbol={}", instance.getId(), credential.getId(), symbol.getSymbol());
+            stopInactiveRuntime(instance.getId());
+            return false;
         }
 
         StrategyPlugin plugin = pluginRegistry.require(strategy.getPluginCode());
@@ -865,6 +1065,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         try {
             synchronized (runtime) {
+                // 使用获取租约请求的开始时刻计算本地截止时间，避免启动期间慢 REST 拉长有效期估算。
+                runtime.leaseRenewalHealthy = true;
+                runtime.leaseLastSuccessAtMillis = System.currentTimeMillis();
+                runtime.leaseValidUntilNanos = leaseAcquisitionStartedNanos + leaseSafetyWindowNanos();
+                long elapsedSinceAcquisitionMs = TimeUnit.NANOSECONDS.toMillis(Math.max(0L, System.nanoTime() - leaseAcquisitionStartedNanos));
+                long renewDelayMs = Math.max(0L, leaseRenewIntervalMillis() - elapsedSinceAcquisitionMs);
+                runtime.nextLeaseRenewAt = System.currentTimeMillis() + renewDelayMs;
                 activeRuntimes.put(instance.getId(), runtime);
                 if (runtime.position != null) {
                     ensureHardStop(runtime);
@@ -894,7 +1101,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             throw ex;
         }
-        runtime.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
         resumeRecoveryIfNeeded(runtime);
         log.info("策略运行时已启动 instanceId={} strategy={} plugin={} symbol={} interval={} mode={} protectionOnly={}", instance.getId(), strategy.getStrategyName(),
                 strategy.getPluginCode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), credential.getRunMode(), protectionOnly);
@@ -952,21 +1158,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      * 根据租约有效期计算安全续租周期。
      */
     private long leaseRenewIntervalMillis() {
-        long leaseSeconds = Math.max(3L, properties.getRuntime().getLeaseSeconds());
+        long leaseSeconds = Math.max(15L, properties.getRuntime().getLeaseSeconds());
         return Math.max(1_000L, leaseSeconds * 1_000L / 3L);
     }
 
-    /**
-     * 处理实时事件前确认当前节点仍持有有效租约。
-     */
+    /** 行情线程只读取本地续租状态，不执行同步租约 SQL。 */
     private boolean ensureEventLease(ActiveRuntime runtime) {
-        long now = System.currentTimeMillis();
-        if (now < runtime.nextLeaseRenewAt) {
-            return true;
-        }
-        boolean acquired = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
-        runtime.nextLeaseRenewAt = acquired ? now + leaseRenewIntervalMillis() : now + 1_000L;
-        return acquired;
+        return isLeaseLocallyUsable(runtime);
     }
 
     /**
@@ -982,10 +1180,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         synchronized (runtime) {
             if (runtime.closed) {
-                return;
-            }
-            if (!ensureEventLease(runtime)) {
-                runtime.marketHealthy = false;
                 return;
             }
             if ("CONNECTING".equals(event.type())) {
@@ -1005,6 +1199,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             if ("CONNECTED".equals(event.type())) {
                 runtime.marketHealthy = true;
+                return;
+            }
+            if (!ensureEventLease(runtime)) {
+                // 连接状态仍需更新；行情决策在租约重新确认前暂停，且本路径不执行数据库续租。
                 return;
             }
             if (event.kline() != null) {
@@ -1318,7 +1516,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             String cycle = runtime.state == null ? null : runtime.state.getPositionCycleKey();
             runtime.entryProtectionCleanupTask = recoveryExecutor.submit(() -> {
                 try {
-                    if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+                    if (!leaseService.isCurrentOwner(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
                         return;
                     }
                     long epoch = leaseService.requireCurrentEpoch(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
@@ -1571,6 +1769,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         QuantExecutionRecord previousAttempt = executionRecordService.find(runtime.credential.getId(), idempotencyKey);
         if (previousAttempt != null && "FAILED".equals(previousAttempt.getExecutionStatus())) {
             idempotencyKey += ":" + UUID.randomUUID();
+        }
+        // Re-check immediately before persisting an opening intent. If a renewal failed while this event was being evaluated,
+        // release the candle claim and do not create a new LIVE order intent.
+        if (!ensureEventLease(runtime)) {
+            logEntryDecision(runtime, context, "LEASE_UNHEALTHY", "租约续期未确认或恢复核对尚未完成，禁止新开仓");
+            entryGuardService.release(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.klineOpenTime());
+            return;
         }
         QuantStrategyPositionState state;
         try {
@@ -2004,7 +2209,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                     try {
                         while (renewing.get()) {
                             Thread.sleep(5000);
-                            if (renewing.get() && !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+                            if (renewing.get() && !leaseService.renew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
                                 leaseHeld.set(false);
                                 break;
                             }
@@ -2033,7 +2238,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                             return;
                         }
                     }
-                    if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+                    if (!leaseHeld.get() || !leaseService.isCurrentOwner(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
                         return;
                     }
                     // 触发事实已经锁定；确认窗口中即便价格反弹仍完成该保护意图，不追用旧信号开仓。
@@ -2123,7 +2328,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
         String side = "SHORT".equalsIgnoreCase(direction) ? "BUY" : "SELL";
         Instant klineOpenTime = context.klineOpenTime() == null ? Instant.ofEpochMilli(System.currentTimeMillis()) : context.klineOpenTime();
         String idempotencyKey = nextExitAttemptKey(runtime, exit.type(), klineOpenTime);
-        if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+        if (!leaseHeld.get() || !leaseService.isCurrentOwner(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
             throw new IllegalStateException("退出前租约失效，等待恢复");
         }
         QuantStrategyPositionState state = preparePendingStateForExit(runtime, exit.type(), quantity, klineOpenTime, idempotencyKey);
@@ -2508,7 +2713,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 runtime.reconcileRequested.set(true);
                 return true;
             }
-            if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+            if (!leaseService.isCurrentOwner(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
                 return true;
             }
             return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven);
@@ -3182,7 +3387,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                         if (runtime.closed || !leaseHeld.get()) {
                             break;
                         }
-                        if (!leaseService.acquireOrRenew(runtime.instance.getId(), work.credentialId(), work.position().getSymbol())) {
+                        if (!leaseService.isCurrentOwner(runtime.instance.getId(), work.credentialId(), work.position().getSymbol())) {
                             runtime.marketHealthy = false;
                             runtime.protectionRequested.set(false);
                             break;
@@ -3195,7 +3400,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                         if (!renewing.get()) {
                                             break;
                                         }
-                                        if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+                                        if (!leaseService.renew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
                                             leaseHeld.set(false);
                                             runtime.marketHealthy = false;
                                             break;
@@ -3228,7 +3433,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                             if (work.signalFailure() != null) {
                                 throw work.signalFailure();
                             }
-                            if (work.dynamic() && !runtime.closed && leaseHeld.get() && leaseService.acquireOrRenew(runtime.instance.getId(), work.credentialId(),
+                            if (work.dynamic() && !runtime.closed && leaseHeld.get() && leaseService.isCurrentOwner(runtime.instance.getId(), work.credentialId(),
                              work.position().getSymbol())) {
                                 // 硬止损价可能已冻结；跨类型覆盖必须由保护服务精确核实实际委托，不能用重算价格提前过滤。
                                 List<ProtectionSignal> exchangeSignals = deduplicateExchangeProtectionSignals(work.signals(), work.position(), work.initialQuantity(),
@@ -3249,7 +3454,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                 failure.addSuppressed(ex);
                             }
                         }
-                        if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), work.credentialId(), work.position().getSymbol())) {
+                        if (!leaseHeld.get() || !leaseService.isCurrentOwner(runtime.instance.getId(), work.credentialId(), work.position().getSymbol())) {
                             runtime.marketHealthy = false;
                             runtime.protectionRequested.set(false);
                             break;
@@ -3832,6 +4037,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     @PreDestroy
     public void destroy() {
         stopAll();
+        leaseRenewalScheduler.shutdownNow();
+        leaseRenewalExecutor.shutdownNow();
         recoveryExecutor.shutdownNow();
     }
 
@@ -4037,6 +4244,16 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final AtomicBoolean dynamicProtectionRequested = new AtomicBoolean();
         private final AtomicBoolean reconciling = new AtomicBoolean();
         private final AtomicBoolean reconcileRequested = new AtomicBoolean();
+        private final AtomicBoolean leaseRenewing = new AtomicBoolean();
+        private final AtomicBoolean leaseRecoveryRunning = new AtomicBoolean();
+        private final java.util.concurrent.atomic.AtomicLong leaseRecoveryGeneration = new java.util.concurrent.atomic.AtomicLong();
+        private volatile long leaseRecoveryDispatchGeneration;
+        private volatile boolean leaseRenewalHealthy;
+        private volatile boolean leaseRecoveryRequired;
+        private volatile boolean leaseRecoveryDispatchVerified;
+        private volatile long leaseValidUntilNanos;
+        private volatile long leaseLastSuccessAtMillis;
+        private volatile int leaseRenewFailureCount;
         private final EntryRetryGate entryRetryGate = new EntryRetryGate();
         /** 串行化交易对暂停操作与完整开仓决策/派单流程。 */
         private final Object entryDispatchLock = new Object();

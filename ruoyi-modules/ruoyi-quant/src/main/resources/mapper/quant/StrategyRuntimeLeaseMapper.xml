@@ -12,7 +12,7 @@ SET lease_epoch=CASE WHEN owner_token<>#{ownerToken} OR lease_until<=NOW()
     lease_until=DATE_ADD(NOW(), INTERVAL #{leaseSeconds} SECOND),
     update_time=NOW()
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
-  AND (owner_token=#{ownerToken} OR lease_until<NOW())]]></update>
+  AND (owner_token=#{ownerToken} OR lease_until<=NOW())]]></update>
     <update id="release" timeout="3"><![CDATA[UPDATE quant_strategy_runtime_lease
 SET lease_until=DATE_SUB(NOW(), INTERVAL 1 SECOND), update_time=NOW()
 WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND owner_token=#{ownerToken}
