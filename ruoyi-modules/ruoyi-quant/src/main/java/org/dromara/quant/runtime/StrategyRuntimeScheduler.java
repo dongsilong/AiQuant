@@ -22,6 +22,15 @@ public class StrategyRuntimeScheduler {
     }
 
     /**
+     * 独立于行情回调续期策略运行租约；续期失败会关闭本节点行情驱动决策。
+     * 运行租约最短 15 秒，因此 5 秒监督周期为其保留至少两次重试机会。
+     */
+    @Scheduled(fixedDelay = 5000, initialDelay = 5000)
+    public void renewStrategyLeases() {
+        runtime.renewActiveRuntimeLeases();
+    }
+
+    /**
      * 定期刷新运行策略依赖的持仓事实。
      */
     @Scheduled(fixedDelayString = "#{@quantProperties.reconcile.intervalSeconds * 1000}", initialDelay = 15000)
