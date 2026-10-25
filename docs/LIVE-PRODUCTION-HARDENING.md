@@ -37,7 +37,7 @@ Two independent transports are implemented under the same `ExchangeGateway` mark
 | Option | Configuration | Operational trade-off |
 | --- | --- | --- |
 | A — official SDK | `QUANT_BINANCE_WEBSOCKET_TRANSPORT=BINANCE_SDK` | Uses the official 12.1.0 stream subscription API for market and user events. The SDK's internal queue is unbounded; the adapter monitors queue depth and disconnects at `QUANT_BINANCE_SDK_BACKLOG_LIMIT` (default 2048) for reconciliation/replay. This is a **threshold**, not a hard memory cap. Treat as opt-in pending soak/fault testing. |
-| B — raw OkHttp | `QUANT_BINANCE_WEBSOCKET_TRANSPORT=RAW_OKHTTP` | Existing combined stream protocol, preserving raw-event parsing and existing stream-health/replay behavior. **Default for LIVE.** |
+| B — raw OkHttp | `QUANT_BINANCE_WEBSOCKET_TRANSPORT=RAW_OKHTTP` | Existing combined stream protocol, preserving raw-event parsing and existing stream-health/replay behavior. **Default in dev/prod profiles and LIVE.** |
 
 **Configuration at deployment:** set environment variables above, then perform a supervised rolling restart. This is safe to configure in every profile and does not modify the Binance REST SDK version.
 
@@ -60,11 +60,11 @@ A switch chooses the new transport for future subscriptions, closes existing str
 
 ## Required production configuration
 
-Mandatory before booting either prod/dev profile: `QUANT_SECRET_KEY`, `MYBATIS_ENCRYPTOR_PASSWORD`, `AIQUANT_JDBC_URL`, `AIQUANT_DB_USERNAME`, `AIQUANT_DB_PASSWORD`, `AIQUANT_REDIS_PASSWORD`.
+Mandatory before booting either prod/dev profile: `QUANT_SECURITY_SECRET_KEY`, `AIQUANT_ENCRYPTOR_PASSWORD`, `AIQUANT_DATASOURCE_PASSWORD`, `AIQUANT_REDIS_PASSWORD`, `AIQUANT_SA_TOKEN_JWT_SECRET`, and `AIQUANT_API_DECRYPT_PRIVATE_KEY`. Production additionally requires `AIQUANT_DATASOURCE_URL`, `AIQUANT_DATASOURCE_USERNAME`, `AIQUANT_REDIS_HOST`, and `AIQUANT_REDIS_PORT`; the production profile deliberately has no localhost fallback for database/Redis endpoints. Development retains local-only datasource defaults.
 
 LIVE global permission is now enabled by default. For active strategy execution in prod, `QUANT_RUNTIME_ENABLED=true` remains separately required. Set `QUANT_LIVE_ENABLED=false` wherever real trading has not been approved. These environment variables are **not** sufficient approval to deploy. Check per-account authorization, risk limits, API withdrawal prohibition, credential permissions, and platform network rules independently. No API credentials should appear in git, logs, screenshots, or monitoring payloads.
 
-**Encryption migration warning:** Changing `QUANT_SECRET_KEY` or `MYBATIS_ENCRYPTOR_PASSWORD` without re-encrypting stored values can make existing credentials unreadable. Copy the current key into a secret manager **outside git** and coordinate a controlled key rotation with data migration. Environment-variable substitution alone does not revoke compromised credentials.
+**Encryption migration warning:** Changing `QUANT_SECURITY_SECRET_KEY` or `AIQUANT_ENCRYPTOR_PASSWORD` without re-encrypting stored values can make existing credentials unreadable. Copy the current key into a secret manager **outside git** and coordinate a controlled key rotation with data migration. Environment-variable substitution alone does not revoke compromised credentials.
 
 **Existing positions warning:** Do not start an upgraded node with `QUANT_RUNTIME_ENABLED=false` when it is responsible for protecting open LIVE positions. Arrange safe migration with exchange-side protection, an operator-approved cutover, and a verified new worker owner.
 
@@ -114,7 +114,7 @@ Empty defaults prevent source-embedded secrets but do not configure an integrati
 
 `script/sql/quant/production-preflight.sql` requires schema used by the active LIVE dispatch, recovery and cross-node snapshot-fencing paths. The strategy position-cycle/fill-event/inventory tables from migrations V07/V08 are deliberately excluded from mandatory preflight because those migrations are marked review-only and the projector is not automatically wired. Do not install or enable that projector until its provenance, historical replay, side/role attribution, commission accounting and reconciliation contracts have passed an independent staging review.
 
-The current preflight is a read-only contract check, not a canonical production DDL baseline. The recovery case/audit migration V05 is also marked design-only and requires a reviewed production DDL, backup/restore rehearsal, least-privilege database grants and external immutable audit retention before use.
+The current preflight is a read-only contract check, not a canonical production DDL baseline. First-time financial-income reconciliation now bootstraps up to 180 days of Binance income history rather than treating the ordinary 48-hour scheduler window as complete; the durable cursor advances only with the transaction that persists those financial facts. The recovery case/audit migration V05 is also marked design-only and requires a reviewed production DDL, backup/restore rehearsal, least-privilege database grants and external immutable audit retention before use.
 
 
 ### 2026-10-25 — fill-ledger immutability and schema alignment
