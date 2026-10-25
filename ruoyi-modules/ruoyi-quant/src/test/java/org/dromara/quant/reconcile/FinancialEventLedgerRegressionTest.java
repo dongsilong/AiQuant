@@ -7,6 +7,7 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.StrictBinanceTradeCollector;
+import org.dromara.quant.execution.StrictBinanceIncomeCollector;
 import org.dromara.quant.execution.StrategyFillJournalService;
 import org.dromara.quant.finance.domain.QuantFinancialEvent;
 import org.dromara.quant.finance.domain.vo.QuantFinancialEventVo;
@@ -17,6 +18,7 @@ import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
 import org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
+import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,8 +49,9 @@ class FinancialEventLedgerRegressionTest {
             mock(QuantOrderMapper.class), mock(QuantTradeMapper.class), mock(QuantProtectionOrderMapper.class),
             financialEvents, mock(QuantReconcileRecordMapper.class), mock(ReconciliationFailureRecorder.class),
             mock(StrategyPositionStateService.class), mock(PlatformTransactionManager.class),
-            mock(StrictBinanceTradeCollector.class), mock(StrategyFillJournalService.class),
-            mock(StrategyFillSyncCursorMapper.class), mock(StrategyFillSyncCursorService.class));
+            mock(StrictBinanceTradeCollector.class), mock(StrictBinanceIncomeCollector.class), mock(StrategyFillJournalService.class),
+            mock(StrategyFillSyncCursorMapper.class), mock(StrategyFillSyncCursorService.class),
+            mock(FinancialEventSyncCursorMapper.class), mock(FinancialEventSyncCursorService.class));
     }
 
     private void sync(List<ExchangeGateway.IncomeSnapshot> snapshots) throws Exception {
@@ -129,6 +132,27 @@ class FinancialEventLedgerRegressionTest {
         assertTrue(conflict.getMessage().contains("fields=amount"),
             "conflict diagnostics should identify the exact mismatched financial field");
         verify(financialEvents, never()).insert(any(QuantFinancialEvent.class));
+    }
+
+    @Test
+    void normalizesOnlyAnOtherwiseIdenticalLegacyBeijingLocalEventTime() throws Exception {
+        QuantFinancialEventVo stored = new QuantFinancialEventVo();
+        stored.setId(123L);
+        stored.setSymbol("BTCUSDT");
+        stored.setEventType("FUNDING_FEE");
+        stored.setAmount(new BigDecimal("-0.125"));
+        stored.setAsset("USDT");
+        stored.setInfo("funding");
+        stored.setEventTime(LocalDateTime.of(2026, 10, 20, 8, 0));
+        when(financialEvents.selectVoOne(any(LambdaQueryWrapper.class))).thenReturn(stored);
+        when(financialEvents.updateById(any(QuantFinancialEvent.class))).thenReturn(1);
+
+        Instant timestamp = Instant.parse("2026-10-20T00:00:00Z");
+        assertDoesNotThrow(() -> sync(List.of(income(new BigDecimal("-0.125"), timestamp))));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(QuantFinancialEvent.class);
+        verify(financialEvents).updateById(captor.capture());
+        assertEquals(LocalDateTime.ofInstant(timestamp, ZoneOffset.UTC), captor.getValue().getEventTime());
     }
 
     @Test
