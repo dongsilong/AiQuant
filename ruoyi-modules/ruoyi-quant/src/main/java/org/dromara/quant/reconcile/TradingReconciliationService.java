@@ -555,7 +555,8 @@ public class TradingReconciliationService {
             // behind the current interval may not be reported as complete.
             reconcileMapper.insert(record(credential.getId(), "DEGRADED",
                 "{\"unmatchedLiveProtections\":" + unmatchedProtections + ",\"unattributedFills\":" + unattributedFills
-                    + ",\"fillHistoryBacklogSymbols\":" + fillHistoryBacklogSymbols + ",\"incomeHistoryBacklog\":" + facts.incomeHistoryBacklog() + "}"));        } else {
+                    + ",\"fillHistoryBacklogSymbols\":" + fillHistoryBacklogSymbols + ",\"incomeHistoryBacklog\":" + facts.incomeHistoryBacklog() + "}"));
+        } else {
             reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
         }
     }
