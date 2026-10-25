@@ -23,7 +23,8 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
     private static final Set<String> TABLES = Set.of("quant_credential", "quant_strategy", "quant_strategy_instance", "quant_strategy_position_state",
         "quant_strategy_runtime_lease", "quant_strategy_entry_guard", "quant_execution_record", "quant_open_capacity", "quant_order", "quant_position", "quant_protection_order",
         "quant_protection_target", "quant_trade", "quant_trade_decision_log", "quant_live_dispatch_guard", "quant_order_dispatch_ticket", "quant_strategy_fill_allocation",
-        "quant_strategy_fill_journal", "quant_strategy_fill_sync_cursor", "quant_live_account_settings_intent", "quant_position_sync_fence", "quant_live_user_stream_lease");
+        "quant_strategy_fill_journal", "quant_strategy_fill_sync_cursor", "quant_live_account_settings_intent", "quant_position_sync_fence", "quant_live_user_stream_lease",
+        "quant_strategy_order_intent", "quant_strategy_pre_dispatch_intent", "quant_live_recovery_case", "quant_live_recovery_audit");
 
     private static final Set<String> UNIQUE = Set.of("quant_strategy_runtime_lease|credential_id,symbol", "quant_strategy_entry_guard|credential_id,symbol,kline_open_time",
         "quant_execution_record|credential_id,idempotency_key", "quant_open_capacity|credential_id,idempotency_key", "quant_strategy_position_state|instance_id",
