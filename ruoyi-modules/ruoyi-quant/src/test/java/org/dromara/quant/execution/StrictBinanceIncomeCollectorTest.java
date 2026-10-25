@@ -64,6 +64,31 @@ class StrictBinanceIncomeCollectorTest {
     }
 
     @Test
+    void reportsMissingEventTimeSeparatelyFromOutOfWindowEvent() {
+        var missingTime = new ExchangeGateway.IncomeSnapshot("BTCUSDT", "FUNDING_FEE", new BigDecimal("0.25"),
+            "USDT", 100L, "funding", null);
+        when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of(missingTime));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+            () -> collector.collect(credential, new ExchangeGateway.TimeRange(start, end)));
+
+        org.junit.jupiter.api.Assertions.assertTrue(error.getMessage().contains("reason=missing_event_time"));
+        org.junit.jupiter.api.Assertions.assertTrue(error.getMessage().contains("transactionId=100"));
+    }
+
+    @Test
+    void reportsOutOfWindowEventSeparately() {
+        var outside = new ExchangeGateway.IncomeSnapshot("BTCUSDT", "FUNDING_FEE", new BigDecimal("0.25"),
+            "USDT", 101L, "funding", end.plusMillis(1));
+        when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of(outside));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+            () -> collector.collect(credential, new ExchangeGateway.TimeRange(start, end)));
+
+        org.junit.jupiter.api.Assertions.assertTrue(error.getMessage().contains("reason=event_time_outside_requested_interval"));
+    }
+
+    @Test
     void rejectsIncomeRowsWithMissingFinancialFacts() {
         var incomplete = new ExchangeGateway.IncomeSnapshot("BTCUSDT", "FUNDING_FEE", null, "USDT", 99L, "funding", start.plusSeconds(1));
         when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of(incomplete));
