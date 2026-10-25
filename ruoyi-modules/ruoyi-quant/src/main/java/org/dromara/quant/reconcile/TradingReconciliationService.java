@@ -967,7 +967,27 @@ public class TradingReconciliationService {
                 if (!Objects.equals(entity.getInfo(), s.info())) conflictingFields.add("info");
                 if (!sameTime) conflictingFields.add("eventTime");
                 if (!conflictingFields.isEmpty()) {
-                    // Keep the ledger immutable while identifying the exact conflicting facts.
+                    /*
+                     * Narrow compatibility repair for rows written by the legacy Beijing-local-time
+                     * representation: the immutable exchange identity and every non-time fact must
+                     * match, and the stored time must equal the incoming UTC time plus exactly 8h.
+                     * Never normalize arbitrary timestamp conflicts or overwrite other financial facts.
+                     */
+                    boolean legacyBeijingTime = conflictingFields.equals(List.of("eventTime"))
+                        && entity.getEventTime() != null
+                        && entity.getEventTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+                            .equals(eventTime.plusHours(8).truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+                    if (legacyBeijingTime && entity.getId() != null) {
+                        entity.setEventTime(eventTime);
+                        if (financialEventMapper.updateById(entity) != 1) {
+                            throw new IllegalStateException("Legacy Beijing-time financial event could not be normalized safely: credentialId="
+                                + credential.getId() + ", transactionId=" + s.transactionId());
+                        }
+                        log.warn("Normalized legacy Beijing-local eventTime to UTC for matching Binance financial event credentialId={} transactionId={}",
+                            credential.getId(), s.transactionId());
+                        continue;
+                    }
+                    // Any other mismatch remains a hard reconciliation failure; do not advance the cursor.
                     throw new IllegalStateException("Binance financial event conflicts with persisted ledger: credentialId="
                         + credential.getId() + ", transactionId=" + s.transactionId() + ", fields=" + String.join(",", conflictingFields));
                 }
