@@ -535,7 +535,7 @@ public class StrategyRuntimeService {
         }
         // Add a small margin so the callback cannot run before requestReconciliation's throttle expires.
         long delayMillis = Math.max(1L, retryAt - now) + 25L;
-        log.warn("策略持仓核验/恢复尚未解除开仓阻断，安排自动重试 instanceId={} credentialId={} symbol={} runMode={} reason={} retryAfterMillis={}",
+        log.debug("策略持仓核验/恢复尚未解除开仓阻断，安排自动重试 instanceId={} credentialId={} symbol={} runMode={} reason={} retryAfterMillis={}",
             runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
             runtime.positionReconciliationBlockReason, delayMillis);
         java.util.concurrent.CompletableFuture.delayedExecutor(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS, recoveryExecutor)
