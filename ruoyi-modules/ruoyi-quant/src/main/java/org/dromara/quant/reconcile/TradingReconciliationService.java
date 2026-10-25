@@ -218,7 +218,12 @@ public class TradingReconciliationService {
                     throw new IllegalStateException("Position snapshot fence advance failed");
                 }
             });
-            markPositionVerified(credential.getId(), eventGeneration);
+            if (!markPositionVerified(credential.getId(), eventGeneration)) {
+                // A private-stream event can race the final commit/verification boundary.
+                // The database may contain this older snapshot, but it must never become
+                // a fresh runtime cache entry or release the LIVE entry gate.
+                throw new SnapshotSupersededException("Position snapshot changed before freshness verification");
+            }
             runtimePositionSnapshots.put(credential.getId(), new CachedPositionSnapshot(eventGeneration, runtimeGeneration, Instant.now(), positions));
         } finally {
             accountLock.unlock();
@@ -236,10 +241,8 @@ public class TradingReconciliationService {
         return runtimeSnapshotGenerations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong()).get();
     }
 
-    private void markPositionVerified(Long credentialId, long generation) {
-        if (positionFreshness != null) {
-            positionFreshness.verifiedIfUnchanged(credentialId, generation);
-        }
+    private boolean markPositionVerified(Long credentialId, long generation) {
+        return positionFreshness == null || positionFreshness.verifiedIfUnchanged(credentialId, generation);
     }
 
     /**
