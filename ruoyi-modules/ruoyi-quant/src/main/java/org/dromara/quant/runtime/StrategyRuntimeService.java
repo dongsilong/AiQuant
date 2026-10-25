@@ -535,7 +535,7 @@ public class StrategyRuntimeService {
         }
         // Add a small margin so the callback cannot run before requestReconciliation's throttle expires.
         long delayMillis = Math.max(1L, retryAt - now) + 25L;
-        log.warn("策略持仓事实核验未完成，保持开仓阻断并安排自动重试 instanceId={} credentialId={} symbol={} runMode={} reason={} retryAfterMillis={}",
+        log.warn("策略持仓核验/恢复尚未解除开仓阻断，安排自动重试 instanceId={} credentialId={} symbol={} runMode={} reason={} retryAfterMillis={}",
             runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
             runtime.positionReconciliationBlockReason, delayMillis);
         java.util.concurrent.CompletableFuture.delayedExecutor(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS, recoveryExecutor)
@@ -773,7 +773,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.instance.setLastError("");
                 instanceMapper.updateById(runtime.instance);
             }
-            runtime.positionReconciliationBlockReason = "COMPLETE";
+            runtime.positionReconciliationBlockReason = recoveryStillRequired ? "RECOVERY_OR_PROTECTION_STILL_REQUIRED" : "COMPLETE";
             reconciliationCompleted = true;
         } catch (TradingReconciliationService.SnapshotSupersededException ex) {
             runtime.positionReconciliationBlockReason = "SNAPSHOT_SUPERSEDED";
@@ -834,7 +834,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
                 }
             }
-            if (!reconciliationCompleted) {
+            if (!reconciliationCompleted || "RECOVERY_OR_PROTECTION_STILL_REQUIRED".equals(runtime.positionReconciliationBlockReason)) {
                 scheduleReconciliationRetry(runtime);
             }
         }
