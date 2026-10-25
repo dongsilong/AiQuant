@@ -1013,6 +1013,15 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /**
+     * A fresh live trade/kline proves data is flowing only after the shared stream has
+     * completed its own recovery handshake. Replay and status events cannot reopen the gate.
+     */
+    static boolean shouldRestoreMarketHealth(boolean marketStreamReady, boolean replay, String eventType) {
+        return marketStreamReady && !replay && eventType != null
+            && ("TRADE".equalsIgnoreCase(eventType) || "KLINE".equalsIgnoreCase(eventType));
+    }
+
+    /**
      * 处理实时行情事件并驱动策略计算。
      */
     private void onMarketEvent(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
@@ -1028,7 +1037,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 return;
             }
             if (!ensureEventLease(runtime)) {
-                runtime.marketHealthy = false;
+                // Losing the strategy lease fences decisions, but does not mean the public
+                // market feed is unhealthy. MarketStreamHub reports feed readiness separately.
                 return;
             }
             if ("CONNECTING".equals(event.type())) {
@@ -1049,6 +1059,16 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if ("CONNECTED".equals(event.type())) {
                 runtime.marketHealthy = true;
                 return;
+            }
+            // CONNECTED may have reached this runtime while its strategy lease was temporarily
+            // fenced. Once the hub reports ready, the next fresh live data event is also a safe
+            // recovery signal; otherwise this runtime could remain marketHealthy=false forever.
+            if (shouldRestoreMarketHealth(runtime.marketStreamReady, event.replay(), event.type())) {
+                if (!runtime.marketHealthy) {
+                    log.info("策略行情健康门控随实时行情恢复 instanceId={} mode={} symbol={} eventType={}",
+                        runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type());
+                }
+                runtime.marketHealthy = true;
             }
             if (event.kline() != null) {
                 runtime.updateKline(event.kline());
@@ -4168,6 +4188,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private volatile boolean stateRefreshRequired;
         private volatile boolean positionReconciling;
         private volatile boolean positionFactsReady;
+        /** 最近一次未完成的持仓核验阶段，用于解释开仓门控并安排独立重试。 */
+        private volatile String positionReconciliationBlockReason = "NOT_STARTED";
         private volatile long positionFactsVerifiedAt;
         private volatile long nextPositionReconcilingLogAt;
         private volatile long nextRecoveryRequiredLogAt;
