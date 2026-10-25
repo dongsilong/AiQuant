@@ -747,12 +747,10 @@ public class TradingReconciliationService {
                     if (raced == null) {
                         throw concurrentInsert;
                     }
+                    final boolean attributionChanged;
                     try {
                         assertImmutableTradeFacts(raced, s);
-                        boolean attributionChanged = mergeStrategyAttribution(raced, sourceOrder);
-                        if (attributionChanged && tradeMapper.updateById(raced) != 1) {
-                            throw new IllegalStateException("Concurrent Binance fill attribution could not be enriched safely", concurrentInsert);
-                        }
+                        attributionChanged = mergeStrategyAttribution(raced, sourceOrder);
                     } catch (IllegalStateException conflict) {
                         if (!live) {
                             throw conflict;
@@ -761,6 +759,9 @@ public class TradingReconciliationService {
                         log.error("Concurrent local trade conflicts with Binance fill; quarantined raw fact credentialId={} symbol={} exchangeTradeId={}",
                             credential.getId(), s.symbol(), s.tradeId());
                         continue;
+                    }
+                    if (attributionChanged && tradeMapper.updateById(raced) != 1) {
+                        throw new IllegalStateException("Concurrent Binance fill attribution could not be enriched safely", concurrentInsert);
                     }
                     log.debug("并发对账已写入相同成交事实，跳过重复插入 credentialId={} symbol={} exchangeTradeId={}",
                         credential.getId(), s.symbol(), s.tradeId());
