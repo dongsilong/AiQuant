@@ -21,6 +21,8 @@ WITH required_tables AS (
     SELECT 'quant_live_dispatch_guard' UNION ALL
     SELECT 'quant_order_dispatch_ticket' UNION ALL
     SELECT 'quant_strategy_fill_allocation' UNION ALL
+    SELECT 'quant_strategy_fill_journal' UNION ALL
+    SELECT 'quant_strategy_fill_sync_cursor' UNION ALL
     SELECT 'quant_live_account_settings_intent' UNION ALL
     SELECT 'quant_strategy_pre_dispatch_intent' UNION ALL
     SELECT 'quant_strategy_order_intent' UNION ALL
@@ -51,6 +53,9 @@ WITH required_indexes AS (
   SELECT 'quant_live_dispatch_guard','credential_id,symbol' UNION ALL
   SELECT 'quant_order_dispatch_ticket','credential_id,idempotency_key' UNION ALL
   SELECT 'quant_strategy_fill_allocation','credential_id,symbol,exchange_trade_id' UNION ALL
+  SELECT 'quant_strategy_fill_journal','credential_id,symbol,exchange_trade_id' UNION ALL
+  SELECT 'quant_strategy_fill_sync_cursor','credential_id,symbol' UNION ALL
+  SELECT 'quant_live_recovery_case','credential_id,symbol,active_case_key' UNION ALL
   SELECT 'quant_live_account_settings_intent','credential_id,symbol' UNION ALL
   SELECT 'quant_strategy_pre_dispatch_intent','credential_id,idempotency_key' UNION ALL
   SELECT 'quant_strategy_order_intent','credential_id,symbol,client_order_id' UNION ALL
