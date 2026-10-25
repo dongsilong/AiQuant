@@ -47,6 +47,24 @@ public class StrictBinanceIncomeCollector {
         return List.copyOf(sorted);
     }
 
+    private static String invalidReason(ExchangeGateway.IncomeSnapshot item, long leftMillis, long rightMillis) {
+        if (item == null) return "null_event";
+        if (item.transactionId() == null) return "missing_transaction_id";
+        if (item.transactionId() <= 0) return "invalid_transaction_id";
+        if (item.incomeType() == null || item.incomeType().isBlank()) return "missing_income_type";
+        if (item.amount() == null) return "missing_amount";
+        if (item.asset() == null || !item.asset().matches("[A-Za-z0-9]{2,20}")) return "missing_or_invalid_asset";
+        if (item.time() == null) return "missing_event_time";
+        long eventMillis = item.time().toEpochMilli();
+        if (eventMillis < leftMillis || eventMillis > rightMillis) return "event_time_outside_requested_interval";
+        return null;
+    }
+
+    private static String safeToken(String value) {
+        if (value == null || value.isBlank()) return "<missing>";
+        return value.replaceAll("[^A-Za-z0-9_.-]", "_");
+    }
+
     private void collectWindow(ExchangeGateway.Credential credential, long leftMillis, long rightMillis,
                                Map<String, ExchangeGateway.IncomeSnapshot> unique, int[] queryCount) {
         if (++queryCount[0] > MAX_QUERIES) {
@@ -69,11 +87,16 @@ public class StrictBinanceIncomeCollector {
             return;
         }
         for (ExchangeGateway.IncomeSnapshot item : page) {
-            if (item == null || item.transactionId() == null || item.transactionId() <= 0
-                || item.incomeType() == null || item.incomeType().isBlank()
-                || item.amount() == null || item.asset() == null || !item.asset().matches("[A-Za-z0-9]{2,20}")
-                || item.time() == null || item.time().toEpochMilli() < leftMillis || item.time().toEpochMilli() > rightMillis) {
-                throw new IllegalStateException("Binance income event has missing identity/financial facts or lies outside the requested interval");
+            String invalidReason = invalidReason(item, leftMillis, rightMillis);
+            if (invalidReason != null) {
+                // Do not log amounts, credentials, raw SDK payloads or account secrets.
+                // The field-level reason is sufficient to distinguish DTO mapping bugs
+                // from a real out-of-window exchange response.
+                throw new IllegalStateException("Binance income event rejected: reason=" + invalidReason
+                    + ", incomeType=" + safeToken(item == null ? null : item.incomeType())
+                    + ", transactionId=" + (item == null ? null : item.transactionId())
+                    + ", eventTime=" + (item == null ? null : item.time())
+                    + ", requestedFrom=" + left + ", requestedTo=" + right);
             }
             String key = item.incomeType() + ":" + item.transactionId();
             ExchangeGateway.IncomeSnapshot previous = unique.putIfAbsent(key, item);
