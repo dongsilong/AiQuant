@@ -25,6 +25,7 @@ import org.dromara.quant.reconcile.domain.QuantReconcileRecord;
 import org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
+import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -100,6 +101,8 @@ public class TradingReconciliationService {
     private final StrategyFillJournalService fillJournal;
     private final StrategyFillSyncCursorMapper fillSyncCursors;
     private final StrategyFillSyncCursorService fillSyncCursorService;
+    private final FinancialEventSyncCursorMapper incomeSyncCursors;
+    private final FinancialEventSyncCursorService incomeSyncCursorService;
     @Autowired(required = false)
     private LivePositionFreshness positionFreshness;
     @Autowired
@@ -117,7 +120,8 @@ public class TradingReconciliationService {
                                         QuantOrderMapper orderMapper, QuantTradeMapper tradeMapper, QuantProtectionOrderMapper protectionOrderMapper,
                                         QuantFinancialEventMapper financialEventMapper, QuantReconcileRecordMapper reconcileMapper, ReconciliationFailureRecorder failureRecorder
         , StrategyPositionStateService strategyPositionStateService, PlatformTransactionManager transactionManager, StrictBinanceTradeCollector tradeCollector,
-                                        StrategyFillJournalService fillJournal, StrategyFillSyncCursorMapper fillSyncCursors, StrategyFillSyncCursorService fillSyncCursorService) {
+                                        StrategyFillJournalService fillJournal, StrategyFillSyncCursorMapper fillSyncCursors, StrategyFillSyncCursorService fillSyncCursorService,
+                                        FinancialEventSyncCursorMapper incomeSyncCursors, FinancialEventSyncCursorService incomeSyncCursorService) {
         this.gateway = gateway;
         this.accountSnapshotMapper = accountSnapshotMapper;
         this.positionMapper = positionMapper;
@@ -133,6 +137,8 @@ public class TradingReconciliationService {
         this.fillJournal = fillJournal;
         this.fillSyncCursors = fillSyncCursors;
         this.fillSyncCursorService = fillSyncCursorService;
+        this.incomeSyncCursors = incomeSyncCursors;
+        this.incomeSyncCursorService = incomeSyncCursorService;
         this.transaction = new TransactionTemplate(transactionManager);
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -496,8 +502,23 @@ public class TradingReconciliationService {
             }
             protections.put(symbol, List.copyOf(gateway.queryProtectionOrders(c, symbol)));
         }
-        var income = incomeCollector.collect(c, range);
-        return new ExchangeFacts(account, positions, openOrders, history, trades, fillCursorEnds, futureFillCursors, fillHistoryBacklogSymbols, protections, income);
+        LocalDateTime storedIncomeCursor = incomeSyncCursors.selectLastCompleteTo(credential.getId());
+        Instant incomeFrom = storedIncomeCursor == null ? range.from() : storedIncomeCursor.toInstant(ZoneOffset.UTC);
+        Instant incomeTo = range.to();
+        if (incomeFrom.isAfter(incomeTo)) {
+            throw new IllegalStateException("Binance income-history cursor is in the future; refusing to skip financial events: credentialId="
+                + credential.getId() + ", cursor=" + storedIncomeCursor);
+        }
+        boolean incomeHistoryBacklog = Duration.between(incomeFrom, incomeTo).compareTo(Duration.ofDays(180)) > 0;
+        if (incomeHistoryBacklog) {
+            incomeTo = incomeFrom.plus(Duration.ofDays(180));
+        }
+        List<ExchangeGateway.IncomeSnapshot> income = incomeFrom.isBefore(incomeTo)
+            ? incomeCollector.collect(c, new ExchangeGateway.TimeRange(incomeFrom, incomeTo))
+            : List.of();
+        LocalDateTime incomeCursorEnd = LocalDateTime.ofInstant(incomeTo, ZoneOffset.UTC);
+        return new ExchangeFacts(account, positions, openOrders, history, trades, fillCursorEnds, futureFillCursors, fillHistoryBacklogSymbols,
+            protections, income, incomeCursorEnd, incomeHistoryBacklog);
     }
 
     /**
@@ -527,13 +548,14 @@ public class TradingReconciliationService {
             unmatchedProtections += syncProtectionOrders(credential, entry.getKey(), facts.positions(), entry.getValue());
         }
         syncFinancialEvents(credential, facts.income());
+        incomeSyncCursorService.advance(credential.getId(), facts.incomeCursorEnd());
         int fillHistoryBacklogSymbols = facts.fillHistoryBacklogSymbols().size();
-        if (unmatchedProtections > 0 || unattributedFills > 0 || fillHistoryBacklogSymbols > 0) {
+        if (unmatchedProtections > 0 || unattributedFills > 0 || fillHistoryBacklogSymbols > 0 || facts.incomeHistoryBacklog()) {
             // Unmatched protections, unattributed fills, or a catch-up cursor
             // behind the current interval may not be reported as complete.
             reconcileMapper.insert(record(credential.getId(), "DEGRADED",
-                "{\"unmatchedLiveProtections\":" + unmatchedProtections + ",\"unattributedFills\":" + unattributedFills + ",\"fillHistoryBacklogSymbols\":" + fillHistoryBacklogSymbols + "}"));
-        } else {
+                "{\"unmatchedLiveProtections\":" + unmatchedProtections + ",\"unattributedFills\":" + unattributedFills
+                    + ",\"fillHistoryBacklogSymbols\":" + fillHistoryBacklogSymbols + ",\"incomeHistoryBacklog\":" + facts.incomeHistoryBacklog() + "}"));        } else {
             reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
         }
     }
@@ -1058,7 +1080,7 @@ public class TradingReconciliationService {
                                  List<ExchangeGateway.OrderSnapshot> history, Map<String, List<ExchangeGateway.TradeSnapshot>> trades,
                                  Map<String, Instant> fillCursorEnds, Map<String, LocalDateTime> futureFillCursors, Set<String> fillHistoryBacklogSymbols,
                                  Map<String, List<ExchangeGateway.ProtectionOrderSnapshot>> protections,
-                                 List<ExchangeGateway.IncomeSnapshot> income) {
+                                 List<ExchangeGateway.IncomeSnapshot> income, LocalDateTime incomeCursorEnd, boolean incomeHistoryBacklog) {
     }
 
     private record CachedPositionSnapshot(long positionGeneration, long runtimeGeneration, Instant fetchedAt, List<ExchangeGateway.PositionSnapshot> positions) {
