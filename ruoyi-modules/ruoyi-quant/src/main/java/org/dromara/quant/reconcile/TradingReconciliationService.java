@@ -461,6 +461,17 @@ public class TradingReconciliationService {
      */
 
     /**
+     * Binance income history is retained for up to six months. A missing cursor is a
+     * bootstrap, not proof that the recent scheduler window is the full history.
+     */
+    static Instant initialIncomeHistoryStart(Instant now, LocalDateTime storedCursor) {
+        if (now == null) {
+            throw new IllegalArgumentException("Exchange reconciliation time is required");
+        }
+        return storedCursor == null ? now.minus(Duration.ofDays(180)) : storedCursor.toInstant(ZoneOffset.UTC);
+    }
+
+    /**
      * 收集并校验账户、持仓和成交事实，缺项时不写入部分同步结果。
      */
     private ExchangeFacts collectExchangeFacts(QuantCredential credential, int historyHours, ExchangeGateway.Credential c, ExchangeGateway.AccountSnapshot account,
@@ -503,7 +514,7 @@ public class TradingReconciliationService {
             protections.put(symbol, List.copyOf(gateway.queryProtectionOrders(c, symbol)));
         }
         LocalDateTime storedIncomeCursor = incomeSyncCursors.selectLastCompleteTo(credential.getId());
-        Instant incomeFrom = storedIncomeCursor == null ? now.minus(Duration.ofDays(180)) : storedIncomeCursor.toInstant(ZoneOffset.UTC);
+        Instant incomeFrom = initialIncomeHistoryStart(now, storedIncomeCursor);
         Instant incomeTo = range.to();
         if (incomeFrom.isAfter(incomeTo)) {
             throw new IllegalStateException("Binance income-history cursor is in the future; refusing to skip financial events: credentialId="
