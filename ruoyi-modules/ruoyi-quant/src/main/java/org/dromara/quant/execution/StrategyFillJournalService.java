@@ -44,6 +44,10 @@ public class StrategyFillJournalService {
             return CONFLICT;
         }
         if (order == null || order.getStrategyId() == null || order.getStrategyInstanceId() == null) {
+            // A capture-only pass must not regress a previously attributed raw fill.
+            if (ATTRIBUTED.equals(record.getAttributionStatus())) {
+                return ATTRIBUTED;
+            }
             return updateStatus(record, WAITING_ORDER, "未找到具有明确策略实例归属的本地订单");
         }
         try {
