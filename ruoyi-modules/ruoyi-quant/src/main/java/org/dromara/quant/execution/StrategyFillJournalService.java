@@ -59,6 +59,21 @@ public class StrategyFillJournalService {
         }
     }
 
+    /**
+     * Persist a cross-ledger conflict without rewriting the first exchange fact.
+     * Callers must not throw afterward if this quarantine is to commit.
+     */
+    public void quarantineConflict(Long credentialId, String symbol, Long tradeId, String reason) {
+        if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank() || tradeId == null || tradeId <= 0) {
+            throw new IllegalArgumentException("Valid raw fill identity required for conflict quarantine");
+        }
+        StrategyFillJournalRecord record = journal.selectByKey(credentialId, symbol.trim().toUpperCase(Locale.ROOT), tradeId);
+        if (record == null) {
+            throw new IllegalStateException("Cannot quarantine a fill conflict without its persisted raw exchange fact");
+        }
+        updateStatus(record, CONFLICT, reason == null || reason.isBlank() ? "跨账本成交事实冲突，需要人工核验" : reason);
+    }
+
     /** Retry durable unresolved fills after their exact local order may have become available. */
     public int retryPending(Long credentialId) {
         List<StrategyFillJournalRecord> pending = journal.selectPending(credentialId, RETRY_BATCH_SIZE);
