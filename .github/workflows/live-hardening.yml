@@ -89,6 +89,15 @@ jobs:
           test -n "$MYSQL_CONTAINER"
           # Minimal disposable baseline lets CI verify the composite income identity migration.
           docker exec "$MYSQL_CONTAINER" mysql -uroot -ponly_for_ci aiquant_ci_test -e "
+            CREATE TABLE quant_strategy_runtime_lease (
+              instance_id BIGINT NOT NULL,
+              credential_id BIGINT NOT NULL,
+              symbol VARCHAR(32) NOT NULL,
+              owner_token VARCHAR(128) NOT NULL,
+              lease_until DATETIME(6) NOT NULL,
+              PRIMARY KEY (instance_id),
+              UNIQUE KEY uk_runtime_lease_credential_symbol (credential_id, symbol)
+            ) ENGINE=InnoDB;
             CREATE TABLE quant_financial_event (
               id BIGINT NOT NULL,
               credential_id BIGINT NOT NULL,
@@ -98,9 +107,11 @@ jobs:
               UNIQUE KEY uk_quant_financial_event (credential_id, exchange_transaction_id)
             ) ENGINE=InnoDB;"
           for ddl in \
+            script/sql/quant/V20261014_01__runtime_lease_epoch.sql \
             script/sql/quant/V20261024_01__financial_event_income_type_identity.sql \
             script/sql/quant/V20261014_02__live_dispatch_guard.sql \
             script/sql/quant/V20261014_03__strategy_fill_allocation.sql \
+            script/sql/quant/V20261014_04__account_settings_intent.sql \
             script/sql/quant/V20261014_05__recovery_case_audit.sql \
             script/sql/quant/V20261014_06__recovery_audit_immutability.sql \
             script/sql/quant/V20261014_07__strategy_position_cycles.sql \
@@ -116,14 +127,14 @@ jobs:
           tables="$(docker exec -i "$MYSQL_CONTAINER" mysql -N -B -uroot -ponly_for_ci aiquant_ci_test -e "
             SELECT COUNT(*) FROM information_schema.tables
             WHERE table_schema='aiquant_ci_test' AND table_name IN
-            ('quant_strategy_fill_allocation','quant_live_recovery_case',
-             'quant_live_recovery_audit','quant_strategy_position_cycle',
+            ('quant_strategy_runtime_lease','quant_strategy_fill_allocation','quant_live_account_settings_intent',
+             'quant_live_recovery_case','quant_live_recovery_audit','quant_strategy_position_cycle',
              'quant_strategy_position_fill_event','quant_strategy_position_inventory',
              'quant_strategy_order_intent','quant_strategy_pre_dispatch_intent',
              'quant_position_sync_fence','quant_live_user_stream_lease',
              'quant_financial_event','quant_strategy_fill_journal','quant_strategy_fill_sync_cursor',
              'quant_financial_event_sync_cursor');" | tr -d '\r')"
-          test "$tables" = 14
+          test "$tables" = 16
       - name: Verify V12 account fence blocks concurrent InnoDB writers
         run: |
           set -euo pipefail
