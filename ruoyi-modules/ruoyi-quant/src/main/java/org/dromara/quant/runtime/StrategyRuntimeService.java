@@ -447,6 +447,9 @@ public class StrategyRuntimeService {
                 || !runtime.leaseRenewing.compareAndSet(false, true)) {
                 continue;
             }
+            // Fail closed for the duration of the DB renewal. If the query hangs or the
+            // executor stalls past the lease deadline, event decisions remain fenced.
+            runtime.leaseValid = false;
             try {
                 leaseRenewalExecutor.execute(() -> {
                     try {
