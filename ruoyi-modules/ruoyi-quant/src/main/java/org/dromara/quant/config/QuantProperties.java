@@ -76,11 +76,11 @@ public class QuantProperties {
          */
         private String testnetUrl = "https://demo-fapi.binance.com";
         /**
-         * WebSocket 连接实现：RAW_OKHTTP（默认，避免已观测到的 Binance SDK/Jetty close-callback API 冲突）
-         * 或 BINANCE_SDK（显式启用前须通过当前 Jetty 依赖组合的连接、断线和重订阅集成测试）。
-         * SDK 启动失败时，适配器会在本节点降级到 RAW_OKHTTP 并请求现有流安全重连。
+         * WebSocket 连接实现：BINANCE_SDK（默认，官方 12.1.1 Streams + HTTP 代理 + 积压阈值故障断开）
+         * 或 RAW_OKHTTP（显式备用传输，原始流、有界业务队列）。
+         * 仅影响新建连接。切换已有连接须主动重新订阅/安全滚动重启。
          */
-        private String websocketTransport = "RAW_OKHTTP";
+        private String websocketTransport = "BINANCE_SDK";
         /**
          * SDK 无界内部队列的过载断开阈值；不得小于 64。
          */
