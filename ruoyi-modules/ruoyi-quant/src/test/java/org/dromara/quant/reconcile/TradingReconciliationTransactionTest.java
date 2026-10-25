@@ -13,6 +13,7 @@ import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
+import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -48,12 +49,14 @@ class TradingReconciliationTransactionTest {
     private final StrategyFillJournalService fillJournal = mock(StrategyFillJournalService.class);
     private final StrategyFillSyncCursorMapper fillCursors = mock(StrategyFillSyncCursorMapper.class);
     private final StrategyFillSyncCursorService fillCursorService = mock(StrategyFillSyncCursorService.class);
+    private final FinancialEventSyncCursorMapper incomeCursors = mock(FinancialEventSyncCursorMapper.class);
+    private final FinancialEventSyncCursorService incomeCursorService = mock(FinancialEventSyncCursorService.class);
 
     private TradingReconciliationService service() {
         var source = new DriverManagerDataSource("jdbc:h2:mem:reconciliation_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         return new TradingReconciliationService(gateway, accounts, positions, orders, trades, protection, finance, records, errors, state,
             new DataSourceTransactionManager(source), new StrictBinanceTradeCollector(gateway), new StrictBinanceIncomeCollector(gateway), fillJournal,
-            fillCursors, fillCursorService);
+            fillCursors, fillCursorService, incomeCursors, incomeCursorService);
     }
 
     private QuantCredential credential() {
