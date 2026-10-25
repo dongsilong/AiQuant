@@ -479,4 +479,56 @@ class TradingReconciliationTransactionTest {
         assertEquals("NEW", fact.getValue().getStatus());
         assertEquals(BigDecimal.ZERO, fact.getValue().getExecutedQuantity());
     }
+
+    @Test
+    void replayCannotOverwriteImmutableTradeFactsOrFundingFee() {
+        var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00Z"), "USDT");
+        var local = new org.dromara.quant.account.domain.QuantTrade();
+        local.setId(77L);
+        local.setCredentialId(1L);
+        local.setSymbol("BTCUSDT");
+        local.setExchangeTradeId(101L);
+        local.setExchangeOrderId(202L);
+        local.setSide("BUY");
+        local.setQuantity(BigDecimal.ONE);
+        local.setPrice(BigDecimal.TEN);
+        local.setCommission(new BigDecimal("0.01"));
+        local.setRealizedPnl(BigDecimal.ZERO);
+        local.setTradeTime(java.time.LocalDateTime.ofInstant(fill.time(), java.time.ZoneOffset.UTC));
+        local.setFundingFee(new BigDecimal("0.25"));
+        when(trades.selectOne(any())).thenReturn(local);
+
+        var reconciliation = service();
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(reconciliation, "syncTrades", credential(), List.of(fill));
+
+        assertEquals(new BigDecimal("0.25"), local.getFundingFee());
+        verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
+    }
+
+    @Test
+    void conflictingReplayCannotRewriteExistingTradePrice() {
+        var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00Z"), "USDT");
+        var local = new org.dromara.quant.account.domain.QuantTrade();
+        local.setId(77L);
+        local.setCredentialId(1L);
+        local.setSymbol("BTCUSDT");
+        local.setExchangeTradeId(101L);
+        local.setExchangeOrderId(202L);
+        local.setSide("BUY");
+        local.setQuantity(BigDecimal.ONE);
+        local.setPrice(new BigDecimal("11"));
+        local.setCommission(new BigDecimal("0.01"));
+        local.setRealizedPnl(BigDecimal.ZERO);
+        local.setTradeTime(java.time.LocalDateTime.ofInstant(fill.time(), java.time.ZoneOffset.UTC));
+        when(trades.selectOne(any())).thenReturn(local);
+
+        assertThrows(IllegalStateException.class,
+            () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", credential(), List.of(fill)));
+
+        verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
+        verifyNoInteractions(fillCursors, fillCursorService);
+    }
+
 }
