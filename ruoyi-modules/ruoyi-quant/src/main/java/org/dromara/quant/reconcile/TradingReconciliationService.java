@@ -485,6 +485,7 @@ public class TradingReconciliationService {
         history.forEach(o -> addSymbol(symbols, o.symbol()));
         openOrders.forEach(o -> addSymbol(symbols, o.symbol()));
         symbols.addAll(fillSyncCursors.selectSymbols(credential.getId()));
+        symbols.addAll(orderMapper.selectHistoricalSymbolsByCredential(credential.getId()));
         Map<String, List<ExchangeGateway.TradeSnapshot>> trades = new HashMap<>();
         Map<String, Instant> fillCursorEnds = new HashMap<>();
         Map<String, LocalDateTime> futureFillCursors = new HashMap<>();
@@ -492,7 +493,7 @@ public class TradingReconciliationService {
         Map<String, List<ExchangeGateway.ProtectionOrderSnapshot>> protections = new HashMap<>();
         for (String symbol : symbols) {
             LocalDateTime storedCursor = fillSyncCursors.selectLastCompleteTo(credential.getId(), symbol);
-            Instant from = storedCursor == null ? range.from() : storedCursor.toInstant(ZoneOffset.UTC);
+            Instant from = storedCursor == null ? now.minus(Duration.ofDays(180)) : storedCursor.toInstant(ZoneOffset.UTC);
             Instant to = range.to();
             if (from.isAfter(to)) {
                 // 旧版把本地时间按 UTC 写入游标。先完整重采窗口，事务内再以原值 CAS 修复，不能直接跳到现在。
