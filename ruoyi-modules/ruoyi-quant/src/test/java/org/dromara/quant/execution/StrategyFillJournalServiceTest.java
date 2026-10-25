@@ -88,6 +88,24 @@ class StrategyFillJournalServiceTest {
     }
 
     @Test
+    void crossLedgerConflictIsPersistedWithoutRewritingRawExchangeFact() {
+        var stored = new StrategyFillJournalRecord();
+        stored.setId(77L);
+        stored.setCredentialId(1L);
+        stored.setSymbol("BTCUSDT");
+        stored.setExchangeTradeId(101L);
+        stored.setAttributionStatus("ATTRIBUTED");
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(stored);
+        when(journal.updateStatus(77L, "CONFLICT", "local ledger mismatch")).thenReturn(1);
+
+        service.quarantineConflict(1L, "btcusdt", 101L, "local ledger mismatch");
+
+        assertEquals("CONFLICT", stored.getAttributionStatus());
+        verify(journal).updateStatus(77L, "CONFLICT", "local ledger mismatch");
+        verify(journal, never()).insertRaw(any());
+    }
+
+    @Test
     void retriesPersistedFillAfterExactStrategyOrderBecomesAvailable() {
         var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN, new BigDecimal("0.01"), BigDecimal.ZERO,
             Instant.parse("2026-10-17T00:00:00.123Z"), "USDT");
