@@ -678,25 +678,42 @@ public class TradingReconciliationService {
     private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
         Map<Long, QuantOrder> filledOrders = new LinkedHashMap<>();
         for (ExchangeGateway.TradeSnapshot s : snapshots) {
-            if (s == null || s.symbol() == null || s.symbol().isBlank() || s.tradeId() == null || s.tradeId() <= 0
-                || s.orderId() == null || s.orderId() <= 0 || s.time() == null
-                || !java.util.Set.of("BUY", "SELL").contains(s.side() == null ? "" : s.side().toUpperCase(Locale.ROOT))
-                || s.quantity() == null || s.quantity().signum() <= 0 || s.price() == null || s.price().signum() <= 0
-                || s.commission() == null || s.commission().signum() < 0 || s.realizedPnl() == null
-                || s.commissionAsset() == null || !s.commissionAsset().matches("[A-Za-z0-9]{2,20}")) {
+            // Pagination identity is mandatory, but incomplete money facts must still reach the
+            // LIVE raw-fill journal so the account's history watermark does not erase the evidence.
+            if (s == null || s.symbol() == null || s.symbol().isBlank() || s.tradeId() == null || s.tradeId() <= 0 || s.time() == null) {
+                throw new IllegalStateException("Binance fill lacks stable symbol/trade/time identity; refusing to advance history");
+            }
+            QuantOrder sourceOrder = s.orderId() == null ? null : orderMapper.selectOne(new LambdaQueryWrapper<QuantOrder>()
+                .eq(QuantOrder::getCredentialId, credential.getId())
+                .eq(QuantOrder::getSymbol, s.symbol())
+                .eq(QuantOrder::getExchangeOrderId, s.orderId()));
+            if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                fillJournal.attribute(s, sourceOrder, credential.getId());
+            }
+
+            boolean completeFacts = s.orderId() != null && s.orderId() > 0
+                && java.util.Set.of("BUY", "SELL").contains(s.side() == null ? "" : s.side().toUpperCase(Locale.ROOT))
+                && s.quantity() != null && s.quantity().signum() > 0
+                && s.price() != null && s.price().signum() > 0
+                && s.commission() != null && s.commission().signum() >= 0
+                && s.realizedPnl() != null
+                && s.commissionAsset() != null && s.commissionAsset().matches("[A-Za-z0-9]{2,20}");
+            if (!completeFacts) {
+                if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                    log.warn("LIVE Binance fill retained for attribution review; local numeric trade row was not fabricated credentialId={} symbol={} exchangeTradeId={} orderId={}",
+                        credential.getId(), s.symbol(), s.tradeId(), s.orderId());
+                    continue;
+                }
                 throw new IllegalStateException("Binance fill lacks valid immutable facts; refusing to persist partial trade");
             }
             if (decisionLogs != null) {
                 decisionLogs.trade(credential.getId(), s);
             }
+
             QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>()
                 .eq(QuantTrade::getCredentialId, credential.getId())
                 .eq(QuantTrade::getSymbol, s.symbol())
                 .eq(QuantTrade::getExchangeTradeId, s.tradeId()));
-            QuantOrder sourceOrder = orderMapper.selectOne(new LambdaQueryWrapper<QuantOrder>()
-                .eq(QuantOrder::getCredentialId, credential.getId())
-                .eq(QuantOrder::getSymbol, s.symbol())
-                .eq(QuantOrder::getExchangeOrderId, s.orderId()));
 
             if (entity == null) {
                 entity = new QuantTrade();
@@ -742,9 +759,6 @@ public class TradingReconciliationService {
             }
             if (sourceOrder != null && sourceOrder.getId() != null) {
                 filledOrders.put(sourceOrder.getId(), sourceOrder);
-            }
-            if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
-                fillJournal.attribute(s, sourceOrder, credential.getId());
             }
         }
         filledOrders.values().forEach(order -> capturePostFillBalance(credential, order));
