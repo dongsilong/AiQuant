@@ -16,7 +16,7 @@ class FinancialIncomeHistoryBootstrapTest {
         Instant now = Instant.parse("2026-10-25T05:00:00Z");
 
         assertEquals(now.minusSeconds(180L * 24 * 60 * 60),
-            TradingReconciliationService.initialIncomeHistoryStart(now, null));
+            TradingReconciliationService.initialRetainedHistoryStart(now, null));
     }
 
     @Test
