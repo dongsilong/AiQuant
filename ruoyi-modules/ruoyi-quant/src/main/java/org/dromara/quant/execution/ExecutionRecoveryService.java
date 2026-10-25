@@ -71,21 +71,31 @@ public class ExecutionRecoveryService {
         if (!properties.getReconcile().isEnabled()) {
             return;
         }
-        List<QuantExecutionRecord> pending = recordMapper.selectList(new LambdaQueryWrapper<QuantExecutionRecord>().in(QuantExecutionRecord::getExecutionStatus, "PENDING",
-                "UNKNOWN", "CONFIRMED")
-            // Avoid querying the same unresolved order every scheduler tick, while never expiring it.
-            .and(q -> q.isNull(QuantExecutionRecord::getLastRecoveryAt).or().le(QuantExecutionRecord::getLastRecoveryAt, LocalDateTime.now().minusMinutes(1)))
-            // Do not drop unresolved orders after 24h; oldest never-retried records are examined first.
-            .orderByAsc(QuantExecutionRecord::getLastRecoveryAt).orderByAsc(QuantExecutionRecord::getCreatedAt).last("LIMIT 100"));
+        final List<QuantExecutionRecord> pending;
+        try {
+            pending = recordMapper.selectList(new LambdaQueryWrapper<QuantExecutionRecord>().in(QuantExecutionRecord::getExecutionStatus, "PENDING",
+                    "UNKNOWN", "CONFIRMED")
+                // Avoid querying the same unresolved order every scheduler tick, while never expiring it.
+                .and(q -> q.isNull(QuantExecutionRecord::getLastRecoveryAt).or().le(QuantExecutionRecord::getLastRecoveryAt, LocalDateTime.now().minusMinutes(1)))
+                // Do not drop unresolved orders after 24h; oldest never-retried records are examined first.
+                .orderByAsc(QuantExecutionRecord::getLastRecoveryAt).orderByAsc(QuantExecutionRecord::getCreatedAt).last("LIMIT 100"));
+        } catch (RuntimeException ex) {
+            log.error("扫描待恢复执行记录失败，本轮不释放任何 LIVE 调度票据", ex);
+            return;
+        }
+        if (pending == null || pending.isEmpty()) {
+            recoverStrandedFinalizedDispatches();
+            return;
+        }
         for (QuantExecutionRecord record : pending) {
             if (record.getCredentialId() == null || record.getSymbol() == null) {
                 continue;
             }
-            QuantCredential credential = credentialMapper.selectById(record.getCredentialId());
-            if (credential == null || "PAPER".equalsIgnoreCase(credential.getRunMode())) {
-                continue;
-            }
             try {
+                QuantCredential credential = credentialMapper.selectById(record.getCredentialId());
+                if (credential == null || "PAPER".equalsIgnoreCase(credential.getRunMode())) {
+                    continue;
+                }
                 recordService.markRecoveryAttempt(record);
                 ExchangeGateway.Credential c = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(),
                     credential.getRunMode());
