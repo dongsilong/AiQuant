@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper">
+    <select id="selectLastCompleteTo" resultType="java.time.LocalDateTime" timeout="3"><![CDATA[
+SELECT last_complete_to FROM quant_financial_event_sync_cursor
+WHERE credential_id=#{credentialId}
+]]></select>
+    <insert id="insertCursor" timeout="3"><![CDATA[
+INSERT INTO quant_financial_event_sync_cursor
+  (credential_id,last_complete_to,updated_at)
+VALUES (#{credentialId},#{lastCompleteTo},NOW(3))
+]]></insert>
+    <update id="advanceIfBehind" timeout="3"><![CDATA[
+UPDATE quant_financial_event_sync_cursor
+SET last_complete_to=#{lastCompleteTo},updated_at=NOW(3)
+WHERE credential_id=#{credentialId} AND last_complete_to<#{lastCompleteTo}
+]]></update>
+</mapper>
