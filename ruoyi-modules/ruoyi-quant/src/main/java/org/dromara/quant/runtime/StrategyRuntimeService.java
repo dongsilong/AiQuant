@@ -103,6 +103,8 @@ public class StrategyRuntimeService {
      * 交易所统一网关。
      */
     private final ExchangeGateway gateway;
+    /** 同环境、同交易对共享的交易规则缓存；缓存失效不改变开仓风控判定。 */
+    private final org.dromara.quant.exchange.ExchangeTradingRuleCache tradingRuleCache;
     /**
      * 公共行情流中心。
      */
@@ -888,7 +890,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         ActiveRuntime runtime = new ActiveRuntime(instance, strategy, strategySymbol, credential, symbol, plugin, params);
         runtime.protectionOnly = protectionOnly;
         runtime.leaseValid = true;
-        runtime.protectionRule = "PAPER".equalsIgnoreCase(credential.getRunMode()) ? null : gateway.queryTradingRule(executionService.toCredential(credential), symbol.getSymbol());
+        runtime.protectionRule = "PAPER".equalsIgnoreCase(credential.getRunMode()) ? null :
+            tradingRuleCache.get(credential.getRunMode(), executionService.toCredential(credential), symbol.getSymbol());
         if (!"PAPER".equalsIgnoreCase(credential.getRunMode()) && runtime.protectionRule == null) {
             throw new IllegalStateException("交易规则未就绪，拒绝启动策略");
         }
