@@ -75,6 +75,24 @@ def main() -> int:
 
     for file in FILES:
         content = file.read_text(encoding="utf-8")
+        transport = section(content, "binance:")
+        if property_value(transport, "websocket-transport") != "${QUANT_BINANCE_WEBSOCKET_TRANSPORT:RAW_OKHTTP}":
+            violations.append(f"{file.name}: LIVE WebSocket transport must default to the audited RAW_OKHTTP path")
+        if file.name == "application-prod.yml":
+            datasource = section(content, "spring.datasource:")
+            for key, expected in (
+                ("url", "${AIQUANT_DATASOURCE_URL:}"),
+                ("username", "${AIQUANT_DATASOURCE_USERNAME:}"),
+            ):
+                if property_value(datasource, key) != expected:
+                    violations.append(f"{file.name}: production datasource {key} must be externally configured")
+            redis = section(content, "spring.data:")
+            for key, expected in (
+                ("host", "${AIQUANT_REDIS_HOST:}"),
+                ("port", "${AIQUANT_REDIS_PORT:}"),
+            ):
+                if property_value(redis, key) != expected:
+                    violations.append(f"{file.name}: production Redis {key} must be externally configured")
         expected_switches = {
             "  live:": "${QUANT_LIVE_ENABLED:true}",
             "  runtime:": "${QUANT_RUNTIME_ENABLED:true}" if file.name == "application-dev.yml" else "${QUANT_RUNTIME_ENABLED:false}",
