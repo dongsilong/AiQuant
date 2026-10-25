@@ -35,6 +35,7 @@ class LiveSchemaStartupGuardTest {
         assertTrue(error.getMessage().contains("quant_strategy_order_intent"));
         assertTrue(error.getMessage().contains("quant_strategy_pre_dispatch_intent"));
         assertTrue(error.getMessage().contains("quant_position_sync_fence|credential_id"));
+        assertTrue(error.getMessage().contains("V20261014_12__position_sync_fence.sql"));
         assertTrue(error.getMessage().contains("quant_live_recovery_case"));
         assertTrue(error.getMessage().contains("V20261025_01__strategy_fill_journal.sql"));
         assertTrue(error.getMessage().contains("V20261014_09__strategy_order_intent.sql"));
