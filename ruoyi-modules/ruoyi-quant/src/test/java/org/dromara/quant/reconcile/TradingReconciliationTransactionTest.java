@@ -521,6 +521,31 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void localTradeConflictIsQuarantinedAndDoesNotAbortRawFillEvidence() {
+        var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 601L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00Z"), "USDT");
+        var local = new org.dromara.quant.account.domain.QuantTrade();
+        local.setId(77L);
+        local.setCredentialId(1L);
+        local.setSymbol("BTCUSDT");
+        local.setExchangeTradeId(601L);
+        local.setExchangeOrderId(202L);
+        local.setSide("BUY");
+        local.setQuantity(BigDecimal.ONE);
+        local.setPrice(new BigDecimal("11"));
+        local.setCommission(new BigDecimal("0.01"));
+        local.setRealizedPnl(BigDecimal.ZERO);
+        local.setTradeTime(java.time.LocalDateTime.ofInstant(fill.time(), java.time.ZoneOffset.UTC));
+        when(trades.selectOne(any())).thenReturn(local);
+        when(orders.selectOne(any())).thenReturn(null);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", credential(), List.of(fill));
+
+        verify(fillJournal).quarantineConflict(1L, "BTCUSDT", 601L, contains("conflicts with immutable Binance fill facts"));
+        verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
+    }
+
+    @Test
     void conflictingReplayCannotRewriteExistingTradePrice() {
         var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
             new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00Z"), "USDT");
