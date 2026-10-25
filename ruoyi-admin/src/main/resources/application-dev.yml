@@ -50,9 +50,9 @@ spring.boot.admin.client:
     service-host-type: IP
     metadata:
       username: ${spring.boot.admin.client.username}
-      userpassword: ${spring.boot.admin.client.password}
+      userpassword: ${AIQUANT_MONITOR_INSTANCE_PASSWORD:}
   username: @monitor.username@
-  password: ${AIQUANT_EXTERNAL_PASSWORD:}
+  password: ${AIQUANT_MONITOR_PASSWORD:}
 
 --- # snail-job 配置
 snail-job:
@@ -135,7 +135,7 @@ mybatis-encryptor:
   enable: true
   algorithm: AES
   encode: BASE64
-  password: ${AIQUANT_EXTERNAL_PASSWORD:}
+  password: ${AIQUANT_ENCRYPTOR_PASSWORD:}
 
 --- # 数据源配置
 spring:
@@ -156,7 +156,7 @@ spring:
           # rewriteBatchedStatements=true 批处理优化 大幅提升批量插入更新删除性能(对数据库有性能损耗 使用批量操作应考虑性能问题)
           url: jdbc:mysql://localhost:3306/quantdb?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true
           username: root
-          password: ${AIQUANT_EXTERNAL_PASSWORD:}
+          password: ${AIQUANT_DATASOURCE_PASSWORD:}
 #        # 从库数据源
 #        slave:
 #          lazy: true
@@ -209,7 +209,7 @@ spring.data:
     # 数据库索引
     database: 8
     # redis 密码必须配置
-    password: ${AIQUANT_EXTERNAL_PASSWORD:}
+    password: ${AIQUANT_REDIS_PASSWORD:}
     # 连接超时时间
     timeout: 10s
     # 是否开启ssl
