@@ -4,8 +4,6 @@ import com.binance.connector.client.common.websocket.adapter.stream.StreamConnec
 import com.binance.connector.client.common.websocket.configuration.WebSocketClientConfiguration;
 import com.google.gson.Gson;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.jetty.websocket.api.Callback;
-
 import java.util.UUID;
 
 /**
@@ -27,17 +25,13 @@ public class MarketStreamConnectionWrapper extends StreamConnectionWrapper {
     }
 
     /**
-     * Jetty 12 requires the callback-based close signature. Do not also declare the
-     * deprecated two-argument overload: Jetty rejects endpoints exposing both forms.
+     * StreamConnectionWrapper in the pinned Binance SDK exposes Jetty's two-argument
+     * WebSocketListener close callback. Keep the signature aligned with that API so
+     * disconnect recovery is invoked by the actual SDK endpoint callback.
      */
     @Override
-    public void onWebSocketClose(int statusCode, String reason, Callback callback) {
-        try {
-            BinanceSdkStreamTransport.notifyMarketSocketClosed(connectionId, statusCode, reason, disconnected, symbol, interval);
-        } finally {
-            // Complete Jetty's close callback even if the hub's disconnect handler fails.
-            callback.succeed();
-        }
+    public void onWebSocketClose(int statusCode, String reason) {
+        BinanceSdkStreamTransport.notifyMarketSocketClosed(connectionId, statusCode, reason, disconnected, symbol, interval);
     }
 
     @Override
