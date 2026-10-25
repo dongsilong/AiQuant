@@ -132,6 +132,27 @@ class FinancialEventLedgerRegressionTest {
     }
 
     @Test
+    void normalizesOnlyAnOtherwiseIdenticalLegacyBeijingLocalEventTime() throws Exception {
+        QuantFinancialEventVo stored = new QuantFinancialEventVo();
+        stored.setId(123L);
+        stored.setSymbol("BTCUSDT");
+        stored.setEventType("FUNDING_FEE");
+        stored.setAmount(new BigDecimal("-0.125"));
+        stored.setAsset("USDT");
+        stored.setInfo("funding");
+        stored.setEventTime(LocalDateTime.of(2026, 10, 20, 8, 0));
+        when(financialEvents.selectVoOne(any(LambdaQueryWrapper.class))).thenReturn(stored);
+        when(financialEvents.updateById(any(QuantFinancialEvent.class))).thenReturn(1);
+
+        Instant timestamp = Instant.parse("2026-10-20T00:00:00Z");
+        assertDoesNotThrow(() -> sync(List.of(income(new BigDecimal("-0.125"), timestamp))));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(QuantFinancialEvent.class);
+        verify(financialEvents).updateById(captor.capture());
+        assertEquals(LocalDateTime.ofInstant(timestamp, ZoneOffset.UTC), captor.getValue().getEventTime());
+    }
+
+    @Test
     void identicalReplayIsIdempotentAndDoesNotRewriteOriginalRow() throws Exception {
         QuantFinancialEventVo stored = new QuantFinancialEventVo();
         stored.setSymbol("BTCUSDT");
