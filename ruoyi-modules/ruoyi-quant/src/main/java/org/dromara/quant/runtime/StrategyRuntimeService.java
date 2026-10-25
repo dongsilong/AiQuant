@@ -460,6 +460,13 @@ public class StrategyRuntimeService {
                             log.error("策略运行租约独立续期失败，已阻止行情驱动决策 instanceId={} credentialId={} symbol={}",
                                 runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
                         }
+                    } catch (RuntimeException ex) {
+                        // A database/coordination exception is an ambiguous lease result.
+                        // Keep the runtime fenced and log the failure instead of silently
+                        // losing the renewal task's exception on its virtual thread.
+                        runtime.leaseValid = false;
+                        log.error("策略运行租约续期异常，已阻止行情驱动决策 instanceId={} credentialId={} symbol={}",
+                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), ex);
                     } finally {
                         runtime.leaseRenewing.set(false);
                     }
