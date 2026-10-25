@@ -455,8 +455,21 @@ public class StrategyRuntimeService {
                     try {
                         boolean renewed = !runtime.closed && leaseService.acquireOrRenew(
                             runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
-                        runtime.leaseValid = renewed;
-                        if (!renewed) {
+                        boolean releaseAfterClose = false;
+                        synchronized (runtime) {
+                            if (runtime.closed) {
+                                // A renewal already in flight can finish after closeRuntime releases the lease.
+                                // Release again here so that the late SQL update cannot leave an orphan owner.
+                                runtime.leaseValid = false;
+                                releaseAfterClose = renewed;
+                            } else {
+                                runtime.leaseValid = renewed;
+                            }
+                        }
+                        if (releaseAfterClose) {
+                            leaseService.release(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                        }
+                        if (!renewed && !runtime.closed) {
                             log.error("策略运行租约独立续期失败，已阻止行情驱动决策 instanceId={} credentialId={} symbol={}",
                                 runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
                         }
