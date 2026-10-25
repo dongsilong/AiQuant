@@ -197,7 +197,7 @@ spring:
         # 此属性控制池中连接的最长生命周期，值0表示无限生命周期，默认30分钟
         maxLifetime: 1800000
         # 多久检查一次连接的活性
-        keepaliveTime: 30000
+        keepaliveTime: 120000
 
 --- # redis 单机配置(单机与集群只能开启一个另一个需要注释掉)
 spring.data:
