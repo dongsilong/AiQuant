@@ -44,13 +44,14 @@ class TradingReconciliationTransactionTest {
     private final QuantReconcileRecordMapper records = mock(QuantReconcileRecordMapper.class);
     private final ReconciliationFailureRecorder errors = mock(ReconciliationFailureRecorder.class);
     private final StrategyPositionStateService state = mock(StrategyPositionStateService.class);
+    private final StrategyFillJournalService fillJournal = mock(StrategyFillJournalService.class);
     private final StrategyFillSyncCursorMapper fillCursors = mock(StrategyFillSyncCursorMapper.class);
     private final StrategyFillSyncCursorService fillCursorService = mock(StrategyFillSyncCursorService.class);
 
     private TradingReconciliationService service() {
         var source = new DriverManagerDataSource("jdbc:h2:mem:reconciliation_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         return new TradingReconciliationService(gateway, accounts, positions, orders, trades, protection, finance, records, errors, state,
-            new DataSourceTransactionManager(source), new StrictBinanceTradeCollector(gateway), mock(StrategyFillJournalService.class),
+            new DataSourceTransactionManager(source), new StrictBinanceTradeCollector(gateway), fillJournal,
             fillCursors, fillCursorService);
     }
 
@@ -478,6 +479,19 @@ class TradingReconciliationTransactionTest {
         verify(orders, never()).updateById(any(org.dromara.quant.order.domain.QuantOrder.class));
         assertEquals("NEW", fact.getValue().getStatus());
         assertEquals(BigDecimal.ZERO, fact.getValue().getExecutedQuantity());
+    }
+
+    @Test
+    void incompleteLiveFillIsJournaledAndNeverWrittenAsZeroValuedTrade() {
+        var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 501L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            null, null, Instant.parse("2026-10-17T00:00:00Z"), null);
+        when(orders.selectOne(any())).thenReturn(null);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", credential(), List.of(fill));
+
+        verify(fillJournal).attribute(fill, null, 1L);
+        verify(trades, never()).insert(any(org.dromara.quant.account.domain.QuantTrade.class));
+        verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
     }
 
     @Test
