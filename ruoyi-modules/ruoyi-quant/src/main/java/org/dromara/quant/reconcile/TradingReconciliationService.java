@@ -766,9 +766,10 @@ public class TradingReconciliationService {
                         credential.getId(), s.symbol(), s.tradeId());
                 }
             } else {
+                final boolean attributionChanged;
                 try {
                     assertImmutableTradeFacts(entity, s);
-                    mergeStrategyAttribution(entity, sourceOrder);
+                    attributionChanged = mergeStrategyAttribution(entity, sourceOrder);
                 } catch (IllegalStateException conflict) {
                     if (!live) {
                         throw conflict;
@@ -778,7 +779,7 @@ public class TradingReconciliationService {
                         credential.getId(), s.symbol(), s.tradeId());
                     continue;
                 }
-                if (mergeStrategyAttribution(entity, sourceOrder) && tradeMapper.updateById(entity) != 1) {
+                if (attributionChanged && tradeMapper.updateById(entity) != 1) {
                     throw new IllegalStateException("Binance fill attribution could not be enriched safely: credentialId="
                         + credential.getId() + ", symbol=" + s.symbol() + ", exchangeTradeId=" + s.tradeId());
                 }
