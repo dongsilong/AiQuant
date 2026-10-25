@@ -35,8 +35,6 @@ public class ExchangeTradingRuleCache {
         String environment = normalizeMode(runMode == null ? credential.runMode() : runMode);
         String normalizedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
         Key key = new Key(environment, normalizedSymbol);
-        long now = System.nanoTime();
-
         Entry entry = entries.compute(key, (ignored, current) -> {
             long checkedAt = System.nanoTime();
             if (current != null && checkedAt - current.expiresAtNanos() < 0) {
