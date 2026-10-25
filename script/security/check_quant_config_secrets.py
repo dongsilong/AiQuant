@@ -58,6 +58,39 @@ def main() -> int:
                 val = (match.group(1) or "").strip()
                 if val and not (val.startswith("${") or val.startswith("@")):
                     violations.append(f"{file.name}:{content[:match.start()].count(chr(10))+1}: literal {key} value")
+    # Shared JWT/API decryption keys must not regress to tracked literals.
+    jwt = section(common, "sa-token:")
+    if property_value(jwt, "jwt-secret-key") != "${AIQUANT_SA_TOKEN_JWT_SECRET:}":
+        violations.append(f"{COMMON.name}: sa-token.jwt-secret-key must be external")
+    decrypt = section(common, "api-decrypt:")
+    if property_value(decrypt, "privateKey") != "${AIQUANT_API_DECRYPT_PRIVATE_KEY:}":
+        violations.append(f"{COMMON.name}: api-decrypt.privateKey must be external")
+
+    for file in FILES:
+        content = file.read_text(encoding="utf-8")
+        expected_switches = {
+            "quant:\\n  live:": "${QUANT_LIVE_ENABLED:true}",
+            "  runtime:": "${QUANT_RUNTIME_ENABLED:true}" if file.name == "application-dev.yml" else "${QUANT_RUNTIME_ENABLED:false}",
+        }
+        for marker, expected in expected_switches.items():
+            block = section(content, marker)
+            if property_value(block, "enabled") != expected:
+                violations.append(f"{file.name}: {marker.split(':')[0]} enabled must equal {expected}")
+        for marker, expected in (
+            ("snail-job:", "${AIQUANT_SNAIL_JOB_TOKEN:}"),
+            ("snail-ai:", "${AIQUANT_SNAIL_AI_TOKEN:}"),
+        ):
+            try:
+                if property_value(section(content, marker), "token") != expected:
+                    violations.append(f"{file.name}: {marker.rstrip(':')} token must be external")
+            except ValueError as exc:
+                violations.append(f"{file.name}: {exc}")
+        auth = section(content, "justauth:")
+        for line_number, line in enumerate(auth.splitlines(), 1):
+            match = re.match(r"^\\s*client-secret:\\s*(.*)$", line)
+            if match and not re.fullmatch(r"\\$\\{AIQUANT_JUSTAUTH_[A-Z0-9_]+_CLIENT_SECRET:\\}", match.group(1).strip()):
+                violations.append(f"{file.name}: justauth client-secret at section line {line_number} must be external")
+
     if violations:
         for violation in violations:
             print("CONFIG-SECRET-ERROR:", violation, file=sys.stderr)
