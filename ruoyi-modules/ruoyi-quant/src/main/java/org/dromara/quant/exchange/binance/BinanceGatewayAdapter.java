@@ -607,10 +607,16 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         Runnable disconnected = () -> listener.accept(new MarketEvent("DISCONNECTED", normalized, interval, null, null, Instant.now()));
         if (sdkStreamsEnabled()) {
             requireSdkStreamsCanConnect();
-            BinanceSdkStreamTransport sdk = BinanceSdkStreamTransport.market(base, streamSymbol, interval, events, disconnected,
-                properties.getBinance().getSdkStreamBacklogLimit(), properties.getProxy());
-            StreamHandle managed = trackWebsocket(sdk::close, disconnected);
-            return new MarketStreamSession(managed::close);
+            try {
+                BinanceSdkStreamTransport sdk = BinanceSdkStreamTransport.market(base, streamSymbol, interval, events, disconnected,
+                    properties.getBinance().getSdkStreamBacklogLimit(), properties.getProxy());
+                StreamHandle managed = trackWebsocket(sdk::close, disconnected);
+                return new MarketStreamSession(managed::close);
+            } catch (RuntimeException sdkFailure) {
+                // A broken SDK/Jetty listener must not trap every market stream in an endless retry loop.
+                // Downgrade this node to the independently implemented OkHttp transport and let hubs replay.
+                fallbackToRawWebsocketTransport(sdkFailure);
+            }
         }
         String url = base + "?streams=" + streamSymbol + "@aggTrade/" + streamSymbol + "@markPrice@1s/" + streamSymbol + "@kline_" + interval;
         SocketConnection socket = new SocketConnection(url, events, disconnected);
@@ -675,6 +681,26 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         log.warn("Binance WebSocket transport changed to {} on this node, reconnecting {} streams", normalized, count);
         return count;
+    }
+
+    /**
+     * Fail over the node-wide stream transport after an SDK connection/bootstrap failure.
+     * Existing hubs are notified through their normal reconnect callback; the failing subscription
+     * continues below through RAW_OKHTTP. This is a transport failover, not permission to trade
+     * on stale data: MarketStreamHub still owns freshness checks and REST replay.
+     */
+    private synchronized void fallbackToRawWebsocketTransport(RuntimeException cause) {
+        if (!"BINANCE_SDK".equals(currentWebsocketTransport.get())) {
+            return;
+        }
+        currentWebsocketTransport.set("RAW_OKHTTP");
+        int reconnecting = 0;
+        for (StreamHandle stream : java.util.List.copyOf(activeWebsocketStreams)) {
+            stream.reconnect();
+            reconnecting++;
+        }
+        log.error("Binance SDK WebSocket bootstrap failed; switched this node to RAW_OKHTTP and requested reconnect for {} existing streams; errorType={}",
+            reconnecting, cause.getClass().getSimpleName());
     }
 
     private StreamHandle trackWebsocket(Runnable close, Runnable notifyDisconnected) {
@@ -1324,16 +1350,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 }, disconnected);
                 return new UserDataStreamSession(listenKey, Instant.now(), () -> keepAliveUserDataStream(credential), managed::close, sdk::connected);
             } catch (RuntimeException ex) {
-                // Preserve the raw transport fallback for SDK startup/session failures;
-                // BinanceSdkStreamTransport opens the SDK connection before SUBSCRIBE.
-                if (!(ex instanceof NullPointerException) || ex.getMessage() == null || !ex.getMessage().contains("session")) {
-                    try {
-                        api(credential).closeUserDataStream();
-                    } catch (RuntimeException ignored) {
-                    }
-                    throw ex;
-                }
-                log.warn("Binance SDK user stream session not ready; using RAW_OKHTTP for this LIVE credential without disabling reconciliation");
+                // The listenKey is still valid: SDK bootstrap failed before a usable session was returned.
+                // Keep it for the raw socket, and downgrade the node so market and private streams agree.
+                fallbackToRawWebsocketTransport(ex);
+                log.error("Binance SDK user stream bootstrap failed; falling back to RAW_OKHTTP for this credential; errorType={}",
+                    ex.getClass().getSimpleName());
             }
         }
         SocketConnection socket = new SocketConnection(base + listenKey, events, disconnected);
