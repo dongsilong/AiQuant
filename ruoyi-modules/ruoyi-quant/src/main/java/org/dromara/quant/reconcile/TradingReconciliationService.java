@@ -677,6 +677,7 @@ public class TradingReconciliationService {
      */
     private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
         Map<Long, QuantOrder> filledOrders = new LinkedHashMap<>();
+        boolean live = "LIVE".equalsIgnoreCase(credential.getRunMode());
         for (ExchangeGateway.TradeSnapshot s : snapshots) {
             // Pagination identity is mandatory, but incomplete money facts must still reach the
             // LIVE raw-fill journal so the account's history watermark does not erase the evidence.
@@ -687,8 +688,11 @@ public class TradingReconciliationService {
                 .eq(QuantOrder::getCredentialId, credential.getId())
                 .eq(QuantOrder::getSymbol, s.symbol())
                 .eq(QuantOrder::getExchangeOrderId, s.orderId()));
-            if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
-                fillJournal.attribute(s, sourceOrder, credential.getId());
+            String attributionStatus = live ? fillJournal.attribute(s, sourceOrder, credential.getId()) : null;
+            if ("CONFLICT".equals(attributionStatus)) {
+                log.error("LIVE fill journal quarantined conflicting raw fact; local trade ledger was not modified credentialId={} symbol={} exchangeTradeId={}",
+                    credential.getId(), s.symbol(), s.tradeId());
+                continue;
             }
 
             boolean completeFacts = s.orderId() != null && s.orderId() > 0
@@ -699,7 +703,7 @@ public class TradingReconciliationService {
                 && s.realizedPnl() != null
                 && s.commissionAsset() != null && s.commissionAsset().matches("[A-Za-z0-9]{2,20}");
             if (!completeFacts) {
-                if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                if (live) {
                     log.warn("LIVE Binance fill retained for attribution review; local numeric trade row was not fabricated credentialId={} symbol={} exchangeTradeId={} orderId={}",
                         credential.getId(), s.symbol(), s.tradeId(), s.orderId());
                     continue;
@@ -743,15 +747,37 @@ public class TradingReconciliationService {
                     if (raced == null) {
                         throw concurrentInsert;
                     }
-                    assertImmutableTradeFacts(raced, s);
-                    if (mergeStrategyAttribution(raced, sourceOrder) && tradeMapper.updateById(raced) != 1) {
-                        throw new IllegalStateException("Concurrent Binance fill attribution could not be enriched safely", concurrentInsert);
+                    try {
+                        assertImmutableTradeFacts(raced, s);
+                        boolean attributionChanged = mergeStrategyAttribution(raced, sourceOrder);
+                        if (attributionChanged && tradeMapper.updateById(raced) != 1) {
+                            throw new IllegalStateException("Concurrent Binance fill attribution could not be enriched safely", concurrentInsert);
+                        }
+                    } catch (IllegalStateException conflict) {
+                        if (!live) {
+                            throw conflict;
+                        }
+                        fillJournal.quarantineConflict(credential.getId(), s.symbol(), s.tradeId(), conflict.getMessage());
+                        log.error("Concurrent local trade conflicts with Binance fill; quarantined raw fact credentialId={} symbol={} exchangeTradeId={}",
+                            credential.getId(), s.symbol(), s.tradeId());
+                        continue;
                     }
                     log.debug("并发对账已写入相同成交事实，跳过重复插入 credentialId={} symbol={} exchangeTradeId={}",
                         credential.getId(), s.symbol(), s.tradeId());
                 }
             } else {
-                assertImmutableTradeFacts(entity, s);
+                try {
+                    assertImmutableTradeFacts(entity, s);
+                    mergeStrategyAttribution(entity, sourceOrder);
+                } catch (IllegalStateException conflict) {
+                    if (!live) {
+                        throw conflict;
+                    }
+                    fillJournal.quarantineConflict(credential.getId(), s.symbol(), s.tradeId(), conflict.getMessage());
+                    log.error("Persisted local trade conflicts with Binance fill; quarantined raw fact credentialId={} symbol={} exchangeTradeId={}",
+                        credential.getId(), s.symbol(), s.tradeId());
+                    continue;
+                }
                 if (mergeStrategyAttribution(entity, sourceOrder) && tradeMapper.updateById(entity) != 1) {
                     throw new IllegalStateException("Binance fill attribution could not be enriched safely: credentialId="
                         + credential.getId() + ", symbol=" + s.symbol() + ", exchangeTradeId=" + s.tradeId());
