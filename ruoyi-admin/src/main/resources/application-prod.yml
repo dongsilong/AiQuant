@@ -213,7 +213,7 @@ spring.data:
     # 连接超时时间
     timeout: 10s
     # 是否开启ssl
-    ssl.enabled: false
+    ssl.enabled: ${AIQUANT_REDIS_SSL_ENABLED:true}
 
 # redisson 配置
 redisson:
