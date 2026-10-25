@@ -44,6 +44,13 @@ def main() -> int:
         for key, value in expected.items():
             if property_value(mail, key) != value:
                 violations.append(f"{file.name}: mail.{key} must use the approved external value")
+    # Reject private-key material hidden in YAML comments as well as active properties.
+    for file in (COMMON, *FILES):
+        for line_number, line in enumerate(file.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"(?i)private.?key", line) and re.search(
+                r"(?i)(?:MIIC|MIIE|MIGH|MIGT|BEGIN.{0,24}PRIVATE KEY|[A-Za-z0-9+/]{120,}={0,2})", line
+            ):
+                violations.append(f"{file.name}:{line_number}: private-key material must not be committed, including comments")
     common = COMMON.read_text(encoding="utf-8")
     mqtt = section(common, "mqtt.client:")
     for field in ("username", "password"):
