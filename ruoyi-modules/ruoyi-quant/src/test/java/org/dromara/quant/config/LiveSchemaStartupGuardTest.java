@@ -26,10 +26,12 @@ class LiveSchemaStartupGuardTest {
         assertTrue(error.getMessage().contains("quant_execution_record|credential_id,idempotency_key"));
         assertTrue(error.getMessage().contains("quant_strategy_fill_journal"));
         assertTrue(error.getMessage().contains("quant_strategy_fill_sync_cursor"));
+        assertTrue(error.getMessage().contains("quant_live_recovery_audit"));
+        assertTrue(error.getMessage().contains("quant_live_recovery_case|credential_id,symbol,active_case_key"));
         assertTrue(error.getMessage().contains("quant_strategy_order_intent"));
         assertTrue(error.getMessage().contains("quant_strategy_pre_dispatch_intent"));
         assertTrue(error.getMessage().contains("quant_live_recovery_case"));
-        assertTrue(error.getMessage().contains("V20261017_01__strategy_fill_journal.sql"));
+        assertTrue(error.getMessage().contains("V20261025_01__strategy_fill_journal.sql"));
         assertTrue(error.getMessage().contains("V20261014_09__strategy_order_intent.sql"));
         assertTrue(error.getMessage().contains("V20261014_10__pre_dispatch_strategy_intent.sql"));
         assertTrue(error.getMessage().contains("V20261014_05__recovery_case_audit.sql"));
