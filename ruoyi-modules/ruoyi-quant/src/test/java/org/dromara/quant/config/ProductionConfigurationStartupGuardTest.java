@@ -44,18 +44,18 @@ class ProductionConfigurationStartupGuardTest {
     @Test
     void acceptsExternallyConfiguredProductionSecretsAndNetworkEndpoints() {
         var environment = new StandardEnvironment();
-        Map<String, Object> values = Map.of(
-            "quant.security.secret-key", "configured",
-            "sa-token.jwt-secret-key", "configured",
-            "api-decrypt.privateKey", "configured",
-            "mybatis-encryptor.password", "configured",
-            "spring.datasource.dynamic.datasource.master.url", "jdbc:mysql://db.internal:3306/quantdb?sslMode=VERIFY_IDENTITY",
-            "spring.datasource.dynamic.datasource.master.username", "quant_app",
-            "spring.datasource.dynamic.datasource.master.password", "configured",
-            "spring.data.redis.host", "redis.internal",
-            "spring.data.redis.port", "6379",
-            "spring.data.redis.password", "configured",
-            "spring.data.redis.ssl.enabled", "true"
+        Map<String, Object> values = Map.ofEntries(
+            Map.entry("quant.security.secret-key", "configured"),
+            Map.entry("sa-token.jwt-secret-key", "configured"),
+            Map.entry("api-decrypt.privateKey", "configured"),
+            Map.entry("mybatis-encryptor.password", "configured"),
+            Map.entry("spring.datasource.dynamic.datasource.master.url", "jdbc:mysql://db.internal:3306/quantdb?sslMode=VERIFY_IDENTITY"),
+            Map.entry("spring.datasource.dynamic.datasource.master.username", "quant_app"),
+            Map.entry("spring.datasource.dynamic.datasource.master.password", "configured"),
+            Map.entry("spring.data.redis.host", "redis.internal"),
+            Map.entry("spring.data.redis.port", "6379"),
+            Map.entry("spring.data.redis.password", "configured"),
+            Map.entry("spring.data.redis.ssl.enabled", "true")
         );
         environment.getPropertySources().addFirst(new MapPropertySource("test", values));
 
