@@ -678,9 +678,13 @@ public class TradingReconciliationService {
     private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
         Map<Long, QuantOrder> filledOrders = new LinkedHashMap<>();
         for (ExchangeGateway.TradeSnapshot s : snapshots) {
-            if (s == null || s.symbol() == null || s.tradeId() == null || s.orderId() == null || s.time() == null
-                || s.quantity() == null || s.price() == null || s.commission() == null || s.realizedPnl() == null) {
-                throw new IllegalStateException("Binance fill lacks required immutable facts; refusing to persist partial trade");
+            if (s == null || s.symbol() == null || s.symbol().isBlank() || s.tradeId() == null || s.tradeId() <= 0
+                || s.orderId() == null || s.orderId() <= 0 || s.time() == null
+                || !java.util.Set.of("BUY", "SELL").contains(s.side() == null ? "" : s.side().toUpperCase(Locale.ROOT))
+                || s.quantity() == null || s.quantity().signum() <= 0 || s.price() == null || s.price().signum() <= 0
+                || s.commission() == null || s.commission().signum() < 0 || s.realizedPnl() == null
+                || s.commissionAsset() == null || !s.commissionAsset().matches("[A-Za-z0-9]{2,20}")) {
+                throw new IllegalStateException("Binance fill lacks valid immutable facts; refusing to persist partial trade");
             }
             if (decisionLogs != null) {
                 decisionLogs.trade(credential.getId(), s);
