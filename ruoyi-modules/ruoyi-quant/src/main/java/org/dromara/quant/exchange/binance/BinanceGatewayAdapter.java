@@ -1438,11 +1438,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 restScheduler.acquire(kind);
                 long queueMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted);
                 ClockSyncTiming syncTiming = clockSyncTiming.get();
+                log.debug("Binance REST 获准执行 kind={} queueMillis={} clockSync={}", kind, queueMillis, syncTiming != null);
+                // Keep diagnostics out of the measured HTTP round trip.
                 long requestStartedAt = System.currentTimeMillis();
                 if (syncTiming != null) {
                     syncTiming.markRequestStarted(requestStartedAt, queueMillis);
                 }
-                log.debug("Binance REST 获准执行 kind={} queueMillis={} clockSync={}", kind, queueMillis, syncTiming != null);
                 okhttp3.Response response = chain.proceed(chain.request());
                 if (syncTiming != null) {
                     syncTiming.markResponseReceived(System.currentTimeMillis());
