@@ -83,7 +83,13 @@ public class ExecutionRecoveryService {
             log.error("扫描待恢复执行记录失败，本轮不释放任何 LIVE 调度票据", ex);
             return;
         }
-        if (pending == null || pending.isEmpty()) {
+        if (pending == null) {
+            // A null result is not evidence that no unresolved executions exist.
+            // Fail closed instead of running any recovery path that could release a guard.
+            log.error("待恢复执行记录扫描返回 null，本轮不释放任何 LIVE 调度票据");
+            return;
+        }
+        if (pending.isEmpty()) {
             recoverStrandedFinalizedDispatches();
             return;
         }
