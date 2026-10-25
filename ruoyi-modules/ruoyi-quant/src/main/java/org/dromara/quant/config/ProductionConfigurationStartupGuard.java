@@ -55,6 +55,13 @@ public class ProductionConfigurationStartupGuard implements ApplicationRunner {
         if (datasourceUrl.contains("localhost") || datasourceUrl.contains("127.0.0.1")) {
             missing.add("spring.datasource.dynamic.datasource.master.url (must not target loopback in production)");
         }
+        if (!datasourceUrl.toLowerCase(java.util.Locale.ROOT).contains("sslmode=verify_identity")) {
+            missing.add("spring.datasource.dynamic.datasource.master.url (must require sslMode=VERIFY_IDENTITY)");
+        }
+        String redisTls = environment.getProperty("spring.data.redis.ssl.enabled", "false");
+        if (!Boolean.parseBoolean(redisTls)) {
+            missing.add("spring.data.redis.ssl.enabled (must be true in production)");
+        }
         String redisHost = environment.getProperty("spring.data.redis.host", "");
         if ("localhost".equalsIgnoreCase(redisHost) || "127.0.0.1".equals(redisHost)) {
             missing.add("spring.data.redis.host (must not target loopback in production)");
