@@ -24,7 +24,13 @@ WITH required_tables AS (
     SELECT 'quant_live_account_settings_intent' UNION ALL
     SELECT 'quant_strategy_pre_dispatch_intent' UNION ALL
     SELECT 'quant_strategy_order_intent' UNION ALL
-    SELECT 'quant_live_user_stream_lease'
+    SELECT 'quant_live_user_stream_lease' UNION ALL
+    SELECT 'quant_position_sync_fence' UNION ALL
+    SELECT 'quant_live_recovery_case' UNION ALL
+    SELECT 'quant_live_recovery_audit' UNION ALL
+    SELECT 'quant_strategy_position_cycle' UNION ALL
+    SELECT 'quant_strategy_position_fill_event' UNION ALL
+    SELECT 'quant_strategy_position_inventory'
 )
 SELECT r.table_name, COALESCE(t.engine,'ABSENT') AS actual_engine,
        CASE WHEN t.table_name IS NULL THEN 'MISSING'
@@ -50,7 +56,8 @@ WITH required_indexes AS (
   SELECT 'quant_strategy_fill_allocation','credential_id,symbol,exchange_trade_id' UNION ALL
   SELECT 'quant_live_account_settings_intent','credential_id,symbol' UNION ALL
   SELECT 'quant_strategy_pre_dispatch_intent','credential_id,idempotency_key' UNION ALL
-  SELECT 'quant_strategy_order_intent','credential_id,symbol,client_order_id'
+  SELECT 'quant_strategy_order_intent','credential_id,symbol,client_order_id' UNION ALL
+  SELECT 'quant_position_sync_fence','credential_id'
 ), actual_indexes AS (
   SELECT table_name, index_name, non_unique,
          GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') AS indexed_columns
