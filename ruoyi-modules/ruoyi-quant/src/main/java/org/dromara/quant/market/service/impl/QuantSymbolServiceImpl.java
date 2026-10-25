@@ -22,7 +22,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -132,11 +135,23 @@ public class QuantSymbolServiceImpl implements IQuantSymbolService {
     public int syncFromExchange() {
         int count = 0;
         List<ExchangeGateway.SymbolRule> symbols = gateway.queryExchangeInfo().symbols();
+
+        // 先批量读取本地交易对，避免每个交易所交易对都执行一次 selectOne。
+        // 交易所元数据通常只有数百条；一次读取并建立索引比 N 次往返更可控。
+        Map<String, QuantSymbol> localBySymbol = new HashMap<>();
+        for (QuantSymbol local : mapper.selectList(null)) {
+            if (local.getSymbol() != null) {
+                localBySymbol.putIfAbsent(local.getSymbol().toUpperCase(Locale.ROOT), local);
+            }
+        }
+
+        LocalDateTime syncedAt = LocalDateTime.now();
         for (ExchangeGateway.SymbolRule rule : symbols) {
-            if (!"USDT".equalsIgnoreCase(rule.quoteAsset())) {
+            if (rule == null || !"USDT".equalsIgnoreCase(rule.quoteAsset()) || rule.symbol() == null || rule.symbol().isBlank()) {
                 continue;
             }
-            QuantSymbol e = mapper.selectOne(new LambdaQueryWrapper<QuantSymbol>().eq(QuantSymbol::getSymbol, rule.symbol()));
+            String key = rule.symbol().toUpperCase(Locale.ROOT);
+            QuantSymbol e = localBySymbol.get(key);
             if (e == null) {
                 e = new QuantSymbol();
                 e.setSymbol(rule.symbol());
@@ -149,12 +164,13 @@ public class QuantSymbolServiceImpl implements IQuantSymbolService {
             e.setMarketQuantityStep(rule.marketStepSize());
             e.setMinNotional(rule.minNotional());
             e.setExchangeStatus(rule.status());
-            e.setSyncedAt(LocalDateTime.now());
+            e.setSyncedAt(syncedAt);
             if (StringUtils.isBlank(e.getStatus())) {
                 e.setStatus("0");
             }
             if (e.getId() == null) {
                 mapper.insert(e);
+                localBySymbol.put(key, e);
             } else {
                 mapper.updateById(e);
             }
