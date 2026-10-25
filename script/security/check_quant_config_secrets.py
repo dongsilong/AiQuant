@@ -79,7 +79,7 @@ def main() -> int:
         if property_value(transport, "websocket-transport") != "${QUANT_BINANCE_WEBSOCKET_TRANSPORT:RAW_OKHTTP}":
             violations.append(f"{file.name}: LIVE WebSocket transport must default to the audited RAW_OKHTTP path")
         if file.name == "application-prod.yml":
-            datasource = section(content, "spring.datasource:")
+            datasource = section(content, "datasource:")
             for key, expected in (
                 ("url", "${AIQUANT_DATASOURCE_URL:}"),
                 ("username", "${AIQUANT_DATASOURCE_USERNAME:}"),
