@@ -673,7 +673,7 @@ public class TradingReconciliationService {
     }
 
     /**
-     * 同步交易所成交事实。
+     * 同步交易所成交事实。已落库的交易所事实不可被重放覆盖；仅允许补齐此前缺失且可证明的策略归属。
      */
     private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
         Map<Long, QuantOrder> filledOrders = new LinkedHashMap<>();
@@ -681,69 +681,107 @@ public class TradingReconciliationService {
             if (decisionLogs != null) {
                 decisionLogs.trade(credential.getId(), s);
             }
-            QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>().eq(QuantTrade::getCredentialId, credential.getId())
-                .eq(QuantTrade::getSymbol, s.symbol()).eq(QuantTrade::getExchangeTradeId, s.tradeId()));
+            if (s == null || s.symbol() == null || s.tradeId() == null || s.orderId() == null || s.time() == null
+                || s.quantity() == null || s.price() == null || s.commission() == null || s.realizedPnl() == null) {
+                throw new IllegalStateException("Binance fill lacks required immutable facts; refusing to persist partial trade");
+            }
+            QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>()
+                .eq(QuantTrade::getCredentialId, credential.getId())
+                .eq(QuantTrade::getSymbol, s.symbol())
+                .eq(QuantTrade::getExchangeTradeId, s.tradeId()));
+            QuantOrder sourceOrder = orderMapper.selectOne(new LambdaQueryWrapper<QuantOrder>()
+                .eq(QuantOrder::getCredentialId, credential.getId())
+                .eq(QuantOrder::getSymbol, s.symbol())
+                .eq(QuantOrder::getExchangeOrderId, s.orderId()));
+
             if (entity == null) {
                 entity = new QuantTrade();
                 entity.setCredentialId(credential.getId());
+                entity.setSymbol(s.symbol());
                 entity.setExchangeTradeId(s.tradeId());
-            }
-            entity.setSymbol(s.symbol());
-            entity.setExchangeOrderId(s.orderId());
-            QuantOrder sourceOrder = s.orderId() == null ? null :
-                orderMapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credential.getId()).eq(QuantOrder::getSymbol, s.symbol())
-                    .eq(QuantOrder::getExchangeOrderId, s.orderId()));
-            if (sourceOrder != null) {
-                entity.setStrategyId(sourceOrder.getStrategyId());
-                entity.setStrategyInstanceId(sourceOrder.getStrategyInstanceId());
-            }
-            if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
-                fillJournal.attribute(s, sourceOrder, credential.getId());
-            }
-            entity.setSide(s.side());
-            entity.setQuantity(nvl(s.quantity()));
-            entity.setPrice(nvl(s.price()));
-            entity.setCommission(nvl(s.commission()));
-            entity.setRealizedPnl(nvl(s.realizedPnl()));
-            entity.setFundingFee(BigDecimal.ZERO);
-            entity.setTradeTime(s.time() == null ? LocalDateTime.now() : LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC));
-            if (entity.getId() == null) {
+                entity.setExchangeOrderId(s.orderId());
+                entity.setSide(s.side());
+                entity.setQuantity(s.quantity());
+                entity.setPrice(s.price());
+                entity.setCommission(s.commission());
+                entity.setRealizedPnl(s.realizedPnl());
+                // Funding income is stored separately in quant_financial_event. Zero is only
+                // an initial display default; a replay must never erase a previously stored value.
+                entity.setFundingFee(BigDecimal.ZERO);
+                entity.setTradeTime(LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC));
+                mergeStrategyAttribution(entity, sourceOrder);
                 try {
                     if (tradeMapper.insert(entity) != 1) {
                         throw new IllegalStateException("Binance成交事实未写入本地成交账本");
                     }
                 } catch (DuplicateKeyException concurrentInsert) {
-                    // Concurrent reconciliation may have inserted this exact fill after our initial lookup.
-                    // Re-read by the full business key and accept only an identical exchange fact.
                     QuantTrade raced = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>()
                         .eq(QuantTrade::getCredentialId, credential.getId())
                         .eq(QuantTrade::getSymbol, s.symbol())
                         .eq(QuantTrade::getExchangeTradeId, s.tradeId()));
                     if (raced == null) {
-                        // Could be an unrelated unique-key collision (for example a duplicate local ID).
                         throw concurrentInsert;
                     }
-                    if (!Objects.equals(raced.getExchangeOrderId(), s.orderId())
-                        || !sameText(raced.getSide(), s.side())
-                        || !sameDecimal(raced.getQuantity(), s.quantity())
-                        || !sameDecimal(raced.getPrice(), s.price())
-                        || !sameDecimal(raced.getCommission(), s.commission())
-                        || !sameDecimal(raced.getRealizedPnl(), s.realizedPnl())
-                        || !sameTradeTime(raced.getTradeTime(), s.time())) {
-                        throw new IllegalStateException("并发写入的本地成交与 Binance 原始事实冲突，拒绝覆盖: credentialId="
-                            + credential.getId() + ", symbol=" + s.symbol() + ", exchangeTradeId=" + s.tradeId(), concurrentInsert);
+                    assertImmutableTradeFacts(raced, s);
+                    if (mergeStrategyAttribution(raced, sourceOrder) && tradeMapper.updateById(raced) != 1) {
+                        throw new IllegalStateException("Concurrent Binance fill attribution could not be enriched safely", concurrentInsert);
                     }
                     log.debug("并发对账已写入相同成交事实，跳过重复插入 credentialId={} symbol={} exchangeTradeId={}",
                         credential.getId(), s.symbol(), s.tradeId());
                 }
             } else {
-                tradeMapper.updateById(entity);
+                assertImmutableTradeFacts(entity, s);
+                if (mergeStrategyAttribution(entity, sourceOrder) && tradeMapper.updateById(entity) != 1) {
+                    throw new IllegalStateException("Binance fill attribution could not be enriched safely: credentialId="
+                        + credential.getId() + ", symbol=" + s.symbol() + ", exchangeTradeId=" + s.tradeId());
+                }
             }
             if (sourceOrder != null && sourceOrder.getId() != null) {
                 filledOrders.put(sourceOrder.getId(), sourceOrder);
             }
+            if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                fillJournal.attribute(s, sourceOrder, credential.getId());
+            }
         }
         filledOrders.values().forEach(order -> capturePostFillBalance(credential, order));
+    }
+
+    private static void assertImmutableTradeFacts(QuantTrade stored, ExchangeGateway.TradeSnapshot incoming) {
+        if (!Objects.equals(stored.getExchangeOrderId(), incoming.orderId())
+            || !sameText(stored.getSymbol(), incoming.symbol())
+            || !sameText(stored.getSide(), incoming.side())
+            || !sameDecimal(stored.getQuantity(), incoming.quantity())
+            || !sameDecimal(stored.getPrice(), incoming.price())
+            || !sameDecimal(stored.getCommission(), incoming.commission())
+            || !sameDecimal(stored.getRealizedPnl(), incoming.realizedPnl())
+            || !sameTradeTime(stored.getTradeTime(), incoming.time())) {
+            throw new IllegalStateException("Persisted local trade conflicts with immutable Binance fill facts; refusing overwrite: symbol="
+                + incoming.symbol() + ", exchangeTradeId=" + incoming.tradeId() + ", exchangeOrderId=" + incoming.orderId());
+        }
+    }
+
+    /**
+     * Enrich absent strategy ownership only from the exact local order. Existing non-null ownership is immutable.
+     */
+    private static boolean mergeStrategyAttribution(QuantTrade trade, QuantOrder sourceOrder) {
+        if (sourceOrder == null || sourceOrder.getStrategyId() == null || sourceOrder.getStrategyInstanceId() == null) {
+            return false;
+        }
+        if (trade.getStrategyId() != null && !trade.getStrategyId().equals(sourceOrder.getStrategyId())
+            || trade.getStrategyInstanceId() != null && !trade.getStrategyInstanceId().equals(sourceOrder.getStrategyInstanceId())) {
+            throw new IllegalStateException("Binance fill strategy attribution conflicts with persisted ownership: exchangeOrderId="
+                + sourceOrder.getExchangeOrderId());
+        }
+        boolean changed = false;
+        if (trade.getStrategyId() == null) {
+            trade.setStrategyId(sourceOrder.getStrategyId());
+            changed = true;
+        }
+        if (trade.getStrategyInstanceId() == null) {
+            trade.setStrategyInstanceId(sourceOrder.getStrategyInstanceId());
+            changed = true;
+        }
+        return changed;
     }
 
     private static boolean sameText(String left, String right) {
