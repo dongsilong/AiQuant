@@ -75,7 +75,14 @@ LEFT JOIN actual_indexes a
   ON a.table_name=r.table_name AND a.indexed_columns=r.required_columns AND a.non_unique=0
 ORDER BY r.table_name;
 
--- Preflight rejects empty production credentials before any LIVE enablement.
+-- Credential check reports counts only; never returns API key or secret values.
+-- A zero result is required if the account is expected to trade in LIVE.
+SELECT COUNT(*) AS active_live_credentials_missing_api_material
+FROM quant_credential
+WHERE status='0' AND UPPER(run_mode)='LIVE'
+  AND (api_key IS NULL OR TRIM(api_key)=''
+       OR secret_key IS NULL OR TRIM(secret_key)='');
+
 -- Index name/shape validation is independent of H2 tests, which do not test the real production schema.
 
 -- Fencing schema gate: the migration V20261014_01__runtime_lease_epoch.sql
