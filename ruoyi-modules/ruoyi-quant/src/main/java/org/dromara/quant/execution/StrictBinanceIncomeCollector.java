@@ -50,7 +50,9 @@ public class StrictBinanceIncomeCollector {
     private static String invalidReason(ExchangeGateway.IncomeSnapshot item, long leftMillis, long rightMillis) {
         if (item == null) return "null_event";
         if (item.transactionId() == null) return "missing_transaction_id";
-        if (item.transactionId() <= 0) return "invalid_transaction_id";
+        // Binance documents tranId as unique within incomeType, but does not specify a strictly-positive range.
+        // Zero is therefore not rejected solely by value; negative IDs remain invalid.
+        if (item.transactionId() < 0) return "invalid_transaction_id";
         if (item.incomeType() == null || item.incomeType().isBlank()) return "missing_income_type";
         if (item.amount() == null) return "missing_amount";
         if (item.asset() == null || !item.asset().matches("[A-Za-z0-9]{2,20}")) return "missing_or_invalid_asset";
