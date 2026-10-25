@@ -87,8 +87,8 @@ def main() -> int:
                 violations.append(f"{file.name}: {exc}")
         auth = section(content, "justauth:")
         for line_number, line in enumerate(auth.splitlines(), 1):
-            match = re.match(r"^\\s*client-secret:\\s*(.*)$", line)
-            if match and not re.fullmatch(r"\\$\\{AIQUANT_JUSTAUTH_[A-Z0-9_]+_CLIENT_SECRET:\\}", match.group(1).strip()):
+            match = re.match(r"^\s*client-secret:\s*(.*)$", line)
+            if match and not re.fullmatch(r"\$\{AIQUANT_JUSTAUTH_[A-Z0-9_]+_CLIENT_SECRET:\}, match.group(1).strip()):
                 violations.append(f"{file.name}: justauth client-secret at section line {line_number} must be external")
 
     if violations:
