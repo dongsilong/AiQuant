@@ -87,6 +87,30 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void completeIncomeHistoryAdvancesItsCursorInsideThePersistenceTransaction() {
+        stubCommonFacts();
+        doAnswer(invocation -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive(), "income watermark must share the financial-event transaction");
+            return null;
+        }).when(incomeCursorService).advance(eq(1L), any(java.time.LocalDateTime.class));
+
+        service().reconcileCredential(credential(), 24);
+
+        verify(incomeCursorService).advance(eq(1L), any(java.time.LocalDateTime.class));
+    }
+
+    @Test
+    void incompleteIncomeHistoryDoesNotAdvanceItsCursor() {
+        stubCommonFacts();
+        var incomplete = new ExchangeGateway.IncomeSnapshot("BTCUSDT", "FUNDING_FEE", null, "USDT", 99L, "funding", Instant.now());
+        when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of(incomplete));
+
+        assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 24));
+
+        verifyNoInteractions(incomeCursorService);
+    }
+
+    @Test
     void historyWindowUsesRealUtcInstantInShanghaiTimezone() {
         java.util.TimeZone previous = java.util.TimeZone.getDefault();
         try {
