@@ -48,4 +48,21 @@ class LivePositionFreshnessRiskTest {
         freshness.invalidate(11L);
         assertFalse(service.approveOpen(11L, "BTCUSDT", BigDecimal.ONE, "LIVE"));
     }
+    @Test
+    void staleSnapshotCannotReopenGateAfterNewerPrivateEvent() {
+        var freshness = new LivePositionFreshness();
+        long snapshotGeneration = freshness.generation(22L);
+
+        freshness.invalidate(22L);
+
+        assertFalse(freshness.verifiedIfUnchanged(22L, snapshotGeneration),
+            "a REST snapshot started before the event must not restore freshness");
+        assertFalse(freshness.fresh(22L));
+
+        long currentGeneration = freshness.generation(22L);
+        assertTrue(freshness.verifiedIfUnchanged(22L, currentGeneration),
+            "a full snapshot for the current generation may restore freshness");
+        assertTrue(freshness.fresh(22L));
+    }
+
 }
