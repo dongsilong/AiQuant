@@ -96,6 +96,7 @@ public class TradingReconciliationService {
     @Autowired
     private TradeDecisionLogService decisionLogs;
     private final StrictBinanceTradeCollector tradeCollector;
+    private final org.dromara.quant.execution.StrictBinanceIncomeCollector incomeCollector;
     private final StrategyFillJournalService fillJournal;
     private final StrategyFillSyncCursorMapper fillSyncCursors;
     private final StrategyFillSyncCursorService fillSyncCursorService;
@@ -128,6 +129,7 @@ public class TradingReconciliationService {
         this.failureRecorder = failureRecorder;
         this.strategyPositionStateService = strategyPositionStateService;
         this.tradeCollector = tradeCollector;
+        this.incomeCollector = incomeCollector;
         this.fillJournal = fillJournal;
         this.fillSyncCursors = fillSyncCursors;
         this.fillSyncCursorService = fillSyncCursorService;
@@ -494,7 +496,7 @@ public class TradingReconciliationService {
             }
             protections.put(symbol, List.copyOf(gateway.queryProtectionOrders(c, symbol)));
         }
-        var income = List.copyOf(gateway.queryIncomeHistory(c, null, null, range, 1000L));
+        var income = incomeCollector.collect(c, range);
         return new ExchangeFacts(account, positions, openOrders, history, trades, fillCursorEnds, futureFillCursors, fillHistoryBacklogSymbols, protections, income);
     }
 
