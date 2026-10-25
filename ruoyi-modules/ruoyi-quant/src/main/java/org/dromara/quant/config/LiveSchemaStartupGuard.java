@@ -33,7 +33,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_strategy_fill_sync_cursor|credential_id,symbol", "quant_financial_event|credential_id,exchange_transaction_id,event_type", "quant_financial_event_sync_cursor|credential_id",
         "quant_live_recovery_case|credential_id,symbol,active_case_key",
         "quant_live_account_settings_intent|credential_id,symbol", "quant_strategy_order_intent|credential_id,symbol,client_order_id",
-        "quant_strategy_pre_dispatch_intent|credential_id,idempotency_key");
+        "quant_strategy_pre_dispatch_intent|credential_id,idempotency_key", "quant_position_sync_fence|credential_id");
 
     private final LiveSchemaContractMapper mapper;
 
