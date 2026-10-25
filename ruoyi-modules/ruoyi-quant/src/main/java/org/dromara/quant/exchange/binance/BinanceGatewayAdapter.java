@@ -566,7 +566,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * SDK 12.1.1 的 ticker/mark oneOf 解码会返回 actualInstance=null；保留 SDK 的请求、代理和超时配置，按原始 JSON 读取。
+     * SDK 12.1.0 的 ticker/mark oneOf 解码会返回 actualInstance=null；保留 SDK 的请求、代理和超时配置，按原始 JSON 读取。
      */
     private JsonObject publicJson(String runMode, String path, String symbol) {
         ClientConfiguration config = restConfiguration(marketBaseUrl(runMode));
