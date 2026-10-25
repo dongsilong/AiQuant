@@ -9,6 +9,9 @@ import org.dromara.quant.order.domain.QuantOrder;
  */
 public interface QuantOrderMapper extends BaseMapperPlus<QuantOrder, QuantOrder> {
 
+    /** Distinct symbols already known to this credential, including symbols whose positions are now closed. */
+    java.util.List<String> selectHistoricalSymbolsByCredential(@Param("credentialId") Long credentialId);
+
     int claimPostFillBalanceSnapshot(@Param("id") Long id, @Param("requestedAt") java.time.LocalDateTime requestedAt);
 
     int savePostFillBalanceSnapshot(@Param("id") Long id, @Param("balance") java.math.BigDecimal balance, @Param("observedAt") java.time.LocalDateTime observedAt);
