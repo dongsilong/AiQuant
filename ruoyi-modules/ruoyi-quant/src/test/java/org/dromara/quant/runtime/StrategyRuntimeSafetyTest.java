@@ -410,7 +410,7 @@ class StrategyRuntimeSafetyTest {
             }
 
             assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "leaseValid"));
-            verify(lease).release(1L, 2L, "BTCUSDT");
+            verify(lease).release(1L, 3L, "BTCUSDT");
         } finally {
             f.service.destroy();
         }
