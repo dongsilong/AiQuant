@@ -76,7 +76,8 @@ public class ExchangeTradingRuleCache {
         entries.entrySet().removeIf(entry -> now - entry.getValue().expiresAtNanos() >= 0);
         // 仅作内存上限保护；不影响正确性，下一次访问会重新查询规则。
         if (entries.size() > MAX_ENTRIES) {
-            entries.keySet().stream().limit(entries.size() - MAX_ENTRIES).forEach(entries::remove);
+            int excess = Math.max(0, entries.size() - MAX_ENTRIES);
+            entries.keySet().stream().limit(excess).forEach(entries::remove);
         }
     }
 
