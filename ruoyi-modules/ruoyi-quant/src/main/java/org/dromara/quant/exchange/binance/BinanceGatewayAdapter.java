@@ -776,7 +776,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         List<IncomeSnapshot> result = new ArrayList<>();
         for (GetIncomeHistoryResponseInner item : data) {
-            result.add(new IncomeSnapshot(item.getSymbol(), String.valueOf(item.getIncomeType()), decimal(item.getIncome()), item.getAsset(), item.getTranId(), item.getInfo(),
+            result.add(new IncomeSnapshot(item.getSymbol(), string(item, "getIncomeType"), decimal(item.getIncome()), item.getAsset(), item.getTranId(), item.getInfo(),
                 instant(item.getTime())));
         }
         return result;
