@@ -10,7 +10,7 @@ quant:
     # SDK 内部无界队列积压阈值，达到后显式断线以触发订阅恢复。
     sdk-stream-backlog-limit: ${QUANT_BINANCE_SDK_BACKLOG_LIMIT:2048}
   live:
-    enabled: true
+    enabled: ${QUANT_LIVE_ENABLED:true}
   security:
     # 通过部署环境变量提供，禁止写入源码或提交真实密钥。
     secret-key: ${QUANT_SECURITY_SECRET_KEY:}
@@ -25,7 +25,7 @@ quant:
   # 策略运行时调度与分布式租约配置
   runtime:
     # 是否启用策略运行时监督；关闭后会停止全部运行中的策略实例
-    enabled: true
+    enabled: ${QUANT_RUNTIME_ENABLED:true}
     # 策略实例发现、启动/停止和租约维护的间隔，单位：秒
     tick-seconds: 5
     # 策略运行租约有效期，单位：秒；用于避免多个服务实例同时运行同一策略
