@@ -386,6 +386,30 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void leaseRenewalExceptionKeepsRuntimeFencedAndReleasesRenewalGuard() throws Exception {
+        Fixture f = fixture();
+        try {
+            var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+            when(lease.acquireOrRenew(any(), any(), any())).thenThrow(new IllegalStateException("database unavailable"));
+
+            f.service.renewActiveRuntimeLeases();
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+            while (((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "leaseRenewing")).get()
+                && System.nanoTime() < deadline) {
+                Thread.sleep(5);
+            }
+
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "leaseValid"),
+                "an exception makes lease ownership ambiguous and must fence decisions");
+            assertFalse(((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "leaseRenewing")).get(),
+                "the renewal guard must be released after an exception");
+            assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime));
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void persistedStepIsRestoredAndExtremaAdvanceItWithoutRegression() throws Exception {
         Fixture f = fixture();
         try {
