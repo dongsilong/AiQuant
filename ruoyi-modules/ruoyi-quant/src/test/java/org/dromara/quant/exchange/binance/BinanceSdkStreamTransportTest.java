@@ -37,7 +37,7 @@ class BinanceSdkStreamTransportTest {
     void notifiesTheMarketOwnerWhenSdkSocketClosesInsteadOfAllowingSdkReconnect() {
         AtomicBoolean disconnected = new AtomicBoolean();
 
-        BinanceSdkStreamTransport.notifyMarketSocketClosed(1006, "Session Closed", () -> disconnected.set(true), "BTCUSDT", "1m");
+        BinanceSdkStreamTransport.notifyMarketSocketClosed("test-connection", 1006, "Session Closed", () -> disconnected.set(true), "BTCUSDT", "1m");
 
         assertTrue(disconnected.get());
     }
