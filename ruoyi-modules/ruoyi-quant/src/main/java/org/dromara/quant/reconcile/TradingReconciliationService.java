@@ -678,12 +678,12 @@ public class TradingReconciliationService {
     private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
         Map<Long, QuantOrder> filledOrders = new LinkedHashMap<>();
         for (ExchangeGateway.TradeSnapshot s : snapshots) {
-            if (decisionLogs != null) {
-                decisionLogs.trade(credential.getId(), s);
-            }
             if (s == null || s.symbol() == null || s.tradeId() == null || s.orderId() == null || s.time() == null
                 || s.quantity() == null || s.price() == null || s.commission() == null || s.realizedPnl() == null) {
                 throw new IllegalStateException("Binance fill lacks required immutable facts; refusing to persist partial trade");
+            }
+            if (decisionLogs != null) {
+                decisionLogs.trade(credential.getId(), s);
             }
             QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>()
                 .eq(QuantTrade::getCredentialId, credential.getId())
