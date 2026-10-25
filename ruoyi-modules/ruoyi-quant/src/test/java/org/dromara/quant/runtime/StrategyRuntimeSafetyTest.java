@@ -386,6 +386,37 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void lateLeaseRenewalReleasesLeaseWhenRuntimeClosesInFlight() throws Exception {
+        Fixture f = fixture();
+        try {
+            var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+            var renewalEntered = new java.util.concurrent.CountDownLatch(1);
+            var allowRenewalToFinish = new java.util.concurrent.CountDownLatch(1);
+            when(lease.acquireOrRenew(any(), any(), any())).thenAnswer(invocation -> {
+                renewalEntered.countDown();
+                assertTrue(allowRenewalToFinish.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                return true;
+            });
+
+            f.service.renewActiveRuntimeLeases();
+            assertTrue(renewalEntered.await(2, java.util.concurrent.TimeUnit.SECONDS), "renewal task should reach the database call");
+            ReflectionTestUtils.setField(f.runtime, "closed", true);
+            allowRenewalToFinish.countDown();
+
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+            while (((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "leaseRenewing")).get()
+                && System.nanoTime() < deadline) {
+                Thread.sleep(5);
+            }
+
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "leaseValid"));
+            verify(lease).release(1L, 2L, "BTCUSDT");
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void leaseRenewalExceptionKeepsRuntimeFencedAndReleasesRenewalGuard() throws Exception {
         Fixture f = fixture();
         try {
