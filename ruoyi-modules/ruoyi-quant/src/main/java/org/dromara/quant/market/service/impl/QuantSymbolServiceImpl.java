@@ -47,6 +47,8 @@ public class QuantSymbolServiceImpl implements IQuantSymbolService {
      * 交易所统一网关。
      */
     private final ExchangeGateway gateway;
+    /** 交易所元数据同步成功后，立即使进程内规则快照失效。 */
+    private final org.dromara.quant.exchange.ExchangeTradingRuleCache tradingRuleCache;
 
     /**
      * 按条件分页查询。
@@ -135,6 +137,8 @@ public class QuantSymbolServiceImpl implements IQuantSymbolService {
     public int syncFromExchange() {
         int count = 0;
         List<ExchangeGateway.SymbolRule> symbols = gateway.queryExchangeInfo().symbols();
+        // 完整交易所元数据已成功返回；避免策略启动继续使用同步前的规则快照。
+        tradingRuleCache.invalidateAll();
 
         // 先批量读取本地交易对，避免每个交易所交易对都执行一次 selectOne。
         // 交易所元数据通常只有数百条；一次读取并建立索引比 N 次往返更可控。
