@@ -437,7 +437,7 @@ class StrategyRuntimeSafetyTest {
 
             ReflectionTestUtils.invokeMethod(f.service, "closeRuntime", f.runtime);
 
-            verify(lease, atLeast(2)).acquireOrRenew(1L, 3L, "BTCUSDT");
+            verify(lease).acquireOrRenew(1L, 3L, "BTCUSDT");
             verify(lease).release(1L, 3L, "BTCUSDT");
             assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "leaseValid"));
         } finally {
