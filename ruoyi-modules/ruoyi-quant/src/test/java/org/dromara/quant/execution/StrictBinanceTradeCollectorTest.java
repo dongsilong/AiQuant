@@ -42,6 +42,14 @@ class StrictBinanceTradeCollectorTest {
     }
 
     @Test
+    void rejectsIncompleteFinancialFactsInsteadOfAllowingZeroDefaults() {
+        var incomplete = new ExchangeGateway.TradeSnapshot("BTCUSDT", 5L, 11L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            null, BigDecimal.ZERO, start.plusSeconds(5), null);
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of(incomplete));
+        assertThrows(IllegalStateException.class, () -> collector.collect(credential, "BTCUSDT", start, end));
+    }
+
+    @Test
     void rejectsAOneMillisecondWindowThatRemainsSaturated() {
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(java.util.Collections.nCopies(1000, trade(1L)));
         assertThrows(IllegalStateException.class, () -> collector.collect(credential, "BTCUSDT", start, end));
