@@ -69,7 +69,7 @@ def main() -> int:
     for file in FILES:
         content = file.read_text(encoding="utf-8")
         expected_switches = {
-            "quant:\\n  live:": "${QUANT_LIVE_ENABLED:true}",
+            "quant:\n  live:": "${QUANT_LIVE_ENABLED:true}",
             "  runtime:": "${QUANT_RUNTIME_ENABLED:true}" if file.name == "application-dev.yml" else "${QUANT_RUNTIME_ENABLED:false}",
         }
         for marker, expected in expected_switches.items():
