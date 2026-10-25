@@ -93,6 +93,11 @@ def main() -> int:
             ):
                 if property_value(redis, key) != expected:
                     violations.append(f"{file.name}: production Redis {key} must be externally configured")
+            if property_value(redis, "ssl.enabled") != "${AIQUANT_REDIS_SSL_ENABLED:true}":
+                violations.append(f"{file.name}: production Redis TLS must default to enabled")
+            if "sslMode=VERIFY_IDENTITY" not in property_value(datasource, "url"):
+                violations.append(f"{file.name}: production MySQL URL must require sslMode=VERIFY_IDENTITY")
+            # Check endpoint placeholders above without printing their resolved values.
         expected_switches = {
             "  live:": "${QUANT_LIVE_ENABLED:true}",
             "  runtime:": "${QUANT_RUNTIME_ENABLED:true}" if file.name == "application-dev.yml" else "${QUANT_RUNTIME_ENABLED:false}",
