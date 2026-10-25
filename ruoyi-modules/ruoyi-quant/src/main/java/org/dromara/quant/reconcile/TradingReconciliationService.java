@@ -797,7 +797,7 @@ public class TradingReconciliationService {
                 }
             }
 
-            if (live) {
+            if (live && sourceOrder != null && sourceOrder.getStrategyId() != null && sourceOrder.getStrategyInstanceId() != null) {
                 String status = fillJournal.attribute(s, sourceOrder, credential.getId());
                 if ("CONFLICT".equals(status)) {
                     log.error("LIVE fill attribution became conflicting after local fact verification credentialId={} symbol={} exchangeTradeId={}",
