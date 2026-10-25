@@ -2,6 +2,7 @@ package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
@@ -19,6 +20,7 @@ import java.util.List;
 /**
  * 恢复 PENDING/UNKNOWN/ACCEPTED 执行记录，避免“交易所已接受、应用未落库”后再次下单。
  */
+@Slf4j
 @RequiredArgsConstructor
 @Component
 public class ExecutionRecoveryService {
@@ -140,8 +142,11 @@ public class ExecutionRecoveryService {
                 } else if (record.getCreatedAt() != null && Duration.between(record.getCreatedAt(), LocalDateTime.now()).getSeconds() >= 90) {
                     recordService.markUnknown(record, "超过 90 秒仍无法确认交易所订单状态，保持 UNKNOWN 并等待后续对账");
                 }
-            } catch (RuntimeException ignored) {
+            } catch (RuntimeException ex) {
                 // 网络/交易所异常不能改写交易事实；记录继续保留在当前状态，下一轮继续查询。
+                // markRecoveryAttempt throttles repeated attempts, so this warning is bounded per record.
+                log.warn("执行记录恢复失败，保留当前状态并等待后续对账 executionId={} credentialId={} symbol={} operation={} status={}",
+                    record.getId(), record.getCredentialId(), record.getSymbol(), record.getOperationType(), record.getExecutionStatus(), ex);
             }
         }
         recoverStrandedFinalizedDispatches();
@@ -159,8 +164,15 @@ public class ExecutionRecoveryService {
         if (liveOrderDispatcher == null) {
             return;
         }
-        List<QuantExecutionRecord> stranded = recordMapper.strandedRecoveredDispatches();
-        if (stranded == null) {
+        final List<QuantExecutionRecord> stranded;
+        try {
+            stranded = recordMapper.strandedRecoveredDispatches();
+        } catch (RuntimeException ex) {
+            // If discovery fails, do not release any possibly stranded dispatch guard.
+            log.error("查询已恢复但调度票据未释放的 LIVE 执行记录失败，本轮保持所有保护锁", ex);
+            return;
+        }
+        if (stranded == null || stranded.isEmpty()) {
             return;
         }
         for (QuantExecutionRecord record : stranded) {
@@ -189,6 +201,8 @@ public class ExecutionRecoveryService {
             } catch (RuntimeException ex) {
                 // Keep the guard held on any uncertain DB/network result. Other
                 // records may still be independently recoverable on this tick.
+                log.warn("滞留 LIVE 调度票据恢复失败，继续阻断该账户交易对 credentialId={} executionId={} symbol={} clientOrderId={}",
+                    record.getCredentialId(), record.getId(), record.getSymbol(), record.getClientOrderId(), ex);
             }
         }
     }
