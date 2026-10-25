@@ -74,6 +74,39 @@ class UserDataStreamLeaseGateTest {
     }
 
     @Test
+    void databaseLeaseVerificationFailureClosesFormerOwnerConnection() {
+        var gateway = mock(ExchangeGateway.class);
+        var lease = mock(LiveUserStreamLeaseService.class);
+        var positions = mock(AccountPositionCache.class);
+        var balances = mock(AccountBalanceCache.class);
+        var preparation = mock(TradingPreparationService.class);
+        var session = mock(ExchangeGateway.UserDataStreamSession.class);
+        when(session.isConnected()).thenReturn(true);
+        when(gateway.subscribeUserData(any(), any())).thenReturn(session);
+        when(lease.owns(104L, 1L)).thenReturn(true, true, true)
+            .thenThrow(new IllegalStateException("database unavailable"));
+        var hub = new UserDataStreamHub(gateway, mock(TradeExecutionApplicationService.class), positions, balances, preparation);
+        ReflectionTestUtils.setField(hub, "streamLease", lease);
+        var credential = new QuantCredential();
+        credential.setId(104L);
+        credential.setRunMode("LIVE");
+        hub.registerLeaseOwner(104L, 1L);
+        hub.subscribe(credential, ignored -> {
+        });
+
+        try {
+            hub.healthCheck();
+
+            verify(session).close();
+            verify(positions).remove(104L);
+            verify(balances).remove(104L);
+            assertFalse(hub.hasLocalStream(104L));
+        } finally {
+            hub.destroy();
+        }
+    }
+
+    @Test
     void explicitLeaseRevocationClosesSocketEvenIfBrowserSseStillSubscribes() throws Exception {
         var gateway = mock(ExchangeGateway.class);
         var lease = mock(LiveUserStreamLeaseService.class);
