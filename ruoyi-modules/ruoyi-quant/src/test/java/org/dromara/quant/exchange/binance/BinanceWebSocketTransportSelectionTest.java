@@ -41,6 +41,25 @@ class BinanceWebSocketTransportSelectionTest {
     }
 
     @Test
+    void sdkBootstrapFailureDowngradesNodeAndNotifiesExistingStreams() {
+        var config = new QuantProperties();
+        config.getBinance().setWebsocketTransport("BINANCE_SDK");
+        var gateway = new BinanceGatewayAdapter(config);
+        var closed = new java.util.concurrent.atomic.AtomicInteger();
+        var notified = new java.util.concurrent.atomic.AtomicInteger();
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(gateway, "trackWebsocket",
+            (Runnable) closed::incrementAndGet, (Runnable) notified::incrementAndGet);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(gateway, "fallbackToRawWebsocketTransport",
+            new IllegalStateException("simulated SDK/Jetty bootstrap conflict"));
+
+        assertEquals("RAW_OKHTTP", gateway.websocketTransport());
+        assertFalse(gateway.sdkStreamsEnabled());
+        assertEquals(1, closed.get(), "existing SDK stream must be closed before the hub replays");
+        assertEquals(1, notified.get(), "existing stream owner must receive a disconnect event");
+    }
+
+    @Test
     void rawTransportCanBeExplicitlySelected() {
         var config = new QuantProperties();
         config.getBinance().setWebsocketTransport("RAW_OKHTTP");
