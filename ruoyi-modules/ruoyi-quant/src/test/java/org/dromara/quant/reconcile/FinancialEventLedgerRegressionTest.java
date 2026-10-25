@@ -7,6 +7,7 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.StrictBinanceTradeCollector;
+import org.dromara.quant.execution.StrictBinanceIncomeCollector;
 import org.dromara.quant.execution.StrategyFillJournalService;
 import org.dromara.quant.finance.domain.QuantFinancialEvent;
 import org.dromara.quant.finance.domain.vo.QuantFinancialEventVo;
@@ -17,6 +18,7 @@ import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
 import org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
+import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,8 +49,9 @@ class FinancialEventLedgerRegressionTest {
             mock(QuantOrderMapper.class), mock(QuantTradeMapper.class), mock(QuantProtectionOrderMapper.class),
             financialEvents, mock(QuantReconcileRecordMapper.class), mock(ReconciliationFailureRecorder.class),
             mock(StrategyPositionStateService.class), mock(PlatformTransactionManager.class),
-            mock(StrictBinanceTradeCollector.class), mock(StrategyFillJournalService.class),
-            mock(StrategyFillSyncCursorMapper.class), mock(StrategyFillSyncCursorService.class));
+            mock(StrictBinanceTradeCollector.class), mock(StrictBinanceIncomeCollector.class), mock(StrategyFillJournalService.class),
+            mock(StrategyFillSyncCursorMapper.class), mock(StrategyFillSyncCursorService.class),
+            mock(FinancialEventSyncCursorMapper.class), mock(FinancialEventSyncCursorService.class));
     }
 
     private void sync(List<ExchangeGateway.IncomeSnapshot> snapshots) throws Exception {
