@@ -5,7 +5,7 @@
 
 ## Technology rules
 
-1. **Binance:** Use the official `io.github.binance:binance-derivatives-trading-usds-futures:12.0.3` APIs first. Existing REST order, conditional-order and account methods already use this SDK. New direct REST/WebSocket implementations are permitted only where the pinned SDK cannot provide a required capability, with an inline justification and test. Never retry an unknown-result order through an alternative client.
+1. **Binance:** Use the official `io.github.binance:binance-derivatives-trading-usds-futures:12.1.1` APIs first. Existing REST order, conditional-order and account methods already use this SDK. New direct REST/WebSocket implementations are permitted only where the pinned SDK cannot provide a required capability, with an inline justification and test. Never retry an unknown-result order through an alternative client.
 2. **Persistence:** Use MyBatis-Plus CRUD/Wrapper for simple queries; use MyBatis Mapper custom SQL for atomic updates, `FOR UPDATE`, `INSERT IGNORE`, JOINs and lease ownership. Preserve affected-row checks, unique constraints and Spring transaction semantics when migrating legacy `JdbcTemplate` code. `TransactionTemplate(REQUIRES_NEW, READ_COMMITTED)` used for short reservations must not be replaced with unprotected read-modify-write code.
 3. **Separation:** Business modules call `ExchangeGateway`, not Binance SDK classes directly. Management API must not become the single source of trading execution state.
 4. **Real positions:** Exchange position, strategy allocation and pending capacity reservation are different concepts. No live rollout to shared-account multi-strategy operation until attribution and reconciliation tests are reviewed.
@@ -36,7 +36,7 @@ Two independent transports are implemented under the same `ExchangeGateway` mark
 
 | Option | Configuration | Operational trade-off |
 | --- | --- | --- |
-| A — official SDK | `QUANT_BINANCE_WEBSOCKET_TRANSPORT=BINANCE_SDK` | Uses the official 12.0.3 stream subscription API for market and user events. The SDK's internal queue is unbounded; the adapter monitors queue depth and disconnects at `QUANT_BINANCE_SDK_BACKLOG_LIMIT` (default 2048) for reconciliation/replay. This is a **threshold**, not a hard memory cap. Treat as opt-in pending soak/fault testing. |
+| A — official SDK | `QUANT_BINANCE_WEBSOCKET_TRANSPORT=BINANCE_SDK` | Uses the official 12.1.1 stream subscription API for market and user events. The SDK's internal queue is unbounded; the adapter monitors queue depth and disconnects at `QUANT_BINANCE_SDK_BACKLOG_LIMIT` (default 2048) for reconciliation/replay. This is a **threshold**, not a hard memory cap. Treat as opt-in pending soak/fault testing. |
 | B — raw OkHttp | `QUANT_BINANCE_WEBSOCKET_TRANSPORT=RAW_OKHTTP` | Existing combined stream protocol, preserving raw-event parsing and existing stream-health/replay behavior. **Default for LIVE.** |
 
 **Configuration at deployment:** set environment variables above, then perform a supervised rolling restart. This is safe to configure in every profile and does not modify the Binance REST SDK version.
@@ -48,7 +48,7 @@ Two independent transports are implemented under the same `ExchangeGateway` mark
 
 A switch chooses the new transport for future subscriptions, closes existing streams and explicitly announces `DISCONNECTED` to hubs so they can resubscribe and replay/reconcile. Switching is **per application node**, not a cluster-wide atomic operation; coordinate multi-node cutover. There is a reconnection window, **not zero-downtime or no-lost-events**. Do not switch with unprotected open LIVE positions or during uncertain executions. Only authorized infrastructure operators should be assigned the new permissions. Reconciliation and protective order supervision must be healthy before/after cutover.
 
-**Important:** The SDK path uses its generated typed subscription API but consumes raw event strings from the SDK queue to preserve the already audited AiQuant event normalizer. Validate actual 12.0.3 listenKey, mark-price cadence, reconnection and event model compatibility on a staging account; the method-existence test alone does not prove end-to-end stream behavior. SDK Streams with a configured HTTP proxy intentionally fail closed until proper SDK proxy support is wired/tested.
+**Important:** The SDK path uses its generated typed subscription API but consumes raw event strings from the SDK queue to preserve the already audited AiQuant event normalizer. Validate actual 12.1.1 listenKey, mark-price cadence, reconnection and event model compatibility on a staging account; the method-existence test alone does not prove end-to-end stream behavior. SDK Streams with a configured HTTP proxy intentionally fail closed until proper SDK proxy support is wired/tested.
 
 ## Architecture changes and operational validation
 
@@ -74,7 +74,7 @@ LIVE global permission is now enabled by default. For active strategy execution 
 - [ ] Run frontend typecheck, unit tests, lint and production build.
 - [ ] Verify that `StrategyEntryGuardMapper` is registered by Spring in the production profile.
 - [ ] Verify credentials/secrets are rotated, database keys migrated, network access restricted, TLS verified, and all production settings externally provisioned.
-- [x] Verified SDK 12.x API has `klineCandlestickStreams` and `userData` methods; added the `BinanceSdkContractTest` to enforce method presence on pinned 12.0.3 dependency.
+- [x] Verified SDK 12.x API has `klineCandlestickStreams` and `userData` methods; added the `BinanceSdkContractTest` to enforce method presence on pinned 12.1.1 dependency.
 - [ ] Validate the new optional SDK transport in long-running LIVE-like staging, including real user-data payloads, stream backlog storms, Jetty dependency compatibility, disconnect-replay and stream cutover with open positions. The raw transport remains the default and rollback option until this passes; SDK transport currently monitors a **soft** backlog threshold, not a physical bound.
 - [ ] Test multi-node lease loss, fencing/stale-worker execution, concurrent strategies against the same account, and duplicate signal deliveries.
 - [ ] Fault-inject order timeout, exchange accepted / local DB failed, unknown order recovery across 24+ hours, cancelled partial fills, and inconsistent order snapshots.
@@ -89,3 +89,29 @@ LIVE global permission is now enabled by default. For active strategy execution 
 - Maven GitHub Actions now run critical invariants, the complete `@Tag("dev")` quant regression suite, and a separate MySQL/InnoDB concurrency job for atomic lease/guard/capacity semantics. These checks do not substitute for independent multi-node fault injection against real Binance services.
 - Strategy runtime and terminal component decomposition, shared strategy position attribution and full OMS state machine are not yet implemented.
 - The environment executing these edits cannot clone or compile GitHub repositories; source-level inspection and added tests are **not** evidence that tests passed.
+
+
+## 2026-10-25 — environment and schema gates
+
+### Runtime switches
+
+- `QUANT_LIVE_ENABLED` defaults to `true` as explicitly requested. Set it to `false` on every node until the target database and exchange acceptance gates are satisfied.
+- `QUANT_RUNTIME_ENABLED` defaults to `true` in the development profile and `false` in the production profile. Production strategy execution therefore remains independently disabled until an operator explicitly enables it.
+- `QUANT_BINANCE_WEBSOCKET_TRANSPORT` selects `BINANCE_SDK` or `RAW_OKHTTP`; `QUANT_BINANCE_SDK_BACKLOG_LIMIT` controls the SDK backlog disconnect threshold. Threshold-based disconnect is not a hard memory cap.
+
+### Secret injection
+
+Do not store production values in tracked YAML. Configure these variables through the deployment secret manager (only configure integrations actually enabled in that environment):
+
+- Core security: `QUANT_SECURITY_SECRET_KEY`, `AIQUANT_SA_TOKEN_JWT_SECRET`, `AIQUANT_API_DECRYPT_PRIVATE_KEY`, `AIQUANT_ENCRYPTOR_PASSWORD`.
+- Infrastructure: `AIQUANT_DATASOURCE_PASSWORD`, `AIQUANT_REDIS_PASSWORD`, `AIQUANT_MONITOR_INSTANCE_PASSWORD`, `AIQUANT_MONITOR_PASSWORD`.
+- Optional mail/MQTT: `AIQUANT_MAIL_ENABLED`, `AIQUANT_MAIL_FROM`, `AIQUANT_MAIL_USER`, `AIQUANT_MAIL_PASSWORD`, `AIQUANT_MQTT_USERNAME`, `AIQUANT_MQTT_PASSWORD`.
+- Optional integrations: `AIQUANT_SNAIL_JOB_TOKEN`, `AIQUANT_SNAIL_AI_TOKEN`, and `AIQUANT_JUSTAUTH_<PROVIDER>_CLIENT_SECRET` (provider name is uppercase, e.g. `GITEE`, `MAXKEY`, `TOPIAM`).
+
+Empty defaults prevent source-embedded secrets but do not configure an integration. Verify each enabled feature's required credentials before rollout. Credentials and private keys that were previously committed must be rotated; changing current files does not revoke values in Git history.
+
+### Schema review boundaries
+
+`script/sql/quant/production-preflight.sql` requires schema used by the active LIVE dispatch, recovery and cross-node snapshot-fencing paths. The strategy position-cycle/fill-event/inventory tables from migrations V07/V08 are deliberately excluded from mandatory preflight because those migrations are marked review-only and the projector is not automatically wired. Do not install or enable that projector until its provenance, historical replay, side/role attribution, commission accounting and reconciliation contracts have passed an independent staging review.
+
+The current preflight is a read-only contract check, not a canonical production DDL baseline. The recovery case/audit migration V05 is also marked design-only and requires a reviewed production DDL, backup/restore rehearsal, least-privilege database grants and external immutable audit retention before use.
