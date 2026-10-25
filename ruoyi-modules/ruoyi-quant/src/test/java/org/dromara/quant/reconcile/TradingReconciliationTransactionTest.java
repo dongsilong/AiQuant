@@ -102,8 +102,10 @@ class TradingReconciliationTransactionTest {
     @Test
     void incompleteIncomeHistoryDoesNotAdvanceItsCursor() {
         stubCommonFacts();
-        var incomplete = new ExchangeGateway.IncomeSnapshot("BTCUSDT", "FUNDING_FEE", null, "USDT", 99L, "funding", Instant.now());
-        when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of(incomplete));
+        when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenAnswer(call -> {
+            ExchangeGateway.TimeRange range = call.getArgument(3);
+            return List.of(new ExchangeGateway.IncomeSnapshot("BTCUSDT", "FUNDING_FEE", null, "USDT", 99L, "funding", range.from().plusSeconds(1)));
+        });
 
         assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 24));
 
