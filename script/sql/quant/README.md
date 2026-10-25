@@ -19,6 +19,10 @@ against the intended MySQL 8.x database. Inspect every result row.
 - Never use the destructive `MySqlAtomicConcurrencyTest` on any database outside the
   dedicated disposable `aiquant_ci_test`; the test explicitly rejects other names.
 
+## V20261025_02 financial income-history cursor
+
+`V20261025_02__financial_event_sync_cursor.sql` provides a durable per-credential watermark for Binance income/funding events. The collector splits 1000-row saturated windows and rejects incomplete event facts; the watermark advances in the same transaction as financial-event persistence. If a cursor is more than 180 days behind, reconciliation advances in bounded chunks and reports DEGRADED until caught up. A future cursor blocks reconciliation rather than skipping financial history. Apply only after the standard restored-clone migration rehearsal; the migration is not automatic.
+
 ## V20261025_01 raw fill journal and sync cursor
 
 `V20261025_01__strategy_fill_journal.sql` is a reviewed schema source for the active raw Binance fill journal and monotonic history cursor. It is **not automatically applied** and does not replace the canonical production DDL baseline. Apply only after the same all-nodes-LIVE-off, backup/restore, duplicate/data review, and restored-clone rehearsal described above. The read-only preflight and LIVE startup guard require both tables and their exact unique-key contracts. This migration stores raw exchange facts and attribution-processing state; it does not infer strategy ownership or activate the review-only position-cycle/inventory projector.
