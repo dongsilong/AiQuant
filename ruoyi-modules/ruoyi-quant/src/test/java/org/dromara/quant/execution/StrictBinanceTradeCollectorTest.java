@@ -42,11 +42,14 @@ class StrictBinanceTradeCollectorTest {
     }
 
     @Test
-    void rejectsIncompleteFinancialFactsInsteadOfAllowingZeroDefaults() {
+    void retainsIncompleteFinancialFactsForRawJournalInsteadOfConvertingThemToZero() {
         var incomplete = new ExchangeGateway.TradeSnapshot("BTCUSDT", 5L, 11L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
             null, BigDecimal.ZERO, start.plusSeconds(5), null);
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of(incomplete));
-        assertThrows(IllegalStateException.class, () -> collector.collect(credential, "BTCUSDT", start, end));
+        var result = collector.collect(credential, "BTCUSDT", start, end);
+        assertEquals(1, result.size());
+        org.junit.jupiter.api.Assertions.assertNull(result.getFirst().commission());
+        org.junit.jupiter.api.Assertions.assertNull(result.getFirst().commissionAsset());
     }
 
     @Test
