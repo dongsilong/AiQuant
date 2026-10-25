@@ -72,9 +72,18 @@ public class StrictBinanceTradeCollector {
             return;
         }
         for (var trade : page) {
-            if (trade == null || trade.tradeId() == null || trade.time() == null || !symbol.equalsIgnoreCase(trade.symbol())
+            if (trade == null || trade.tradeId() == null || trade.tradeId() <= 0 || trade.orderId() == null || trade.orderId() <= 0
+                || trade.time() == null || !symbol.equalsIgnoreCase(trade.symbol())
                 || trade.time().toEpochMilli() < leftMillis || trade.time().toEpochMilli() > rightMillis) {
-                throw new IllegalStateException("Exchange fill outside requested historical interval");
+                throw new IllegalStateException("Exchange fill outside requested historical interval or missing exact order identity");
+            }
+            if (!Set.of("BUY", "SELL").contains(trade.side() == null ? "" : trade.side().toUpperCase(Locale.ROOT))
+                || trade.quantity() == null || trade.quantity().signum() <= 0
+                || trade.price() == null || trade.price().signum() <= 0
+                || trade.commission() == null || trade.commission().signum() < 0
+                || trade.realizedPnl() == null
+                || trade.commissionAsset() == null || !trade.commissionAsset().matches("[A-Za-z0-9]{2,20}")) {
+                throw new IllegalStateException("Binance fill is missing quantity, price, side, commission, fee asset or realized PnL; history is not safe to apply");
             }
             var prior = unique.putIfAbsent(trade.tradeId(), trade);
             if (prior != null && !prior.equals(trade)) {
