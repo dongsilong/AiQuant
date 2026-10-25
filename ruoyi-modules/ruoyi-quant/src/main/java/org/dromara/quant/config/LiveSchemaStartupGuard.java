@@ -22,7 +22,7 @@ import java.util.Set;
 public class LiveSchemaStartupGuard implements ApplicationRunner {
     private static final Set<String> TABLES = Set.of("quant_credential", "quant_strategy", "quant_strategy_instance", "quant_strategy_position_state",
         "quant_strategy_runtime_lease", "quant_strategy_entry_guard", "quant_execution_record", "quant_open_capacity", "quant_order", "quant_position", "quant_protection_order",
-        "quant_protection_target", "quant_trade", "quant_financial_event", "quant_trade_decision_log", "quant_live_dispatch_guard", "quant_order_dispatch_ticket", "quant_strategy_fill_allocation",
+        "quant_protection_target", "quant_trade", "quant_financial_event", "quant_financial_event_sync_cursor", "quant_trade_decision_log", "quant_live_dispatch_guard", "quant_order_dispatch_ticket", "quant_strategy_fill_allocation",
         "quant_strategy_fill_journal", "quant_strategy_fill_sync_cursor", "quant_live_account_settings_intent", "quant_position_sync_fence", "quant_live_user_stream_lease",
         "quant_strategy_order_intent", "quant_strategy_pre_dispatch_intent", "quant_live_recovery_case", "quant_live_recovery_audit");
 
@@ -30,7 +30,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_execution_record|credential_id,idempotency_key", "quant_open_capacity|credential_id,idempotency_key", "quant_strategy_position_state|instance_id",
         "quant_protection_target|target_key", "quant_live_dispatch_guard|credential_id,symbol", "quant_order_dispatch_ticket|credential_id,idempotency_key",
         "quant_strategy_fill_allocation|credential_id,symbol,exchange_trade_id", "quant_strategy_fill_journal|credential_id,symbol,exchange_trade_id",
-        "quant_strategy_fill_sync_cursor|credential_id,symbol", "quant_financial_event|credential_id,exchange_transaction_id,event_type",
+        "quant_strategy_fill_sync_cursor|credential_id,symbol", "quant_financial_event|credential_id,exchange_transaction_id,event_type", "quant_financial_event_sync_cursor|credential_id",
         "quant_live_recovery_case|credential_id,symbol,active_case_key",
         "quant_live_account_settings_intent|credential_id,symbol", "quant_strategy_order_intent|credential_id,symbol,client_order_id",
         "quant_strategy_pre_dispatch_intent|credential_id,idempotency_key");
@@ -75,6 +75,9 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
             }
             if (missingTables.contains("quant_strategy_pre_dispatch_intent") || missingUnique.contains("quant_strategy_pre_dispatch_intent|credential_id,idempotency_key")) {
                 requiredMigrations.add("script/sql/quant/V20261014_10__pre_dispatch_strategy_intent.sql");
+            }
+            if (missingTables.contains("quant_financial_event_sync_cursor") || missingUnique.contains("quant_financial_event_sync_cursor|credential_id")) {
+                requiredMigrations.add("script/sql/quant/V20261025_02__financial_event_sync_cursor.sql");
             }
             if (missingTables.contains("quant_financial_event") || missingUnique.contains("quant_financial_event|credential_id,exchange_transaction_id,event_type")) {
                 requiredMigrations.add("script/sql/quant/V20261024_01__financial_event_income_type_identity.sql");
