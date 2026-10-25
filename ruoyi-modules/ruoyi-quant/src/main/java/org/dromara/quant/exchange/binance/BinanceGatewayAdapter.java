@@ -66,6 +66,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     private final Map<String, ClockOffset> clockOffsets = new ConcurrentHashMap<>();
     /**
+     * 仅在当前线程执行服务端时间同步请求时记录真正进入 HTTP 链路的时间点。
+     * 该时间点在 REST 调度器放行后记录，避免把本地排队耗时计入网络往返时间。
+     */
+    private final ThreadLocal<ClockSyncTiming> clockSyncTiming = new ThreadLocal<>();
+    /**
      * 同一环境只允许一个服务器时间刷新，其他线程复用结果。
      */
     private final Map<String, Object> clockOffsetRefreshLocks = new ConcurrentHashMap<>();
@@ -1431,9 +1436,17 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             .addInterceptor(chain -> {
                 long queueStarted = System.nanoTime();
                 restScheduler.acquire(kind);
-                log.debug("Binance REST 获准执行 kind={} queueMillis={}", kind,
-                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted));
+                long queueMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted);
+                ClockSyncTiming syncTiming = clockSyncTiming.get();
+                long requestStartedAt = System.currentTimeMillis();
+                if (syncTiming != null) {
+                    syncTiming.markRequestStarted(requestStartedAt, queueMillis);
+                }
+                log.debug("Binance REST 获准执行 kind={} queueMillis={} clockSync={}", kind, queueMillis, syncTiming != null);
                 okhttp3.Response response = chain.proceed(chain.request());
+                if (syncTiming != null) {
+                    syncTiming.markResponseReceived(System.currentTimeMillis());
+                }
                 // Apply HTTP 418 cooldown/latch centrally so even SDK methods without a local
                 // ApiException wrapper cannot leave the shared REST scheduler open.
                 if (response.code() == 418 || response.code() == 429) {
@@ -1574,6 +1587,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
 
     /**
      * 获取 Binance 服务器时间偏移。
+     *
+     * 估算必须使用 REST 调度器放行后、真正进入 HTTP 调用链的起始时间；
+     * 若使用 SDK 调用前的时间，本地队列等待会被错误地当作网络 RTT，
+     * 使中点偏向过去，并可能导致签名时间戳仍然超前于 Binance 服务器。
      */
     private long clockOffset(String baseUrl) {
         long now = System.currentTimeMillis();
@@ -1588,25 +1605,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 return cached.value();
             }
             long refreshStartedAt = System.currentTimeMillis();
-            ClientConfiguration config = restConfiguration(baseUrl);
-            long requestStartedAt = System.currentTimeMillis();
-            ApiResponse<CheckServerTimeResponse> response;
-            try {
-                response = new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config))).checkServerTime();
-            } catch (RuntimeException ex) {
-                throw requestFailure("CHECK_SERVER_TIME", ex);
-            }
-            long requestFinishedAt = System.currentTimeMillis();
-            CheckServerTimeResponse data = response.getData();
-            if (data == null || data.getServerTime() == null) {
-                throw new IllegalStateException("无法获取 Binance 服务端时间");
-            }
-            long localMidpoint = requestStartedAt + (requestFinishedAt - requestStartedAt) / 2;
-            long offset = data.getServerTime() - localMidpoint;
-            clockOffsets.put(baseUrl, new ClockOffset(offset, requestFinishedAt));
-            log.info("Binance 服务端时间偏移已刷新: baseUrl={}, offsetMillis={}, recvWindowMillis={}, syncElapsedMillis={}, requestElapsedMillis={}", baseUrl, offset, RECV_WINDOW_MILLIS,
-                requestFinishedAt - refreshStartedAt, requestFinishedAt - requestStartedAt);
-            return offset;
+            ClockSyncResult sync = synchronizeClock(baseUrl);
+            clockOffsets.put(baseUrl, new ClockOffset(sync.offsetMillis(), sync.responseReceivedAtMillis()));
+            log.info("Binance 服务端时间偏移已刷新: baseUrl={}, offsetMillis={}, recvWindowMillis={}, syncElapsedMillis={}, schedulerQueueMillis={}, requestElapsedMillis={}",
+                baseUrl, sync.offsetMillis(), RECV_WINDOW_MILLIS, sync.responseReceivedAtMillis() - refreshStartedAt,
+                sync.schedulerQueueMillis(), sync.responseReceivedAtMillis() - sync.requestStartedAtMillis());
+            return sync.offsetMillis();
         }
     }
 
@@ -1618,25 +1622,55 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 return;
             }
             long refreshStartedAt = System.currentTimeMillis();
-            ClientConfiguration config = restConfiguration(baseUrl);
-            long requestStartedAt = System.currentTimeMillis();
-            ApiResponse<CheckServerTimeResponse> response;
-            try {
-                response = new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config))).checkServerTime();
-            } catch (RuntimeException ex) {
-                throw requestFailure("CHECK_SERVER_TIME", ex);
-            }
-            long requestFinishedAt = System.currentTimeMillis();
-            CheckServerTimeResponse data = response.getData();
-            if (data == null || data.getServerTime() == null) {
-                throw new IllegalStateException("无法获取 Binance 服务端时间");
-            }
-            long localMidpoint = requestStartedAt + (requestFinishedAt - requestStartedAt) / 2;
-            long offset = data.getServerTime() - localMidpoint;
-            clockOffsets.put(baseUrl, new ClockOffset(offset, requestFinishedAt));
-            log.info("Binance 服务端时间偏移已强制刷新: baseUrl={}, offsetMillis={}, syncElapsedMillis={}, requestElapsedMillis={}", baseUrl, offset,
-                requestFinishedAt - refreshStartedAt, requestFinishedAt - requestStartedAt);
+            ClockSyncResult sync = synchronizeClock(baseUrl);
+            clockOffsets.put(baseUrl, new ClockOffset(sync.offsetMillis(), sync.responseReceivedAtMillis()));
+            log.info("Binance 服务端时间偏移已强制刷新: baseUrl={}, offsetMillis={}, syncElapsedMillis={}, schedulerQueueMillis={}, requestElapsedMillis={}",
+                baseUrl, sync.offsetMillis(), sync.responseReceivedAtMillis() - refreshStartedAt,
+                sync.schedulerQueueMillis(), sync.responseReceivedAtMillis() - sync.requestStartedAtMillis());
         }
+    }
+
+    /**
+     * 发起一次带调度的 Binance 公共服务器时间请求，并从 HTTP 拦截器取得实际往返时间。
+     */
+    private ClockSyncResult synchronizeClock(String baseUrl) {
+        ClientConfiguration config = restConfiguration(baseUrl);
+        ClockSyncTiming timing = new ClockSyncTiming();
+        long syncInvokedAt = System.currentTimeMillis();
+        clockSyncTiming.set(timing);
+        ApiResponse<CheckServerTimeResponse> response;
+        try {
+            response = new DerivativesTradingUsdsFuturesRestApi(restClient(new ApiClient(config))).checkServerTime();
+        } catch (RuntimeException ex) {
+            throw requestFailure("CHECK_SERVER_TIME", ex);
+        } finally {
+            // 不让时间同步上下文泄漏到同线程后续的其他 REST 请求。
+            clockSyncTiming.remove();
+        }
+        CheckServerTimeResponse data = response.getData();
+        if (data == null || data.getServerTime() == null) {
+            throw new IllegalStateException("无法获取 Binance 服务端时间");
+        }
+        long requestStartedAt = timing.requestStartedAtMillis();
+        long responseReceivedAt = timing.responseReceivedAtMillis();
+        if (requestStartedAt <= 0L || responseReceivedAt < requestStartedAt) {
+            // 测量缺失时不回退到 SDK 调用前的时间，否则会重新引入排队偏差。
+            throw new IllegalStateException("无法准确测量 Binance 服务器时间请求的 HTTP 往返时间");
+        }
+        long offset = estimateClockOffset(data.getServerTime(), requestStartedAt, responseReceivedAt);
+        return new ClockSyncResult(offset, requestStartedAt, responseReceivedAt, timing.schedulerQueueMillis(), syncInvokedAt);
+    }
+
+    /**
+     * 使用 HTTP 请求真正开始到收到响应之间的中点估算时钟偏移。
+     * 包含 SDK 调用前的本地排队时间会产生偏差，因此调用方不能传入排队前的时间戳。
+     */
+    static long estimateClockOffset(long serverTimeMillis, long requestStartedAtMillis, long responseReceivedAtMillis) {
+        if (requestStartedAtMillis <= 0L || responseReceivedAtMillis < requestStartedAtMillis) {
+            throw new IllegalArgumentException("服务器时间采样的 HTTP 时间区间无效");
+        }
+        long localMidpoint = requestStartedAtMillis + (responseReceivedAtMillis - requestStartedAtMillis) / 2L;
+        return serverTimeMillis - localMidpoint;
     }
 
     /**
@@ -1653,6 +1687,39 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * @param updatedAt 最后更新时间
      */
     private record ClockOffset(long value, long updatedAt) {
+    }
+
+    /** 单次服务器时间同步的 HTTP 时序采样。 */
+    private record ClockSyncResult(long offsetMillis, long requestStartedAtMillis, long responseReceivedAtMillis,
+                                   long schedulerQueueMillis, long syncInvokedAtMillis) {
+    }
+
+    /** 由 REST 拦截器在调度放行及响应到达时填充。 */
+    private static final class ClockSyncTiming {
+        private volatile long requestStartedAtMillis;
+        private volatile long responseReceivedAtMillis;
+        private volatile long schedulerQueueMillis;
+
+        private void markRequestStarted(long timestampMillis, long queueMillis) {
+            requestStartedAtMillis = timestampMillis;
+            schedulerQueueMillis = queueMillis;
+        }
+
+        private void markResponseReceived(long timestampMillis) {
+            responseReceivedAtMillis = timestampMillis;
+        }
+
+        private long requestStartedAtMillis() {
+            return requestStartedAtMillis;
+        }
+
+        private long responseReceivedAtMillis() {
+            return responseReceivedAtMillis;
+        }
+
+        private long schedulerQueueMillis() {
+            return schedulerQueueMillis;
+        }
     }
 
     /**
