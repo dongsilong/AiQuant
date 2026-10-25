@@ -27,11 +27,11 @@ class BinanceWebSocketTransportSelectionTest {
     }
 
     @Test
-    void sdkIsDefaultAndInvalidProxySwitchPreservesExistingLiveStreams() {
+    void rawTransportIsDefaultAndInvalidSdkProxySwitchPreservesExistingLiveStreams() {
         var config = new QuantProperties();
         var gateway = new BinanceGatewayAdapter(config);
-        assertTrue(gateway.sdkStreamsEnabled());
-        assertEquals("BINANCE_SDK", gateway.websocketTransport());
+        assertFalse(gateway.sdkStreamsEnabled());
+        assertEquals("RAW_OKHTTP", gateway.websocketTransport());
         config.getProxy().setHost("localhost");
         var closed = new java.util.concurrent.atomic.AtomicInteger();
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(gateway, "trackWebsocket", (Runnable) closed::incrementAndGet, (Runnable) () -> {
