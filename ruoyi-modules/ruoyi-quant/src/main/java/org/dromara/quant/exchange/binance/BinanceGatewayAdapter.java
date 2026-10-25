@@ -772,7 +772,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         IncomeType type = incomeType == null || incomeType.isBlank() ? null : IncomeType.fromValue(incomeType);
         GetIncomeHistoryResponse data = api(credential).getIncomeHistory(symbol, type, start, end, null, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData();
         if (data == null) {
-            return List.of();
+            throw new IllegalStateException("Binance income-history response has no data payload; completeness cannot be proven");
         }
         List<IncomeSnapshot> result = new ArrayList<>();
         for (GetIncomeHistoryResponseInner item : data) {
