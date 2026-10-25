@@ -22,7 +22,7 @@ class ProductionConfigurationStartupGuardTest {
         values.put("sa-token.jwt-secret-key", "");
         values.put("api-decrypt.privateKey", "");
         values.put("mybatis-encryptor.password", "");
-        values.put("spring.datasource.dynamic.datasource.master.url", "jdbc:mysql://localhost:3306/quantdb");
+        values.put("spring.datasource.dynamic.datasource.master.url", "jdbc:mysql://localhost:3306/quantdb?sslMode=VERIFY_IDENTITY");
         values.put("spring.datasource.dynamic.datasource.master.username", "");
         values.put("spring.datasource.dynamic.datasource.master.password", "");
         values.put("spring.data.redis.host", "127.0.0.1");
@@ -36,6 +36,8 @@ class ProductionConfigurationStartupGuardTest {
         assertTrue(failure.getMessage().contains("quant.security.secret-key"));
         assertTrue(failure.getMessage().contains("spring.datasource.dynamic.datasource.master.url"));
         assertTrue(failure.getMessage().contains("spring.data.redis.host"));
+        assertTrue(failure.getMessage().contains("sslMode=VERIFY_IDENTITY"));
+        assertTrue(failure.getMessage().contains("spring.data.redis.ssl.enabled"));
         assertTrue(!failure.getMessage().contains("jdbc:mysql://localhost"));
     }
 
@@ -47,12 +49,13 @@ class ProductionConfigurationStartupGuardTest {
             "sa-token.jwt-secret-key", "configured",
             "api-decrypt.privateKey", "configured",
             "mybatis-encryptor.password", "configured",
-            "spring.datasource.dynamic.datasource.master.url", "jdbc:mysql://db.internal:3306/quantdb",
+            "spring.datasource.dynamic.datasource.master.url", "jdbc:mysql://db.internal:3306/quantdb?sslMode=VERIFY_IDENTITY",
             "spring.datasource.dynamic.datasource.master.username", "quant_app",
             "spring.datasource.dynamic.datasource.master.password", "configured",
             "spring.data.redis.host", "redis.internal",
             "spring.data.redis.port", "6379",
-            "spring.data.redis.password", "configured"
+            "spring.data.redis.password", "configured",
+            "spring.data.redis.ssl.enabled", "true"
         );
         environment.getPropertySources().addFirst(new MapPropertySource("test", values));
 
