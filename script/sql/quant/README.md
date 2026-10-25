@@ -19,6 +19,10 @@ against the intended MySQL 8.x database. Inspect every result row.
 - Never use the destructive `MySqlAtomicConcurrencyTest` on any database outside the
   dedicated disposable `aiquant_ci_test`; the test explicitly rejects other names.
 
+## V20261025_01 raw fill journal and sync cursor
+
+`V20261025_01__strategy_fill_journal.sql` is a reviewed schema source for the active raw Binance fill journal and monotonic history cursor. It is **not automatically applied** and does not replace the canonical production DDL baseline. Apply only after the same all-nodes-LIVE-off, backup/restore, duplicate/data review, and restored-clone rehearsal described above. The read-only preflight and LIVE startup guard require both tables and their exact unique-key contracts. This migration stores raw exchange facts and attribution-processing state; it does not infer strategy ownership or activate the review-only position-cycle/inventory projector.
+
 ## Outstanding production migration work
 
 1. Obtain a sanitized `SHOW CREATE TABLE` for each quant table from the authoritative
