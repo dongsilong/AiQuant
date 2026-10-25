@@ -688,12 +688,6 @@ public class TradingReconciliationService {
                 .eq(QuantOrder::getCredentialId, credential.getId())
                 .eq(QuantOrder::getSymbol, s.symbol())
                 .eq(QuantOrder::getExchangeOrderId, s.orderId()));
-            String attributionStatus = live ? fillJournal.attribute(s, sourceOrder, credential.getId()) : null;
-            if ("CONFLICT".equals(attributionStatus)) {
-                log.error("LIVE fill journal quarantined conflicting raw fact; local trade ledger was not modified credentialId={} symbol={} exchangeTradeId={}",
-                    credential.getId(), s.symbol(), s.tradeId());
-                continue;
-            }
 
             boolean completeFacts = s.orderId() != null && s.orderId() > 0
                 && java.util.Set.of("BUY", "SELL").contains(s.side() == null ? "" : s.side().toUpperCase(Locale.ROOT))
@@ -704,11 +698,28 @@ public class TradingReconciliationService {
                 && s.commissionAsset() != null && s.commissionAsset().matches("[A-Za-z0-9]{2,20}");
             if (!completeFacts) {
                 if (live) {
-                    log.warn("LIVE Binance fill retained for attribution review; local numeric trade row was not fabricated credentialId={} symbol={} exchangeTradeId={} orderId={}",
-                        credential.getId(), s.symbol(), s.tradeId(), s.orderId());
+                    String status = fillJournal.attribute(s, sourceOrder, credential.getId());
+                    if ("CONFLICT".equals(status)) {
+                        log.error("Incomplete LIVE fill conflicts with persisted raw fact credentialId={} symbol={} exchangeTradeId={}",
+                            credential.getId(), s.symbol(), s.tradeId());
+                    } else {
+                        log.warn("LIVE Binance fill retained for attribution review; local numeric trade row was not fabricated credentialId={} symbol={} exchangeTradeId={} orderId={}",
+                            credential.getId(), s.symbol(), s.tradeId(), s.orderId());
+                    }
                     continue;
                 }
                 throw new IllegalStateException("Binance fill lacks valid immutable facts; refusing to persist partial trade");
+            }
+
+            // First persist/check the raw exchange fact WITHOUT allocating it. Only after the local
+            // trade identity is verified may strategy attribution mutate the allocation ledger.
+            if (live) {
+                String rawStatus = fillJournal.attribute(s, null, credential.getId());
+                if ("CONFLICT".equals(rawStatus)) {
+                    log.error("LIVE fill journal quarantined conflicting raw fact; local trade ledger was not modified credentialId={} symbol={} exchangeTradeId={}",
+                        credential.getId(), s.symbol(), s.tradeId());
+                    continue;
+                }
             }
             if (decisionLogs != null) {
                 decisionLogs.trade(credential.getId(), s);
@@ -783,6 +794,14 @@ public class TradingReconciliationService {
                 if (attributionChanged && tradeMapper.updateById(entity) != 1) {
                     throw new IllegalStateException("Binance fill attribution could not be enriched safely: credentialId="
                         + credential.getId() + ", symbol=" + s.symbol() + ", exchangeTradeId=" + s.tradeId());
+                }
+            }
+
+            if (live) {
+                String status = fillJournal.attribute(s, sourceOrder, credential.getId());
+                if ("CONFLICT".equals(status)) {
+                    log.error("LIVE fill attribution became conflicting after local fact verification credentialId={} symbol={} exchangeTradeId={}",
+                        credential.getId(), s.symbol(), s.tradeId());
                 }
             }
             if (sourceOrder != null && sourceOrder.getId() != null) {
