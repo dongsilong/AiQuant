@@ -400,15 +400,23 @@ class StrategyRuntimeSafetyTest {
 
             f.service.renewActiveRuntimeLeases();
             assertTrue(renewalEntered.await(2, java.util.concurrent.TimeUnit.SECONDS), "renewal task should reach the database call");
-            ReflectionTestUtils.setField(f.runtime, "closed", true);
-            allowRenewalToFinish.countDown();
-
-            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
-            while (((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "leaseRenewing")).get()
-                && System.nanoTime() < deadline) {
+            var closeFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            Thread closer = Thread.ofVirtual().start(() -> {
+                try {
+                    ReflectionTestUtils.invokeMethod(f.service, "closeRuntime", f.runtime);
+                } catch (Throwable ex) {
+                    closeFailure.set(ex);
+                }
+            });
+            long closeDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+            while (!(boolean) ReflectionTestUtils.getField(f.runtime, "closed") && System.nanoTime() < closeDeadline) {
                 Thread.sleep(5);
             }
-
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "closed"), "shutdown should fence the runtime before waiting for lease operations");
+            allowRenewalToFinish.countDown();
+            closer.join(2_000);
+            assertFalse(closer.isAlive(), "shutdown should release the lease after the in-flight renewal completes");
+            assertNull(closeFailure.get(), "runtime shutdown must finish without exception");
             assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "leaseValid"));
             verify(lease).release(1L, 3L, "BTCUSDT");
         } finally {
