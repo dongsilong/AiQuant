@@ -193,4 +193,17 @@ class ExecutionRecoveryServiceTest {
         verify(recovery).markRecovered(record, 123L, "FILLED");
         verify(gateway, never()).placeOrder(any());
     }
+    @Test
+    void nullUnresolvedScanDoesNotAttemptToReleaseStrandedDispatches() {
+        var records = mock(QuantExecutionRecordMapper.class);
+        when(records.selectList(any())).thenReturn(null);
+        var service = new ExecutionRecoveryService(records, mock(QuantCredentialMapper.class), mock(ExchangeGateway.class),
+            mock(ExecutionRecordService.class), mock(OrderLedgerService.class), new QuantProperties());
+        service.setLiveOrderDispatcher(mock(LiveOrderDispatcher.class));
+
+        service.recover();
+
+        verify(records, never()).strandedRecoveredDispatches();
+    }
+
 }
