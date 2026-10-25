@@ -30,7 +30,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_execution_record|credential_id,idempotency_key", "quant_open_capacity|credential_id,idempotency_key", "quant_strategy_position_state|instance_id",
         "quant_protection_target|target_key", "quant_live_dispatch_guard|credential_id,symbol", "quant_order_dispatch_ticket|credential_id,idempotency_key",
         "quant_strategy_fill_allocation|credential_id,symbol,exchange_trade_id", "quant_strategy_fill_journal|credential_id,symbol,exchange_trade_id",
-        "quant_strategy_fill_sync_cursor|credential_id,symbol",
+        "quant_strategy_fill_sync_cursor|credential_id,symbol", "quant_live_recovery_case|credential_id,symbol,active_case_key",
         "quant_live_account_settings_intent|credential_id,symbol", "quant_strategy_order_intent|credential_id,symbol,client_order_id",
         "quant_strategy_pre_dispatch_intent|credential_id,idempotency_key");
 
@@ -67,7 +67,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
             if (missingTables.contains("quant_strategy_fill_journal") || missingTables.contains("quant_strategy_fill_sync_cursor")
                 || missingUnique.contains("quant_strategy_fill_journal|credential_id,symbol,exchange_trade_id")
                 || missingUnique.contains("quant_strategy_fill_sync_cursor|credential_id,symbol")) {
-                requiredMigrations.add("script/sql/quant/V20261017_01__strategy_fill_journal.sql");
+                requiredMigrations.add("script/sql/quant/V20261025_01__strategy_fill_journal.sql");
             }
             if (missingTables.contains("quant_strategy_order_intent") || missingUnique.contains("quant_strategy_order_intent|credential_id,symbol,client_order_id")) {
                 requiredMigrations.add("script/sql/quant/V20261014_09__strategy_order_intent.sql");
