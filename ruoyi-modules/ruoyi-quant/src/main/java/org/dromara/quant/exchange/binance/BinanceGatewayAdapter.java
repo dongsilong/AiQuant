@@ -802,8 +802,18 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         List<IncomeSnapshot> result = new ArrayList<>();
         for (GetIncomeHistoryResponseInner item : data) {
-            result.add(new IncomeSnapshot(item.getSymbol(), string(item, "getIncomeType"), decimal(item.getIncome()), item.getAsset(), item.getTranId(), item.getInfo(),
-                instant(item.getTime())));
+            if (item == null) {
+                // Preserve a malformed/null row for the strict collector to reject with diagnostics.
+                result.add(null);
+                continue;
+            }
+            // Income history is financial evidence: do not turn absent fields into plausible defaults.
+            // decimal() maps null to zero and instant() maps null to epoch for other API paths,
+            // so this mapping must explicitly preserve nulls for strict reconciliation.
+            BigDecimal amount = item.getIncome() == null ? null : decimal(item.getIncome());
+            Instant eventTime = item.getTime() == null ? null : Instant.ofEpochMilli(item.getTime());
+            result.add(new IncomeSnapshot(item.getSymbol(), string(item, "getIncomeType"), amount, item.getAsset(), item.getTranId(), item.getInfo(),
+                eventTime));
         }
         return result;
     }
