@@ -1636,7 +1636,6 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     private ClockSyncResult synchronizeClock(String baseUrl) {
         ClientConfiguration config = restConfiguration(baseUrl);
         ClockSyncTiming timing = new ClockSyncTiming();
-        long syncInvokedAt = System.currentTimeMillis();
         clockSyncTiming.set(timing);
         ApiResponse<CheckServerTimeResponse> response;
         try {
@@ -1658,7 +1657,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             throw new IllegalStateException("无法准确测量 Binance 服务器时间请求的 HTTP 往返时间");
         }
         long offset = estimateClockOffset(data.getServerTime(), requestStartedAt, responseReceivedAt);
-        return new ClockSyncResult(offset, requestStartedAt, responseReceivedAt, timing.schedulerQueueMillis(), syncInvokedAt);
+        return new ClockSyncResult(offset, requestStartedAt, responseReceivedAt, timing.schedulerQueueMillis());
     }
 
     /**
@@ -1691,7 +1690,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
 
     /** 单次服务器时间同步的 HTTP 时序采样。 */
     private record ClockSyncResult(long offsetMillis, long requestStartedAtMillis, long responseReceivedAtMillis,
-                                   long schedulerQueueMillis, long syncInvokedAtMillis) {
+                                   long schedulerQueueMillis) {
     }
 
     /** 由 REST 拦截器在调度放行及响应到达时填充。 */
