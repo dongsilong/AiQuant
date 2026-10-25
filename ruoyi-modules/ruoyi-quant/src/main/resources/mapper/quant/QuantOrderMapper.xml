@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="org.dromara.quant.order.mapper.QuantOrderMapper">
+    <select id="selectHistoricalSymbolsByCredential" resultType="java.lang.String" timeout="3"><![CDATA[
+SELECT DISTINCT UPPER(TRIM(symbol))
+FROM quant_order
+WHERE credential_id=#{credentialId}
+  AND symbol IS NOT NULL AND TRIM(symbol)<>''
+ORDER BY UPPER(TRIM(symbol))
+]]></select>
     <update id="claimPostFillBalanceSnapshot">
         <![CDATA[UPDATE quant_order SET post_fill_balance_requested_at=#{requestedAt} WHERE id=#{id} AND (post_fill_balance_requested_at IS NULL OR post_fill_balance_requested_at < TIMESTAMPADD(SECOND, -30, CURRENT_TIMESTAMP))]]></update>
     <update id="savePostFillBalanceSnapshot"><![CDATA[UPDATE quant_order SET post_fill_wallet_balance=#{balance}, post_fill_balance_at=#{observedAt} WHERE id=#{id}]]></update>
