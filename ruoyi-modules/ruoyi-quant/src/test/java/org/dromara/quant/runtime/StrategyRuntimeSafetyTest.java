@@ -425,6 +425,27 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void shutdownRenewsLeaseWhileWaitingForInFlightProtectionTask() throws Exception {
+        Fixture f = fixture();
+        try {
+            var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+            java.util.concurrent.Future<?> protectionTask = mock(java.util.concurrent.Future.class);
+            when(protectionTask.get(anyLong(), any(java.util.concurrent.TimeUnit.class)))
+                .thenThrow(new java.util.concurrent.TimeoutException("still running"))
+                .thenReturn(null);
+            ReflectionTestUtils.setField(f.runtime, "protectionTask", protectionTask);
+
+            ReflectionTestUtils.invokeMethod(f.service, "closeRuntime", f.runtime);
+
+            verify(lease, atLeast(2)).acquireOrRenew(1L, 3L, "BTCUSDT");
+            verify(lease).release(1L, 3L, "BTCUSDT");
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "leaseValid"));
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void leaseRenewalExceptionKeepsRuntimeFencedAndReleasesRenewalGuard() throws Exception {
         Fixture f = fixture();
         try {
