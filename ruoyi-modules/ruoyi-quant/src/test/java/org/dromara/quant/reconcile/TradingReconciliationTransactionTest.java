@@ -563,9 +563,12 @@ class TradingReconciliationTransactionTest {
         local.setTradeTime(java.time.LocalDateTime.ofInstant(fill.time(), java.time.ZoneOffset.UTC));
         when(trades.selectOne(any())).thenReturn(local);
 
+        var testnetCredential = credential();
+        testnetCredential.setRunMode("TESTNET");
         assertThrows(IllegalStateException.class,
-            () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", credential(), List.of(fill)));
+            () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", testnetCredential, List.of(fill)));
 
+        verifyNoInteractions(fillJournal);
         verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
         verifyNoInteractions(fillCursors, fillCursorService);
     }
