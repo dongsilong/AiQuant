@@ -503,7 +503,7 @@ public class TradingReconciliationService {
             protections.put(symbol, List.copyOf(gateway.queryProtectionOrders(c, symbol)));
         }
         LocalDateTime storedIncomeCursor = incomeSyncCursors.selectLastCompleteTo(credential.getId());
-        Instant incomeFrom = storedIncomeCursor == null ? range.from() : storedIncomeCursor.toInstant(ZoneOffset.UTC);
+        Instant incomeFrom = storedIncomeCursor == null ? now.minus(Duration.ofDays(180)) : storedIncomeCursor.toInstant(ZoneOffset.UTC);
         Instant incomeTo = range.to();
         if (incomeFrom.isAfter(incomeTo)) {
             throw new IllegalStateException("Binance income-history cursor is in the future; refusing to skip financial events: credentialId="
