@@ -43,6 +43,19 @@ class StrictBinanceIncomeCollectorTest {
     }
 
     @Test
+    void keepsSameTransactionIdWhenIncomeTypesDiffer() {
+        var funding = income(77);
+        var commission = new ExchangeGateway.IncomeSnapshot("BTCUSDT", "COMMISSION", new BigDecimal("-0.02"), "USDT", 77L,
+            "commission", funding.time());
+        when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of(funding, commission));
+
+        var result = collector.collect(credential, new ExchangeGateway.TimeRange(start, end));
+
+        assertEquals(2, result.size());
+        assertEquals(List.of("COMMISSION", "FUNDING_FEE"), result.stream().map(ExchangeGateway.IncomeSnapshot::incomeType).toList());
+    }
+
+    @Test
     void rejectsSaturatedMillisecondIncomeWindowInsteadOfTruncating() {
         when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong()))
             .thenReturn(java.util.Collections.nCopies(1000, income(1)));
