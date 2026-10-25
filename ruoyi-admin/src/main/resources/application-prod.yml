@@ -4,7 +4,7 @@ spring.servlet.multipart.location: /ruoyi/server/temp
 quant:
   binance:
     # RAW_OKHTTP / BINANCE_SDK; SDK 路径需通过集成验证后逐步启用。
-    websocket-transport: ${QUANT_BINANCE_WEBSOCKET_TRANSPORT:BINANCE_SDK}
+    websocket-transport: ${QUANT_BINANCE_WEBSOCKET_TRANSPORT:RAW_OKHTTP}
     # SDK 内部无界队列积压阈值，达到后显式断线以触发订阅恢复。
     sdk-stream-backlog-limit: ${QUANT_BINANCE_SDK_BACKLOG_LIMIT:2048}
   live:
@@ -154,8 +154,8 @@ spring:
           driverClassName: com.mysql.cj.jdbc.Driver
           # jdbc 所有参数配置参考 https://lionli.blog.csdn.net/article/details/122018562
           # rewriteBatchedStatements=true 批处理优化 大幅提升批量插入更新删除性能(对数据库有性能损耗 使用批量操作应考虑性能问题)
-          url: jdbc:mysql://localhost:3306/quantdb?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true
-          username: quantdb
+          url: ${AIQUANT_DATASOURCE_URL:}
+          username: ${AIQUANT_DATASOURCE_USERNAME:}
           password: ${AIQUANT_DATASOURCE_PASSWORD:}
 #        # 从库数据源
 #        slave:
