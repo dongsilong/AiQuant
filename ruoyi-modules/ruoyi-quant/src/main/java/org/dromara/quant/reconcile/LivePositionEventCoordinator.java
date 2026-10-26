@@ -16,6 +16,9 @@ import org.springframework.stereotype.Component;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * Nonblocking callback-to-REST bridge. WebSocket callbacks merely flag an
@@ -34,6 +37,9 @@ public class LivePositionEventCoordinator {
     private final ConcurrentHashMap<Long, Long> retryNotBefore = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Integer> failures = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, Long> lastAttempt = new ConcurrentHashMap<>();
+    /** Slow REST refreshes must not serialize unrelated credentials on the scheduler thread. */
+    private final Set<Long> refreshInFlight = ConcurrentHashMap.newKeySet();
+    private final ExecutorService refreshExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private final Set<ProtectionRecoveryRequest> protectionRecoveryPending = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<ProtectionRecoveryRequest, Long> protectionRetryNotBefore = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<ProtectionRecoveryRequest, Integer> protectionRecoveryFailures = new ConcurrentHashMap<>();
@@ -144,40 +150,65 @@ public class LivePositionEventCoordinator {
      */
     @Scheduled(fixedDelay = 2000, initialDelay = 3000)
     public void drain() {
-        // Resolve gate-blocked protection tickets before potentially slower position snapshots.
+        // Resolve gate-blocked protection tickets before enqueueing potentially slower position snapshots.
         drainProtectionRecoveryRequests();
         for (Long id : Set.copyOf(pending)) {
             long now = System.currentTimeMillis();
-            if (now < retryNotBefore.getOrDefault(id, 0L) || now - lastAttempt.getOrDefault(id, 0L) < MIN_REFRESH_GAP_MILLIS || !pending.remove(id)) {
+            if (now < retryNotBefore.getOrDefault(id, 0L)
+                || now - lastAttempt.getOrDefault(id, 0L) < MIN_REFRESH_GAP_MILLIS
+                || refreshInFlight.contains(id)
+                || !pending.remove(id)) {
+                continue;
+            }
+            if (!refreshInFlight.add(id)) {
+                pending.add(id);
                 continue;
             }
             lastAttempt.put(id, now);
             try {
-                QuantCredential credential = credentials.selectById(id);
-                if (credential == null || !"0".equals(credential.getStatus()) || !"LIVE".equalsIgnoreCase(credential.getRunMode())) {
-                    failures.remove(id);
-                    retryNotBefore.remove(id);
-                    continue;
-                }
-                reconciliation.refreshPositionsOnly(credential);
-                failures.remove(id);
-                retryNotBefore.remove(id);
-            } catch (TradingReconciliationService.SnapshotSupersededException ex) {
-                // 正常的快照竞争不累计网络故障退避；保留请求，下一轮按账户最小间隔重新获取。
-                failures.remove(id);
-                retryNotBefore.remove(id);
+                refreshExecutor.execute(() -> refreshPositionForCredential(id));
+            } catch (RejectedExecutionException ex) {
+                refreshInFlight.remove(id);
                 pending.add(id);
-                log.debug("LIVE 事件刷新快照已被更新事实取代，保留刷新请求 credentialId={}", id);
-            } catch (RuntimeException ex) {
-                // Failed refresh never marks an account fresh. Periodic REST
-                // heartbeat retries independently; allow next event to queue.
-                int count = failures.merge(id, 1, (previous, ignored) -> Math.min(10, previous + 1));
-                long backoffMillis = Math.min(60000L, 2000L << Math.min(count - 1, 5));
-                retryNotBefore.put(id, System.currentTimeMillis() + backoffMillis);
-                pending.add(id);
-                log.warn("LIVE event-triggered position refresh failed credentialId={} retryInMs={}", id, backoffMillis, ex);
+                scheduleRefreshRetry(id, ex);
             }
         }
+    }
+
+    /**
+     * 在独立虚拟线程执行单账户 REST 快照，避免一个账户的网络超时阻塞其他账户。
+     */
+    private void refreshPositionForCredential(Long id) {
+        try {
+            QuantCredential credential = credentials.selectById(id);
+            if (credential == null || !"0".equals(credential.getStatus()) || !"LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                failures.remove(id);
+                retryNotBefore.remove(id);
+                pending.remove(id);
+                return;
+            }
+            reconciliation.refreshPositionsOnly(credential);
+            failures.remove(id);
+            retryNotBefore.remove(id);
+        } catch (TradingReconciliationService.SnapshotSupersededException ex) {
+            // A newer account event/snapshot won the race; retain the request without network-failure backoff.
+            failures.remove(id);
+            retryNotBefore.remove(id);
+            pending.add(id);
+            log.debug("LIVE 事件刷新快照已被更新事实取代，保留刷新请求 credentialId={}", id);
+        } catch (RuntimeException ex) {
+            scheduleRefreshRetry(id, ex);
+        } finally {
+            refreshInFlight.remove(id);
+        }
+    }
+
+    private void scheduleRefreshRetry(Long id, RuntimeException ex) {
+        int count = failures.merge(id, 1, (previous, ignored) -> Math.min(10, previous + 1));
+        long backoffMillis = Math.min(60000L, 2000L << Math.min(count - 1, 5));
+        retryNotBefore.put(id, System.currentTimeMillis() + backoffMillis);
+        pending.add(id);
+        log.warn("LIVE event-triggered position refresh failed credentialId={} retryInMs={}", id, backoffMillis, ex);
     }
 
     private void drainProtectionRecoveryRequests() {
