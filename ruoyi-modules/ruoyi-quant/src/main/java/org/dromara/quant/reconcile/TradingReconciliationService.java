@@ -91,6 +91,9 @@ public class TradingReconciliationService {
     private final ConcurrentHashMap<Long, ReentrantLock> positionLocks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, CompletableFuture<List<ExchangeGateway.PositionSnapshot>>> positionRefreshes = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, CachedPositionSnapshot> runtimePositionSnapshots = new ConcurrentHashMap<>();
+    /** Run modes blocked by an exchange-level HTTP 451; do not keep retrying account snapshots. */
+    private final Set<String> accessRestrictedRunModes = ConcurrentHashMap.newKeySet();
+    private final Set<String> accessRestrictedRunModeLogs = ConcurrentHashMap.newKeySet();
     private final Set<Long> balanceSnapshotTasks = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicLong> runtimeSnapshotGenerations = new ConcurrentHashMap<>();
     private static final Duration RUNTIME_POSITION_CACHE_AGE = Duration.ofSeconds(20);
@@ -241,6 +244,35 @@ public class TradingReconciliationService {
             eventGeneration, trigger, positions.size(), openPositionCount, java.time.Duration.between(fetchStartedAt, LocalDateTime.now()).toMillis());
     }
 
+    private void ensureRunModeNotAccessRestricted(QuantCredential credential, String stage) {
+        String runMode = normalizedRunMode(credential);
+        if (accessRestrictedRunModes.contains(runMode)) {
+            throw new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeAccessRestrictedException(
+                stage, 451, 0, "Binance endpoint returned HTTP 451 for runMode=" + runMode
+                    + "; account snapshots are blocked locally until supported eligibility/endpoint configuration is corrected and the application is restarted");
+        }
+    }
+
+    private static String normalizedRunMode(QuantCredential credential) {
+        String runMode = credential == null ? null : credential.getRunMode();
+        return runMode == null || runMode.isBlank() ? "UNKNOWN" : runMode.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static boolean isExchangeAccessRestricted(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof org.dromara.quant.exchange.ExchangeTradingPort.ExchangeAccessRestrictedException) {
+                return true;
+            }
+            String message = cause.getMessage();
+            if (message != null && (message.contains("httpStatus=451")
+                || message.toLowerCase(Locale.ROOT).contains("restricted location")
+                || message.toLowerCase(Locale.ROOT).contains("eligibility"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private long positionGeneration(Long credentialId) {
         return positionFreshness == null ? 0L : positionFreshness.generation(credentialId);
     }
@@ -270,6 +302,7 @@ public class TradingReconciliationService {
         if (credential == null || credential.getId() == null) {
             throw new IllegalArgumentException("Credential is required for a runtime position snapshot");
         }
+        ensureRunModeNotAccessRestricted(credential, "RUNTIME_POSITION_SNAPSHOT");
         CachedPositionSnapshot cached = runtimePositionSnapshots.get(credential.getId());
         long generation = positionGeneration(credential.getId());
         long runtimeGeneration = runtimeSnapshotGeneration(credential.getId());
@@ -300,6 +333,7 @@ public class TradingReconciliationService {
         if (credential == null || credential.getId() == null) {
             throw new IllegalArgumentException("Credential is required for an account position snapshot");
         }
+        ensureRunModeNotAccessRestricted(credential, "ACCOUNT_POSITION_SNAPSHOT");
         long credentialId = credential.getId();
         CompletableFuture<List<ExchangeGateway.PositionSnapshot>> created = new CompletableFuture<>();
         CompletableFuture<List<ExchangeGateway.PositionSnapshot>> existing = positionRefreshes.putIfAbsent(credentialId, created);
@@ -327,7 +361,18 @@ public class TradingReconciliationService {
             created.completeExceptionally(ex);
             throw ex;
         } catch (RuntimeException ex) {
-            failureRecorder.record(credentialId, ex.getMessage());
+            if (isExchangeAccessRestricted(ex)) {
+                String runMode = normalizedRunMode(credential);
+                accessRestrictedRunModes.add(runMode);
+                runtimePositionSnapshots.clear();
+                if (accessRestrictedRunModeLogs.add(runMode)) {
+                    log.error("账户级持仓快照因Binance HTTP 451访问限制而停止自动重试；该环境的持仓事实不可用，所有策略继续禁止开仓 "
+                        + "credentialId={} runMode={} trigger={} error={}。请核实Binance支持地区/账户资格与endpoint配置，修正后重启",
+                        credentialId, runMode, trigger, ex.getMessage());
+                }
+            } else {
+                failureRecorder.record(credentialId, ex.getMessage());
+            }
             created.completeExceptionally(ex);
             throw ex;
         } finally {
