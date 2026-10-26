@@ -25,6 +25,27 @@ import static org.mockito.Mockito.*;
 @org.junit.jupiter.api.Tag("dev")
 class StrategyRuntimeSafetyTest {
     @Test
+    void marketEventLeaseCheckUsesLocalStateAndNeverPerformsSynchronousRenewal() throws Exception {
+        Fixture f = fixture();
+        try {
+            var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+            long future = System.currentTimeMillis() + 30_000L;
+            ReflectionTestUtils.setField(f.runtime, "leaseValid", true);
+            ReflectionTestUtils.setField(f.runtime, "leaseValidUntilMillis", future);
+            ReflectionTestUtils.setField(f.runtime, "nextLeaseRenewAt", 0L);
+
+            assertTrue((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime));
+            verify(lease, never()).acquireOrRenew(any(), any(), any());
+
+            ReflectionTestUtils.setField(f.runtime, "leaseValid", false);
+            assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime));
+            verify(lease, never()).acquireOrRenew(any(), any(), any());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void mapsExchangeCloseTimeToTheOwningKlineForSupportedIntervals() {
         assertEquals(Instant.parse("2026-10-17T08:00:00Z"), StrategyRuntimeService.klineOpenAt(Instant.parse("2026-10-17T08:14:59.999Z"), "15m"));
         assertEquals(Instant.parse("2026-10-17T00:00:00Z"), StrategyRuntimeService.klineOpenAt(Instant.parse("2026-10-17T23:59:59Z"), "1d"));
