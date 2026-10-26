@@ -26,7 +26,7 @@ class LiveSchemaStartupGuardTest {
         assertTrue(error.getMessage().contains("quant_execution_record|credential_id,idempotency_key"));
         assertTrue(error.getMessage().contains("quant_strategy_fill_journal"));
         assertTrue(error.getMessage().contains("quant_strategy_fill_sync_cursor"));
-        assertTrue(error.getMessage().contains("quant_financial_event|credential_id,exchange_transaction_id,event_type"));
+        assertTrue(error.getMessage().contains("quant_financial_event|credential_id,event_identity_key"));
         assertTrue(error.getMessage().contains("V20261024_01__financial_event_income_type_identity.sql"));
         assertTrue(error.getMessage().contains("quant_financial_event_sync_cursor"));
         assertTrue(error.getMessage().contains("V20261025_02__financial_event_sync_cursor.sql"));
