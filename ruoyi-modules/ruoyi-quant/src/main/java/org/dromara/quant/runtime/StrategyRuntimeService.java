@@ -3971,6 +3971,15 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 }
             }
         }
+        // Do not release the database lease while an asynchronous renewal is still in flight:
+        // otherwise that renewal could extend the lease again after release and delay safe takeover.
+        while (runtime.leaseRenewalInFlight.get()) {
+            try {
+                Thread.sleep(10L);
+            } catch (InterruptedException ex) {
+                interrupted = true;
+            }
+        }
         leaseService.release(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
         if (interrupted) {
             Thread.currentThread().interrupt();
