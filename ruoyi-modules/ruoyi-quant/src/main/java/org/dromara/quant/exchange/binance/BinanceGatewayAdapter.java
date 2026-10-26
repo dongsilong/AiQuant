@@ -66,6 +66,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     private final Map<String, ClockOffset> clockOffsets = new ConcurrentHashMap<>();
     /**
+     * REST hosts that returned HTTP 451 are blocked for this process lifetime. Repeated
+     * retries cannot fix an exchange eligibility/location restriction and amplify failures.
+     */
+    private final Map<String, Long> restrictedEndpointSince = new ConcurrentHashMap<>();
+    /**
      * 仅在当前线程执行服务端时间同步请求时记录真正进入 HTTP 链路的时间点。
      * 该时间点在 REST 调度器放行后记录，避免把本地排队耗时计入网络往返时间。
      */
@@ -233,6 +238,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 message = com.google.gson.JsonParser.parseString(error.getResponseBody()).getAsJsonObject().get("msg").getAsString();
             } catch (RuntimeException ignored) {
             }
+        }
+        // HTTP 451 is a legal/eligibility access restriction, not a transient network failure.
+        // The interceptor also latches the host so subsequent requests are rejected locally.
+        if (error != null && error.getCode() == 451) {
+            return new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeAccessRestrictedException(
+                stage, error.getCode(), errorCode(error), message);
         }
         // 不附带原始异常，避免 SDK 的 URL、签名和请求头进入日志。
         if (error != null && (error.getCode() == 418 || error.getCode() == 429)) {
@@ -1434,6 +1445,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             // Acquire a slot for every actual HTTP request, not merely when an SDK client is constructed.
             // Some SDK API objects issue multiple requests, so client-construction throttling is insufficient.
             .addInterceptor(chain -> {
+                okhttp3.Request request = chain.request();
+                String host = request.url().host();
+                Long restrictedSince = restrictedEndpointSince.get(host);
+                if (restrictedSince != null) {
+                    // Return a local 451 response so generated SDK methods retain the typed
+                    // access-restricted failure path, without making another remote request.
+                    return restrictedResponse(request, restrictedSince);
+                }
                 long queueStarted = System.nanoTime();
                 restScheduler.acquire(kind);
                 long queueMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted);
@@ -1444,9 +1463,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 if (syncTiming != null) {
                     syncTiming.markRequestStarted(requestStartedAt, queueMillis);
                 }
-                okhttp3.Response response = chain.proceed(chain.request());
+                okhttp3.Response response = chain.proceed(request);
                 if (syncTiming != null) {
                     syncTiming.markResponseReceived(System.currentTimeMillis());
+                }
+                if (response.code() == 451) {
+                    latchRestrictedEndpoint(host);
                 }
                 // Apply HTTP 418 cooldown/latch centrally so even SDK methods without a local
                 // ApiException wrapper cannot leave the shared REST scheduler open.
@@ -1481,6 +1503,42 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 return response;
             })
             .retryOnConnectionFailure(false).build();
+    }
+
+    private okhttp3.Response restrictedResponse(okhttp3.Request request, long restrictedSince) {
+        String body = "{\"code\":0,\"msg\":\"Binance REST host is blocked after HTTP 451; verify supported eligibility and endpoint configuration, then restart the application\"}";
+        return new okhttp3.Response.Builder()
+            .request(request)
+            .protocol(okhttp3.Protocol.HTTP_1_1)
+            .code(451)
+            .message("Unavailable For Legal Reasons")
+            .header("Content-Type", "application/json")
+            .header("X-AiQuant-Access-Restricted-Since", Long.toString(restrictedSince))
+            .body(okhttp3.ResponseBody.create(okhttp3.MediaType.parse("application/json"), body))
+            .build();
+    }
+
+    private void latchRestrictedEndpoint(String host) {
+        long now = System.currentTimeMillis();
+        if (restrictedEndpointSince.putIfAbsent(host, now) == null) {
+            log.error("Binance REST host returned HTTP 451; automatic REST requests to this host are disabled for this process. "
+                    + "Verify Binance eligibility, supported region, and configured endpoint; correct access before restarting. host={}", host);
+        }
+    }
+
+    private void throwIfEndpointRestricted(String baseUrl, String stage) {
+        String host;
+        try {
+            host = URI.create(baseUrl).getHost();
+        } catch (RuntimeException ex) {
+            host = null;
+        }
+        Long since = host == null ? null : restrictedEndpointSince.get(host.toLowerCase(Locale.ROOT));
+        if (since != null) {
+            throw new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeAccessRestrictedException(
+                stage, 451, 0, "HTTP 451 endpoint access restriction latched since " + Instant.ofEpochMilli(since)
+                    + "; automatic requests are suppressed until eligibility/endpoint configuration is corrected and the application is restarted");
+        }
     }
 
     /**
@@ -1594,6 +1652,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * 使中点偏向过去，并可能导致签名时间戳仍然超前于 Binance 服务器。
      */
     private long clockOffset(String baseUrl) {
+        throwIfEndpointRestricted(baseUrl, "CHECK_SERVER_TIME");
         long now = System.currentTimeMillis();
         ClockOffset cached = clockOffsets.get(baseUrl);
         if (cached != null && now - cached.updatedAt() < CLOCK_OFFSET_REFRESH_MILLIS) {
@@ -1617,6 +1676,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
 
     /** 强制刷新偏移；若其他并发请求已在本次请求后完成刷新，则复用其结果。 */
     private void refreshClockOffset(String baseUrl, long observedUpdatedAt) {
+        throwIfEndpointRestricted(baseUrl, "CHECK_SERVER_TIME");
         synchronized (clockOffsetRefreshLocks.computeIfAbsent(baseUrl, ignored -> new Object())) {
             ClockOffset cached = clockOffsets.get(baseUrl);
             if (cached != null && cached.updatedAt() > observedUpdatedAt) {
