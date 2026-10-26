@@ -14,6 +14,14 @@ public interface ExchangeMarketPort {
         return 0L;
     }
 
+    /**
+     * Non-blocking market-event clock lookup. Implementations with remote time sync should
+     * serve a bounded cached offset and refresh it outside the market-event consumer thread.
+     */
+    default long exchangeTimeOffsetMillisForMarketEvents(String runMode) {
+        return exchangeTimeOffsetMillis(runMode);
+    }
+
     private static void requireSupportedMarket(String runMode) {
         if ("TESTNET".equalsIgnoreCase(runMode)) {
             throw new IllegalStateException("网关不支持测试网行情，拒绝回退正式网");
