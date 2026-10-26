@@ -34,6 +34,17 @@ import static org.mockito.Mockito.*;
  */
 @Tag("dev")
 class TradingReconciliationTransactionTest {
+    @org.junit.jupiter.api.Test
+    void financialEventTimestampComparisonAcceptsUtcAndExactLegacyBeijingStorageOnly() {
+        java.time.Instant exchangeTime = java.time.Instant.parse("2026-10-25T07:03:01Z");
+        java.time.LocalDateTime utc = java.time.LocalDateTime.ofInstant(exchangeTime, java.time.ZoneOffset.UTC);
+
+        org.junit.jupiter.api.Assertions.assertTrue(TradingReconciliationService.sameFinancialEventTime(utc, exchangeTime));
+        org.junit.jupiter.api.Assertions.assertTrue(TradingReconciliationService.sameFinancialEventTime(utc.plusHours(8), exchangeTime));
+        org.junit.jupiter.api.Assertions.assertFalse(TradingReconciliationService.sameFinancialEventTime(utc.plusHours(7), exchangeTime));
+        org.junit.jupiter.api.Assertions.assertFalse(TradingReconciliationService.sameFinancialEventTime(null, exchangeTime));
+    }
+
     private final ExchangeGateway gateway = mock(ExchangeGateway.class);
     private final QuantAccountSnapshotMapper accounts = mock(QuantAccountSnapshotMapper.class);
     private final QuantPositionMapper positions = mock(QuantPositionMapper.class);
