@@ -60,7 +60,7 @@ A switch chooses the new transport for future subscriptions, closes existing str
 
 ## Required production configuration
 
-Mandatory before booting either prod/dev profile: `QUANT_SECRET_KEY`, `MYBATIS_ENCRYPTOR_PASSWORD`, `AIQUANT_JDBC_URL`, `AIQUANT_DB_USERNAME`, `AIQUANT_DB_PASSWORD`, `AIQUANT_REDIS_PASSWORD`.
+Mandatory before booting either prod/dev profile: `QUANT_SECRET_KEY`, `MYBATIS_ENCRYPTOR_PASSWORD`, `AIQUANT_JDBC_URL`, `AIQUANT_DB_USERNAME`, `AIQUANT_DB_PASSWORD`, `AIQUANT_REDIS_PASSWORD`, `AIQUANT_JWT_SECRET_KEY`. The JWT secret must be generated and rotated independently.
 
 LIVE global permission is now enabled by default. For active strategy execution in prod, `QUANT_RUNTIME_ENABLED=true` remains separately required. Set `QUANT_LIVE_ENABLED=false` wherever real trading has not been approved. These environment variables are **not** sufficient approval to deploy. Check per-account authorization, risk limits, API withdrawal prohibition, credential permissions, and platform network rules independently. No API credentials should appear in git, logs, screenshots, or monitoring payloads.
 
