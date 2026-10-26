@@ -49,12 +49,18 @@ final class StreamEventConsumer<T> implements AutoCloseable {
             return;
         }
         received.increment();
+        if (overflowPending.get()) {
+            // Do not enqueue post-gap events before the recovery callback has established
+            // a new committed cursor; otherwise the worker could process a partial sequence.
+            dropped.increment();
+            return;
+        }
         if (!queue.offer(event)) {
             if (overflowPending.compareAndSet(false, true)) {
                 // The queued events and this event cannot be trusted as a complete sequence.
                 // Clear once and request exact replay from the committed cursor. While that
-                // recovery is being scheduled, drop only new arrivals instead of repeatedly
-                // clearing the worker's queue and amplifying the backlog.
+                // recovery is being scheduled, drop new arrivals without repeatedly clearing
+                // the queue and amplifying the backlog.
                 dropped.add(queue.size() + 1L);
                 queue.clear();
                 overflow.run();
@@ -72,6 +78,10 @@ final class StreamEventConsumer<T> implements AutoCloseable {
             return;
         }
         received.increment();
+        if (overflowPending.get()) {
+            dropped.increment();
+            throw new IllegalStateException("行情恢复消费者正在恢复，拒绝旧代次回放");
+        }
         try {
             if (!queue.offer(event, 3, java.util.concurrent.TimeUnit.SECONDS)) {
                 dropped.increment();
