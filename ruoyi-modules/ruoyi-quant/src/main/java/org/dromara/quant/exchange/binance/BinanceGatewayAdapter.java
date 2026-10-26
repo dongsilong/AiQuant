@@ -224,6 +224,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     /**
      * 将 SDK 异常映射为带阶段信息的安全错误，不输出认证数据。
      */
+    static boolean isAccessRestrictedStatus(int statusCode) {
+        return statusCode == 451;
+    }
+
     private RuntimeException requestFailure(String stage, RuntimeException ex) {
         if (ex instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
             return deferred;
@@ -241,7 +245,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         // HTTP 451 is a legal/eligibility access restriction, not a transient network failure.
         // The interceptor also latches the host so subsequent requests are rejected locally.
-        if (error != null && error.getCode() == 451) {
+        if (error != null && isAccessRestrictedStatus(error.getCode())) {
             return new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeAccessRestrictedException(
                 stage, error.getCode(), errorCode(error), message);
         }
@@ -1467,7 +1471,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 if (syncTiming != null) {
                     syncTiming.markResponseReceived(System.currentTimeMillis());
                 }
-                if (response.code() == 451) {
+                if (isAccessRestrictedStatus(response.code())) {
                     latchRestrictedEndpoint(host);
                 }
                 // Apply HTTP 418 cooldown/latch centrally so even SDK methods without a local
