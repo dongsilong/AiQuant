@@ -93,7 +93,7 @@ sa-token:
   # 在多人登录同一账号时，是否共用一个token (为true时所有登录共用一个token, 为false时每次登录新建一个token)
   is-share: false
   # jwt秘钥
-  jwt-secret-key: applebananaorangewatermelon
+  jwt-secret-key: ${AIQUANT_SA_TOKEN_JWT_SECRET:}
 
 # security配置
 security:
@@ -156,8 +156,7 @@ api-decrypt:
   publicKey: MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDRj/TBUP8fyktny+z6Y/DG6iqszlyydq0W8QHiH2iTRQG0jHD87/eBfD1j7PvFNk16sDm1Bheu1N0c839A99BMzXkLD9JV4IsZFVqYnEwJATkvhzerUgID9I0KRpPExFpvLOl+jz3Z8/9NfS4VUfK7n29EanqJFSsUjY4xkNxH8wIDAQAB
   # 请求解密私钥 非对称算法的公私钥 如：SM2，RSA 使用者请自行更换
   # 对应前端加密公钥 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDvEDuRIOM3oZPWj9Ukoc5pQklR4PFH6/clnjeFqjDLIgDyQvjxhgqAZQA+E9eD6qu6FsXPmK8djcL+nh3cFHz4pX473jDvO3Sve+8yL3VRQ0n2pRgQ2a01MJsy+WwTZCBYWf0VnLRIvANUoWQgy9vz94q7Va44dg7A1/3ICf+xAwIDAQAB
-#  privateKey: MIIBVAIBADANBgkqhkiG9w0BAQEFAASCAT4wggE6AgEAAkEAqhHyZfSsYourNxaY7Nt+PrgrxkiA50efORdI5U5lsW79MmFnusUA355oaSXcLhu5xxB38SMSyP2KvuKNPuH3owIDAQABAkAfoiLyL+Z4lf4Myxk6xUDgLaWGximj20CUf+5BKKnlrK+Ed8gAkM0HqoTt2UZwA5E2MzS4EI2gjfQhz5X28uqxAiEA3wNFxfrCZlSZHb0gn2zDpWowcSxQAgiCstxGUoOqlW8CIQDDOerGKH5OmCJ4Z21v+F25WaHYPxCFMvwxpcw99EcvDQIgIdhDTIqD2jfYjPTY8Jj3EDGPbH2HHuffvflECt3Ek60CIQCFRlCkHpi7hthhYhovyloRYsM+IS9h/0BzlEAuO0ktMQIgSPT3aFAgJYwKpqRYKlLDVcflZFCKY7u3UP8iWi1Qw0Y=
-  privateKey: MIICdgIBADANBgkqhkiG9w0BAQEFAASCAmAwggJcAgEAAoGBAMWeguq9zoHl2evbglN/q80r3rcNq8q+3B+3FJr8gte/csjXD74nMIiRZAU2bjmXOiUqiYEtBpcW3Ux5yTXLng9rh9K7pxAZzvisvPVmvJZsMezrLgGk48B/4GxHhRq6cv/dnTQo21ZkxFyIqJjn73oqF2uvK7eLDr1h7HZXvpDfAgMBAAECgYA4zP/KIvY5ReymKzjBcT/bQBHKwaYwJz2z6/aDObMN+hwu+AmxWShNCKUcDnIOIZZ32ksdkuiDAvJmqdaYnMb4HE10wqqV1dNd/9dj2bVqHvdLnNJpncCOudp0ugRlODqYoFNRJF+QxBtRMOTxH9iqUFA1iyCM7tvVOzztUBTwIQJBAOhGJ9bOb5S5CtPWcuWru00RW64LwhuXwLVnWfZgNFM+EAKjLPF7UZNYgMf0GGNiIIVPuBMC1Up+qEg+Lni57bECQQDZziY80y8hcGNp9S2JUzuwXF7KRLiDw2WXDvbip08fDvs0TmrdSgOnW7kDXRNWHfZMjvpNUjz5rduEcZ6vizuPAkEAgf8ZtvAspNj3hV4FSiNWHaj0XbF4/sZs9VoVkH2Ba4FVppQ6yCATpNqooMAtkhnOR645QHKaeynt9xjOG4U70QJAKpe1wo9J2DAyQLZBgWlVctedcdCehKXhZ/j1Lr2pK1mypjfvjfa7YC7/rzi0X1Lcp3wOVrCOXAUzuGK/tXR04QJAJYHbJbK6X1K1NPJ6rd3R/40I7XrYBDGuHgiH3hDItd6Y94kxoPxDZwobXSWgHWr0+L/v9FgSBJCGIGtYxJPciw==
+  privateKey: ${AIQUANT_API_DECRYPT_PRIVATE_KEY:}
 
 springdoc:
   api-docs:
@@ -276,8 +275,8 @@ mqtt.client:
   name: Mqtt-Client
   # 客户端Id（非常重要，一般为设备 sn，不可重复）
   client-id: 000001
-  username: ruoyi
-  password: 123456
+  username: ${AIQUANT_MQTT_USERNAME:}
+  password: ${AIQUANT_MQTT_PASSWORD:}
   # 超时时间，单位：秒，默认：5秒
   timeout: 5
   # 重连时间，默认 5000 毫秒
