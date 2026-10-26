@@ -1,6 +1,7 @@
 package org.dromara.quant.runtime;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
@@ -55,6 +56,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -113,6 +116,9 @@ public class StrategyRuntimeService {
     private final org.dromara.quant.execution.TradingPreparationService preparationService;
     private final TradingReconciliationService reconciliationService;
     private final ExecutorService recoveryExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    /** 租约续期由独立调度线程触发，绝不在行情回调线程执行数据库续租。 */
+    private final ScheduledExecutorService leaseRenewScheduler = Executors.newSingleThreadScheduledExecutor(
+        Thread.ofPlatform().daemon().name("quant-runtime-lease-scheduler").factory());
     /**
      * 策略斜率结果 SSE 事件中心。
      */
@@ -815,6 +821,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 current.credential = credential;
                 current.params = refreshed;
                 current.protectionOnly = protectionOnly;
+                current.leaseValid = true;
+                current.leaseValidUntilMillis = System.currentTimeMillis() + leaseTtlMillis();
                 current.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
             }
             prepareTrading(current);
@@ -894,6 +902,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             throw ex;
         }
+        runtime.leaseValid = true;
+        runtime.leaseValidUntilMillis = System.currentTimeMillis() + leaseTtlMillis();
         runtime.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
         resumeRecoveryIfNeeded(runtime);
         log.info("策略运行时已启动 instanceId={} strategy={} plugin={} symbol={} interval={} mode={} protectionOnly={}", instance.getId(), strategy.getStrategyName(),
@@ -949,6 +959,61 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /**
+     * 在独立调度线程中触发租约续期；每个 Runtime 同时最多执行一次续期请求。
+     * 网络/数据库抖动只会让对应 Runtime 失去交易资格，不会阻塞行情事件分发。
+     */
+    @PostConstruct
+    private void startLeaseRenewal() {
+        leaseRenewScheduler.scheduleWithFixedDelay(this::renewActiveRuntimeLeases, 1, 1, TimeUnit.SECONDS);
+    }
+
+    private void renewActiveRuntimeLeases() {
+        long now = System.currentTimeMillis();
+        for (ActiveRuntime runtime : activeRuntimes.values()) {
+            if (runtime == null || runtime.closed || now < runtime.nextLeaseRenewAt
+                || !runtime.leaseRenewalInFlight.compareAndSet(false, true)) {
+                continue;
+            }
+            try {
+                recoveryExecutor.submit(() -> {
+                    boolean acquired = false;
+                    try {
+                        if (!runtime.closed) {
+                            acquired = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                        }
+                    } catch (RuntimeException ex) {
+                        log.error("策略运行租约异步续期异常 instanceId={} credentialId={} symbol={}",
+                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), ex);
+                    } finally {
+                        long completedAt = System.currentTimeMillis();
+                        if (acquired && !runtime.closed) {
+                            runtime.leaseValid = true;
+                            runtime.leaseValidUntilMillis = completedAt + leaseTtlMillis();
+                            runtime.nextLeaseRenewAt = completedAt + leaseRenewIntervalMillis();
+                        } else {
+                            // 立即失效，不允许在租约状态不明时继续使用缓存的行情决策。
+                            runtime.leaseValid = false;
+                            runtime.marketHealthy = false;
+                            runtime.nextLeaseRenewAt = completedAt + 1_000L;
+                            log.warn("策略运行租约续期失败，已关闭该 Runtime 的交易准入 instanceId={} credentialId={} symbol={}",
+                                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                        }
+                        runtime.leaseRenewalInFlight.set(false);
+                    }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException ex) {
+                runtime.leaseRenewalInFlight.set(false);
+                runtime.leaseValid = false;
+                runtime.marketHealthy = false;
+            }
+        }
+    }
+
+    private long leaseTtlMillis() {
+        return Math.max(15L, properties.getRuntime().getLeaseSeconds()) * 1_000L;
+    }
+
+    /**
      * 根据租约有效期计算安全续租周期。
      */
     private long leaseRenewIntervalMillis() {
@@ -957,16 +1022,15 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /**
-     * 处理实时事件前确认当前节点仍持有有效租约。
+     * 行情回调只读取独立续租任务维护的本地租约状态，不执行同步 SQL/网络请求。
      */
     private boolean ensureEventLease(ActiveRuntime runtime) {
         long now = System.currentTimeMillis();
-        if (now < runtime.nextLeaseRenewAt) {
-            return true;
+        boolean valid = runtime.leaseValid && now < runtime.leaseValidUntilMillis;
+        if (!valid) {
+            runtime.marketHealthy = false;
         }
-        boolean acquired = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
-        runtime.nextLeaseRenewAt = acquired ? now + leaseRenewIntervalMillis() : now + 1_000L;
-        return acquired;
+        return valid;
     }
 
     /**
@@ -3831,6 +3895,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
      */
     @PreDestroy
     public void destroy() {
+        leaseRenewScheduler.shutdownNow();
         stopAll();
         recoveryExecutor.shutdownNow();
     }
@@ -4123,6 +4188,9 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
          * 下一次运行租约续期时间。
          */
         private volatile long nextLeaseRenewAt;
+        private final AtomicBoolean leaseRenewalInFlight = new AtomicBoolean();
+        private volatile boolean leaseValid = true;
+        private volatile long leaseValidUntilMillis = Long.MAX_VALUE;
         /**
          * REST 账户余额查询失败后的下一次允许查询时间。
          */
