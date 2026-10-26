@@ -829,7 +829,7 @@ public class TradingReconciliationService {
                 // original event, but must not silently rewrite a conflicting fact.
                 // Older deployments persisted Binance UTC instants as Beijing-local LocalDateTime.
                 // Accept only the exact legacy +08:00 representation; keep all other event facts immutable.
-                boolean sameTime = sameFinancialEventTime(entity.getEventTime(), eventTime);
+                boolean sameTime = sameFinancialEventTime(entity.getEventTime(), s.time());
                 List<String> conflictingFields = new ArrayList<>();
                 if (!Objects.equals(entity.getSymbol(), s.symbol())) conflictingFields.add("symbol");
                 if (!Objects.equals(entity.getEventType(), s.incomeType())) conflictingFields.add("eventType");
