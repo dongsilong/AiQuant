@@ -389,6 +389,42 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void shutdownDoesNotWaitForeverOrReleaseLeaseWhileRenewalIsStuck() throws Exception {
+        Fixture f = fixture();
+        var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+        var renewalEntered = new java.util.concurrent.CountDownLatch(1);
+        var allowRenewalToFinish = new java.util.concurrent.CountDownLatch(1);
+        try {
+            when(lease.acquireOrRenew(any(), any(), any())).thenAnswer(invocation -> {
+                renewalEntered.countDown();
+                assertTrue(allowRenewalToFinish.await(5, java.util.concurrent.TimeUnit.SECONDS));
+                return true;
+            });
+            f.service.renewActiveRuntimeLeases();
+            assertTrue(renewalEntered.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            @SuppressWarnings("unchecked")
+            java.util.Map<Long, ?> runtimes = (java.util.Map<Long, ?>) ReflectionTestUtils.getField(f.service, "activeRuntimes");
+            runtimes.clear();
+
+            long started = System.nanoTime();
+            ReflectionTestUtils.invokeMethod(f.service, "closeRuntime", f.runtime);
+            long elapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+            assertTrue(elapsedMillis < 3_500L, "shutdown must be bounded when lease renewal is stuck");
+            verify(lease, never()).release(1L, 3L, "BTCUSDT");
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "leaseValid"));
+        } finally {
+            allowRenewalToFinish.countDown();
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+            while (((java.util.concurrent.atomic.AtomicBoolean) ReflectionTestUtils.getField(f.runtime, "leaseRenewing")).get()
+                && System.nanoTime() < deadline) {
+                Thread.sleep(5);
+            }
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void lateLeaseRenewalReleasesLeaseWhenRuntimeClosesInFlight() throws Exception {
         Fixture f = fixture();
         try {
