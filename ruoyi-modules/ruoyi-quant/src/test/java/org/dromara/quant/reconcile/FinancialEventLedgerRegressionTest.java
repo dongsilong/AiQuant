@@ -98,6 +98,22 @@ class FinancialEventLedgerRegressionTest {
     }
 
     @Test
+    void zeroTransactionIdUsesStableNaturalIdentityAndSeparatesDifferentTransferFacts() {
+        Instant timestamp = Instant.parse("2026-10-25T07:03:01Z");
+        ExchangeGateway.IncomeSnapshot first = new ExchangeGateway.IncomeSnapshot(
+            null, "TRANSFER", new BigDecimal("12.5000"), "USDT", 0L, "transfer-a", timestamp);
+        ExchangeGateway.IncomeSnapshot replay = new ExchangeGateway.IncomeSnapshot(
+            null, "TRANSFER", new BigDecimal("12.5"), "USDT", 0L, "transfer-a", timestamp);
+        ExchangeGateway.IncomeSnapshot different = new ExchangeGateway.IncomeSnapshot(
+            null, "TRANSFER", new BigDecimal("15.0"), "USDT", 0L, "transfer-b", timestamp);
+
+        String firstKey = TradingReconciliationService.financialEventIdentityKey(first);
+        assertEquals(firstKey, TradingReconciliationService.financialEventIdentityKey(replay));
+        assertNotEquals(firstKey, TradingReconciliationService.financialEventIdentityKey(different));
+        assertTrue(firstKey.startsWith("Z:"));
+    }
+
+    @Test
     void allowsDifferentIncomeTypesToShareBinanceTransactionId() throws Exception {
         when(financialEvents.selectVoOne(any(LambdaQueryWrapper.class))).thenReturn(null);
         when(financialEvents.insert(any(QuantFinancialEvent.class))).thenReturn(1);
