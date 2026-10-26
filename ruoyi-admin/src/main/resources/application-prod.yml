@@ -11,7 +11,7 @@ quant:
     enabled: true
   security:
     # 通过部署环境变量提供，禁止写入源码或提交真实密钥。
-    secret-key: 303815efc2e94ed3b5dadfc487d5ef7c
+    secret-key: ${AIQUANT_SECURITY_SECRET_KEY:}
   proxy:
     host:
     port:
@@ -135,7 +135,7 @@ mybatis-encryptor:
   enable: true
   algorithm: AES
   encode: BASE64
-  password: quant20260725key
+  password: ${AIQUANT_ENCRYPTOR_PASSWORD:}
 
 --- # 数据源配置
 spring:
@@ -156,7 +156,7 @@ spring:
           # rewriteBatchedStatements=true 批处理优化 大幅提升批量插入更新删除性能(对数据库有性能损耗 使用批量操作应考虑性能问题)
           url: jdbc:mysql://localhost:3306/quantdb?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true
           username: quantdb
-          password: quantpw2026
+          password: ${AIQUANT_DB_PASSWORD:}
 #        # 从库数据源
 #        slave:
 #          lazy: true
@@ -209,7 +209,7 @@ spring.data:
     # 数据库索引
     database: 3
     # redis 密码必须配置
-    password: LUCKLY20218886999LUCKLY2021
+    password: ${AIQUANT_REDIS_PASSWORD:}
     # 连接超时时间
     timeout: 10s
     # 是否开启ssl
@@ -240,17 +240,17 @@ redisson:
 
 --- # mail 邮件发送
 mail:
-  enabled: true
+  enabled: ${AIQUANT_MAIL_ENABLED:false}
   host: smtp.qq.com
   port: 465
   # 是否需要用户名密码验证
   auth: true
   # 发送方，遵循RFC-822标准
-  from: 3402238213@qq.com
+  from: ${AIQUANT_MAIL_FROM:}
   # 用户名（注意：如果使用foxmail邮箱，此处user为qq号）
-  user: 3402238213@qq.com
-  # 密码（注意，某些邮箱需要为SMTP服务单独设置密码，详情查看相关帮助）
-  pass: cgzfxlrypfaschjf
+  user: ${AIQUANT_MAIL_USER:}
+  # 密码由部署环境注入
+  pass: ${AIQUANT_MAIL_PASSWORD:}
   # 使用 STARTTLS安全连接，STARTTLS是对纯文本通信协议的扩展。
   starttlsEnable: true
   # 使用SSL安全连接
