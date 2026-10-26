@@ -30,7 +30,6 @@ public class MarketStreamConnectionWrapper extends StreamConnectionWrapper {
      * Jetty 12 requires the callback-based close signature. Do not also declare the
      * deprecated two-argument overload: Jetty rejects endpoints exposing both forms.
      */
-    @Override
     public void onWebSocketClose(int statusCode, String reason, Callback callback) {
         try {
             BinanceSdkStreamTransport.notifyMarketSocketClosed(connectionId, statusCode, reason, disconnected, symbol, interval);
