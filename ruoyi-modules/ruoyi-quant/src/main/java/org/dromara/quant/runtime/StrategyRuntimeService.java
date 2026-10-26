@@ -171,6 +171,8 @@ public class StrategyRuntimeService {
      * Limit detailed stale-exposure diagnostics while the strategy is blocked.
      */
     private final Map<Long, Long> nextExposureDiagnosticLogAt = new ConcurrentHashMap<>();
+    /** Access restrictions are endpoint/process-wide; log once per credential and fail closed. */
+    private final Set<Long> accessRestrictedCredentialLogs = ConcurrentHashMap.newKeySet();
     @Autowired
     private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
     @Autowired
@@ -546,6 +548,21 @@ public class StrategyRuntimeService {
             });
     }
 
+    private static boolean isExchangeAccessRestricted(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ExchangeTradingPort.ExchangeAccessRestrictedException) {
+                return true;
+            }
+            String message = cause.getMessage();
+            if (message != null && (message.contains("httpStatus=451")
+                || message.toLowerCase(Locale.ROOT).contains("restricted location")
+                || message.toLowerCase(Locale.ROOT).contains("eligibility"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * 仅在持仓事实完成核验后同步策略状态；失败时保留暂停决策状态。
      */
@@ -786,30 +803,47 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             log.debug("保护单执行事实尚未收敛，保持决策阻断并等待重核 instanceId={} symbol={} runMode={} retryAfterSeconds=5", runtime.instance.getId(),
                 runtime.symbol.getSymbol(), runtime.credential.getRunMode());
         } catch (RuntimeException ex) {
-            runtime.positionReconciliationBlockReason = "RECONCILIATION_ERROR:" + ex.getClass().getSimpleName();
-            boolean stateConflict = containsMessage(ex, "策略持仓状态乐观锁冲突");
-            log.warn("策略持仓事实核实失败 instanceId={} credentialId={} symbol={} runMode={} elapsedMs={} error={}", runtime.instance.getId(), runtime.credential.getId(),
-                runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
-            if (stateConflict) {
-                QuantStrategyPositionState latestState = stateService.findByInstance(runtime.instance.getId());
-                synchronized (runtime) {
-                    if (!runtime.closed) {
-                        if (latestState != null) {
-                            replaceRuntimeStatePreservingExtrema(runtime, latestState);
-                        } else if (runtime.state != null) {
-                            // 状态行缺失时不能把本地旧状态当作空仓事实；留存阻断并等待人工/后续恢复。
-                            runtime.state.setRecoveryRequired(true);
-                            runtime.state.setUnsafeRecovery(true);
+            if (isExchangeAccessRestricted(ex)) {
+                // HTTP 451 is not a transient clock-sync or network failure. The gateway latches
+                // the endpoint locally; stop this runtime's automatic reconciliation retries
+                // and keep entry closed until access/endpoint configuration is corrected and
+                // the process is restarted.
+                runtime.positionReconciliationBlockReason = "EXCHANGE_ACCESS_RESTRICTED";
+                runtime.nextReconcileAt = Long.MAX_VALUE;
+                if (accessRestrictedCredentialLogs.add(runtime.credential.getId())) {
+                    log.error("策略持仓核验被交易所HTTP 451访问限制阻断；已停止该凭证的自动重试并保持禁止开仓 "
+                            + "instanceId={} credentialId={} symbol={} runMode={} stage={}，请核实Binance支持地区/账户资格与endpoint配置后再重启",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(), ex.getMessage());
+                } else {
+                    log.debug("凭证已处于HTTP 451访问限制阻断，继续保持开仓关闭 instanceId={} credentialId={} symbol={}",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                }
+            } else {
+                runtime.positionReconciliationBlockReason = "RECONCILIATION_ERROR:" + ex.getClass().getSimpleName();
+                boolean stateConflict = containsMessage(ex, "策略持仓状态乐观锁冲突");
+                log.warn("策略持仓事实核实失败 instanceId={} credentialId={} symbol={} runMode={} elapsedMs={} error={}", runtime.instance.getId(), runtime.credential.getId(),
+                    runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
+                if (stateConflict) {
+                    QuantStrategyPositionState latestState = stateService.findByInstance(runtime.instance.getId());
+                    synchronized (runtime) {
+                        if (!runtime.closed) {
+                            if (latestState != null) {
+                                replaceRuntimeStatePreservingExtrema(runtime, latestState);
+                            } else if (runtime.state != null) {
+                                // 状态行缺失时不能把本地旧状态当作空仓事实；留存阻断并等待人工/后续恢复。
+                                runtime.state.setRecoveryRequired(true);
+                                runtime.state.setUnsafeRecovery(true);
+                            }
+                            runtime.nextReconcileAt = 0L;
+                            runtime.reconcileRequested.set(true);
                         }
-                        runtime.nextReconcileAt = 0L;
-                        runtime.reconcileRequested.set(true);
                     }
                 }
+                if (!stateConflict) {
+                    runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                }
+                recordError(runtime.instance, ex);
             }
-            if (!stateConflict) {
-                runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
-            }
-            recordError(runtime.instance, ex);
         } finally {
             synchronized (runtime) {
                 runtime.positionReconciling = false;
@@ -834,7 +868,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
                 }
             }
-            if (!reconciliationCompleted || "RECOVERY_OR_PROTECTION_STILL_REQUIRED".equals(runtime.positionReconciliationBlockReason)) {
+            if (!"EXCHANGE_ACCESS_RESTRICTED".equals(runtime.positionReconciliationBlockReason)
+                && (!reconciliationCompleted || "RECOVERY_OR_PROTECTION_STILL_REQUIRED".equals(runtime.positionReconciliationBlockReason))) {
                 scheduleReconciliationRetry(runtime);
             }
         }
