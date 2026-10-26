@@ -11,7 +11,7 @@ quant:
     enabled: true
   security:
     # 通过部署环境变量提供，禁止写入源码或提交真实密钥。
-    secret-key: ${AIQUANT_SECURITY_SECRET_KEY}
+    secret-key: ${QUANT_SECRET_KEY}
   proxy:
     host:
     port:
@@ -135,7 +135,7 @@ mybatis-encryptor:
   enable: true
   algorithm: AES
   encode: BASE64
-  password: ${AIQUANT_ENCRYPTOR_PASSWORD}
+  password: ${MYBATIS_ENCRYPTOR_PASSWORD}
 
 --- # 数据源配置
 spring:
@@ -154,8 +154,8 @@ spring:
           driverClassName: com.mysql.cj.jdbc.Driver
           # jdbc 所有参数配置参考 https://lionli.blog.csdn.net/article/details/122018562
           # rewriteBatchedStatements=true 批处理优化 大幅提升批量插入更新删除性能(对数据库有性能损耗 使用批量操作应考虑性能问题)
-          url: jdbc:mysql://localhost:3306/quantdb?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true
-          username: quantdb
+          url: ${AIQUANT_JDBC_URL}
+          username: ${AIQUANT_DB_USERNAME}
           password: ${AIQUANT_DB_PASSWORD}
 #        # 从库数据源
 #        slave:
