@@ -11,6 +11,8 @@ import java.util.function.Consumer;
 final class StreamEventConsumer<T> implements AutoCloseable {
     private final ArrayBlockingQueue<T> queue;
     private final AtomicBoolean closed = new AtomicBoolean();
+    /** One queue-overflow notification per recovery cycle, even if producers remain faster than the consumer. */
+    private final AtomicBoolean overflowPending = new AtomicBoolean();
     private final Thread worker;
     private final Runnable overflow;
     private final LongAdder received = new LongAdder();
@@ -48,9 +50,17 @@ final class StreamEventConsumer<T> implements AutoCloseable {
         }
         received.increment();
         if (!queue.offer(event)) {
-            dropped.add(queue.size() + 1L);
-            queue.clear();
-            overflow.run();
+            if (overflowPending.compareAndSet(false, true)) {
+                // The queued events and this event cannot be trusted as a complete sequence.
+                // Clear once and request exact replay from the committed cursor. While that
+                // recovery is being scheduled, drop only new arrivals instead of repeatedly
+                // clearing the worker's queue and amplifying the backlog.
+                dropped.add(queue.size() + 1L);
+                queue.clear();
+                overflow.run();
+            } else {
+                dropped.increment();
+            }
         }
     }
 
@@ -65,7 +75,9 @@ final class StreamEventConsumer<T> implements AutoCloseable {
         try {
             if (!queue.offer(event, 3, java.util.concurrent.TimeUnit.SECONDS)) {
                 dropped.increment();
-                overflow.run();
+                if (overflowPending.compareAndSet(false, true)) {
+                    overflow.run();
+                }
                 throw new IllegalStateException("行情回放消费者持续阻塞");
             }
         } catch (InterruptedException ex) {
@@ -81,6 +93,7 @@ final class StreamEventConsumer<T> implements AutoCloseable {
     void clear() {
         dropped.add(queue.size());
         queue.clear();
+        overflowPending.set(false);
     }
 
     /**
