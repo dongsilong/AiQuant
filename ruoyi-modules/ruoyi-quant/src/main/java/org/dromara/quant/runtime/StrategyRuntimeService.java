@@ -1169,7 +1169,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             if (event.replay()) {
                 // 成交补偿仅恢复开仓后的峰值，不产生回溯下单。
-                Instant localEventTime = event.eventTime() == null ? null : event.eventTime().minusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
+                Instant localEventTime = event.eventTime() == null ? null : event.eventTime().minusMillis(gateway.exchangeTimeOffsetMillisForMarketEvents(runtime.credential.getRunMode()));
                 if (!runtime.exitCoordinating.get() && event.price() != null && runtime.state != null && runtime.state.getOpenedAt() != null && localEventTime != null &&
                     !localEventTime.isBefore(runtime.state.getOpenedAt().atZone(java.time.ZoneId.systemDefault()).toInstant())) {
                     updateRuntimeExtrema(runtime, event.price());
@@ -1203,7 +1203,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      */
     private void evaluate(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
         long nowMillis = System.currentTimeMillis();
-        long exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode());
+        long exchangeOffsetMillis = gateway.exchangeTimeOffsetMillisForMarketEvents(runtime.credential.getRunMode());
         Instant localNow = Instant.now();
         Instant exchangeNow = localNow.plusMillis(exchangeOffsetMillis);
         long maxEventAgeMillis = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
@@ -1243,7 +1243,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             return;
         }
-        exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode());
+        exchangeOffsetMillis = gateway.exchangeTimeOffsetMillisForMarketEvents(runtime.credential.getRunMode());
         Instant decisionAt = Instant.now();
         exchangeNow = decisionAt.plusMillis(exchangeOffsetMillis);
         if (log.isDebugEnabled() && System.currentTimeMillis() >= runtime.nextLatencyLogAt) {
@@ -1412,7 +1412,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (event.replay() || !("TRADE".equalsIgnoreCase(type) || "MARK".equalsIgnoreCase(type) || "KLINE".equalsIgnoreCase(type))) {
             return false;
         }
-        long offsetMillis = gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode());
+        long offsetMillis = gateway.exchangeTimeOffsetMillisForMarketEvents(runtime.credential.getRunMode());
         Instant now = Instant.now();
         Instant exchangeNow = now.plusMillis(offsetMillis);
         return !org.dromara.quant.market.MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), now, exchangeNow, properties.getMarket().getMaxEventAgeMillis());
@@ -1430,7 +1430,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             logUnavailableEntry(runtime, event, "STALE_MARKET", "行情事件过期或时间异常，已丢弃本次决策");
         }
-        long offsetMillis = gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode());
+        long offsetMillis = gateway.exchangeTimeOffsetMillisForMarketEvents(runtime.credential.getRunMode());
         Instant observedAt = Instant.now();
         Instant observedExchangeTime = observedAt.plusMillis(offsetMillis);
         log.warn("策略丢弃过期或时间异常行情，未更新本地行情状态 instanceId={} symbol={} eventTime={} receivedAt={} ageMillis={} queueWaitMillis={}", runtime.instance.getId(),
