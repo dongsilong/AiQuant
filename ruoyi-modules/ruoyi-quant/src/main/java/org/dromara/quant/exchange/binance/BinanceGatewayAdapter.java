@@ -70,6 +70,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * retries cannot fix an exchange eligibility/location restriction and amplify failures.
      */
     private final Map<String, Long> restrictedEndpointSince = new ConcurrentHashMap<>();
+    /** Asynchronous refresh controls for the non-blocking market-event clock path. */
+    private final Map<String, AtomicBoolean> marketClockRefreshInFlight = new ConcurrentHashMap<>();
+    private final Map<String, Long> marketClockRefreshNextAttemptAt = new ConcurrentHashMap<>();
+    private final java.util.concurrent.ExecutorService marketClockRefreshExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
     /**
      * 仅在当前线程执行服务端时间同步请求时记录真正进入 HTTP 链路的时间点。
      * 该时间点在 REST 调度器放行后记录，避免把本地排队耗时计入网络往返时间。
@@ -1558,6 +1562,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
 
     /**
      * 将 Binance 的服务端时钟偏移应用于公开行情时间判定。
+     * 普通调用方保留同步语义；行情消费线程使用单独的非阻塞入口。
      */
     @Override
     public long exchangeTimeOffsetMillis(String runMode) {
@@ -1574,19 +1579,96 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             if (cached == null || now - cached.updatedAt() > MAX_STALE_MARKET_CLOCK_OFFSET_MILLIS) {
                 throw ex;
             }
-            java.util.concurrent.atomic.AtomicBoolean shouldWarn = new java.util.concurrent.atomic.AtomicBoolean();
-            clockOffsetWarningTimes.compute(baseUrl, (ignored, lastWarning) -> {
-                if (lastWarning == null || now - lastWarning >= 30_000L) {
-                    shouldWarn.set(true);
-                    return now;
-                }
-                return lastWarning;
-            });
-            if (shouldWarn.get()) {
-                log.warn("Binance时间同步受限，暂用最近一次有效偏移并等待恢复: baseUrl={}, cacheAgeMs={}", baseUrl, now - cached.updatedAt());
-            }
+            warnMarketClockOffsetFallback(baseUrl, cached, now);
             return cached.value();
         }
+    }
+
+    /**
+     * MarketStreamHub calls this from serialized event and watchdog threads. Never perform
+     * network I/O here: use a bounded cached offset and refresh it on a dedicated virtual thread.
+     * If no sufficiently recent sample exists, defer event processing until the refresh completes.
+     */
+    @Override
+    public long exchangeTimeOffsetMillisForMarketEvents(String runMode) {
+        String baseUrl = marketBaseUrl(runMode);
+        throwIfEndpointRestricted(baseUrl, "MARKET_CLOCK");
+        long now = System.currentTimeMillis();
+        ClockOffset cached = clockOffsets.get(baseUrl);
+        long age = cached == null ? Long.MAX_VALUE : Math.max(0L, now - cached.updatedAt());
+        if (cached != null && age < CLOCK_OFFSET_REFRESH_MILLIS) {
+            return cached.value();
+        }
+        scheduleMarketClockOffsetRefresh(baseUrl);
+        if (cached != null && age <= MAX_STALE_MARKET_CLOCK_OFFSET_MILLIS) {
+            warnMarketClockOffsetFallback(baseUrl, cached, now);
+            return cached.value();
+        }
+        throw new ExchangeMarketPort.RequestDeferredException(1_000L);
+    }
+
+    private void scheduleMarketClockOffsetRefresh(String baseUrl) {
+        long now = System.currentTimeMillis();
+        if (now < marketClockRefreshNextAttemptAt.getOrDefault(baseUrl, 0L)) {
+            return;
+        }
+        AtomicBoolean inFlight = marketClockRefreshInFlight.computeIfAbsent(baseUrl, ignored -> new AtomicBoolean());
+        if (!inFlight.compareAndSet(false, true)) {
+            return;
+        }
+        long nextAttemptAt = now + CLOCK_OFFSET_REFRESH_MILLIS;
+        marketClockRefreshNextAttemptAt.put(baseUrl, nextAttemptAt);
+        try {
+            marketClockRefreshExecutor.execute(() -> {
+                try {
+                    clockOffset(baseUrl);
+                } catch (RuntimeException ex) {
+                    if (ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.ExchangeAccessRestrictedException) {
+                        // The endpoint latch already logged the permanent access restriction.
+                        return;
+                    }
+                    long failedAt = System.currentTimeMillis();
+                    java.util.concurrent.atomic.AtomicBoolean shouldWarn = new java.util.concurrent.atomic.AtomicBoolean();
+                    clockOffsetWarningTimes.compute(baseUrl, (ignored, lastWarning) -> {
+                        if (lastWarning == null || failedAt - lastWarning >= 30_000L) {
+                            shouldWarn.set(true);
+                            return failedAt;
+                        }
+                        return lastWarning;
+                    });
+                    if (shouldWarn.get()) {
+                        log.warn("Binance市场时钟异步刷新失败；行情消费线程未被REST等待阻塞: baseUrl={} errorType={}",
+                            baseUrl, ex.getClass().getSimpleName());
+                    }
+                } finally {
+                    inFlight.set(false);
+                }
+            });
+        } catch (RuntimeException rejected) {
+            inFlight.set(false);
+            marketClockRefreshNextAttemptAt.remove(baseUrl, nextAttemptAt);
+            log.warn("无法提交Binance市场时钟异步刷新任务: baseUrl={} errorType={}", baseUrl, rejected.getClass().getSimpleName());
+        }
+    }
+
+    private void warnMarketClockOffsetFallback(String baseUrl, ClockOffset cached, long now) {
+        java.util.concurrent.atomic.AtomicBoolean shouldWarn = new java.util.concurrent.atomic.AtomicBoolean();
+        clockOffsetWarningTimes.compute(baseUrl, (ignored, lastWarning) -> {
+            if (lastWarning == null || now - lastWarning >= 30_000L) {
+                shouldWarn.set(true);
+                return now;
+            }
+            return lastWarning;
+        });
+        if (shouldWarn.get()) {
+            log.warn("Binance时间同步受限，行情事件暂用最近一次有效偏移: baseUrl={}, cacheAgeMs={}",
+                baseUrl, now - cached.updatedAt());
+        }
+    }
+
+    @jakarta.annotation.PreDestroy
+    public void shutdownMarketClockRefreshExecutor() {
+        marketClockRefreshExecutor.shutdownNow();
     }
 
     private DerivativesTradingUsdsFuturesRestApi api(Credential credential) {
