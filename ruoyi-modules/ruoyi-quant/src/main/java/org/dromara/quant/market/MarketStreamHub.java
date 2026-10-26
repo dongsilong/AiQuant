@@ -181,6 +181,10 @@ public class MarketStreamHub {
                     consumedKlineOpens.computeIfPresent(id, (ignored, consumed) -> event.kline().openTime().isAfter(consumed) ? event.kline().openTime() : consumed);
                 }
             }, ex -> {
+                if (accessRestricted(ex)) {
+                    suspendForAccessRestriction(ex);
+                    return;
+                }
                 log.error("行情消费者失败，暂停决策并从成功游标恢复: symbol={}, interval={}, listenerId={}", key.symbol(), key.interval(), id, ex);
                 scheduleDisconnect("行情消费者处理失败");
             }, () -> scheduleDisconnect("下游消费队列溢出，暂停决策并恢复行情"));
