@@ -34,6 +34,13 @@ class BinanceSdkStreamTransportTest {
     }
 
     @Test
+    void exposesJettyCallbackBasedMarketCloseSignature() throws Exception {
+        var close = MarketStreamConnectionWrapper.class.getMethod("onWebSocketClose", int.class, String.class,
+            org.eclipse.jetty.websocket.api.Callback.class);
+        assertTrue(Modifier.isPublic(close.getModifiers()));
+    }
+
+    @Test
     void notifiesTheMarketOwnerWhenSdkSocketClosesInsteadOfAllowingSdkReconnect() {
         AtomicBoolean disconnected = new AtomicBoolean();
 
