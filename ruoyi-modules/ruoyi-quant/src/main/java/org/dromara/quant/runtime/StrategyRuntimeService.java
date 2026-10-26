@@ -56,6 +56,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 事件驱动策略运行时。
@@ -456,7 +457,8 @@ public class StrategyRuntimeService {
                 leaseRenewalExecutor.execute(() -> {
                     try {
                         boolean renewed;
-                        synchronized (runtime.leaseOperationLock) {
+                        runtime.leaseOperationLock.lock();
+                        try {
                             // closeRuntime owns the final release. A renewal task that starts
                             // after shutdown begins must not reacquire the lease behind it.
                             renewed = !runtime.closed && leaseService.acquireOrRenew(
@@ -464,6 +466,8 @@ public class StrategyRuntimeService {
                             synchronized (runtime) {
                                 runtime.leaseValid = renewed && !runtime.closed;
                             }
+                        } finally {
+                            runtime.leaseOperationLock.unlock();
                         }
                         if (!renewed && !runtime.closed) {
                             log.error("策略运行租约独立续期失败，已阻止行情驱动决策 instanceId={} credentialId={} symbol={}",
@@ -4017,8 +4021,26 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 return;
             }
         }
-        synchronized (runtime.leaseOperationLock) {
+        boolean leaseLockAcquired = false;
+        try {
+            // Never block shutdown indefinitely behind a hung lease-renewal database call.
+            leaseLockAcquired = runtime.leaseOperationLock.tryLock(2, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException ex) {
+            interrupted = true;
+        }
+        if (!leaseLockAcquired) {
+            runtime.leaseValid = false;
+            log.error("策略运行租约操作仍在途，停止等待并保留租约直至自然过期 instanceId={} credentialId={} symbol={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            return;
+        }
+        try {
             leaseService.release(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+        } finally {
+            runtime.leaseOperationLock.unlock();
         }
         if (interrupted) {
             Thread.currentThread().interrupt();
@@ -4037,13 +4059,27 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 return interrupted;
             } catch (java.util.concurrent.TimeoutException timeout) {
                 if (!"PAPER".equalsIgnoreCase(runtime.credential.getRunMode())) {
-                    synchronized (runtime.leaseOperationLock) {
+                    boolean leaseLockAcquired = false;
+                    try {
+                        leaseLockAcquired = runtime.leaseOperationLock.tryLock(1, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (InterruptedException ex) {
+                        interrupted = true;
+                    }
+                    if (!leaseLockAcquired) {
+                        runtime.leaseValid = false;
+                        log.error("关闭运行时等待在途交易期间无法取得租约续期锁，继续等待交易结果且不释放租约 instanceId={} credentialId={} symbol={}",
+                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                        continue;
+                    }
+                    try {
                         boolean renewed = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
                         if (!renewed) {
                             runtime.leaseValid = false;
                             log.error("关闭运行时等待在途交易期间租约续期失败，保持关闭并禁止接管假设 instanceId={} credentialId={} symbol={}",
                                 runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
                         }
+                    } finally {
+                        runtime.leaseOperationLock.unlock();
                     }
                 }
             } catch (InterruptedException ex) {
@@ -4182,7 +4218,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final AtomicBoolean reconciling = new AtomicBoolean();
         private final AtomicBoolean leaseRenewing = new AtomicBoolean();
         /** Serializes database lease acquisition/renewal with the final release during shutdown. */
-        private final Object leaseOperationLock = new Object();
+        private final ReentrantLock leaseOperationLock = new ReentrantLock();
         private final AtomicBoolean reconcileRequested = new AtomicBoolean();
         private final EntryRetryGate entryRetryGate = new EntryRetryGate();
         /** 串行化交易对暂停操作与完整开仓决策/派单流程。 */
