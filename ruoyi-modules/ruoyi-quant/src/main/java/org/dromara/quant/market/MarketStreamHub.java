@@ -237,6 +237,9 @@ public class MarketStreamHub {
             long attempt = ++generation;
             connected = false;
             recovering = true;
+            // A reconnect starts a new replay boundary. Discard any stale subscriber backlog
+            // and reset its overflow latch so this generation can request recovery independently.
+            listeners.values().forEach(StreamEventConsumer::clear);
             lastEventTime.clear();
             lastMarkProcessingLagMs = -1;
             lastMarkFreshAtProcessing = false;
