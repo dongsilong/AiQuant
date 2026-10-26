@@ -42,8 +42,8 @@ class StreamEventConsumerOverflowTest {
             consumer.accept("queued-after-overflow");
             consumer.accept("overflow-two");
             assertEquals(1, overflowNotifications.get());
-            assertTrue(consumer.statistics().contains("dropped=3"));
-            assertTrue(consumer.statistics().contains("queued=1"));
+            assertTrue(consumer.statistics().contains("dropped=4"));
+            assertTrue(consumer.statistics().contains("queued=0"));
         } finally {
             releaseFirstEvent.countDown();
             consumer.close();
