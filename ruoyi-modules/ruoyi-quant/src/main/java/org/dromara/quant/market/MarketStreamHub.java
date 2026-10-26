@@ -213,7 +213,7 @@ public class MarketStreamHub {
         }
 
         private Instant exchangeNow() {
-            long offsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
+            long offsetMillis = gateway.exchangeTimeOffsetMillisForMarketEvents(key.runMode());
             return Instant.now().plusMillis(offsetMillis);
         }
 
@@ -598,7 +598,7 @@ public class MarketStreamHub {
             }
             long exchangeOffsetMillis;
             try {
-                exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
+                exchangeOffsetMillis = gateway.exchangeTimeOffsetMillisForMarketEvents(key.runMode());
             } catch (RuntimeException ex) {
                 if (accessRestricted(ex)) {
                     suspendForAccessRestriction(ex);
@@ -793,7 +793,7 @@ public class MarketStreamHub {
             }
             long exchangeOffsetMillis;
             try {
-                exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
+                exchangeOffsetMillis = gateway.exchangeTimeOffsetMillisForMarketEvents(key.runMode());
             } catch (RuntimeException ex) {
                 if (accessRestricted(ex)) {
                     suspendForAccessRestriction(ex);
