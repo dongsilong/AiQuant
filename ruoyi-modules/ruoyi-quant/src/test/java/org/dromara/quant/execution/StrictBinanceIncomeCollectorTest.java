@@ -90,7 +90,7 @@ class StrictBinanceIncomeCollectorTest {
 
 
     @Test
-    void acceptsZeroTransactionIdWhenItIsTheExchangeProvidedUniqueIdentity() {
+    void acceptsZeroTransactionIdAndUsesStableFactIdentity() {
         var transfer = new ExchangeGateway.IncomeSnapshot("", "TRANSFER", new BigDecimal("-5.00"),
             "USDT", 0L, "TRANSFER", start.plusSeconds(1));
         when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of(transfer));
@@ -99,6 +99,23 @@ class StrictBinanceIncomeCollectorTest {
 
         assertEquals(1, result.size());
         assertEquals(0L, result.getFirst().transactionId());
+    }
+
+    @Test
+    void preservesDistinctTransferFactsThatShareZeroTransactionIdAndDeduplicatesReplay() {
+        var first = new ExchangeGateway.IncomeSnapshot("", "TRANSFER", new BigDecimal("-5.00"),
+            "USDT", 0L, "transfer-a", start.plusSeconds(1));
+        var replay = new ExchangeGateway.IncomeSnapshot("", "TRANSFER", new BigDecimal("-5.0"),
+            "USDT", 0L, "transfer-a", start.plusSeconds(1));
+        var second = new ExchangeGateway.IncomeSnapshot("", "TRANSFER", new BigDecimal("-7.00"),
+            "USDT", 0L, "transfer-b", start.plusSeconds(2));
+        when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of(first, replay, second));
+
+        var result = collector.collect(credential, new ExchangeGateway.TimeRange(start, end));
+
+        assertEquals(2, result.size());
+        assertEquals(List.of(new BigDecimal("-5.00"), new BigDecimal("-7.00")),
+            result.stream().map(ExchangeGateway.IncomeSnapshot::amount).toList());
     }
 
     @Test
