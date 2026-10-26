@@ -28,6 +28,7 @@ class LiveSchemaStartupGuardTest {
         assertTrue(error.getMessage().contains("quant_strategy_fill_sync_cursor"));
         assertTrue(error.getMessage().contains("quant_financial_event|credential_id,event_identity_key"));
         assertTrue(error.getMessage().contains("V20261024_01__financial_event_income_type_identity.sql"));
+        assertTrue(error.getMessage().contains("V20261026_01__financial_event_identity_key.sql"));
         assertTrue(error.getMessage().contains("quant_financial_event_sync_cursor"));
         assertTrue(error.getMessage().contains("V20261025_02__financial_event_sync_cursor.sql"));
         assertTrue(error.getMessage().contains("quant_live_recovery_audit"));
