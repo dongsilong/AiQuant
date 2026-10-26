@@ -3980,12 +3980,24 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         }
         // Do not release the database lease while an asynchronous renewal is still in flight:
         // otherwise that renewal could extend the lease again after release and delay safe takeover.
-        while (runtime.leaseRenewalInFlight.get()) {
+        long leaseWaitDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (runtime.leaseRenewalInFlight.get() && System.nanoTime() < leaseWaitDeadline) {
             try {
                 Thread.sleep(10L);
             } catch (InterruptedException ex) {
                 interrupted = true;
+                break;
             }
+        }
+        if (runtime.leaseRenewalInFlight.get()) {
+            // Never release while a renewal may still be in flight: it could re-create a lease after release.
+            // Bound shutdown latency; if renewal is stuck, leave the lease to expire naturally instead.
+            log.warn("租约续期仍在执行，跳过主动释放并等待数据库租约自然过期 instanceId={} credentialId={} symbol={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            return;
         }
         leaseService.release(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
         if (interrupted) {
