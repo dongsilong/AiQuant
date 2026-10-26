@@ -1002,6 +1002,39 @@ public class TradingReconciliationService {
     }
 
     /**
+     * Binance tranId=0 is not a reliable event identifier (notably for TRANSFER income).
+     * Keep the exchange value for audit, but derive a deterministic natural identity from
+     * immutable event facts so different zero-ID events do not overwrite or block each other.
+     * Events identical in every available field are inherently indistinguishable without an exchange ID.
+     */
+    static String financialEventIdentityKey(ExchangeGateway.IncomeSnapshot event) {
+        if (event == null || event.incomeType() == null || event.incomeType().isBlank() || event.transactionId() == null) {
+            throw new IllegalArgumentException("Income event identity requires transaction ID and income type");
+        }
+        if (event.transactionId() != 0L) {
+            return "T:" + event.incomeType() + ":" + event.transactionId();
+        }
+        String eventTime = event.time() == null ? "" : LocalDateTime.ofInstant(event.time(), ZoneOffset.UTC)
+            .truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        String amount = event.amount() == null ? "" : event.amount().stripTrailingZeros().toPlainString();
+        String canonical = String.join("\u001f",
+            Objects.toString(event.symbol(), ""),
+            event.incomeType(),
+            amount,
+            Objects.toString(event.asset(), ""),
+            eventTime,
+            Objects.toString(event.info(), ""));
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(canonical.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return "Z:" + java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
+    /**
      * 同步交易所财务流水到独立财务事件账本。
      */
     private void syncFinancialEvents(QuantCredential credential, List<ExchangeGateway.IncomeSnapshot> snapshots) {
@@ -1018,10 +1051,10 @@ public class TradingReconciliationService {
             // Binance tranId is only unique within the same incomeType. Different
             // financial event types may legally share a transaction ID, so the
             // idempotency key must include eventType as well as credential and tranId.
+            String identityKey = financialEventIdentityKey(s);
             QuantFinancialEventVo vo = financialEventMapper.selectVoOne(new LambdaQueryWrapper<QuantFinancialEvent>()
                 .eq(QuantFinancialEvent::getCredentialId, credential.getId())
-                .eq(QuantFinancialEvent::getExchangeTransactionId, s.transactionId())
-                .eq(QuantFinancialEvent::getEventType, s.incomeType()));
+                .eq(QuantFinancialEvent::getEventIdentityKey, identityKey));
             QuantFinancialEvent entity = MapstructUtils.convert(vo, QuantFinancialEvent.class);
             if (entity != null) {
                 // Treat the exchange ledger as immutable. A replay may confirm the
@@ -1069,6 +1102,7 @@ public class TradingReconciliationService {
             entity.setCreatedAt(LocalDateTime.now());
             entity.setSymbol(s.symbol());
             entity.setEventType(s.incomeType());
+            entity.setEventIdentityKey(identityKey);
             entity.setAmount(s.amount());
             entity.setAsset(s.asset());
             entity.setInfo(s.info());
