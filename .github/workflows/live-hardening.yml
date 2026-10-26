@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - hardening/live-production-20261014
+      - fix/live-rest-ws-recovery-20261026
   pull_request:
     branches:
       - ai-quant-dev
@@ -19,7 +20,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
           cache: maven
       - name: Reject committed plaintext credentials in trading configuration
         run: python3 script/security/check_quant_config_secrets.py
@@ -43,7 +44,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
           cache: maven
       - name: Run all tagged quant development regressions
         run: >-
@@ -79,7 +80,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
           cache: maven
       - name: Smoke-test strategy allocation migrations on disposable MySQL 8.4
         run: |
