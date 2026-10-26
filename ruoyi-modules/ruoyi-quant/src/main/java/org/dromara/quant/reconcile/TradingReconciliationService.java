@@ -10,6 +10,7 @@ import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.dromara.quant.execution.StrictBinanceTradeCollector;
 import org.dromara.quant.execution.StrategyFillJournalService;
 import org.dromara.quant.finance.domain.QuantFinancialEvent;
@@ -28,6 +29,7 @@ import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
 import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -44,6 +46,10 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -92,6 +98,10 @@ public class TradingReconciliationService {
     private final ConcurrentHashMap<Long, CompletableFuture<List<ExchangeGateway.PositionSnapshot>>> positionRefreshes = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, CachedPositionSnapshot> runtimePositionSnapshots = new ConcurrentHashMap<>();
     private final Set<Long> balanceSnapshotTasks = ConcurrentHashMap.newKeySet();
+    /** Retry read-only snapshot refreshes after REST deferral/rate limits; never retry order mutations. */
+    private final ScheduledExecutorService positionRetryExecutor = Executors.newSingleThreadScheduledExecutor(
+        Thread.ofPlatform().daemon().name("quant-position-snapshot-retry").factory());
+    private final Map<Long, ScheduledFuture<?>> positionRetryTasks = new HashMap<>();
     private final ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicLong> runtimeSnapshotGenerations = new ConcurrentHashMap<>();
     private static final Duration RUNTIME_POSITION_CACHE_AGE = Duration.ofSeconds(20);
     @Autowired
@@ -327,11 +337,62 @@ public class TradingReconciliationService {
             created.completeExceptionally(ex);
             throw ex;
         } catch (RuntimeException ex) {
+            long retryAfterMillis = snapshotRetryAfterMillis(ex);
+            if (retryAfterMillis > 0) {
+                schedulePositionSnapshotRetry(credential, trigger, retryAfterMillis);
+            }
             failureRecorder.record(credentialId, ex.getMessage());
             created.completeExceptionally(ex);
             throw ex;
         } finally {
             positionRefreshes.remove(credentialId, created);
+        }
+    }
+
+    private long snapshotRetryAfterMillis(RuntimeException failure) {
+        if (failure instanceof ExchangeMarketPort.RequestDeferredException deferred) {
+            return deferred.retryAfterMillis();
+        }
+        if (failure instanceof ExchangeMarketPort.RateLimitException rateLimited) {
+            return rateLimited.retryAfterMillis();
+        }
+        return 0L;
+    }
+
+    /** Coalesce a delayed, read-only account snapshot retry for each credential. */
+    private void schedulePositionSnapshotRetry(QuantCredential credential, String trigger, long retryAfterMillis) {
+        if (credential == null || credential.getId() == null || "PAPER".equalsIgnoreCase(credential.getRunMode())) {
+            return;
+        }
+        long credentialId = credential.getId();
+        long delay = Math.max(1_000L, retryAfterMillis);
+        synchronized (positionRetryTasks) {
+            ScheduledFuture<?> current = positionRetryTasks.get(credentialId);
+            if (current != null && !current.isDone()) {
+                return;
+            }
+            ScheduledFuture<?> scheduled = positionRetryExecutor.schedule(() -> {
+                synchronized (positionRetryTasks) {
+                    positionRetryTasks.remove(credentialId);
+                }
+                try {
+                    refreshAccountPositionSnapshot(credential, "retry:" + trigger);
+                } catch (RuntimeException retryFailure) {
+                    log.warn("账户持仓快照延迟重试仍未成功 credentialId={} trigger={} errorType={}",
+                        credentialId, trigger, retryFailure.getClass().getSimpleName());
+                }
+            }, delay, TimeUnit.MILLISECONDS);
+            positionRetryTasks.put(credentialId, scheduled);
+            log.info("已安排账户持仓快照延迟重试 credentialId={} trigger={} retryAfterMs={}", credentialId, trigger, delay);
+        }
+    }
+
+    @PreDestroy
+    public void shutdownPositionSnapshotRetries() {
+        positionRetryExecutor.shutdownNow();
+        synchronized (positionRetryTasks) {
+            positionRetryTasks.values().forEach(task -> task.cancel(false));
+            positionRetryTasks.clear();
         }
     }
 
@@ -409,8 +470,17 @@ public class TradingReconciliationService {
         LocalDateTime fetchStartedAt = LocalDateTime.now();
         long generation = positionGeneration(credential.getId());
         long runtimeGeneration = runtimeSnapshotGeneration(credential.getId());
-        List<ExchangeGateway.PositionSnapshot> snapshots = List.copyOf(java.util.Objects.requireNonNull(gateway.queryPositions(exchangeCredential, symbol), "Binance symbol " +
-            "position snapshot missing"));
+        final List<ExchangeGateway.PositionSnapshot> snapshots;
+        try {
+            snapshots = List.copyOf(java.util.Objects.requireNonNull(gateway.queryPositions(exchangeCredential, symbol),
+                "Binance symbol position snapshot missing"));
+        } catch (RuntimeException ex) {
+            long retryAfterMillis = snapshotRetryAfterMillis(ex);
+            if (retryAfterMillis > 0) {
+                schedulePositionSnapshotRetry(credential, "symbol:" + symbol, retryAfterMillis);
+            }
+            throw ex;
+        }
         syncSymbolPositionSnapshot(credential, symbol, snapshots, fetchStartedAt, generation, runtimeGeneration);
         return snapshots;
     }
