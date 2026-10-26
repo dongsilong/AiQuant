@@ -9,6 +9,8 @@ import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.TimeUnit;
+
 /**
  * 周期性交易所对账。
  */
@@ -32,7 +34,11 @@ public class TradingReconciliationScheduler {
     /**
      * 执行一轮账户级交易事实对账，补齐本地成交账本与执行记录。
      */
-    @Scheduled(fixedDelayString = "#{@quantProperties.reconcile.intervalSeconds * 1000}", initialDelay = 15000)
+    @Scheduled(
+        fixedDelayString = "#{@quantProperties.reconcile.intervalSeconds.toString()}",
+        initialDelayString = "15",
+        timeUnit = TimeUnit.SECONDS
+    )
     public void reconcile() {
         if (!properties.getReconcile().isEnabled()) {
             return;

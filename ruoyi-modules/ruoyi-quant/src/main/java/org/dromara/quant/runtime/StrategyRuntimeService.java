@@ -103,6 +103,8 @@ public class StrategyRuntimeService {
      * 交易所统一网关。
      */
     private final ExchangeGateway gateway;
+    /** 同环境、同交易对共享的交易规则缓存；缓存失效不改变开仓风控判定。 */
+    private final org.dromara.quant.exchange.ExchangeTradingRuleCache tradingRuleCache;
     /**
      * 公共行情流中心。
      */
@@ -515,6 +517,36 @@ public class StrategyRuntimeService {
     }
 
     /**
+     * Schedule a real retry rather than only storing a throttle timestamp. Otherwise a failed
+     * lease check or stale snapshot can leave entry facts unverified until an unrelated event
+     * or the next full reconciliation interval.
+     */
+    private void scheduleReconciliationRetry(ActiveRuntime runtime) {
+        long now = System.currentTimeMillis();
+        long retryAt;
+        synchronized (runtime) {
+            if (runtime.closed || runtime.exitCoordinating.get()) {
+                return;
+            }
+            if (runtime.nextReconcileAt <= now) {
+                runtime.nextReconcileAt = now + 5_000L;
+            }
+            retryAt = runtime.nextReconcileAt;
+        }
+        // Add a small margin so the callback cannot run before requestReconciliation's throttle expires.
+        long delayMillis = Math.max(1L, retryAt - now) + 25L;
+        log.debug("策略持仓核验/恢复尚未解除开仓阻断，安排自动重试 instanceId={} credentialId={} symbol={} runMode={} reason={} retryAfterMillis={}",
+            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+            runtime.positionReconciliationBlockReason, delayMillis);
+        java.util.concurrent.CompletableFuture.delayedExecutor(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS, recoveryExecutor)
+            .execute(() -> {
+                if (!runtime.closed) {
+                    requestReconciliation(runtime);
+                }
+            });
+    }
+
+    /**
      * 仅在持仓事实完成核验后同步策略状态；失败时保留暂停决策状态。
      */
     private void reconcilePosition(ActiveRuntime runtime) {
@@ -526,10 +558,12 @@ public class StrategyRuntimeService {
             }
             runtime.positionReconciling = true;
             runtime.positionFactsReady = false;
+            runtime.positionReconciliationBlockReason = "IN_PROGRESS";
         }
         try {
             if (reconcilePendingExecution(runtime)) {
                 synchronized (runtime) {
+                    runtime.positionReconciliationBlockReason = "PENDING_EXECUTION";
                     if (!runtime.closed && runtime.position != null) {
                         ensureHardStop(runtime);
                     }
@@ -541,6 +575,7 @@ public class StrategyRuntimeService {
                 return;
             }
             if (retryProtectionCleanupIfNeeded(runtime)) {
+                runtime.positionReconciliationBlockReason = "PROTECTION_CLEANUP_PENDING";
                 return;
             }
             QuantStrategyPositionState expectedState;
@@ -553,6 +588,8 @@ public class StrategyRuntimeService {
                     return;
                 }
                 if (runtime.hasPendingAction()) {
+                    runtime.positionReconciliationBlockReason = "PENDING_ACTION";
+                    runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
                     runtime.reconcileRequested.set(true);
                     return;
                 }
@@ -563,6 +600,10 @@ public class StrategyRuntimeService {
                 expectedQuantity = expectedPosition == null ? null : expectedPosition.getQuantity();
             }
             if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+                runtime.positionReconciliationBlockReason = "STRATEGY_LEASE_NOT_HELD";
+                runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                log.warn("策略持仓核验因租约未确认而延期 instanceId={} credentialId={} symbol={} retryAfterSeconds=5",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
                 return;
             }
             // 在REST前捕获数据库基线；慢查询或并发平仓后只能条件更新，不能覆盖新账本。
@@ -582,6 +623,7 @@ public class StrategyRuntimeService {
                 }
                 if (runtime.exitCoordinating.get() || runtime.state != expectedState || runtime.hasPendingAction() != expectedPending || !Objects.equals(expectedPendingIdentity, runtime.state == null ?
 List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosition || runtime.position != null && !Objects.equals(runtime.position.getQuantity(), expectedQuantity)) {
+                    runtime.positionReconciliationBlockReason = "RUNTIME_STATE_CHANGED_DURING_SNAPSHOT";
                     runtime.reconcileRequested.set(true);
                     return;
                 }
@@ -594,6 +636,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             replaceRuntimeStatePreservingExtrema(runtime, latestState);
                         }
                         runtime.stateRefreshRequired = true;
+                        runtime.positionReconciliationBlockReason = "STATE_CHANGED_DURING_RECONCILIATION";
                         runtime.nextReconcileAt = 0L;
                         runtime.reconcileRequested.set(true);
                     }
@@ -616,6 +659,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             synchronized (runtime) {
                 if (runtime.exitCoordinating.get() || runtime.state != expectedState || runtime.hasPendingAction() != expectedPending || !Objects.equals(expectedPendingIdentity, runtime.state == null ?
 List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosition || runtime.position != null && !Objects.equals(runtime.position.getQuantity(), expectedQuantity)) {
+                    runtime.positionReconciliationBlockReason = "RUNTIME_STATE_CHANGED_DURING_SNAPSHOT";
                     runtime.reconcileRequested.set(true);
                     return;
                 }
@@ -623,6 +667,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     return;
                 }
                 if (!leaseHeld) {
+                    runtime.positionReconciliationBlockReason = "STRATEGY_LEASE_LOST_AFTER_SNAPSHOT";
+                    runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                    log.warn("策略持仓核验快照完成后租约未确认，保持开仓阻断 instanceId={} credentialId={} symbol={} retryAfterSeconds=5",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
                     return;
                 }
                 QuantPosition previousPosition = runtime.position;
@@ -658,6 +706,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
                     if (!flatPositionConfirmed) {
                         runtime.protectionCleanupPending = true;
+                        runtime.positionReconciliationBlockReason = "EXCHANGE_FLAT_SNAPSHOT_INCOMPLETE";
                         runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
                         log.warn("交易所空仓快照不完整，保留策略恢复状态并等待重试 instanceId={} symbol={} state={}",
                             runtime.instance.getId(), runtime.symbol.getSymbol(), runtime.state.getStatus());
@@ -724,16 +773,20 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.instance.setLastError("");
                 instanceMapper.updateById(runtime.instance);
             }
+            runtime.positionReconciliationBlockReason = recoveryStillRequired ? "RECOVERY_OR_PROTECTION_STILL_REQUIRED" : "COMPLETE";
             reconciliationCompleted = true;
         } catch (TradingReconciliationService.SnapshotSupersededException ex) {
+            runtime.positionReconciliationBlockReason = "SNAPSHOT_SUPERSEDED";
             runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
             log.debug("较早发起的交易对持仓快照已被新快照取代，等待后续对账 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
         } catch (ProtectionOrderService.ProtectionExecutionPendingException ex) {
             // Binance 已报告保护单正在触发或成交尚未完成；这是等待成交/持仓事实收敛的暂态，不记作运行错误。
+            runtime.positionReconciliationBlockReason = "PROTECTION_EXECUTION_PENDING";
             runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
             log.debug("保护单执行事实尚未收敛，保持决策阻断并等待重核 instanceId={} symbol={} runMode={} retryAfterSeconds=5", runtime.instance.getId(),
                 runtime.symbol.getSymbol(), runtime.credential.getRunMode());
         } catch (RuntimeException ex) {
+            runtime.positionReconciliationBlockReason = "RECONCILIATION_ERROR:" + ex.getClass().getSimpleName();
             boolean stateConflict = containsMessage(ex, "策略持仓状态乐观锁冲突");
             log.warn("策略持仓事实核实失败 instanceId={} credentialId={} symbol={} runMode={} elapsedMs={} error={}", runtime.instance.getId(), runtime.credential.getId(),
                 runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
@@ -780,6 +833,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
                         runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
                 }
+            }
+            if (!reconciliationCompleted || "RECOVERY_OR_PROTECTION_STILL_REQUIRED".equals(runtime.positionReconciliationBlockReason)) {
+                scheduleReconciliationRetry(runtime);
             }
         }
     }
@@ -888,7 +944,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         ActiveRuntime runtime = new ActiveRuntime(instance, strategy, strategySymbol, credential, symbol, plugin, params);
         runtime.protectionOnly = protectionOnly;
         runtime.leaseValid = true;
-        runtime.protectionRule = "PAPER".equalsIgnoreCase(credential.getRunMode()) ? null : gateway.queryTradingRule(executionService.toCredential(credential), symbol.getSymbol());
+        runtime.protectionRule = "PAPER".equalsIgnoreCase(credential.getRunMode()) ? null :
+            tradingRuleCache.get(credential.getRunMode(), executionService.toCredential(credential), symbol.getSymbol());
         if (!"PAPER".equalsIgnoreCase(credential.getRunMode()) && runtime.protectionRule == null) {
             throw new IllegalStateException("交易规则未就绪，拒绝启动策略");
         }
@@ -1010,6 +1067,15 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /**
+     * A fresh live trade/kline proves data is flowing only after the shared stream has
+     * completed its own recovery handshake. Replay and status events cannot reopen the gate.
+     */
+    static boolean shouldRestoreMarketHealth(boolean marketStreamReady, boolean replay, String eventType) {
+        return marketStreamReady && !replay && eventType != null
+            && ("TRADE".equalsIgnoreCase(eventType) || "KLINE".equalsIgnoreCase(eventType));
+    }
+
+    /**
      * 处理实时行情事件并驱动策略计算。
      */
     private void onMarketEvent(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
@@ -1025,7 +1091,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 return;
             }
             if (!ensureEventLease(runtime)) {
-                runtime.marketHealthy = false;
+                // Losing the strategy lease fences decisions, but does not mean the public
+                // market feed is unhealthy. MarketStreamHub reports feed readiness separately.
                 return;
             }
             if ("CONNECTING".equals(event.type())) {
@@ -1046,6 +1113,16 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if ("CONNECTED".equals(event.type())) {
                 runtime.marketHealthy = true;
                 return;
+            }
+            // CONNECTED may have reached this runtime while its strategy lease was temporarily
+            // fenced. Once the hub reports ready, the next fresh live data event is also a safe
+            // recovery signal; otherwise this runtime could remain marketHealthy=false forever.
+            if (shouldRestoreMarketHealth(runtime.marketStreamReady, event.replay(), event.type())) {
+                if (!runtime.marketHealthy) {
+                    log.info("策略行情健康门控随实时行情恢复 instanceId={} mode={} symbol={} eventType={}",
+                        runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type());
+                }
+                runtime.marketHealthy = true;
             }
             if (event.kline() != null) {
                 runtime.updateKline(event.kline());
@@ -1187,7 +1264,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 long now = System.currentTimeMillis();
                 if (now >= runtime.nextPositionReconcilingLogAt) {
                     runtime.nextPositionReconcilingLogAt = now + 30_000L;
-                    log.warn("开仓暂停：正在核实交易所持仓 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
+                    log.warn("开仓暂停：正在核实交易所持仓 instanceId={} credentialId={} symbol={} runMode={} reason={} reconcileRequested={} nextRetryAt={}",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+                        runtime.positionReconciliationBlockReason, runtime.reconcileRequested.get(), runtime.nextReconcileAt);
                 }
                 return;
             }
@@ -4165,6 +4244,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private volatile boolean stateRefreshRequired;
         private volatile boolean positionReconciling;
         private volatile boolean positionFactsReady;
+        /** 最近一次未完成的持仓核验阶段，用于解释开仓门控并安排独立重试。 */
+        private volatile String positionReconciliationBlockReason = "NOT_STARTED";
         private volatile long positionFactsVerifiedAt;
         private volatile long nextPositionReconcilingLogAt;
         private volatile long nextRecoveryRequiredLogAt;
