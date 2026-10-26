@@ -70,6 +70,16 @@ public interface ExchangeTradingPort {
     }
 
     /**
+     * 交易所明确拒绝访问当前 API endpoint（例如 HTTP 451 法律/地区资格限制）。
+     * 这是运维配置阻断，不应按一般网络抖动无限自动重试。
+     */
+    class ExchangeAccessRestrictedException extends ExchangeRequestException {
+        public ExchangeAccessRestrictedException(String stage, Integer httpStatus, Integer code, String message) {
+            super(stage, httpStatus, code, message);
+        }
+    }
+
+    /**
      * 仅用于交易所明确拒绝订单；超时、断网和未知响应不能使用。
      */
     class OrderRejectedException extends ExchangeRequestException {
