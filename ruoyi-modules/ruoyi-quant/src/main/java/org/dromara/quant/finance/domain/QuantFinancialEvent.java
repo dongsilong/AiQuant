@@ -48,9 +48,13 @@ public class QuantFinancialEvent {
      */
     private String asset;
     /**
-     * 交易所财务流水主键。
+     * 交易所财务流水主键。对于交易所返回的 0，保留原始值但不单独作为幂等键。
      */
     private Long exchangeTransactionId;
+    /**
+     * 财务事件幂等键：非零 tranId 使用类型+ID，零 tranId 使用不可变事实指纹。
+     */
+    private String eventIdentityKey;
     /**
      * 交易所财务流水补充信息。
      */

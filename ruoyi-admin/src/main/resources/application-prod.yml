@@ -4,14 +4,14 @@ spring.servlet.multipart.location: /ruoyi/server/temp
 quant:
   binance:
     # RAW_OKHTTP / BINANCE_SDK; SDK 路径需通过集成验证后逐步启用。
-    websocket-transport: ${QUANT_BINANCE_WEBSOCKET_TRANSPORT:BINANCE_SDK}
+    websocket-transport: ${QUANT_BINANCE_WEBSOCKET_TRANSPORT:RAW_OKHTTP}
     # SDK 内部无界队列积压阈值，达到后显式断线以触发订阅恢复。
     sdk-stream-backlog-limit: ${QUANT_BINANCE_SDK_BACKLOG_LIMIT:2048}
   live:
-    enabled: true
+    enabled: ${QUANT_LIVE_ENABLED:true}
   security:
     # 通过部署环境变量提供，禁止写入源码或提交真实密钥。
-    secret-key: 303815efc2e94ed3b5dadfc487d5ef7c
+    secret-key: ${QUANT_SECURITY_SECRET_KEY:}
   proxy:
     host:
     port:
@@ -23,7 +23,7 @@ quant:
   # 策略运行时调度与分布式租约配置
   runtime:
     # 是否启用策略运行时监督；关闭后会停止全部运行中的策略实例
-    enabled: true
+    enabled: ${QUANT_RUNTIME_ENABLED:false}
     # 策略实例发现、启动/停止和租约维护的间隔，单位：秒
     tick-seconds: 5
     # 策略运行租约有效期，单位：秒；用于避免多个服务实例同时运行同一策略
@@ -61,7 +61,7 @@ snail-job:
   # 需要在 SnailJob 后台组管理创建对应名称的组,然后创建任务的时候选择对应的组,才能正确分派任务
   group: "ruoyi_group"
   # SnailJob 接入验证令牌 详见 script/sql/ry_job.sql `sj_group_config` 表
-  token: "SJ_cKqBTPzCsWA3VyuCfFoccmuIEGXjr5KT"
+  token: ${AIQUANT_SNAIL_JOB_TOKEN:}
   server:
     host: 127.0.0.1
     port: 17888
@@ -86,7 +86,7 @@ snail-ai:
   # 应用 ID（在 Server「应用管理」页面创建后获取）
   app-id: 1
   # 认证令牌（在 Server「应用管理」页面创建时自动生成）
-  token: SAI_566a6bfbc26e4998b4841cc927d50c5d
+  token: ${AIQUANT_SNAIL_AI_TOKEN:}
   port: 3${server.port}
   # Skill 文件临时目录
   skill-temp-dir: /tmp/snail-ai-agent/skills
@@ -135,7 +135,7 @@ mybatis-encryptor:
   enable: true
   algorithm: AES
   encode: BASE64
-  password: quant20260725key
+  password: ${AIQUANT_ENCRYPTOR_PASSWORD:}
 
 --- # 数据源配置
 spring:
@@ -154,9 +154,9 @@ spring:
           driverClassName: com.mysql.cj.jdbc.Driver
           # jdbc 所有参数配置参考 https://lionli.blog.csdn.net/article/details/122018562
           # rewriteBatchedStatements=true 批处理优化 大幅提升批量插入更新删除性能(对数据库有性能损耗 使用批量操作应考虑性能问题)
-          url: jdbc:mysql://localhost:3306/quantdb?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true
-          username: quantdb
-          password: quantpw2026
+          url: ${AIQUANT_DATASOURCE_URL:}
+          username: ${AIQUANT_DATASOURCE_USERNAME:}
+          password: ${AIQUANT_DATASOURCE_PASSWORD:}
 #        # 从库数据源
 #        slave:
 #          lazy: true
@@ -203,17 +203,17 @@ spring:
 spring.data:
   redis:
     # 地址
-    host: localhost
+    host: ${AIQUANT_REDIS_HOST:}
     # 端口，默认为6379
-    port: 6379
+    port: ${AIQUANT_REDIS_PORT:}
     # 数据库索引
     database: 3
     # redis 密码必须配置
-    password: LUCKLY20218886999LUCKLY2021
+    password: ${AIQUANT_REDIS_PASSWORD:}
     # 连接超时时间
     timeout: 10s
     # 是否开启ssl
-    ssl.enabled: false
+    ssl.enabled: ${AIQUANT_REDIS_SSL_ENABLED:true}
 
 # redisson 配置
 redisson:
@@ -240,17 +240,17 @@ redisson:
 
 --- # mail 邮件发送
 mail:
-  enabled: true
+  enabled: ${AIQUANT_MAIL_ENABLED:false}
   host: smtp.qq.com
   port: 465
   # 是否需要用户名密码验证
   auth: true
   # 发送方，遵循RFC-822标准
-  from: 3402238213@qq.com
+  from: ${AIQUANT_MAIL_FROM:}
   # 用户名（注意：如果使用foxmail邮箱，此处user为qq号）
-  user: 3402238213@qq.com
+  user: ${AIQUANT_MAIL_USER:}
   # 密码（注意，某些邮箱需要为SMTP服务单独设置密码，详情查看相关帮助）
-  pass: cgzfxlrypfaschjf
+  pass: ${AIQUANT_MAIL_PASSWORD:}
   # 使用 STARTTLS安全连接，STARTTLS是对纯文本通信协议的扩展。
   starttlsEnable: true
   # 使用SSL安全连接
@@ -302,75 +302,75 @@ justauth:
       # 注意 如下均配置均不需要修改 maxkey 已经内置好了数据
       server-url: http://sso.maxkey.top
       client-id: 876892492581044224
-      client-secret: x1Y5MTMwNzIwMjMxNTM4NDc3Mzche8
+      client-secret: ${AIQUANT_JUSTAUTH_MAXKEY_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=maxkey
     topiam:
       # topiam 服务器地址
       server-url: http://127.0.0.1:1989/api/v1/authorize/y0q************spq***********8ol
       client-id: 449c4*********937************759
-      client-secret: ac7***********1e0************28d
+      client-secret: ${AIQUANT_JUSTAUTH_TOPIAM_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=topiam
       scopes: [ openid, email, phone, profile ]
     qq:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_QQ_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=qq
       union-id: false
     weibo:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_WEIBO_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=weibo
     gitee:
       client-id: 91436b7940090d09c72c7daf85b959cfd5f215d67eea73acbf61b6b590751a98
-      client-secret: 02c6fcfd70342980cd8dd2f2c06c1a350645d76c754d7a264c4e125f9ba915ac
+      client-secret: ${AIQUANT_JUSTAUTH_GITEE_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=gitee
     dingtalk:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_DINGTALK_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=dingtalk
     baidu:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_BAIDU_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=baidu
     csdn:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_CSDN_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=csdn
     coding:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_CODING_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=coding
       coding-group-name: xx
     oschina:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_OSCHINA_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=oschina
     alipay_wallet:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_ALIPAY_WALLET_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=alipay_wallet
       alipay-public-key: MIIB**************DAQAB
     wechat_open:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_WECHAT_OPEN_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=wechat_open
     wechat_mp:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_WECHAT_MP_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=wechat_mp
     wechat_enterprise:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_WECHAT_ENTERPRISE_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=wechat_enterprise
       agent-id: 1000002
     gitlab:
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_GITLAB_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=gitlab
     gitea:
       # 前端改动 https://gitee.com/JavaLionLi/plus-ui/pulls/204
       # gitea 服务器地址
       server-url: https://demo.gitea.com
       client-id: 10**********6
-      client-secret: 1f7d08**********5b7**********29e
+      client-secret: ${AIQUANT_JUSTAUTH_GITEA_CLIENT_SECRET:}
       redirect-uri: ${justauth.address}/social-callback?source=gitea

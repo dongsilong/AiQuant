@@ -87,6 +87,27 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void deferredPositionSnapshotSchedulesOneCoalescedReadOnlyRetry() {
+        TradingReconciliationService reconciliation = service();
+        try {
+            when(gateway.queryAccount(any())).thenThrow(new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException(60_000L));
+
+            assertThrows(org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException.class,
+                () -> reconciliation.refreshPositionsOnly(credential()));
+
+            @SuppressWarnings("unchecked")
+            java.util.Map<Long, java.util.concurrent.ScheduledFuture<?>> retries =
+                (java.util.Map<Long, java.util.concurrent.ScheduledFuture<?>>)
+                    org.springframework.test.util.ReflectionTestUtils.getField(reconciliation, "positionRetryTasks");
+            assertNotNull(retries);
+            assertTrue(retries.containsKey(1L));
+            assertEquals(1, retries.size());
+        } finally {
+            reconciliation.shutdownPositionSnapshotRetries();
+        }
+    }
+
+    @Test
     void completeIncomeHistoryAdvancesItsCursorInsideThePersistenceTransaction() {
         stubCommonFacts();
         doAnswer(invocation -> {

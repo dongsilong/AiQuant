@@ -6,9 +6,11 @@ on:
       - hardening/live-production-20261014
       - fix/live-rest-ws-recovery-20261024
       - fix/ws-jetty-financial-ledger-20261025
+      - fix/ws-jetty-financial-ledger-20261025-hardening
   pull_request:
     branches:
       - ai-quant-dev
+      - fix/ws-jetty-financial-ledger-20261025
 
 jobs:
   quant-critical-tests:
@@ -31,7 +33,7 @@ jobs:
         run: >-
           bash mvnw -B -ntp
           -pl ruoyi-modules/ruoyi-quant -am
-          -Dtest=BeijingTimeTest,FinancialEventLedgerRegressionTest,BinanceSdkStreamTransportTest,BinanceWebSocketTransportSelectionTest,UserDataStreamLeaseGateTest,UserDataStreamHubTest,BinanceGatewayUserDataEventTest,LivePositionStreamSingleNodeGateTest,LivePositionGenerationFenceTest,LivePositionEventCoordinatorTest,LivePositionFreshnessRiskTest,LiveStartupPositionRefreshTest,QuantCredentialSingleUserTest,QuantLiveDefaultsTest,ProtectionOrderServiceTest,UnifiedTradeExecutionServiceTest,UnifiedCancelRecoveryTest,TradingPreparationServiceTest,BinanceSymbolSettingsContractTest,OrderLedgerMonotonicTest,LiveDispatchInspectionControllerTest,LiveOrderDispatcherTest,LivePreDispatchIntentTest,LiveDispatchLeaseEpochSqlTest,StrategyFillAllocationServiceTest,StrategyPositionAccountingTest,StrategyPositionProjectionContractTest,StrategyPositionProjectionValidationTest,StrategyOrderIntentServiceTest,StrategyOrderAcceptanceJournalTest,StrategyOrderCrashRecoveryServiceTest,StrategyFillReplayServiceTest,StrictBinanceTradeCollectorTest,StrategyPositionReconciliationTest,StrategyFillAuditServiceTest,ExecutionRecoveryValidationTest,RecoveredDispatchRestartTest,RecoveredDispatchSqlTest,StrategyEntryGuardServiceTest,StrategyRuntimeLeaseServiceTest,StrategyCloseOwnershipGuardTest,StrategyCloseOwnershipMapperTest,OpenCapacityServiceTest,RiskSignedPositionCountTest,PaperAtomicMapperTest,ProtectionTargetCoordinatorTest,ExecutionRecoveryServiceTest,TradingReconciliationTransactionTest,ExecutionStatusTransitionTest,LiveDispatchRecoveryGuardSqlTest,LiveRecoveryApprovalSqlContractTest,LiveRecoveryCaseServiceTest,LiveManualRecoveryExecutionServiceTest,LiveRecoveryAuditSecurityTest,LiveSchemaStartupGuardTest,ExchangeIdJsonPrecisionTest,BinanceGatewayClockOffsetTest,BinanceGatewayConnectivityTest,BinanceGatewayMarketEnvironmentTest,MarketStreamHubIsolationTest,KlineSlopeRateStrategyTest,BinanceSdkContractTest,BinanceWebSocketTransportSelectionTest,BinanceTransportPermissionTest,StrategyRuntimeSafetyTest
+          -Dtest=BeijingTimeTest,FinancialEventLedgerRegressionTest,BinanceSdkStreamTransportTest,BinanceWebSocketTransportSelectionTest,UserDataStreamLeaseGateTest,UserDataStreamHubTest,BinanceGatewayUserDataEventTest,LivePositionStreamSingleNodeGateTest,LivePositionGenerationFenceTest,LivePositionEventCoordinatorTest,LivePositionFreshnessRiskTest,LiveStartupPositionRefreshTest,QuantCredentialSingleUserTest,QuantLiveDefaultsTest,ProtectionOrderServiceTest,UnifiedTradeExecutionServiceTest,UnifiedCancelRecoveryTest,TradingPreparationServiceTest,BinanceSymbolSettingsContractTest,OrderLedgerMonotonicTest,LiveDispatchInspectionControllerTest,LiveOrderDispatcherTest,LivePreDispatchIntentTest,LiveDispatchLeaseEpochSqlTest,StrategyFillAllocationServiceTest,StrategyPositionAccountingTest,StrategyPositionProjectionContractTest,StrategyPositionProjectionValidationTest,StrategyOrderIntentServiceTest,StrategyOrderAcceptanceJournalTest,StrategyOrderCrashRecoveryServiceTest,StrategyFillReplayServiceTest,StrictBinanceTradeCollectorTest,StrictBinanceIncomeCollectorTest,StrategyPositionReconciliationTest,StrategyFillAuditServiceTest,ExecutionRecoveryValidationTest,RecoveredDispatchRestartTest,RecoveredDispatchSqlTest,StrategyEntryGuardServiceTest,StrategyRuntimeLeaseServiceTest,StrategyCloseOwnershipGuardTest,StrategyCloseOwnershipMapperTest,OpenCapacityServiceTest,RiskSignedPositionCountTest,PaperAtomicMapperTest,ProtectionTargetCoordinatorTest,ExecutionRecoveryServiceTest,TradingReconciliationTransactionTest,ExecutionStatusTransitionTest,LiveDispatchRecoveryGuardSqlTest,LiveRecoveryApprovalSqlContractTest,LiveRecoveryCaseServiceTest,LiveManualRecoveryExecutionServiceTest,LiveRecoveryAuditSecurityTest,LiveSchemaStartupGuardTest,ExchangeIdJsonPrecisionTest,BinanceGatewayClockOffsetTest,BinanceGatewayConnectivityTest,BinanceGatewayMarketEnvironmentTest,MarketStreamHubIsolationTest,KlineSlopeRateStrategyTest,BinanceSdkContractTest,BinanceWebSocketTransportSelectionTest,BinanceTransportPermissionTest,StrategyRuntimeSafetyTest
           -Dsurefire.failIfNoSpecifiedTests=false
           test
 
@@ -104,12 +106,18 @@ jobs:
               credential_id BIGINT NOT NULL,
               exchange_transaction_id BIGINT NOT NULL,
               event_type VARCHAR(64) NOT NULL,
+              symbol VARCHAR(32) NULL,
+              amount DECIMAL(38,18) NULL,
+              asset VARCHAR(32) NULL,
+              info VARCHAR(255) NULL,
+              event_time DATETIME(3) NULL,
               PRIMARY KEY (id),
               UNIQUE KEY uk_quant_financial_event (credential_id, exchange_transaction_id)
             ) ENGINE=InnoDB;"
           for ddl in \
             script/sql/quant/V20261014_01__runtime_lease_epoch.sql \
             script/sql/quant/V20261024_01__financial_event_income_type_identity.sql \
+            script/sql/quant/V20261026_01__financial_event_identity_key.sql \
             script/sql/quant/V20261014_02__live_dispatch_guard.sql \
             script/sql/quant/V20261014_03__strategy_fill_allocation.sql \
             script/sql/quant/V20261014_04__account_settings_intent.sql \

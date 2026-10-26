@@ -7,6 +7,11 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
+import java.time.format.DateTimeFormatter;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
@@ -62,6 +67,37 @@ public class StrictBinanceIncomeCollector {
         return null;
     }
 
+    /**
+     * Stable idempotency identity for an income fact. Non-zero Binance tranId is unique
+     * within incomeType; tranId=0 is represented by a fingerprint of immutable facts.
+     * If two zero-ID rows are identical in every available field, Binance provides no
+     * additional identifier with which to distinguish them.
+     */
+    public static String identityKey(ExchangeGateway.IncomeSnapshot event) {
+        if (event == null || event.transactionId() == null || event.incomeType() == null || event.incomeType().isBlank()) {
+            throw new IllegalArgumentException("Income event identity requires transaction ID and income type");
+        }
+        if (event.transactionId() != 0L) {
+            return "T:" + event.incomeType() + ":" + event.transactionId();
+        }
+        String eventTime = event.time() == null ? "" : LocalDateTime.ofInstant(event.time(), ZoneOffset.UTC)
+            .truncatedTo(ChronoUnit.SECONDS).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        String amount = event.amount() == null ? "" : event.amount().stripTrailingZeros().toPlainString();
+        String canonical = String.join("\u001f",
+            Objects.toString(event.symbol(), ""),
+            event.incomeType(),
+            amount,
+            Objects.toString(event.asset(), ""),
+            eventTime,
+            Objects.toString(event.info(), ""));
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
+            return "Z:" + java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
     private static String safeToken(String value) {
         if (value == null || value.isBlank()) return "<missing>";
         return value.replaceAll("[^A-Za-z0-9_.-]", "_");
@@ -100,7 +136,7 @@ public class StrictBinanceIncomeCollector {
                     + ", eventTime=" + (item == null ? null : item.time())
                     + ", requestedFrom=" + left + ", requestedTo=" + right);
             }
-            String key = item.incomeType() + ":" + item.transactionId();
+            String key = identityKey(item);
             ExchangeGateway.IncomeSnapshot previous = unique.putIfAbsent(key, item);
             if (previous != null && !previous.equals(item)) {
                 throw new IllegalStateException("Conflicting Binance income fact across history windows: incomeType="

@@ -27,6 +27,10 @@ against the intended MySQL 8.x database. Inspect every result row.
 
 `V20261025_01__strategy_fill_journal.sql` is a reviewed schema source for the active raw Binance fill journal and monotonic history cursor. It is **not automatically applied** and does not replace the canonical production DDL baseline. Apply only after the same all-nodes-LIVE-off, backup/restore, duplicate/data review, and restored-clone rehearsal described above. The read-only preflight and LIVE startup guard require both tables and their exact unique-key contracts. This migration stores raw exchange facts and attribution-processing state; it does not infer strategy ownership or activate the review-only position-cycle/inventory projector.
 
+## V20261026_01 financial event identity key
+
+V20261026_01__financial_event_identity_key.sql replaces the credential_id + exchange_transaction_id + event_type unique index with credential_id + event_identity_key. Non-zero Binance tranId keys include the income type; zero-ID events use a SHA-256 fingerprint over symbol, type, normalized amount, asset, UTC event time (second precision), and info. This avoids treating every TRANSFER row with transactionId=0 as the same event. Two rows identical across every available field remain indistinguishable without a Binance-provided identifier. Back up and rehearse this migration on a restored clone after V20261024_01__financial_event_income_type_identity.sql; the migration is not automatic.
+
 ## Outstanding production migration work
 
 1. Obtain a sanitized `SHOW CREATE TABLE` for each quant table from the authoritative

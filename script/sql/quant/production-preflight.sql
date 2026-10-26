@@ -57,7 +57,7 @@ WITH required_indexes AS (
   SELECT 'quant_strategy_fill_allocation','credential_id,symbol,exchange_trade_id' UNION ALL
   SELECT 'quant_strategy_fill_journal','credential_id,symbol,exchange_trade_id' UNION ALL
   SELECT 'quant_strategy_fill_sync_cursor','credential_id,symbol' UNION ALL
-  SELECT 'quant_financial_event','credential_id,exchange_transaction_id,event_type' UNION ALL
+  SELECT 'quant_financial_event','credential_id,event_identity_key' UNION ALL
   SELECT 'quant_financial_event_sync_cursor','credential_id' UNION ALL
   SELECT 'quant_live_recovery_case','credential_id,symbol,active_case_key' UNION ALL
   SELECT 'quant_live_account_settings_intent','credential_id,symbol' UNION ALL
