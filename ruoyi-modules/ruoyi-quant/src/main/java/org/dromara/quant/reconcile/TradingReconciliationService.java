@@ -789,6 +789,20 @@ public class TradingReconciliationService {
     }
 
     /**
+     * Compare persisted local timestamps with an exchange UTC instant. The +08:00 branch
+     * is limited to legacy rows created before the UTC storage convention was enforced.
+     */
+    static boolean sameFinancialEventTime(LocalDateTime persisted, Instant exchangeTime) {
+        if (persisted == null || exchangeTime == null) {
+            return false;
+        }
+        LocalDateTime utc = LocalDateTime.ofInstant(exchangeTime, ZoneOffset.UTC)
+            .truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        LocalDateTime stored = persisted.truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        return stored.equals(utc) || stored.equals(utc.plusHours(8));
+    }
+
+    /**
      * 同步交易所财务流水到独立财务事件账本。
      */
     private void syncFinancialEvents(QuantCredential credential, List<ExchangeGateway.IncomeSnapshot> snapshots) {
@@ -813,9 +827,9 @@ public class TradingReconciliationService {
             if (entity != null) {
                 // Treat the exchange ledger as immutable. A replay may confirm the
                 // original event, but must not silently rewrite a conflicting fact.
-                boolean sameTime = entity.getEventTime() != null
-                    && entity.getEventTime().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
-                        .equals(eventTime.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+                // Older deployments persisted Binance UTC instants as Beijing-local LocalDateTime.
+                // Accept only the exact legacy +08:00 representation; keep all other event facts immutable.
+                boolean sameTime = sameFinancialEventTime(entity.getEventTime(), eventTime);
                 List<String> conflictingFields = new ArrayList<>();
                 if (!Objects.equals(entity.getSymbol(), s.symbol())) conflictingFields.add("symbol");
                 if (!Objects.equals(entity.getEventType(), s.incomeType())) conflictingFields.add("eventType");
