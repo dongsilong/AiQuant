@@ -8,6 +8,7 @@ on:
   pull_request:
     branches:
       - ai-quant-dev
+      - fix/live-rest-ws-recovery-20261023
 
 jobs:
   quant-critical-tests:
