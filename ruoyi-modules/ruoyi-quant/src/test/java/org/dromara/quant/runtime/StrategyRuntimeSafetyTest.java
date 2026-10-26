@@ -368,6 +368,7 @@ class StrategyRuntimeSafetyTest {
         Fixture f = fixture();
         try {
             var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+            ReflectionTestUtils.setField(f.runtime, "marketHealthy", true);
             when(lease.acquireOrRenew(any(), any(), any())).thenReturn(false);
 
             f.service.renewActiveRuntimeLeases();
@@ -378,6 +379,8 @@ class StrategyRuntimeSafetyTest {
             }
 
             assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "leaseValid"), "a failed renewal must immediately fence event decisions");
+            assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "marketHealthy"),
+                "lease renewal failure must not poison the independent public-market health state");
             assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime));
             verify(lease, atLeastOnce()).acquireOrRenew(any(), any(), any());
         } finally {
