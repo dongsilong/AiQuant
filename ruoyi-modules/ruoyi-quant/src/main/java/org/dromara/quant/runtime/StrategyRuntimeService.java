@@ -810,6 +810,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 // the process is restarted.
                 runtime.positionReconciliationBlockReason = "EXCHANGE_ACCESS_RESTRICTED";
                 runtime.nextReconcileAt = Long.MAX_VALUE;
+                runtime.reconcileRequested.set(false);
                 if (accessRestrictedCredentialLogs.add(runtime.credential.getId())) {
                     log.error("策略持仓核验被交易所HTTP 451访问限制阻断；已停止该凭证的自动重试并保持禁止开仓 "
                             + "instanceId={} credentialId={} symbol={} runMode={} stage={}，请核实Binance支持地区/账户资格与endpoint配置后再重启",
