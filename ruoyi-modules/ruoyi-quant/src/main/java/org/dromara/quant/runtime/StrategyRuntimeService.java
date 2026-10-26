@@ -822,7 +822,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 current.params = refreshed;
                 current.protectionOnly = protectionOnly;
                 current.leaseValid = true;
-                current.leaseValidUntilMillis = System.currentTimeMillis() + leaseTtlMillis();
+                current.leaseValidUntilMillis = System.currentTimeMillis() + leaseLocalValidityMillis();
                 current.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
             }
             prepareTrading(current);
@@ -903,7 +903,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             throw ex;
         }
         runtime.leaseValid = true;
-        runtime.leaseValidUntilMillis = System.currentTimeMillis() + leaseTtlMillis();
+        runtime.leaseValidUntilMillis = System.currentTimeMillis() + leaseLocalValidityMillis();
         runtime.nextLeaseRenewAt = System.currentTimeMillis() + leaseRenewIntervalMillis();
         resumeRecoveryIfNeeded(runtime);
         log.info("策略运行时已启动 instanceId={} strategy={} plugin={} symbol={} interval={} mode={} protectionOnly={}", instance.getId(), strategy.getStrategyName(),
@@ -988,7 +988,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         long completedAt = System.currentTimeMillis();
                         if (acquired && !runtime.closed) {
                             runtime.leaseValid = true;
-                            runtime.leaseValidUntilMillis = completedAt + leaseTtlMillis();
+                            runtime.leaseValidUntilMillis = completedAt + leaseLocalValidityMillis();
                             runtime.nextLeaseRenewAt = completedAt + leaseRenewIntervalMillis();
                         } else {
                             // 立即失效，不允许在租约状态不明时继续使用缓存的行情决策。
@@ -1011,6 +1011,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
 
     private long leaseTtlMillis() {
         return Math.max(15L, properties.getRuntime().getLeaseSeconds()) * 1_000L;
+    }
+
+    /**
+     * Expire local permission before the database lease's nominal TTL to tolerate scheduler and clock jitter.
+     */
+    private long leaseLocalValidityMillis() {
+        return Math.max(1_000L, leaseTtlMillis() - leaseRenewIntervalMillis());
     }
 
     /**
