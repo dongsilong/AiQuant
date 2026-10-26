@@ -137,6 +137,8 @@ public class MarketStreamHub {
         private java.util.concurrent.Future<?> recoveryTask;
         private java.util.concurrent.Future<?> quietCheckTask;
         private long nextQuietCheckAt;
+        /** Prevent overlapping watchdog REST/time-sync checks for this shared stream. */
+        private final java.util.concurrent.atomic.AtomicBoolean healthCheckInFlight = new java.util.concurrent.atomic.AtomicBoolean();
 
         private SharedStream(Key key) {
             this.key = key;
@@ -190,7 +192,7 @@ public class MarketStreamHub {
             listeners.put(id, consumer);
             if (listeners.size() == 1) {
                 start();
-                watchdog = scheduler.scheduleAtFixedRate(this::checkHealth, 5, 5, TimeUnit.SECONDS);
+                watchdog = scheduler.scheduleAtFixedRate(this::scheduleHealthCheck, 5, 5, TimeUnit.SECONDS);
             } else {
                 // 持有共享流锁，保证参考回放先于该订阅者的实时事件和就绪通知入队。
                 for (ExchangeGateway.Kline kline : referenceKlines.values()) {
@@ -745,6 +747,31 @@ public class MarketStreamHub {
          */
         private void signalUnhealthy() {
             healthListeners.values().forEach(health -> health.accept(false));
+        }
+
+        /**
+         * 调度线程只负责投递健康检查；交易所时间查询可能触发 REST 网络 I/O，
+         * 不应占用共享定时线程并拖延其他账户的心跳、重试和租约任务。
+         */
+        private void scheduleHealthCheck() {
+            if (closed || !healthCheckInFlight.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                recoveryExecutor.execute(() -> {
+                    try {
+                        checkHealth();
+                    } catch (RuntimeException ex) {
+                        // A failed watchdog check must fail closed for this stream, but not kill the shared scheduler.
+                        disconnect(ex);
+                    } finally {
+                        healthCheckInFlight.set(false);
+                    }
+                });
+            } catch (RuntimeException ex) {
+                healthCheckInFlight.set(false);
+                disconnect(ex);
+            }
         }
 
         /**
