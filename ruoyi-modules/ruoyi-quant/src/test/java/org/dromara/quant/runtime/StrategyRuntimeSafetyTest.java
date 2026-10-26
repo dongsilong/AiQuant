@@ -38,7 +38,10 @@ class StrategyRuntimeSafetyTest {
             verify(lease, never()).acquireOrRenew(any(), any(), any());
 
             ReflectionTestUtils.setField(f.runtime, "leaseValid", false);
+            ReflectionTestUtils.setField(f.runtime, "marketHealthy", true);
             assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime));
+            assertEquals(true, ReflectionTestUtils.getField(f.runtime, "marketHealthy"),
+                "Lease expiry must not permanently mark a healthy market stream as disconnected");
             verify(lease, never()).acquireOrRenew(any(), any(), any());
         } finally {
             f.service.destroy();
