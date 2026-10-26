@@ -128,6 +128,14 @@ The current preflight is a read-only contract check, not a canonical production 
 
 ### 2026-10-25 — complete income/funding history
 
-- `StrictBinanceIncomeCollector` now splits saturated 1000-row Binance income-history windows, rejects missing financial event identity/amount/asset/time, and treats conflicting repeated `(incomeType, tranId)` facts as a hard error. Distinct income types may legally share the same transaction ID.
+- `StrictBinanceIncomeCollector` splits saturated 1000-row Binance income-history windows and rejects missing financial event identity/amount/asset/time. Non-zero `tranId` identity includes `incomeType`; `tranId=0` uses a stable fingerprint of immutable facts, so different transfer rows are not collapsed into one ID. Events identical in every available field remain indistinguishable if Binance supplies no unique identifier.
 - Financial income history now uses a durable per-credential complete-window watermark. It advances in the same transaction as financial event persistence, catches up from the stored checkpoint after downtime, processes a backlog in bounded 180-day chunks, and refuses a future checkpoint rather than silently skipping events.
-- The read-only production preflight and LIVE startup guard require `quant_financial_event` with its `(credential_id, exchange_transaction_id, event_type)` unique identity and `quant_financial_event_sync_cursor` with its primary key. Reviewed migration sources are `V20261024_01__financial_event_income_type_identity.sql` and `V20261025_02__financial_event_sync_cursor.sql`.
+- The read-only production preflight and LIVE startup guard require `quant_financial_event` with its `(credential_id, event_identity_key)` unique identity and `quant_financial_event_sync_cursor` with its primary key. Migration sources are `V20261024_01__financial_event_income_type_identity.sql`, `V20261025_02__financial_event_sync_cursor.sql`, and `V20261026_01__financial_event_identity_key.sql`.
+
+
+### 2026-10-26 — LIVE runtime and WebSocket recovery parity
+
+- Strategy lease renewal is independent from market callbacks; lease invalidation blocks dispatch without marking a healthy public market feed as unhealthy. Final dispatch still checks current ownership.
+- Account/symbol position snapshot refreshes schedule one coalesced delayed read-only retry when the REST scheduler defers the request or Binance returns a retry-after rate limit. Retries do not replay order mutations and retain freshness/generation fences.
+- The Jetty 12 market close handler uses the callback-based signature and completes the callback even if disconnect notification fails. The CI selector includes its signature regression test.
+- Profile secrets, JWT/API-decryption keys, MQTT, SMTP, data source, Redis, Snail tokens and JustAuth client secrets are injected through environment variables. Production datasource URL must use sslMode=VERIFY_IDENTITY, Redis TLS must remain enabled, and the production startup guard refuses missing infrastructure/security values. Rotate previously exposed credentials; current-file changes do not erase Git history.
