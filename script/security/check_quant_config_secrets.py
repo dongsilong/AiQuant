@@ -45,6 +45,8 @@ def main() -> int:
             if property_value(mail, key) != value:
                 violations.append(f"{file.name}: mail.{key} must use the approved external value")
     common = COMMON.read_text(encoding="utf-8")
+    if property_value(common, "jwt-secret-key") != "${AIQUANT_JWT_SECRET_KEY}":
+        violations.append(f"{COMMON.name}: jwt-secret-key must be externally provided")
     mqtt = section(common, "mqtt.client:")
     for field in ("username", "password"):
         expected = f"${{AIQUANT_MQTT_{field.upper()}:}}"
