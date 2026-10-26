@@ -120,6 +120,9 @@ public class MarketStreamHub {
         private volatile boolean closed;
         private volatile boolean connected;
         private volatile boolean recovering;
+        /** HTTP 451 indicates endpoint access is restricted; do not reconnect/retry until restart. */
+        private volatile boolean accessRestricted;
+        private boolean disconnectScheduled;
         private boolean terminalFailure;
         private Long requiredTradeId;
         private Instant connectionStarted;
@@ -228,7 +231,7 @@ public class MarketStreamHub {
          * 建立上游订阅并初始化新鲜度、事件游标和补偿状态。
          */
         private synchronized void start() {
-            if (closed || terminalFailure || listeners.isEmpty()) {
+            if (closed || terminalFailure || accessRestricted || listeners.isEmpty()) {
                 return;
             }
             long attempt = ++generation;
@@ -348,7 +351,9 @@ public class MarketStreamHub {
             } catch (RuntimeException ex) {
                 synchronized (this) {
                     if (!closed && attempt == generation) {
-                        if (unsupportedSymbol(ex)) {
+                        if (accessRestricted(ex)) {
+                            suspendForAccessRestriction(ex);
+                        } else if (unsupportedSymbol(ex)) {
                             failPermanently(ex);
                         } else if (networkFailure(ex)) {
                             // REST不稳定不能连带拆掉健康WS；保持缓冲和决策暂停，继续精确补偿。
@@ -414,10 +419,26 @@ public class MarketStreamHub {
             return false;
         }
 
+        private boolean accessRestricted(Throwable error) {
+            for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+                if (cause instanceof org.dromara.quant.exchange.ExchangeTradingPort.ExchangeAccessRestrictedException) {
+                    return true;
+                }
+                String message = cause.getMessage();
+                if (message != null && (message.contains("httpStatus=451") ||
+                    message.toLowerCase(java.util.Locale.ROOT).contains("restricted location") ||
+                    message.toLowerCase(java.util.Locale.ROOT).contains("eligibility"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private boolean clockUnavailable(Throwable error) {
             for (Throwable cause = error; cause != null; cause = cause.getCause()) {
                 if (cause instanceof ExchangeMarketPort.RequestDeferredException ||
-                    cause instanceof ExchangeMarketPort.RateLimitException) {
+                    cause instanceof ExchangeMarketPort.RateLimitException ||
+                    cause instanceof org.dromara.quant.exchange.ExchangeTradingPort.ExchangeAccessRestrictedException) {
                     return true;
                 }
             }
@@ -455,7 +476,7 @@ public class MarketStreamHub {
                     Thread.currentThread().interrupt();
                     throw new java.util.concurrent.CancellationException("行情恢复已取消");
                 } catch (RuntimeException ex) {
-                    if (retry >= 2 || !networkFailure(ex) || rateLimited(ex) || requestDeferred(ex)) {
+                    if (accessRestricted(ex) || retry >= 2 || !networkFailure(ex) || rateLimited(ex) || requestDeferred(ex)) {
                         throw ex;
                     }
                     log.warn("行情REST只读重试: symbol={}, interval={}, attempt={}, errorType={}", key.symbol(), key.interval(), retry + 1, ex.getClass().getSimpleName());
@@ -556,7 +577,7 @@ public class MarketStreamHub {
          * 接收上游事件，过滤旧代次消息并更新连续性与新鲜度状态。
          */
         private synchronized void onEvent(long attempt, ExchangeGateway.MarketEvent event) {
-            if (closed || attempt != generation || event == null) {
+            if (closed || accessRestricted || attempt != generation || event == null) {
                 return;
             }
             if (recovering) {
@@ -579,6 +600,10 @@ public class MarketStreamHub {
             try {
                 exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
             } catch (RuntimeException ex) {
+                if (accessRestricted(ex)) {
+                    suspendForAccessRestriction(ex);
+                    return;
+                }
                 if (!clockUnavailable(ex)) {
                     disconnect(ex);
                     return;
@@ -733,10 +758,22 @@ public class MarketStreamHub {
          * 标记行情暂不可用并触发异步重连与缺口恢复。
          */
         private synchronized void scheduleDisconnect(String message) {
+            if (closed || terminalFailure || accessRestricted || reconnect != null || disconnectScheduled) {
+                return;
+            }
+            disconnectScheduled = true;
             connected = false;
             signalUnhealthy();
-            if (!closed) {
-                scheduler.execute(() -> disconnect(new IllegalStateException(message)));
+            try {
+                scheduler.execute(() -> {
+                    synchronized (SharedStream.this) {
+                        disconnectScheduled = false;
+                        disconnect(new IllegalStateException(message));
+                    }
+                });
+            } catch (RuntimeException ex) {
+                disconnectScheduled = false;
+                log.warn("无法提交行情断线恢复任务: symbol={} interval={} reason={}", key.symbol(), key.interval(), message, ex);
             }
         }
 
@@ -751,13 +788,17 @@ public class MarketStreamHub {
          * 定时检查流事件年龄、补偿状态和下游健康回调。
          */
         private synchronized void checkHealth() {
-            if (closed || terminalFailure || reconnect != null) {
+            if (closed || terminalFailure || accessRestricted || reconnect != null) {
                 return;
             }
             long exchangeOffsetMillis;
             try {
                 exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
             } catch (RuntimeException ex) {
+                if (accessRestricted(ex)) {
+                    suspendForAccessRestriction(ex);
+                    return;
+                }
                 if (clockUnavailable(ex)) {
                     connected = false;
                     signalUnhealthy();
@@ -849,7 +890,11 @@ public class MarketStreamHub {
                 } catch (RuntimeException ex) {
                     synchronized (this) {
                         if (!closed && attempt == generation && !recovering) {
-                            beginRecovery("静默校验未能确认K线状态", null);
+                            if (accessRestricted(ex)) {
+                                suspendForAccessRestriction(ex);
+                            } else {
+                                beginRecovery("静默校验未能确认K线状态", null);
+                            }
                         }
                     }
                 }
@@ -859,6 +904,52 @@ public class MarketStreamHub {
         /**
          * 使当前连接代次失效并安排受控重连和历史补偿。
          */
+        /**
+         * Stop a stream after Binance explicitly refuses REST access with HTTP 451.
+         * This is not a transport outage: retrying/reconnecting cannot restore eligibility.
+         * The endpoint adapter latches the host process-wide, so restart only after access
+         * and endpoint configuration have been corrected.
+         */
+        private synchronized void suspendForAccessRestriction(Throwable cause) {
+            if (closed || accessRestricted) {
+                return;
+            }
+            accessRestricted = true;
+            terminalFailure = true;
+            signalUnhealthy();
+            ++generation;
+            connected = false;
+            recovering = false;
+            notifyAll();
+            if (recoveryTask != null) {
+                recoveryTask.cancel(true);
+            }
+            if (quietCheckTask != null) {
+                quietCheckTask.cancel(true);
+            }
+            if (reconnect != null) {
+                reconnect.cancel(false);
+                reconnect = null;
+            }
+            nextQuietCheckAt = 0L;
+            ingress.clear();
+            recoveryBuffer.clear();
+            listeners.values().forEach(StreamEventConsumer::clear);
+            log.error("Binance访问被HTTP 451限制，已暂停行情决策并停止该流自动重连: mode={} symbol={} interval={} errorType={} detail={}",
+                key.runMode(), key.symbol(), key.interval(), cause.getClass().getSimpleName(),
+                cause.getMessage() == null ? "access restricted" : cause.getMessage());
+            publish(status("ERROR"));
+            ExchangeGateway.MarketStreamSession old = upstream;
+            upstream = null;
+            if (old != null) {
+                try {
+                    old.close();
+                } catch (RuntimeException ex) {
+                    log.warn("关闭访问受限的行情连接失败: mode={} symbol={} interval={}", key.runMode(), key.symbol(), key.interval(), ex);
+                }
+            }
+        }
+
         private synchronized void disconnect(Throwable cause) {
             if (closed || terminalFailure || reconnect != null) {
                 return;
