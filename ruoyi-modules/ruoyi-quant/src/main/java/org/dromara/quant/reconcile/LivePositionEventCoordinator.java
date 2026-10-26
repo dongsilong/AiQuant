@@ -115,6 +115,31 @@ public class LivePositionEventCoordinator {
     }
 
     /**
+     * 周期性账户级快照心跳：即使私有流事件丢失，也能主动核验账户持仓。
+     * 不主动失效当前已核验快照；只有实际事件才立即关闭开仓准入。
+     * 每账户刷新仍经过 pending 合并、最小间隔、失败退避及共享 REST 单飞保护。
+     */
+    @Scheduled(fixedDelay = 60000, initialDelay = 15000)
+    public void enqueuePositionHeartbeat() {
+        try {
+            var enabled = credentials.selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QuantCredential>()
+                .eq(QuantCredential::getStatus, "0"));
+            if (enabled == null) {
+                throw new IllegalStateException("LIVE position heartbeat credential discovery returned null");
+            }
+            for (QuantCredential credential : enabled) {
+                if (credential != null && credential.getId() != null && "LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                    pending.add(credential.getId());
+                }
+            }
+        } catch (RuntimeException ex) {
+            // Discovery failure cannot be interpreted as an empty credential set.
+            // Existing verified snapshots expire naturally; the entry gate remains fail-closed after expiry.
+            log.warn("LIVE account position heartbeat discovery failed", ex);
+        }
+    }
+
+    /**
      * 取出待处理账户并执行串行刷新，避免并发覆盖新事实。
      */
     @Scheduled(fixedDelay = 2000, initialDelay = 3000)
