@@ -895,6 +895,10 @@ public class MarketStreamHub {
                         if (!closed && attempt == generation && !recovering) {
                             if (accessRestricted(ex)) {
                                 suspendForAccessRestriction(ex);
+                            } else if (clockUnavailable(ex)) {
+                                connected = false;
+                                signalUnhealthy();
+                                warnClockUnavailable(ex);
                             } else {
                                 beginRecovery("静默校验未能确认K线状态", null);
                             }
