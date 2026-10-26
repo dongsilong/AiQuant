@@ -1,5 +1,6 @@
 package org.dromara.quant.reconcile;
 
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.credential.domain.QuantCredential;
@@ -18,7 +19,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 
 /**
  * Nonblocking callback-to-REST bridge. WebSocket callbacks merely flag an
@@ -167,7 +167,7 @@ public class LivePositionEventCoordinator {
             lastAttempt.put(id, now);
             try {
                 refreshExecutor.execute(() -> refreshPositionForCredential(id));
-            } catch (RejectedExecutionException ex) {
+            } catch (RuntimeException ex) {
                 refreshInFlight.remove(id);
                 pending.add(id);
                 scheduleRefreshRetry(id, ex);
@@ -209,6 +209,11 @@ public class LivePositionEventCoordinator {
         retryNotBefore.put(id, System.currentTimeMillis() + backoffMillis);
         pending.add(id);
         log.warn("LIVE event-triggered position refresh failed credentialId={} retryInMs={}", id, backoffMillis, ex);
+    }
+
+    @PreDestroy
+    public void shutdownRefreshExecutor() {
+        refreshExecutor.shutdown();
     }
 
     private void drainProtectionRecoveryRequests() {
