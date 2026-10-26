@@ -499,19 +499,44 @@ public class StrategyRuntimeService {
                 return;
             }
         }
-        recoveryExecutor.execute(() -> {
-            try {
-                do {
-                    runtime.reconcileRequested.set(false);
-                    reconcilePosition(runtime);
-                } while (!runtime.closed && runtime.reconcileRequested.get() && System.currentTimeMillis() >= runtime.nextReconcileAt);
-            } finally {
-                runtime.reconciling.set(false);
-                if (!runtime.closed && runtime.reconcileRequested.get()) {
-                    requestReconciliation(runtime);
+        try {
+            recoveryExecutor.execute(() -> {
+                try {
+                    do {
+                        runtime.reconcileRequested.set(false);
+                        reconcilePosition(runtime);
+                    } while (!runtime.closed && runtime.reconcileRequested.get() && System.currentTimeMillis() >= runtime.nextReconcileAt);
+                } catch (RuntimeException ex) {
+                    // A reconciliation task must always reach a terminal state. Keep entry readiness
+                    // fail-closed, but don't leave the single-flight flag set forever after an
+                    // unexpected runtime failure.
+                    synchronized (runtime) {
+                        runtime.positionFactsReady = false;
+                        runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                        runtime.reconcileRequested.set(!runtime.closed);
+                    }
+                    log.error("策略持仓核验任务异常退出，将保留开仓阻断并安排后续重试 instanceId={} symbol={}",
+                        runtime.instance.getId(), runtime.symbol.getSymbol(), ex);
+                } finally {
+                    runtime.reconciling.set(false);
+                    if (!runtime.closed && runtime.reconcileRequested.get()
+                        && System.currentTimeMillis() >= runtime.nextReconcileAt) {
+                        requestReconciliation(runtime);
+                    }
                 }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            // Executor saturation/shutdown is not a successful reconciliation. Release the
+            // single-flight marker so a later market/supervisor trigger can retry safely.
+            synchronized (runtime) {
+                runtime.positionFactsReady = false;
+                runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                runtime.reconcileRequested.set(!runtime.closed);
+                runtime.reconciling.set(false);
             }
-        });
+            log.warn("策略持仓核验任务提交失败，将保留开仓阻断并等待重试 instanceId={} symbol={} error={}",
+                runtime.instance.getId(), runtime.symbol.getSymbol(), ex.toString());
+        }
     }
 
     /**
