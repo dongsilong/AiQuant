@@ -30,7 +30,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_execution_record|credential_id,idempotency_key", "quant_open_capacity|credential_id,idempotency_key", "quant_strategy_position_state|instance_id",
         "quant_protection_target|target_key", "quant_live_dispatch_guard|credential_id,symbol", "quant_order_dispatch_ticket|credential_id,idempotency_key",
         "quant_strategy_fill_allocation|credential_id,symbol,exchange_trade_id", "quant_strategy_fill_journal|credential_id,symbol,exchange_trade_id",
-        "quant_strategy_fill_sync_cursor|credential_id,symbol", "quant_financial_event|credential_id,exchange_transaction_id,event_type", "quant_financial_event_sync_cursor|credential_id",
+        "quant_strategy_fill_sync_cursor|credential_id,symbol", "quant_financial_event|credential_id,event_identity_key", "quant_financial_event_sync_cursor|credential_id",
         "quant_live_recovery_case|credential_id,symbol,active_case_key",
         "quant_live_account_settings_intent|credential_id,symbol", "quant_strategy_order_intent|credential_id,symbol,client_order_id",
         "quant_strategy_pre_dispatch_intent|credential_id,idempotency_key", "quant_position_sync_fence|credential_id");
@@ -84,6 +84,9 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
             }
             if (missingTables.contains("quant_financial_event") || missingUnique.contains("quant_financial_event|credential_id,exchange_transaction_id,event_type")) {
                 requiredMigrations.add("script/sql/quant/V20261024_01__financial_event_income_type_identity.sql");
+            }
+            if (missingTables.contains("quant_financial_event") || missingUnique.contains("quant_financial_event|credential_id,event_identity_key")) {
+                requiredMigrations.add("script/sql/quant/V20261026_01__financial_event_identity_key.sql");
             }
             if (missingTables.contains("quant_live_recovery_case") || missingTables.contains("quant_live_recovery_audit")
                 || missingUnique.contains("quant_live_recovery_case|credential_id,symbol,active_case_key")) {
