@@ -993,7 +993,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         } else {
                             // 立即失效，不允许在租约状态不明时继续使用缓存的行情决策。
                             runtime.leaseValid = false;
-                            runtime.marketHealthy = false;
                             runtime.nextLeaseRenewAt = completedAt + 1_000L;
                             log.warn("策略运行租约续期失败，已关闭该 Runtime 的交易准入 instanceId={} credentialId={} symbol={}",
                                 runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
@@ -1004,7 +1003,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             } catch (java.util.concurrent.RejectedExecutionException ex) {
                 runtime.leaseRenewalInFlight.set(false);
                 runtime.leaseValid = false;
-                runtime.marketHealthy = false;
             }
         }
     }
@@ -1034,9 +1032,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     private boolean ensureEventLease(ActiveRuntime runtime) {
         long now = System.currentTimeMillis();
         boolean valid = runtime.leaseValid && now < runtime.leaseValidUntilMillis;
-        if (!valid) {
-            runtime.marketHealthy = false;
-        }
+        // Lease validity is a separate trade gate. Do not corrupt market-stream health:
+        // a successful renewal must resume processing without requiring a needless WS reconnect.
         return valid;
     }
 
@@ -1056,7 +1053,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 return;
             }
             if (!ensureEventLease(runtime)) {
-                runtime.marketHealthy = false;
                 return;
             }
             if ("CONNECTING".equals(event.type())) {
