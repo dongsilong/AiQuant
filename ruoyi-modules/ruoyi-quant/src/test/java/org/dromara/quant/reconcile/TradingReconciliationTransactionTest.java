@@ -45,6 +45,27 @@ class TradingReconciliationTransactionTest {
         org.junit.jupiter.api.Assertions.assertFalse(TradingReconciliationService.sameFinancialEventTime(null, exchangeTime));
     }
 
+    @Test
+    void deferredPositionSnapshotSchedulesOneCoalescedReadOnlyRetry() {
+        TradingReconciliationService reconciliation = service();
+        try {
+            when(gateway.queryAccount(any())).thenThrow(new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException(60_000L));
+
+            assertThrows(org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException.class,
+                () -> reconciliation.refreshPositionsOnly(credential()));
+
+            @SuppressWarnings("unchecked")
+            java.util.Map<Long, java.util.concurrent.ScheduledFuture<?>> retries =
+                (java.util.Map<Long, java.util.concurrent.ScheduledFuture<?>>)
+                    org.springframework.test.util.ReflectionTestUtils.getField(reconciliation, "positionRetryTasks");
+            assertNotNull(retries);
+            assertTrue(retries.containsKey(1L));
+            assertEquals(1, retries.size());
+        } finally {
+            reconciliation.shutdownPositionSnapshotRetries();
+        }
+    }
+
     private final ExchangeGateway gateway = mock(ExchangeGateway.class);
     private final QuantAccountSnapshotMapper accounts = mock(QuantAccountSnapshotMapper.class);
     private final QuantPositionMapper positions = mock(QuantPositionMapper.class);
