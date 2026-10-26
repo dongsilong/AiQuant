@@ -503,19 +503,36 @@ public class StrategyRuntimeService {
                 return;
             }
         }
-        recoveryExecutor.execute(() -> {
-            try {
-                do {
-                    runtime.reconcileRequested.set(false);
-                    reconcilePosition(runtime);
-                } while (!runtime.closed && runtime.reconcileRequested.get() && System.currentTimeMillis() >= runtime.nextReconcileAt);
-            } finally {
+        try {
+            recoveryExecutor.execute(() -> {
+                try {
+                    do {
+                        runtime.reconcileRequested.set(false);
+                        reconcilePosition(runtime);
+                    } while (!runtime.closed && runtime.reconcileRequested.get() && System.currentTimeMillis() >= runtime.nextReconcileAt);
+                } finally {
+                    runtime.reconciling.set(false);
+                    if (!runtime.closed && runtime.reconcileRequested.get()) {
+                        requestReconciliation(runtime);
+                    }
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            // Executor rejection happens before the task's finally block can run. Release the
+            // single-flight flag here or subsequent requests can be permanently coalesced away.
+            synchronized (runtime) {
                 runtime.reconciling.set(false);
-                if (!runtime.closed && runtime.reconcileRequested.get()) {
-                    requestReconciliation(runtime);
+                runtime.positionReconciling = false;
+                if (!runtime.closed) {
+                    runtime.positionFactsReady = false;
+                    runtime.positionReconciliationBlockReason = "RECONCILIATION_EXECUTOR_REJECTED";
+                    runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                    runtime.reconcileRequested.set(true);
                 }
             }
-        });
+            log.warn("策略持仓核验任务未能提交到恢复线程池，保持开仓阻断并等待后续重试 instanceId={} credentialId={} symbol={} runMode={} retryAfterSeconds=5",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(), ex);
+        }
     }
 
     /**
