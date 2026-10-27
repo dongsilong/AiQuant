@@ -1258,8 +1258,16 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         // 待确认交易或退出协调会暂停本轮开仓、退出和保护同步；实时斜率仍随有效行情更新。
         if (runtime.hasPendingAction() || runtime.exitCoordinating.get()) {
             logEntryDecision(runtime, context, "PENDING_ACTION", "存在待确认交易或退出协调尚未完成，等待状态恢复");
-            log.warn("策略决策暂停：存在待确认交易或退出协调尚未完成 instanceId={} symbol={} pendingAction={} exitCoordinating={}",
-                runtime.instance.getId(), runtime.symbol.getSymbol(), runtime.hasPendingAction(), runtime.exitCoordinating.get());
+            long now = System.currentTimeMillis();
+            if (now >= runtime.nextPendingActionWarnAt) {
+                runtime.nextPendingActionWarnAt = now + 30_000L;
+                log.warn("策略决策暂停：存在待确认交易或退出协调尚未完成 instanceId={} credentialId={} symbol={} runMode={} pendingAction={} executionStatus={} pendingOrderId={} pendingClientOrderId={} exitCoordinating={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+                    runtime.state == null ? null : runtime.state.getPendingAction(),
+                    runtime.state == null ? null : runtime.state.getExecutionStatus(),
+                    runtime.state == null ? null : runtime.state.getPendingOrderId(),
+                    runtime.state == null ? null : runtime.state.getPendingClientOrderId(), runtime.exitCoordinating.get());
+            }
             return;
         }
         if (runtime.position == null) {
@@ -2597,8 +2605,22 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
         }
         var credential = executionService.toCredential(runtime.credential);
         ExchangeGateway.OrderSnapshot order = null;
-        if (orderId != null || clientOrderId != null && !clientOrderId.isBlank()) {
-            order = gateway.queryOrder(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
+        String orderQueryFailure = null;
+        boolean exactOrderQueryAttempted = orderId != null || clientOrderId != null && !clientOrderId.isBlank();
+        if (exactOrderQueryAttempted) {
+            try {
+                order = gateway.queryOrder(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
+            } catch (RuntimeException ex) {
+                // 查询异常不是“订单不存在”；记录诊断并保持 UNKNOWN，不因异常尝试重发交易。
+                orderQueryFailure = ex.getClass().getSimpleName() + ": " + ex.getMessage();
+            }
+            if (order == null && orderQueryFailure == null) {
+                try {
+                    order = findPendingOrderInOpenOrders(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
+                } catch (RuntimeException ex) {
+                    orderQueryFailure = "openOrders " + ex.getClass().getSimpleName() + ": " + ex.getMessage();
+                }
+            }
         }
         List<ExchangeGateway.PositionSnapshot> snapshots = null;
         if (order == null || "NEW".equalsIgnoreCase(order.status()) || "PARTIALLY_FILLED".equalsIgnoreCase(order.status()) || "FILLED".equalsIgnoreCase(order.status())
@@ -2636,6 +2658,39 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             }
             return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven);
         }
+    }
+
+    /**
+     * 精确查询返回订单不存在时，扫描当前活动订单作为只读备用发现路径。
+     * 只有交易所返回的订单身份与本地待确认身份完全匹配才接受；该路径不会改变 UNKNOWN 的终态判定。
+     */
+    private ExchangeGateway.OrderSnapshot findPendingOrderInOpenOrders(ExchangeGateway.Credential credential, String symbol,
+                                                                        Long orderId, String clientOrderId) {
+        if ((orderId == null) && (clientOrderId == null || clientOrderId.isBlank())) {
+            return null;
+        }
+        List<ExchangeGateway.OrderSnapshot> openOrders = gateway.queryOrders(credential, symbol);
+        if (openOrders == null || openOrders.isEmpty()) {
+            return null;
+        }
+        List<ExchangeGateway.OrderSnapshot> matches = openOrders.stream()
+            .filter(Objects::nonNull)
+            .filter(candidate -> candidate.symbol() != null && candidate.symbol().equalsIgnoreCase(symbol))
+            .filter(candidate -> orderId == null || orderId.equals(candidate.orderId()))
+            .filter(candidate -> clientOrderId == null || clientOrderId.isBlank()
+                || clientOrderId.equals(candidate.clientOrderId()))
+            .toList();
+        if (matches.size() != 1) {
+            if (!matches.isEmpty()) {
+                log.warn("待确认订单备用发现结果不唯一，继续保持 UNKNOWN symbol={} orderId={} clientOrderId={} matches={}",
+                    symbol, orderId, clientOrderId, matches.size());
+            }
+            return null;
+        }
+        ExchangeGateway.OrderSnapshot matched = matches.get(0);
+        log.info("待确认订单通过活动订单列表精确发现 symbol={} orderId={} clientOrderId={} status={}",
+            symbol, matched.orderId(), matched.clientOrderId(), matched.status());
+        return matched;
     }
 
     private List<Object> pendingIdentity(QuantStrategyPositionState state) {
@@ -2764,8 +2819,12 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             }
             runtime.state.setRecoveryRequired(true);
             stateService.save(runtime.state);
-            log.warn("待确认订单未找到，保留开仓保护 instanceId={} symbol={} pendingAction={} executionStatus={} positionCount={}", runtime.instance.getId(), runtime.symbol.getSymbol(),
-             runtime.state.getPendingAction(), execution == null ? "MISSING" : execution.getExecutionStatus(), snapshots == null ? null : snapshots.size());
+            log.warn("待确认订单未找到，保留交易保护 instanceId={} credentialId={} symbol={} runMode={} pendingAction={} executionStatus={} executionId={} idempotencyKey={} pendingOrderId={} pendingClientOrderId={} positionCount={} orderQueryFailure={} notFoundConfirmations={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+                runtime.state.getPendingAction(), execution == null ? "MISSING" : execution.getExecutionStatus(),
+                execution == null ? null : execution.getId(), runtime.state.getPendingIdempotencyKey(),
+                runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(),
+                snapshots == null ? null : snapshots.size(), orderQueryFailure, confirmations);
             return true;
         }
         String status = order.status();
@@ -4220,6 +4279,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /** Serializes database lease acquisition/renewal with the final release during shutdown. */
         private final ReentrantLock leaseOperationLock = new ReentrantLock();
         private final AtomicBoolean reconcileRequested = new AtomicBoolean();
+        /** Next allowed WARN timestamp for repeated pending-action decisions. */
+        private volatile long nextPendingActionWarnAt;
         private final EntryRetryGate entryRetryGate = new EntryRetryGate();
         /** 串行化交易对暂停操作与完整开仓决策/派单流程。 */
         private final Object entryDispatchLock = new Object();
