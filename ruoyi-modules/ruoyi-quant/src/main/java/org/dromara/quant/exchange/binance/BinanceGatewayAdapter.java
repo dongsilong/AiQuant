@@ -404,7 +404,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             if (credential == null) {
                 return new ConnectivityResult(false, "缺少账户凭证");
             }
-            ApiResponse<AccountInformationV3Response> account = api(credential, RestRequestScheduler.Kind.ACCOUNT).accountInformationV3(RECV_WINDOW_MILLIS);
+            ApiResponse<AccountInformationV3Response> account = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.accountInformationV3(RECV_WINDOW_MILLIS));
             ApiResponse<FuturesAccountConfigurationResponse> configuration = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
                 client -> client.futuresAccountConfiguration(RECV_WINDOW_MILLIS));
             if (account.getData() == null || configuration.getData() == null) {
