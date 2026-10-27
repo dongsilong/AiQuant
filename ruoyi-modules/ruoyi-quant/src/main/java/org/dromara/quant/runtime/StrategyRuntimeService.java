@@ -1405,7 +1405,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      * five-second interval while Binance has explicitly deferred requests only creates a local
      * retry loop; entry remains blocked until facts are verified.
      */
-    private long exchangeRetryAfterMillis(Throwable error) {
+    static long exchangeRetryAfterMillis(Throwable error) {
         for (Throwable current = error; current != null; current = current.getCause()) {
             if (current instanceof ExchangeMarketPort.RequestDeferredException deferred) {
                 return deferred.retryAfterMillis();
