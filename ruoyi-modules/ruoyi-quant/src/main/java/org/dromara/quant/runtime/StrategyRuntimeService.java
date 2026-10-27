@@ -2920,12 +2920,16 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             }
             runtime.state.setRecoveryRequired(true);
             stateService.save(runtime.state);
-            log.warn("待确认订单未找到，保留交易保护 instanceId={} credentialId={} symbol={} runMode={} pendingAction={} executionStatus={} executionId={} idempotencyKey={} pendingOrderId={} pendingClientOrderId={} positionCount={} orderQueryFailure={} notFoundConfirmations={}",
-                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
-                runtime.state.getPendingAction(), execution == null ? "MISSING" : execution.getExecutionStatus(),
-                execution == null ? null : execution.getId(), runtime.state.getPendingIdempotencyKey(),
-                runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(),
-                snapshots == null ? null : snapshots.size(), runtime.lastPendingOrderQueryFailure, confirmations);
+            // UNKNOWN 可能是交易所请求已受理但响应丢失，不能仅凭多次未找到就清除保护。
+            // 将重复诊断降为每 6 次一次，避免恢复卡住时持续刷 WARN；每次恢复仍会查询订单事实。
+            if (confirmations % 6 == 0) {
+                log.warn("待确认订单仍未在活动/历史订单中找到，保留交易保护 instanceId={} credentialId={} symbol={} runMode={} pendingAction={} executionStatus={} executionId={} idempotencyKey={} pendingOrderId={} pendingClientOrderId={} positionCount={} orderQueryFailure={} notFoundConfirmations={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+                    runtime.state.getPendingAction(), execution == null ? "MISSING" : execution.getExecutionStatus(),
+                    execution == null ? null : execution.getId(), runtime.state.getPendingIdempotencyKey(),
+                    runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(),
+                    snapshots == null ? null : snapshots.size(), runtime.lastPendingOrderQueryFailure, confirmations);
+            }
             return true;
         }
         String status = order.status();
