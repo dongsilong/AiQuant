@@ -801,7 +801,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         Long start = range == null || range.from() == null ? null : range.from().toEpochMilli();
         Long end = range == null || range.to() == null ? null : range.to().toEpochMilli();
         IncomeType type = incomeType == null || incomeType.isBlank() ? null : IncomeType.fromValue(incomeType);
-        GetIncomeHistoryResponse data = api(credential).getIncomeHistory(symbol, type, start, end, null, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData();
+        GetIncomeHistoryResponse data = signedRead(credential, RestRequestScheduler.Kind.BACKGROUND,
+            client -> client.getIncomeHistory(symbol, type, start, end, null, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData());
         if (data == null) {
             throw new IllegalStateException("Binance income-history response has no data payload; completeness cannot be proven");
         }
@@ -1051,7 +1052,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         requireCredential(credential);
         Long start = range == null || range.from() == null ? null : range.from().toEpochMilli();
         Long end = range == null || range.to() == null ? null : range.to().toEpochMilli();
-        var data = api(credential).allOrders(symbol, null, start, end, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData();
+        var data = signedRead(credential, RestRequestScheduler.Kind.BACKGROUND,
+            client -> client.allOrders(symbol, null, start, end, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData());
         if (data == null) {
             return List.of();
         }
