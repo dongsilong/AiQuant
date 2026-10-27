@@ -595,9 +595,12 @@ public class StrategyRuntimeService {
                     if (!runtime.closed && runtime.position != null) {
                         ensureHardStop(runtime);
                     }
-                    // 未完成的待确认交易按固定间隔重试，避免监督 tick 持续触发 REST 查询。
+                    // UNKNOWN 长时间未决时逐步拉长只读核查间隔，降低 REST 限流压力；
+                    // 最长 30 秒仍持续核查，期间继续保留开仓阻断和已有持仓保护。
                     if (!runtime.closed) {
-                        runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                        int confirmations = runtime.state == null || runtime.state.getPendingNotFoundConfirmations() == null
+                            ? 0 : runtime.state.getPendingNotFoundConfirmations();
+                        runtime.nextReconcileAt = System.currentTimeMillis() + pendingExecutionRetryDelayMillis(confirmations);
                     }
                 }
                 return;
@@ -1407,6 +1410,26 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      * five-second interval while Binance has explicitly deferred requests only creates a local
      * retry loop; entry remains blocked until facts are verified.
      */
+    /**
+     * 待确认交易持续无法从交易所核实时采用有界退避，避免每个策略每 5 秒重复打 REST。
+     * 不清除 pending、不放开开仓；30 秒上限确保仍会持续进行只读恢复核查。
+     */
+    static long pendingExecutionRetryDelayMillis(int notFoundConfirmations) {
+        if (notFoundConfirmations < 0) {
+            return 5_000L;
+        }
+        if (notFoundConfirmations < 6) {
+            return 5_000L;
+        }
+        if (notFoundConfirmations < 18) {
+            return 10_000L;
+        }
+        if (notFoundConfirmations < 36) {
+            return 15_000L;
+        }
+        return 30_000L;
+    }
+
     static long exchangeRetryAfterMillis(Throwable error) {
         for (Throwable current = error; current != null; current = current.getCause()) {
             if (current instanceof ExchangeMarketPort.RequestDeferredException deferred) {
