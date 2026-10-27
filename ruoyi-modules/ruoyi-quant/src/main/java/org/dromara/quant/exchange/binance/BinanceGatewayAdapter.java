@@ -404,8 +404,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             if (credential == null) {
                 return new ConnectivityResult(false, "缺少账户凭证");
             }
-            ApiResponse<AccountInformationV3Response> account = api(credential, RestRequestScheduler.Kind.ACCOUNT).accountInformationV3(RECV_WINDOW_MILLIS);
-            ApiResponse<FuturesAccountConfigurationResponse> configuration = api(credential).futuresAccountConfiguration(RECV_WINDOW_MILLIS);
+            ApiResponse<AccountInformationV3Response> account = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.accountInformationV3(RECV_WINDOW_MILLIS));
+            ApiResponse<FuturesAccountConfigurationResponse> configuration = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.futuresAccountConfiguration(RECV_WINDOW_MILLIS));
             if (account.getData() == null || configuration.getData() == null) {
                 return new ConnectivityResult(false, "Binance 凭证校验无响应");
             }
@@ -801,7 +803,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         Long start = range == null || range.from() == null ? null : range.from().toEpochMilli();
         Long end = range == null || range.to() == null ? null : range.to().toEpochMilli();
         IncomeType type = incomeType == null || incomeType.isBlank() ? null : IncomeType.fromValue(incomeType);
-        GetIncomeHistoryResponse data = api(credential).getIncomeHistory(symbol, type, start, end, null, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData();
+        GetIncomeHistoryResponse data = signedRead(credential, RestRequestScheduler.Kind.BACKGROUND,
+            client -> client.getIncomeHistory(symbol, type, start, end, null, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData());
         if (data == null) {
             throw new IllegalStateException("Binance income-history response has no data payload; completeness cannot be proven");
         }
@@ -829,7 +832,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     @Override
     public PositionMode queryPositionMode(Credential credential) {
         requireCredential(credential);
-        var data = api(credential).getCurrentPositionMode(RECV_WINDOW_MILLIS).getData();
+        var data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+            client -> client.getCurrentPositionMode(RECV_WINDOW_MILLIS).getData());
         return new PositionMode(Boolean.TRUE.equals(data.getDualSidePosition()));
     }
 
@@ -842,12 +846,13 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         ChangePositionModeRequest request = new ChangePositionModeRequest();
         request.setDualSidePosition(hedgeMode ? "TRUE" : "FALSE");
         try {
-            api(credential).changePositionMode(request);
+            api(credential, true).changePositionMode(request);
         } catch (RuntimeException ex) {
             String message = ex.getMessage();
-            if (message == null || (!message.contains("No need to change") && !message.contains("-4059"))) {
-                throw new IllegalStateException("设置 Binance 持仓模式失败", ex);
+            if (message != null && (message.contains("No need to change") || message.contains("-4059"))) {
+                return;
             }
+            throw requestFailure("SET_POSITION_MODE", ex);
         }
     }
 
@@ -901,7 +906,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (symbol == null || !symbol.matches("[a-zA-Z0-9]{2,32}")) {
             throw new IllegalArgumentException("Binance 交易设置回查缺少有效交易对");
         }
-        var rows = api(credential, RestRequestScheduler.Kind.ACCOUNT).positionInformationV2(symbol.trim().toUpperCase(Locale.ROOT), RECV_WINDOW_MILLIS).getData();
+        var rows = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+            client -> client.positionInformationV2(symbol.trim().toUpperCase(Locale.ROOT), RECV_WINDOW_MILLIS).getData());
         if (rows == null || rows.isEmpty()) {
             throw new IllegalStateException("Binance 未返回可核实的交易对保证金/杠杆配置");
         }
@@ -918,6 +924,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     private List<PositionSnapshot> queryPositions(DerivativesTradingUsdsFuturesRestApi client, String symbol) {
+        // A successful positionInformationV3 response is a complete exchange fact. This adapter
+        // intentionally filters zero-quantity rows, so an empty list means the requested symbol
+        // (or the whole account when symbol == null) was successfully verified flat. Transport,
+        // rate-limit, decoding, and API errors must throw instead of being converted to empty.
         var response = client.positionInformationV3(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData();
         var positions =
             response.stream().filter(item -> symbol == null || symbol.equalsIgnoreCase(item.getSymbol())).filter(item -> decimal(item.getPositionAmt()).signum() != 0).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
@@ -960,13 +970,16 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     @Override
     public List<OrderSnapshot> queryOrders(Credential credential, String symbol) {
-        ApiResponse<CurrentAllOpenOrdersResponse> response = api(credential).currentAllOpenOrders(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS);
-        if (response == null || response.getData() == null) {
-            return List.of();
-        }
-        return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
-            item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
-            "getAvgPrice")))).toList();
+        return signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
+            ApiResponse<CurrentAllOpenOrdersResponse> response =
+                client.currentAllOpenOrders(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS);
+            if (response == null || response.getData() == null) {
+                return List.of();
+            }
+            return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
+                item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
+                "getAvgPrice")))).toList();
+        });
     }
 
     /**
@@ -985,7 +998,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         Object data;
         try {
-            data = api(credential, RestRequestScheduler.Kind.ACCOUNT).queryOrder(symbol.trim(), orderId, clientOrderId, RECV_WINDOW_MILLIS).getData();
+            data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.queryOrder(symbol.trim(), orderId, clientOrderId, RECV_WINDOW_MILLIS).getData());
         } catch (RuntimeException ex) {
             var error = apiError(ex);
             if (error != null && error.getCode() == 400 && Integer.valueOf(-2013).equals(errorCode(error))) {
@@ -1027,9 +1041,15 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         Long from = range == null || range.from() == null ? null : range.from().toEpochMilli();
         Long to = range == null || range.to() == null ? null : range.to().toEpochMilli();
-        ApiResponse<AccountTradeListResponse> response = api(credential).accountTradeList(symbol == null ? null : symbol.trim(), null, from, to, null, 1000L, RECV_WINDOW_MILLIS);
-        return response.getData().stream().map(item -> new TradeSnapshot(item.getSymbol(), item.getId(), item.getOrderId(), item.getSide(), decimal(item.getQty()),
-            decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()), instant(item.getTime()), string(item, "getCommissionAsset"))).toList();
+        return signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
+            ApiResponse<AccountTradeListResponse> response =
+                client.accountTradeList(symbol.trim(), null, from, to, null, 1000L, RECV_WINDOW_MILLIS);
+            if (response == null || response.getData() == null) {
+                return List.of();
+            }
+            return response.getData().stream().map(item -> new TradeSnapshot(item.getSymbol(), item.getId(), item.getOrderId(), item.getSide(), decimal(item.getQty()),
+                decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()), instant(item.getTime()), string(item, "getCommissionAsset"))).toList();
+        });
     }
 
     /**
@@ -1040,7 +1060,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         requireCredential(credential);
         Long start = range == null || range.from() == null ? null : range.from().toEpochMilli();
         Long end = range == null || range.to() == null ? null : range.to().toEpochMilli();
-        var data = api(credential).allOrders(symbol, null, start, end, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData();
+        var data = signedRead(credential, RestRequestScheduler.Kind.BACKGROUND,
+            client -> client.allOrders(symbol, null, start, end, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData());
         if (data == null) {
             return List.of();
         }

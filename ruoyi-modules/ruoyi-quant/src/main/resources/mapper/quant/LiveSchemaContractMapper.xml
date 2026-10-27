@@ -20,4 +20,8 @@ WHERE table_schema=DATABASE() AND table_name='quant_protection_order'
   AND column_name IN ('strategy_id','strategy_instance_id') AND data_type='bigint']]></select>
     <select id="positionReturnRateColumns" resultType="java.lang.String" timeout="3">
         <![CDATA[SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='quant_strategy_position_state' AND column_name='maximum_return_rate' AND data_type='decimal']]></select>
+    <select id="orderBalanceSnapshotColumns" resultType="java.lang.String" timeout="3">
+        <![CDATA[SELECT column_name FROM information_schema.columns
+WHERE table_schema=DATABASE() AND table_name='quant_order'
+  AND column_name IN ('leverage_snapshot','price_tick_size_snapshot','post_fill_wallet_balance','post_fill_balance_at','post_fill_balance_requested_at')]]></select>
 </mapper>

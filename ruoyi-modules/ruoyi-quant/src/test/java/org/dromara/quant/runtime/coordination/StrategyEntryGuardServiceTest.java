@@ -71,6 +71,23 @@ class StrategyEntryGuardServiceTest {
     }
 
     @Test
+    void databaseFailureMustNotBeReportedAsDuplicateEntryGuard() {
+        var mapper = org.mockito.Mockito.mock(StrategyEntryGuardMapper.class);
+        org.mockito.Mockito.when(mapper.tryClaim(
+            org.mockito.ArgumentMatchers.eq(10L),
+            org.mockito.ArgumentMatchers.eq("BTCUSDT"),
+            org.mockito.ArgumentMatchers.eq(1L),
+            org.mockito.ArgumentMatchers.any()
+        )).thenThrow(new org.springframework.dao.DataAccessResourceFailureException("database unavailable"));
+
+        var guard = new StrategyEntryGuardService(mapper);
+        var candle = Instant.parse("2026-10-12T00:00:00Z");
+
+        assertThrows(org.springframework.dao.DataAccessResourceFailureException.class,
+            () -> guard.tryClaim(1L, 10L, "BTCUSDT", candle));
+    }
+
+    @Test
     void confirmedCloseBlocksThatCandleAcrossInstancesButAllowsNextCandle() {
         var db = database();
         var first = new StrategyEntryGuardService(db.mapper());

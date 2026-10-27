@@ -186,4 +186,24 @@ class FinancialEventLedgerRegressionTest {
         verify(financialEvents, never()).insert(any(QuantFinancialEvent.class));
         verify(financialEvents, never()).updateById(any(QuantFinancialEvent.class));
     }
+
+    @Test
+    void persistsDistinctZeroTransactionIdFactsWithSeparateCanonicalIdentities() throws Exception {
+        when(financialEvents.selectVoOne(any(LambdaQueryWrapper.class))).thenReturn(null);
+        when(financialEvents.insert(any(QuantFinancialEvent.class))).thenReturn(1);
+        Instant timestamp = Instant.parse("2026-10-25T07:03:01Z");
+        ExchangeGateway.IncomeSnapshot first = new ExchangeGateway.IncomeSnapshot(
+            null, "TRANSFER", new BigDecimal("12.5000"), "USDT", 0L, "transfer-a", timestamp);
+        ExchangeGateway.IncomeSnapshot second = new ExchangeGateway.IncomeSnapshot(
+            null, "TRANSFER", new BigDecimal("15.0"), "USDT", 0L, "transfer-b", timestamp);
+
+        sync(List.of(first, second));
+
+        var captor = org.mockito.ArgumentCaptor.forClass(QuantFinancialEvent.class);
+        verify(financialEvents, times(2)).insert(captor.capture());
+        List<String> keys = captor.getAllValues().stream().map(QuantFinancialEvent::getEventIdentityKey).toList();
+        assertEquals(2, keys.stream().distinct().count());
+        assertTrue(keys.stream().allMatch(key -> key.startsWith("Z:")));
+    }
+
 }

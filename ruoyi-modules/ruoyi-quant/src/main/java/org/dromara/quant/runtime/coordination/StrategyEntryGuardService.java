@@ -37,8 +37,9 @@ public class StrategyEntryGuardService {
         try {
             int affected = mapper.tryClaim(credentialId, symbol.toUpperCase(java.util.Locale.ROOT), instanceId, openTime);
             return affected == 1;
-        } catch (Exception ex) {
-            // 数据库异常与"已占用"在返回值上不可区分，调用方需以业务日志判断。
+        } catch (org.springframework.dao.DuplicateKeyException ex) {
+            // 仅将明确的唯一键冲突解释为已占用。INSERT IGNORE 正常情况下会返回 0；
+            // 其他数据库异常必须向上传播，不能伪装成普通的同 K 线重复开仓拦截。
             return false;
         }
     }

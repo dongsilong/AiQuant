@@ -49,6 +49,10 @@ public class TradingReconciliationScheduler {
             }
             try {
                 reconciliationService.reconcileCredential(credential, properties.getReconcile().getHistoryHours());
+            } catch (TradingReconciliationService.SnapshotSupersededException ex) {
+                // A newer private-stream snapshot superseded this read; the retry scheduler
+                // already queues a replacement snapshot, so this is normal concurrency.
+                log.debug("账户持仓快照被更新事实取代，等待只读重试 credentialId={}", credential.getId());
             } catch (RuntimeException ex) {
                 log.error("量化账户事实对账失败 credentialId={}", credential.getId(), ex);
             }

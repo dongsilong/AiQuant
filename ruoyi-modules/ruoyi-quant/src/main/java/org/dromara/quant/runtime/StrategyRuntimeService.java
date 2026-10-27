@@ -11,6 +11,7 @@ import org.dromara.quant.decision.DecisionLogCursor;
 import org.dromara.quant.decision.DecisionLogEvent;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.ExchangeTradingPort;
+import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.dromara.quant.execution.ExecutionRecordService;
 import org.dromara.quant.execution.ExecutionResult;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
@@ -505,19 +506,33 @@ public class StrategyRuntimeService {
                 return;
             }
         }
-        recoveryExecutor.execute(() -> {
-            try {
-                do {
-                    runtime.reconcileRequested.set(false);
-                    reconcilePosition(runtime);
-                } while (!runtime.closed && runtime.reconcileRequested.get() && System.currentTimeMillis() >= runtime.nextReconcileAt);
-            } finally {
-                runtime.reconciling.set(false);
-                if (!runtime.closed && runtime.reconcileRequested.get()) {
-                    requestReconciliation(runtime);
+        try {
+            recoveryExecutor.execute(() -> {
+                try {
+                    do {
+                        runtime.reconcileRequested.set(false);
+                        reconcilePosition(runtime);
+                    } while (!runtime.closed && runtime.reconcileRequested.get() && System.currentTimeMillis() >= runtime.nextReconcileAt);
+                } finally {
+                    runtime.reconciling.set(false);
+                    if (!runtime.closed && runtime.reconcileRequested.get()) {
+                        requestReconciliation(runtime);
+                    }
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            // 提交任务失败时必须释放 in-flight 标志；否则该 Runtime 会永久表现为正在对账。
+            // Executor 已关闭时不在这里递归重试，保留请求标志供存活期监督/事件恢复。
+            runtime.reconciling.set(false);
+            synchronized (runtime) {
+                if (!runtime.closed) {
+                    runtime.reconcileRequested.set(true);
+                    runtime.nextReconcileAt = Math.max(runtime.nextReconcileAt, System.currentTimeMillis() + 5_000L);
                 }
             }
-        });
+            log.warn("策略对账任务未能提交，已释放对账占用标志 instanceId={} credentialId={} symbol={} executorShutdown={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), recoveryExecutor.isShutdown());
+        }
     }
 
     /**
@@ -542,12 +557,21 @@ public class StrategyRuntimeService {
         log.debug("策略持仓核验/恢复尚未解除开仓阻断，安排自动重试 instanceId={} credentialId={} symbol={} runMode={} reason={} retryAfterMillis={}",
             runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
             runtime.positionReconciliationBlockReason, delayMillis);
-        java.util.concurrent.CompletableFuture.delayedExecutor(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS, recoveryExecutor)
-            .execute(() -> {
-                if (!runtime.closed) {
-                    requestReconciliation(runtime);
-                }
-            });
+        try {
+            // 定时等待使用默认延迟调度器；到期后再由 requestReconciliation 提交到 recoveryExecutor。
+            // 若直接把 recoveryExecutor 作为 delayedExecutor 的目标，目标执行器在延迟期间关闭时，
+            // 拒绝发生在异步触发阶段，外层 try/catch 捕获不到。
+            java.util.concurrent.CompletableFuture.delayedExecutor(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .execute(() -> {
+                    if (!runtime.closed) {
+                        requestReconciliation(runtime);
+                    }
+                });
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            // 关闭阶段不再安排新任务；Runtime 仍保持事实未核实，不能因调度失败而放开开仓。
+            log.debug("策略对账延迟重试未能提交，通常表示运行时正在关闭 instanceId={} symbol={} executorShutdown={}",
+                runtime.instance.getId(), runtime.symbol.getSymbol(), recoveryExecutor.isShutdown());
+        }
     }
 
     /**
@@ -571,9 +595,12 @@ public class StrategyRuntimeService {
                     if (!runtime.closed && runtime.position != null) {
                         ensureHardStop(runtime);
                     }
-                    // 未完成的待确认交易按固定间隔重试，避免监督 tick 持续触发 REST 查询。
+                    // UNKNOWN 长时间未决时逐步拉长只读核查间隔，降低 REST 限流压力；
+                    // 最长 30 秒仍持续核查，期间继续保留开仓阻断和已有持仓保护。
                     if (!runtime.closed) {
-                        runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                        int confirmations = runtime.state == null || runtime.state.getPendingNotFoundConfirmations() == null
+                            ? 0 : runtime.state.getPendingNotFoundConfirmations();
+                        runtime.nextReconcileAt = System.currentTimeMillis() + pendingExecutionRetryDelayMillis(confirmations);
                     }
                 }
                 return;
@@ -641,7 +668,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         }
                         runtime.stateRefreshRequired = true;
                         runtime.positionReconciliationBlockReason = "STATE_CHANGED_DURING_RECONCILIATION";
-                        runtime.nextReconcileAt = 0L;
+                        // 持久化状态在本次核验期间发生变化；退避后重新读取，避免连续发起快照请求。
+                        runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
                         runtime.reconcileRequested.set(true);
                     }
                 }
@@ -805,13 +833,15 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             runtime.state.setRecoveryRequired(true);
                             runtime.state.setUnsafeRecovery(true);
                         }
-                        runtime.nextReconcileAt = 0L;
+                        // 先刷新持久化状态，再退避重试，避免乐观锁冲突时在同一工作线程内热循环。
+                        runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
                         runtime.reconcileRequested.set(true);
                     }
                 }
             }
             if (!stateConflict) {
-                runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                long exchangeRetryDelay = exchangeRetryAfterMillis(ex);
+                runtime.nextReconcileAt = System.currentTimeMillis() + Math.max(5_000L, exchangeRetryDelay);
             }
             recordError(runtime.instance, ex);
         } finally {
@@ -1373,6 +1403,43 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return false;
         }
         return !Objects.equals(expected.getVersion(), latest.getVersion());
+    }
+
+    /**
+     * Preserve exchange/scheduler retry windows during reconciliation. Retrying at the generic
+     * five-second interval while Binance has explicitly deferred requests only creates a local
+     * retry loop; entry remains blocked until facts are verified.
+     */
+    /**
+     * 待确认交易持续无法从交易所核实时采用有界退避，避免每个策略每 5 秒重复打 REST。
+     * 不清除 pending、不放开开仓；30 秒上限确保仍会持续进行只读恢复核查。
+     */
+    static long pendingExecutionRetryDelayMillis(int notFoundConfirmations) {
+        if (notFoundConfirmations < 0) {
+            return 5_000L;
+        }
+        if (notFoundConfirmations < 6) {
+            return 5_000L;
+        }
+        if (notFoundConfirmations < 18) {
+            return 10_000L;
+        }
+        if (notFoundConfirmations < 36) {
+            return 15_000L;
+        }
+        return 30_000L;
+    }
+
+    static long exchangeRetryAfterMillis(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof ExchangeMarketPort.RequestDeferredException deferred) {
+                return deferred.retryAfterMillis();
+            }
+            if (current instanceof ExchangeMarketPort.RateLimitException rateLimited) {
+                return rateLimited.retryAfterMillis();
+            }
+        }
+        return 0L;
     }
 
     private boolean containsMessage(Throwable error, String message) {
@@ -2614,11 +2681,25 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 // 查询异常不是“订单不存在”；记录诊断并保持 UNKNOWN，不因异常尝试重发交易。
                 orderQueryFailure = ex.getClass().getSimpleName();
             }
-            if (order == null && orderQueryFailure == null) {
+            // 当前活动订单列表只是精确订单查询的备用路径，未找到时不必每 5 秒重复扫描。
+            // 每 3 次精确查询才扫描一次活动订单；历史订单则每 6 次查询一次，以控制 REST 权重。
+            int priorNotFound = expectedState.getPendingNotFoundConfirmations() == null ? 0 : expectedState.getPendingNotFoundConfirmations();
+            if (order == null && orderQueryFailure == null && (priorNotFound + 1) % 3 == 0) {
                 try {
                     order = findPendingOrderInOpenOrders(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
                 } catch (RuntimeException ex) {
                     orderQueryFailure = "openOrders " + ex.getClass().getSimpleName();
+                }
+            }
+            // 当前活动订单只覆盖仍处于活动态的订单。若下单响应丢失而订单已成交/撤销，
+            // 仅反复查活动订单会永久停留在 UNKNOWN。每 6 次未找到才查询历史，且只接受
+            // 交易对、订单 ID、客户订单 ID 完全匹配的正向事实。
+            if (order == null && orderQueryFailure == null && (priorNotFound + 1) % 6 == 0) {
+                try {
+                    order = findPendingOrderInHistory(credential, runtime.symbol.getSymbol(), orderId, clientOrderId,
+                        expectedState.getPendingOrderTime());
+                } catch (RuntimeException ex) {
+                    orderQueryFailure = "orderHistory " + ex.getClass().getSimpleName();
                 }
             }
         }
@@ -2691,6 +2772,49 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
         }
         ExchangeGateway.OrderSnapshot matched = matches.get(0);
         log.info("待确认订单通过活动订单列表精确发现 symbol={} orderId={} clientOrderId={} status={}",
+            symbol, matched.orderId(), matched.clientOrderId(), matched.status());
+        return matched;
+    }
+
+    /**
+     * 在活动订单未发现时，从交易所历史订单中按完整订单身份补偿恢复。
+     * 不能把历史接口成功但未匹配到订单当作“订单肯定未发送”；此方法只补充正向事实。
+     */
+    private ExchangeGateway.OrderSnapshot findPendingOrderInHistory(ExchangeGateway.Credential credential, String symbol,
+                                                                      Long orderId, String clientOrderId, Long pendingOrderTime) {
+        if (orderId == null && (clientOrderId == null || clientOrderId.isBlank())) {
+            return null;
+        }
+        Instant now = Instant.now();
+        Instant from = pendingOrderTime == null
+            ? now.minusSeconds(24 * 3600L)
+            : Instant.ofEpochMilli(pendingOrderTime).minusSeconds(60L);
+        // Binance 历史订单查询窗口有上限；超出可查询范围时不能将“未找到”解释成终态。
+        if (from.isBefore(now.minusSeconds(6 * 24 * 3600L))) {
+            from = now.minusSeconds(6 * 24 * 3600L);
+        }
+        List<ExchangeGateway.OrderSnapshot> history = gateway.queryOrderHistory(
+            credential, symbol, new ExchangeGateway.TimeRange(from, now), 1000L);
+        if (history == null || history.isEmpty()) {
+            return null;
+        }
+        List<ExchangeGateway.OrderSnapshot> matches = history.stream()
+            .filter(Objects::nonNull)
+            .filter(candidate -> candidate.symbol() != null && candidate.symbol().equalsIgnoreCase(symbol))
+            .filter(candidate -> candidate.orderId() != null)
+            .filter(candidate -> orderId == null || orderId.equals(candidate.orderId()))
+            .filter(candidate -> clientOrderId == null || clientOrderId.isBlank()
+                || clientOrderId.equals(candidate.clientOrderId()))
+            .toList();
+        if (matches.size() != 1) {
+            if (!matches.isEmpty()) {
+                log.warn("待确认订单历史发现结果不唯一，继续保持 UNKNOWN symbol={} orderId={} clientOrderId={} matches={}",
+                    symbol, orderId, clientOrderId, matches.size());
+            }
+            return null;
+        }
+        ExchangeGateway.OrderSnapshot matched = matches.get(0);
+        log.info("待确认订单通过历史订单精确发现 symbol={} orderId={} clientOrderId={} status={}",
             symbol, matched.orderId(), matched.clientOrderId(), matched.status());
         return matched;
     }
@@ -2805,6 +2929,21 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 // 查不到订单不代表没有敞口：刷新实际持仓，外层继续挂载硬止损，保留待确认身份。
                 runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
             }
+            if (runtime.lastPendingOrderQueryFailure != null) {
+                // A timeout, rate limit, or other query error is not evidence that the order
+                // was absent. Keep the original pending identity and recovery block; do not
+                // increase not-found confirmations based on a failed read.
+                runtime.state.setRecoveryRequired(true);
+                stateService.save(runtime.state);
+                long now = System.currentTimeMillis();
+                if (now - runtime.lastPendingOrderQueryFailureLogAt >= 60_000L) {
+                    runtime.lastPendingOrderQueryFailureLogAt = now;
+                    log.warn("待确认订单查询失败，保留 UNKNOWN 身份且不累计未找到次数 instanceId={} credentialId={} symbol={} runMode={} orderId={} clientOrderId={} queryFailure={}",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+                        runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(), runtime.lastPendingOrderQueryFailure);
+                }
+                return true;
+            }
             int confirmations = runtime.state.getPendingNotFoundConfirmations() == null ? 0 : runtime.state.getPendingNotFoundConfirmations();
             confirmations++;
             runtime.state.setPendingNotFoundConfirmations(confirmations);
@@ -2821,12 +2960,16 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             }
             runtime.state.setRecoveryRequired(true);
             stateService.save(runtime.state);
-            log.warn("待确认订单未找到，保留交易保护 instanceId={} credentialId={} symbol={} runMode={} pendingAction={} executionStatus={} executionId={} idempotencyKey={} pendingOrderId={} pendingClientOrderId={} positionCount={} orderQueryFailure={} notFoundConfirmations={}",
-                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
-                runtime.state.getPendingAction(), execution == null ? "MISSING" : execution.getExecutionStatus(),
-                execution == null ? null : execution.getId(), runtime.state.getPendingIdempotencyKey(),
-                runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(),
-                snapshots == null ? null : snapshots.size(), runtime.lastPendingOrderQueryFailure, confirmations);
+            // UNKNOWN 可能是交易所请求已受理但响应丢失，不能仅凭多次未找到就清除保护。
+            // 将重复诊断降为每 6 次一次，避免恢复卡住时持续刷 WARN；每次恢复仍会查询订单事实。
+            if (confirmations % 6 == 0) {
+                log.warn("待确认订单仍未在活动/历史订单中找到，保留交易保护 instanceId={} credentialId={} symbol={} runMode={} pendingAction={} executionStatus={} executionId={} idempotencyKey={} pendingOrderId={} pendingClientOrderId={} positionCount={} orderQueryFailure={} notFoundConfirmations={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+                    runtime.state.getPendingAction(), execution == null ? "MISSING" : execution.getExecutionStatus(),
+                    execution == null ? null : execution.getId(), runtime.state.getPendingIdempotencyKey(),
+                    runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(),
+                    snapshots == null ? null : snapshots.size(), runtime.lastPendingOrderQueryFailure, confirmations);
+            }
             return true;
         }
         String status = order.status();
@@ -4284,6 +4427,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /** Next allowed WARN timestamp for repeated pending-action decisions. */
         private volatile long nextPendingActionWarnAt;
         private volatile String lastPendingOrderQueryFailure;
+        /** Throttle repeated diagnostics when an UNKNOWN order query keeps failing. */
+        private volatile long lastPendingOrderQueryFailureLogAt;
         private final EntryRetryGate entryRetryGate = new EntryRetryGate();
         /** 串行化交易对暂停操作与完整开仓决策/派单流程。 */
         private final Object entryDispatchLock = new Object();

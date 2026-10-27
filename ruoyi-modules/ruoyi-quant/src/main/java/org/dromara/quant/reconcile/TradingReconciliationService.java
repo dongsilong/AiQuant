@@ -216,7 +216,7 @@ public class TradingReconciliationService {
             if (runtimeSnapshotGeneration(credential.getId()) != runtimeGeneration) {
                 throw new SnapshotSupersededException("Account position snapshot superseded by a private-stream event");
             }
-            transaction.executeWithoutResult(status -> {
+            Runnable commitSnapshot = () -> transaction.executeWithoutResult(status -> {
                 if (openCapacityMapper != null && openCapacityMapper.lockCredential(credential.getId()).isEmpty()) {
                     throw new IllegalStateException("Cannot lock credential for position snapshot reconciliation");
                 }
@@ -236,6 +236,13 @@ public class TradingReconciliationService {
                     throw new IllegalStateException("Position snapshot fence advance failed");
                 }
             });
+            if (positionFreshness != null) {
+                if (!positionFreshness.runIfGenerationUnchanged(credential.getId(), eventGeneration, commitSnapshot)) {
+                    throw new SnapshotSupersededException("Position snapshot superseded before atomic commit");
+                }
+            } else {
+                commitSnapshot.run();
+            }
             if (!markPositionVerified(credential.getId(), eventGeneration)) {
                 // A private-stream event can race the final commit/verification boundary.
                 // The database may contain this older snapshot, but it must never become
@@ -333,7 +340,10 @@ public class TradingReconciliationService {
             created.complete(snapshots);
             return snapshots;
         } catch (SnapshotSupersededException ex) {
-            // 过期结果必须原样通知共享等待方，既不提交也不记作交易所请求失败。
+            // 私有流事件/其他更新已使本次快照过期：不能提交旧快照，也不能把它当成交易所故障。
+            // 同时安排一个按 credential 合并的只读刷新，避免仅依赖策略行情事件触发恢复，
+            // 否则低流动性交易对可能长期停留在 POSITION_FACTS_UNVERIFIED。
+            schedulePositionSnapshotRetry(credential, trigger + ":superseded", 1_000L);
             created.completeExceptionally(ex);
             throw ex;
         } catch (RuntimeException ex) {
@@ -474,6 +484,11 @@ public class TradingReconciliationService {
         try {
             snapshots = List.copyOf(java.util.Objects.requireNonNull(gateway.queryPositions(exchangeCredential, symbol),
                 "Binance symbol position snapshot missing"));
+        } catch (SnapshotSupersededException ex) {
+            // A newer private-stream fact won the race. Schedule a fresh read-only snapshot
+            // rather than leaving the strategy blocked until another market event arrives.
+            schedulePositionSnapshotRetry(credential, "symbol:" + symbol + ":superseded", 1_000L);
+            throw ex;
         } catch (RuntimeException ex) {
             long retryAfterMillis = snapshotRetryAfterMillis(ex);
             if (retryAfterMillis > 0) {
@@ -481,7 +496,14 @@ public class TradingReconciliationService {
             }
             throw ex;
         }
-        syncSymbolPositionSnapshot(credential, symbol, snapshots, fetchStartedAt, generation, runtimeGeneration);
+        try {
+            syncSymbolPositionSnapshot(credential, symbol, snapshots, fetchStartedAt, generation, runtimeGeneration);
+        } catch (SnapshotSupersededException ex) {
+            // Supersession is detected at commit time, after the REST read. Retry the whole
+            // read/commit cycle so the latest facts can converge without waiting for market data.
+            schedulePositionSnapshotRetry(credential, "symbol:" + symbol + ":superseded", 1_000L);
+            throw ex;
+        }
         return snapshots;
     }
 
@@ -520,6 +542,12 @@ public class TradingReconciliationService {
             commitPositionSnapshot(credential, account, positions, fetchStartedAt, positionGeneration, runtimeGeneration, "full-reconcile");
             ExchangeFacts facts = collectExchangeFacts(credential, historyHours, exchangeCredential, account, positions);
             transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
+        } catch (SnapshotSupersededException ex) {
+            // The account snapshot lost the generation fence to a newer private-stream fact.
+            // Schedule a fresh read-only full reconciliation so this credential can converge
+            // even if no subsequent market event arrives for the affected symbols.
+            schedulePositionSnapshotRetry(credential, "full-reconcile:superseded", 1_000L);
+            throw ex;
         } catch (RuntimeException ex) {
             failureRecorder.record(credential.getId(), ex.getMessage());
             throw ex;
