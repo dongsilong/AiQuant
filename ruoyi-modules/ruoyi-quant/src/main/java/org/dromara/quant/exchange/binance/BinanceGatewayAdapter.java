@@ -988,7 +988,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         Object data;
         try {
-            data = api(credential, RestRequestScheduler.Kind.ACCOUNT).queryOrder(symbol.trim(), orderId, clientOrderId, RECV_WINDOW_MILLIS).getData();
+            data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.queryOrder(symbol.trim(), orderId, clientOrderId, RECV_WINDOW_MILLIS).getData());
         } catch (RuntimeException ex) {
             var error = apiError(ex);
             if (error != null && error.getCode() == 400 && Integer.valueOf(-2013).equals(errorCode(error))) {
