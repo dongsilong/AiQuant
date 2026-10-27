@@ -134,4 +134,34 @@ class BinanceGatewayAdapterTest {
         assertFalse(result.complete());
         assertTrue(result.orders().isEmpty());
     }
+
+    @Test
+    void latchesRestClosedWhenHttp418HasNoTrustworthyBanExpiry() {
+        var adapter = new BinanceGatewayAdapter(new org.dromara.quant.config.QuantProperties());
+        var apiException = new ApiException(418, "I'm a teapot", java.util.Map.of(),
+            "{\"code\":-1003,\"msg\":\"Way too many requests\"}");
+
+        RuntimeException mapped = org.springframework.test.util.ReflectionTestUtils.invokeMethod(adapter, "requestFailure", "QUERY_KLINES", apiException);
+
+        var rateLimit = assertInstanceOf(org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException.class, mapped);
+        assertEquals(86_400_000L, rateLimit.retryAfterMillis());
+        var scheduler = (RestRequestScheduler) org.springframework.test.util.ReflectionTestUtils.getField(adapter, "restScheduler");
+        assertTrue(scheduler.isManuallyBlocked());
+        assertThrows(org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException.class, () -> scheduler.acquire(RestRequestScheduler.Kind.TRADE));
+    }
+
+    @Test
+    void defaults429ToBoundedDelayWhenRetryAfterHeaderIsMissing() {
+        var adapter = new BinanceGatewayAdapter(new org.dromara.quant.config.QuantProperties());
+        var apiException = new ApiException(429, "Too Many Requests", java.util.Map.of(),
+            "{\"code\":-1003,\"msg\":\"Too many requests\"}");
+
+        RuntimeException mapped = org.springframework.test.util.ReflectionTestUtils.invokeMethod(adapter, "requestFailure", "QUERY_ACCOUNT", apiException);
+
+        var rateLimit = assertInstanceOf(org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException.class, mapped);
+        assertEquals(60_000L, rateLimit.retryAfterMillis());
+        var scheduler = (RestRequestScheduler) org.springframework.test.util.ReflectionTestUtils.getField(adapter, "restScheduler");
+        assertThrows(org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException.class, () -> scheduler.acquire(RestRequestScheduler.Kind.ACCOUNT));
+    }
+
 }
