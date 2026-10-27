@@ -68,8 +68,19 @@ public class StrategyOrderCrashRecoveryService {
             record.getStrategyInstanceId(), positionSide, reduceOnly) != 1) {
             throw new IllegalStateException("Cannot bind exact recovered order to strategy: "
                 + "localOrderId=" + order.getId() + ", credentialId=" + credentialId
-                + ", symbol=" + symbol + ", exchangeOrderId=" + exact.orderId()
-                + ", clientOrderId=" + record.getClientOrderId()
+                + ", expectedSymbol=" + symbol + ", actualSymbol=" + order.getSymbol()
+                + ", expectedExchangeOrderId=" + exact.orderId()
+                + ", actualExchangeOrderId=" + order.getExchangeOrderId()
+                + ", expectedClientOrderId=" + record.getClientOrderId()
+                + ", actualClientOrderId=" + order.getClientOrderId()
+                + ", expectedStrategyId=" + record.getStrategyId()
+                + ", actualStrategyId=" + order.getStrategyId()
+                + ", expectedStrategyInstanceId=" + record.getStrategyInstanceId()
+                + ", actualStrategyInstanceId=" + order.getStrategyInstanceId()
+                + ", expectedPositionSide=" + positionSide
+                + ", actualPositionSide=" + order.getPositionSide()
+                + ", expectedReduceOnly=" + reduceOnly
+                + ", actualReduceOnly=" + order.getReduceOnly()
                 + ", updateCount=" + bound);
         }
         return order;
