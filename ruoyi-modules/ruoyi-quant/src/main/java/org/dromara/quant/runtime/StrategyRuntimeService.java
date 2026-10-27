@@ -1261,12 +1261,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             long now = System.currentTimeMillis();
             if (now >= runtime.nextPendingActionWarnAt) {
                 runtime.nextPendingActionWarnAt = now + 30_000L;
-                log.warn("策略决策暂停：存在待确认交易或退出协调尚未完成 instanceId={} credentialId={} symbol={} runMode={} pendingAction={} executionStatus={} pendingOrderId={} pendingClientOrderId={} exitCoordinating={}",
+                log.warn("策略决策暂停：存在待确认交易或退出协调尚未完成 instanceId={} credentialId={} symbol={} runMode={} pendingAction={} pendingOrderId={} pendingClientOrderId={} idempotencyKey={} exitCoordinating={}",
                     runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
                     runtime.state == null ? null : runtime.state.getPendingAction(),
-                    runtime.state == null ? null : runtime.state.getExecutionStatus(),
                     runtime.state == null ? null : runtime.state.getPendingOrderId(),
-                    runtime.state == null ? null : runtime.state.getPendingClientOrderId(), runtime.exitCoordinating.get());
+                    runtime.state == null ? null : runtime.state.getPendingClientOrderId(),
+                    runtime.state == null ? null : runtime.state.getPendingIdempotencyKey(), runtime.exitCoordinating.get());
             }
             return;
         }
