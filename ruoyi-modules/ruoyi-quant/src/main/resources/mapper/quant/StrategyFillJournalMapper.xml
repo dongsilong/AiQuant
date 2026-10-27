@@ -27,6 +27,30 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND exchange_trade_id=#
   (id,credential_id,symbol,exchange_trade_id,exchange_order_id,side,quantity,price,commission,commission_asset,realized_pnl,trade_time,attribution_status,attempt_count,created_at,updated_at)
 VALUES
   (#{id},#{credentialId},#{symbol},#{exchangeTradeId},#{exchangeOrderId},#{side},#{quantity},#{price},#{commission},#{commissionAsset},#{realizedPnl},#{tradeTime},'CAPTURED',0,NOW(3),NOW(3))]]></insert>
+    <update id="enrichMissingFacts" timeout="3"><![CDATA[
+UPDATE quant_strategy_fill_journal
+SET exchange_order_id=COALESCE(exchange_order_id, #{exchangeOrderId}),
+    side=COALESCE(side, #{side}),
+    quantity=COALESCE(quantity, #{quantity}),
+    price=COALESCE(price, #{price}),
+    commission=COALESCE(commission, #{commission}),
+    commission_asset=COALESCE(commission_asset, #{commissionAsset}),
+    realized_pnl=COALESCE(realized_pnl, #{realizedPnl}),
+    trade_time=COALESCE(trade_time, #{tradeTime}),
+    updated_at=NOW(3)
+WHERE id=#{id}
+  AND credential_id=#{credentialId}
+  AND symbol=#{symbol}
+  AND exchange_trade_id=#{exchangeTradeId}
+  AND (exchange_order_id IS NULL OR #{exchangeOrderId} IS NULL OR exchange_order_id=#{exchangeOrderId})
+  AND (side IS NULL OR #{side} IS NULL OR UPPER(side)=UPPER(#{side}))
+  AND (quantity IS NULL OR #{quantity} IS NULL OR quantity=#{quantity})
+  AND (price IS NULL OR #{price} IS NULL OR price=#{price})
+  AND (commission IS NULL OR #{commission} IS NULL OR commission=#{commission})
+  AND (commission_asset IS NULL OR #{commissionAsset} IS NULL OR UPPER(commission_asset)=UPPER(#{commissionAsset}))
+  AND (realized_pnl IS NULL OR #{realizedPnl} IS NULL OR realized_pnl=#{realizedPnl})
+  AND (trade_time IS NULL OR #{tradeTime} IS NULL OR trade_time=#{tradeTime})
+]]></update>
     <update id="updateStatus" timeout="3"><![CDATA[UPDATE quant_strategy_fill_journal
 SET attribution_status=#{status}, status_reason=#{reason}, attempt_count=attempt_count+1,
     last_attempt_at=NOW(3), updated_at=NOW(3)
