@@ -165,4 +165,53 @@ class BinanceGatewayAccountQueryTest {
         }
     }
 
+
+    @Test
+    void signedHistoryReadRefreshesClockAndRetriesOnceAfterInvalidTimestamp() throws IOException {
+        var timeCalls = new java.util.concurrent.atomic.AtomicInteger();
+        var historyCalls = new java.util.concurrent.atomic.AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/fapi/v1/time", exchange -> {
+            long skewMillis = timeCalls.incrementAndGet() == 1 ? 1_500L : 0L;
+            byte[] body = ("{\"serverTime\":" + (System.currentTimeMillis() + skewMillis) + "}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.createContext("/fapi/v1/allOrders", exchange -> {
+            int attempt = historyCalls.incrementAndGet();
+            long timestamp = java.util.Arrays.stream(exchange.getRequestURI().getRawQuery().split("&"))
+                .filter(value -> value.startsWith("timestamp="))
+                .map(value -> value.substring("timestamp=".length()))
+                .mapToLong(Long::parseLong)
+                .findFirst()
+                .orElseThrow();
+            int status = attempt == 1 && timestamp > System.currentTimeMillis() + 999 ? 400 : 200;
+            String body = status == 400
+                ? "{\"code\":-1021,\"msg\":\"Timestamp for this request was 1000ms ahead of the server's time.\"}"
+                : "[]";
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(status, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var properties = new QuantProperties();
+            properties.getBinance().setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
+            var gateway = new BinanceGatewayAdapter(properties);
+            var now = java.time.Instant.now();
+
+            var history = gateway.queryOrderHistory(
+                new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE"),
+                "BTCUSDT", new ExchangeGateway.TimeRange(now.minusSeconds(60), now), 10L);
+
+            assertTrue(history.isEmpty());
+            assertEquals(2, timeCalls.get(), "initial sync and one forced refresh are expected");
+            assertEquals(2, historyCalls.get(), "the read should be retried once after -1021");
+        } finally {
+            server.stop(0);
+        }
+    }
+
 }
