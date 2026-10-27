@@ -491,7 +491,13 @@ public class TradingReconciliationService {
             }
             throw ex;
         }
-        syncSymbolPositionSnapshot(credential, symbol, snapshots, fetchStartedAt, generation, runtimeGeneration);
+        try {
+            syncSymbolPositionSnapshot(credential, symbol, snapshots, fetchStartedAt, generation, runtimeGeneration);
+        } catch (SnapshotSupersededException ex) {
+            // 单交易对刷新也可能被私有流事件取代；不能只让完整账户对账负责恢复。
+            schedulePositionSnapshotRetry(credential, "symbol:" + symbol + ":superseded", 1_000L);
+            throw ex;
+        }
         return snapshots;
     }
 
@@ -499,7 +505,12 @@ public class TradingReconciliationService {
      * 对账指定交易对持仓，保留无法唯一归属的原始策略份额。
      */
     private void syncSymbolPosition(QuantCredential credential, String symbol, List<ExchangeGateway.PositionSnapshot> snapshots) {
-        if (snapshots.stream().anyMatch(snapshot -> !symbol.equalsIgnoreCase(snapshot.symbol()))) {
+        // An empty response is not a verified zero-position fact. Some adapters filter zero rows;
+        // never let that representation erase a persisted live position.
+        if (snapshots.isEmpty()) {
+            throw new IllegalStateException("Binance returned an empty symbol position snapshot; refusing to infer flat position: " + symbol);
+        }
+        if (snapshots.stream().anyMatch(snapshot -> snapshot == null || !symbol.equalsIgnoreCase(snapshot.symbol()))) {
             throw new IllegalStateException("Binance returned a position outside the requested symbol: " + symbol);
         }
         List<ExchangeGateway.PositionSnapshot> symbolFacts = snapshots.stream().filter(snapshot -> symbol.equalsIgnoreCase(snapshot.symbol())).toList();
@@ -530,6 +541,10 @@ public class TradingReconciliationService {
             commitPositionSnapshot(credential, account, positions, fetchStartedAt, positionGeneration, runtimeGeneration, "full-reconcile");
             ExchangeFacts facts = collectExchangeFacts(credential, historyHours, exchangeCredential, account, positions);
             transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
+        } catch (SnapshotSupersededException ex) {
+            // 私有流在 REST 快照读取期间推进了持仓事实；丢弃旧快照并合并一次只读重试。
+            schedulePositionSnapshotRetry(credential, "full-reconcile:superseded", 1_000L);
+            throw ex;
         } catch (RuntimeException ex) {
             failureRecorder.record(credential.getId(), ex.getMessage());
             throw ex;
