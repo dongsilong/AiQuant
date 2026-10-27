@@ -2935,9 +2935,13 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 // increase not-found confirmations based on a failed read.
                 runtime.state.setRecoveryRequired(true);
                 stateService.save(runtime.state);
-                log.warn("待确认订单查询失败，保留 UNKNOWN 身份且不累计未找到次数 instanceId={} credentialId={} symbol={} runMode={} orderId={} clientOrderId={} queryFailure={}",
-                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
-                    runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(), runtime.lastPendingOrderQueryFailure);
+                long now = System.currentTimeMillis();
+                if (now - runtime.lastPendingOrderQueryFailureLogAt >= 60_000L) {
+                    runtime.lastPendingOrderQueryFailureLogAt = now;
+                    log.warn("待确认订单查询失败，保留 UNKNOWN 身份且不累计未找到次数 instanceId={} credentialId={} symbol={} runMode={} orderId={} clientOrderId={} queryFailure={}",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+                        runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(), runtime.lastPendingOrderQueryFailure);
+                }
                 return true;
             }
             int confirmations = runtime.state.getPendingNotFoundConfirmations() == null ? 0 : runtime.state.getPendingNotFoundConfirmations();
@@ -4423,6 +4427,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /** Next allowed WARN timestamp for repeated pending-action decisions. */
         private volatile long nextPendingActionWarnAt;
         private volatile String lastPendingOrderQueryFailure;
+        /** Throttle repeated diagnostics when an UNKNOWN order query keeps failing. */
+        private volatile long lastPendingOrderQueryFailureLogAt;
         private final EntryRetryGate entryRetryGate = new EntryRetryGate();
         /** 串行化交易对暂停操作与完整开仓决策/派单流程。 */
         private final Object entryDispatchLock = new Object();
