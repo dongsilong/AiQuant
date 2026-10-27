@@ -2355,6 +2355,42 @@ class StrategyRuntimeSafetyTest {
         }
     }
 
+    @Test
+    void missingExactOrderUsesStrictlyMatchedOpenOrdersFallbackWithoutClearingUnknown() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingAction("OPEN");
+            state.setPendingOrderId(55L);
+            state.setPendingClientOrderId("open-client");
+            state.setPendingIdempotencyKey("open-key");
+            state.setPendingOrderTime(System.currentTimeMillis());
+            state.setDirection("LONG");
+            state.setStatus("OPEN_PENDING");
+            state.setRecoveryRequired(true);
+            state.setUnsafeRecovery(true);
+
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            var reconciliation = (org.dromara.quant.reconcile.TradingReconciliationService) ReflectionTestUtils.getField(f.service, "reconciliationService");
+            var matching = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "open-client", "BUY", "MARKET", "NEW",
+                new BigDecimal("100"), BigDecimal.ONE, BigDecimal.ZERO, Instant.now());
+            when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(55L), eq("open-client"))).thenReturn(null);
+            when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(matching));
+            when(reconciliation.refreshSymbolPosition(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+
+            assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime));
+
+            verify(gateway).queryOrder(any(), eq("BTCUSDT"), eq(55L), eq("open-client"));
+            verify(gateway).queryOrders(any(), eq("BTCUSDT"));
+            assertEquals("OPEN", state.getPendingAction(), "活动订单只能证明订单仍在交易所，不能清除待确认动作");
+            assertEquals(55L, state.getPendingOrderId());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"CANCELED", "EXPIRED", "REJECTED"})
     void terminalPartialOpenReadsFreshPositionBeforeApplyingExecution(String status) throws Exception {
