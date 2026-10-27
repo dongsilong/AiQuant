@@ -733,7 +733,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     // 全账户快照可能已把状态标记为待封锁，而运行时本地尚无旧持仓对象。
                     blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
                     boolean flatPositionConfirmed = "PAPER".equalsIgnoreCase(runtime.credential.getRunMode())
-                        || snapshots != null && snapshots.stream().allMatch(snapshot -> snapshot != null
+                        || snapshots != null && !snapshots.isEmpty() && snapshots.stream().allMatch(snapshot -> snapshot != null
                             && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
                             && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
                     if (!flatPositionConfirmed) {
@@ -2710,7 +2710,9 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
         }
         boolean closedOpenProven = false;
-        if (order != null && "FILLED".equalsIgnoreCase(order.status()) && "OPEN".equals(expectedPending.get(0)) && snapshots != null && snapshots.stream().allMatch(p -> p.quantity() != null && p.quantity().signum() == 0)) {
+        if (order != null && "FILLED".equalsIgnoreCase(order.status()) && "OPEN".equals(expectedPending.get(0))
+            && snapshots != null && !snapshots.isEmpty() && snapshots.stream().allMatch(p -> p != null
+                && runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0)) {
             Instant from = expectedPending.get(4) instanceof Long time ? Instant.ofEpochMilli(time) : order.updateTime();
             Instant to = Instant.now();
             // 成交接口窗口有限；缺少完整历史或双向持仓归属时保留 pending，不能仅凭空仓放行。
@@ -2722,7 +2724,8 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                     // 成交证明读取之后再次确认空仓，避免使用旧的持仓快照提交恢复。
                     snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
                     closedOpenProven =
-snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
+snapshots != null && !snapshots.isEmpty() && snapshots.stream().allMatch(p -> p != null
+                            && runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
                 }
             }
         }
@@ -2928,6 +2931,20 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             if (snapshots != null && !snapshots.isEmpty()) {
                 // 查不到订单不代表没有敞口：刷新实际持仓，外层继续挂载硬止损，保留待确认身份。
                 runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
+            }
+            if (runtime.lastPendingOrderQueryFailure != null) {
+                // 查询接口失败不是“交易所明确未找到”。不得把超时、限流或 REST 延迟
+                // 计入 not-found 次数，否则诊断会错误地表现为连续查无订单。
+                runtime.state.setRecoveryRequired(true);
+                stateService.save(runtime.state);
+                long now = System.currentTimeMillis();
+                if (now >= runtime.nextPendingActionWarnAt) {
+                    runtime.nextPendingActionWarnAt = now + 60_000L;
+                    log.warn("待确认订单核实请求失败，保留执行身份并等待重试 instanceId={} credentialId={} symbol={} runMode={} executionId={} clientOrderId={} queryFailure={}",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+                        execution == null ? null : execution.getId(), runtime.state.getPendingClientOrderId(), runtime.lastPendingOrderQueryFailure);
+                }
+                return true;
             }
             int confirmations = runtime.state.getPendingNotFoundConfirmations() == null ? 0 : runtime.state.getPendingNotFoundConfirmations();
             confirmations++;
@@ -3787,7 +3804,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
              ex.getClass().getSimpleName());
             return new ProtectionCleanupResult(false, false);
         }
-        boolean exchangeFlat = snapshots != null && snapshots.stream().allMatch(snapshot -> snapshot.quantity() != null && snapshot.quantity().signum() == 0);
+        boolean exchangeFlat = snapshots != null && !snapshots.isEmpty() && snapshots.stream().allMatch(snapshot -> snapshot != null
+            && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol()) && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
         if (!exchangeFlat) {
             log.warn("{}时交易所仍有持仓或持仓结果不完整，保留所有保护单 instanceId={} positionId={} symbol={}", reason, runtime.instance.getId(), positionId, runtime.symbol.getSymbol());
             return new ProtectionCleanupResult(false, false);
@@ -3823,8 +3841,9 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                         runtime.instance.getId(), runtime.symbol.getSymbol(), ex.getClass().getSimpleName());
                     return false;
                 }
-                boolean exchangeFlat = snapshots != null && snapshots.stream()
-                    .allMatch(snapshot -> snapshot.quantity() != null && snapshot.quantity().signum() == 0);
+                boolean exchangeFlat = snapshots != null && !snapshots.isEmpty() && snapshots.stream()
+                    .allMatch(snapshot -> snapshot != null && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
+                        && snapshot.quantity() != null && snapshot.quantity().signum() == 0);
                 if (!exchangeFlat) {
                     markProtectionCleanupUnresolved(runtime, state, "缺少 positionId 且交易所持仓非空或未知");
                     log.warn("缺少 positionId，交易所持仓非空或结果不完整，保留开仓阻断 instanceId={} symbol={}",
