@@ -51,6 +51,7 @@ public class ExecutionRecoveryService {
     private volatile LiveOrderDispatcher liveOrderDispatcher;
     private volatile StrategyOrderCrashRecoveryService crashRecovery;
 
+    @Autowired
     public void setCrashRecovery(StrategyOrderCrashRecoveryService recovery) {
         this.crashRecovery = java.util.Objects.requireNonNull(recovery);
     }
