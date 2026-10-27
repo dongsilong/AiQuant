@@ -2645,6 +2645,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 }
             }
         }
+        runtime.lastPendingOrderQueryFailure = orderQueryFailure;
         if (decisionLogs != null && order != null) {
             decisionLogs.order(runtime.credential.getId(), order);
         }
@@ -2824,7 +2825,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 runtime.state.getPendingAction(), execution == null ? "MISSING" : execution.getExecutionStatus(),
                 execution == null ? null : execution.getId(), runtime.state.getPendingIdempotencyKey(),
                 runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(),
-                snapshots == null ? null : snapshots.size(), orderQueryFailure, confirmations);
+                snapshots == null ? null : snapshots.size(), runtime.lastPendingOrderQueryFailure, confirmations);
             return true;
         }
         String status = order.status();
@@ -4281,6 +4282,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final AtomicBoolean reconcileRequested = new AtomicBoolean();
         /** Next allowed WARN timestamp for repeated pending-action decisions. */
         private volatile long nextPendingActionWarnAt;
+        private volatile String lastPendingOrderQueryFailure;
         private final EntryRetryGate entryRetryGate = new EntryRetryGate();
         /** 串行化交易对暂停操作与完整开仓决策/派单流程。 */
         private final Object entryDispatchLock = new Object();
