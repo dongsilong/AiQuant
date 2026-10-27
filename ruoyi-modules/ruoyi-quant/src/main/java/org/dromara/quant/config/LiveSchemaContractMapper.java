@@ -21,4 +21,6 @@ public interface LiveSchemaContractMapper {
 
     List<String> positionReturnRateColumns();
 
+    List<String> orderBalanceSnapshotColumns();
+
 }
