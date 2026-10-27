@@ -846,12 +846,13 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         ChangePositionModeRequest request = new ChangePositionModeRequest();
         request.setDualSidePosition(hedgeMode ? "TRUE" : "FALSE");
         try {
-            api(credential).changePositionMode(request);
+            api(credential, true).changePositionMode(request);
         } catch (RuntimeException ex) {
             String message = ex.getMessage();
-            if (message == null || (!message.contains("No need to change") && !message.contains("-4059"))) {
-                throw new IllegalStateException("设置 Binance 持仓模式失败", ex);
+            if (message != null && (message.contains("No need to change") || message.contains("-4059"))) {
+                return;
             }
+            throw requestFailure("SET_POSITION_MODE", ex);
         }
     }
 
