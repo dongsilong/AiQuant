@@ -665,8 +665,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         }
                         runtime.stateRefreshRequired = true;
                         runtime.positionReconciliationBlockReason = "STATE_CHANGED_DURING_RECONCILIATION";
-                        // 状态乐观锁冲突需要先刷新持久化状态，但不能在同一工作线程内立即热循环重试。
-                        // 设置退避时间后由 scheduleReconciliationRetry 重新排队；在下一次核验成功前继续阻断开仓。
+                        // 持久化状态在本次核验期间发生变化；退避后重新读取，避免连续发起快照请求。
                         runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
                         runtime.reconcileRequested.set(true);
                     }
@@ -831,7 +830,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             runtime.state.setRecoveryRequired(true);
                             runtime.state.setUnsafeRecovery(true);
                         }
-                        runtime.nextReconcileAt = 0L;
+                        // 先刷新持久化状态，再退避重试，避免乐观锁冲突时在同一工作线程内热循环。
+                        runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
                         runtime.reconcileRequested.set(true);
                     }
                 }
