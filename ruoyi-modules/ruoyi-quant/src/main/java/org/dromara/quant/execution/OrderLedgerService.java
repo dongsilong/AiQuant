@@ -125,14 +125,33 @@ public class OrderLedgerService {
             return entity;
         }
         if (mapper.mergeExchangeFactIfMonotonic(entity) == 1) {
-            return entity;
+            // Return the committed row, not the merge input: snapshot inputs do not
+            // necessarily carry strategy ownership already persisted locally.
+            QuantOrder persisted = mapper.selectById(entity.getId());
+            if (persisted == null) {
+                throw new IllegalStateException("订单事实写入后无法读取已提交记录，等待重试");
+            }
+            return persisted;
         }
         QuantOrder current = mapper.selectById(entity.getId());
         if (current == null) {
             throw new IllegalStateException("订单对账期间本地订单消失，等待重试");
         }
-        if (entity.getExchangeOrderId() != null && current.getExchangeOrderId() != null && !entity.getExchangeOrderId().equals(current.getExchangeOrderId()) || entity.getStrategyInstanceId() != null && current.getStrategyInstanceId() != null && !entity.getStrategyInstanceId().equals(current.getStrategyInstanceId())) {
-            throw new IllegalStateException("交易所订单身份或策略归属冲突，禁止覆盖");
+        if ((entity.getExchangeOrderId() != null && current.getExchangeOrderId() != null
+                && !entity.getExchangeOrderId().equals(current.getExchangeOrderId()))
+            || (entity.getClientOrderId() != null && current.getClientOrderId() != null
+                && !entity.getClientOrderId().equals(current.getClientOrderId())
+                && !current.getClientOrderId().startsWith("EXCHANGE:"))
+            || (entity.getStrategyId() != null && current.getStrategyId() != null
+                && !entity.getStrategyId().equals(current.getStrategyId()))
+            || (entity.getStrategyInstanceId() != null && current.getStrategyInstanceId() != null
+                && !entity.getStrategyInstanceId().equals(current.getStrategyInstanceId()))) {
+            throw new IllegalStateException("交易所订单身份或策略归属冲突，禁止覆盖: localOrderId="
+                + current.getId() + ", credentialId=" + current.getCredentialId()
+                + ", symbol=" + current.getSymbol() + ", exchangeOrderId=" + current.getExchangeOrderId()
+                + ", clientOrderId=" + current.getClientOrderId()
+                + ", strategyId=" + current.getStrategyId()
+                + ", strategyInstanceId=" + current.getStrategyInstanceId());
         }
         // Returning the freshest DB state (rather than the stale in-memory entity)
         // ensures downstream reconciliation never assumes a rejected snapshot won.
