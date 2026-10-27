@@ -65,7 +65,8 @@ class StrategyFillJournalServiceTest {
 
     @Test
     void laterCompleteReplayEnrichesPreviouslyUnknownMoneyFactsWithoutConflict() {
-        var incoming = fill();
+        var incoming = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00.123Z"), "USDT");
         var stored = new StrategyFillJournalRecord();
         stored.setId(77L);
         stored.setCredentialId(1L);
@@ -87,8 +88,9 @@ class StrategyFillJournalServiceTest {
         var enriched = org.mockito.ArgumentCaptor.forClass(StrategyFillJournalRecord.class);
         verify(journal).enrichMissingFacts(enriched.capture());
         assertEquals(77L, enriched.getValue().getId());
-        assertNull(enriched.getValue().getCommission());
-        assertNull(enriched.getValue().getRealizedPnl());
+        assertEquals(new BigDecimal("0.01"), enriched.getValue().getCommission());
+        assertEquals(BigDecimal.ZERO, enriched.getValue().getRealizedPnl());
+        assertEquals("USDT", enriched.getValue().getCommissionAsset());
         verify(journal, never()).insertRaw(any());
         verify(journal, never()).updateStatus(eq(77L), eq("CONFLICT"), anyString());
     }
