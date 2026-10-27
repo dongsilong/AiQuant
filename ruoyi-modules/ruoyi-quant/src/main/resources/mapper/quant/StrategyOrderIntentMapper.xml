@@ -41,4 +41,15 @@ WHERE id=#{localId} AND credential_id=#{credentialId}
   AND (strategy_instance_id IS NULL OR strategy_instance_id=#{instanceId})
   AND (position_side IS NULL OR position_side=#{positionSide})
   AND (reduce_only IS NULL OR reduce_only=#{reduceOnly})]]></update>
+    <select id="countExactRecoveredBinding" resultType="int" timeout="3"><![CDATA[
+SELECT COUNT(*)
+FROM quant_order
+WHERE id=#{localId} AND credential_id=#{credentialId}
+  AND symbol=#{symbol} AND exchange_order_id=#{orderId}
+  AND client_order_id=#{clientOrderId}
+  AND strategy_id=#{strategyId}
+  AND strategy_instance_id=#{instanceId}
+  AND position_side=#{positionSide}
+  AND reduce_only=#{reduceOnly}
+]]></select>
 </mapper>
