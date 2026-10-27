@@ -557,7 +557,10 @@ public class StrategyRuntimeService {
             runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
             runtime.positionReconciliationBlockReason, delayMillis);
         try {
-            java.util.concurrent.CompletableFuture.delayedExecutor(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS, recoveryExecutor)
+            // 定时等待使用默认延迟调度器；到期后再由 requestReconciliation 提交到 recoveryExecutor。
+            // 若直接把 recoveryExecutor 作为 delayedExecutor 的目标，目标执行器在延迟期间关闭时，
+            // 拒绝发生在异步触发阶段，外层 try/catch 捕获不到。
+            java.util.concurrent.CompletableFuture.delayedExecutor(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
                 .execute(() -> {
                     if (!runtime.closed) {
                         requestReconciliation(runtime);
