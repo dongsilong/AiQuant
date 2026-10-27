@@ -2658,7 +2658,10 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 // 查询异常不是“订单不存在”；记录诊断并保持 UNKNOWN，不因异常尝试重发交易。
                 orderQueryFailure = ex.getClass().getSimpleName();
             }
-            if (order == null && orderQueryFailure == null) {
+            // 当前活动订单列表只是精确订单查询的备用路径，未找到时不必每 5 秒重复扫描。
+            // 每 3 次精确查询才扫描一次活动订单；历史订单则每 6 次查询一次，以控制 REST 权重。
+            int priorNotFound = expectedState.getPendingNotFoundConfirmations() == null ? 0 : expectedState.getPendingNotFoundConfirmations();
+            if (order == null && orderQueryFailure == null && (priorNotFound + 1) % 3 == 0) {
                 try {
                     order = findPendingOrderInOpenOrders(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
                 } catch (RuntimeException ex) {
@@ -2666,9 +2669,8 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 }
             }
             // 当前活动订单只覆盖仍处于活动态的订单。若下单响应丢失而订单已成交/撤销，
-            // 仅反复查活动订单会永久停留在 UNKNOWN。每 6 次未找到才查询历史，避免把历史接口
-            // 加入每个 5 秒恢复周期，且只接受完整历史返回中身份完全匹配的订单。
-            int priorNotFound = expectedState.getPendingNotFoundConfirmations() == null ? 0 : expectedState.getPendingNotFoundConfirmations();
+            // 仅反复查活动订单会永久停留在 UNKNOWN。每 6 次未找到才查询历史，且只接受
+            // 交易对、订单 ID、客户订单 ID 完全匹配的正向事实。
             if (order == null && orderQueryFailure == null && (priorNotFound + 1) % 6 == 0) {
                 try {
                     order = findPendingOrderInHistory(credential, runtime.symbol.getSymbol(), orderId, clientOrderId,
