@@ -405,7 +405,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 return new ConnectivityResult(false, "缺少账户凭证");
             }
             ApiResponse<AccountInformationV3Response> account = api(credential, RestRequestScheduler.Kind.ACCOUNT).accountInformationV3(RECV_WINDOW_MILLIS);
-            ApiResponse<FuturesAccountConfigurationResponse> configuration = api(credential).futuresAccountConfiguration(RECV_WINDOW_MILLIS);
+            ApiResponse<FuturesAccountConfigurationResponse> configuration = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                client -> client.futuresAccountConfiguration(RECV_WINDOW_MILLIS));
             if (account.getData() == null || configuration.getData() == null) {
                 return new ConnectivityResult(false, "Binance 凭证校验无响应");
             }
@@ -903,7 +904,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (symbol == null || !symbol.matches("[a-zA-Z0-9]{2,32}")) {
             throw new IllegalArgumentException("Binance 交易设置回查缺少有效交易对");
         }
-        var rows = api(credential, RestRequestScheduler.Kind.ACCOUNT).positionInformationV2(symbol.trim().toUpperCase(Locale.ROOT), RECV_WINDOW_MILLIS).getData();
+        var rows = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+            client -> client.positionInformationV2(symbol.trim().toUpperCase(Locale.ROOT), RECV_WINDOW_MILLIS).getData());
         if (rows == null || rows.isEmpty()) {
             throw new IllegalStateException("Binance 未返回可核实的交易对保证金/杠杆配置");
         }
