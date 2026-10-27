@@ -127,7 +127,9 @@ public class StrategyFillJournalService {
             // Early WebSocket/history snapshots can omit commission, realized PnL, or other
             // money facts. A later authenticated REST replay may fill those unknown fields,
             // but may never overwrite a previously persisted non-null exchange fact.
-            if (journal.enrichMissingFacts(existing.getId(), fill) > 0) {
+            StrategyFillJournalRecord incoming = fromSnapshot(fill, credentialId, symbol);
+            incoming.setId(existing.getId());
+            if (journal.enrichMissingFacts(incoming) > 0) {
                 existing = journal.selectByKey(credentialId, symbol, fill.tradeId());
             }
             return existing;
