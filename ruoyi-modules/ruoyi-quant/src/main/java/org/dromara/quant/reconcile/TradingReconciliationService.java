@@ -496,7 +496,14 @@ public class TradingReconciliationService {
             }
             throw ex;
         }
-        syncSymbolPositionSnapshot(credential, symbol, snapshots, fetchStartedAt, generation, runtimeGeneration);
+        try {
+            syncSymbolPositionSnapshot(credential, symbol, snapshots, fetchStartedAt, generation, runtimeGeneration);
+        } catch (SnapshotSupersededException ex) {
+            // Supersession is detected at commit time, after the REST read. Retry the whole
+            // read/commit cycle so the latest facts can converge without waiting for market data.
+            schedulePositionSnapshotRetry(credential, "symbol:" + symbol + ":superseded", 1_000L);
+            throw ex;
+        }
         return snapshots;
     }
 
