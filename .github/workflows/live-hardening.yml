@@ -7,6 +7,7 @@ on:
       - fix/live-rest-ws-recovery-20261024
       - fix/ws-jetty-financial-ledger-20261025
       - fix/ws-jetty-financial-ledger-20261025-hardening
+      - fix/batusdt-unknown-order-recovery-20261027
   pull_request:
     branches:
       - ai-quant-dev
