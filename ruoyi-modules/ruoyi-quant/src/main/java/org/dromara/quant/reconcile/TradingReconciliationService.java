@@ -499,7 +499,12 @@ public class TradingReconciliationService {
      * 对账指定交易对持仓，保留无法唯一归属的原始策略份额。
      */
     private void syncSymbolPosition(QuantCredential credential, String symbol, List<ExchangeGateway.PositionSnapshot> snapshots) {
-        if (snapshots.stream().anyMatch(snapshot -> !symbol.equalsIgnoreCase(snapshot.symbol()))) {
+        // An empty response is not a verified zero-position fact. Some adapters filter zero rows;
+        // never let that representation erase a persisted live position.
+        if (snapshots.isEmpty()) {
+            throw new IllegalStateException("Binance returned an empty symbol position snapshot; refusing to infer flat position: " + symbol);
+        }
+        if (snapshots.stream().anyMatch(snapshot -> snapshot == null || !symbol.equalsIgnoreCase(snapshot.symbol()))) {
             throw new IllegalStateException("Binance returned a position outside the requested symbol: " + symbol);
         }
         List<ExchangeGateway.PositionSnapshot> symbolFacts = snapshots.stream().filter(snapshot -> symbol.equalsIgnoreCase(snapshot.symbol())).toList();
