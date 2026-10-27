@@ -505,19 +505,33 @@ public class StrategyRuntimeService {
                 return;
             }
         }
-        recoveryExecutor.execute(() -> {
-            try {
-                do {
-                    runtime.reconcileRequested.set(false);
-                    reconcilePosition(runtime);
-                } while (!runtime.closed && runtime.reconcileRequested.get() && System.currentTimeMillis() >= runtime.nextReconcileAt);
-            } finally {
-                runtime.reconciling.set(false);
-                if (!runtime.closed && runtime.reconcileRequested.get()) {
-                    requestReconciliation(runtime);
+        try {
+            recoveryExecutor.execute(() -> {
+                try {
+                    do {
+                        runtime.reconcileRequested.set(false);
+                        reconcilePosition(runtime);
+                    } while (!runtime.closed && runtime.reconcileRequested.get() && System.currentTimeMillis() >= runtime.nextReconcileAt);
+                } finally {
+                    runtime.reconciling.set(false);
+                    if (!runtime.closed && runtime.reconcileRequested.get()) {
+                        requestReconciliation(runtime);
+                    }
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            // 提交任务失败时必须释放 in-flight 标志；否则该 Runtime 会永久表现为正在对账。
+            // Executor 已关闭时不在这里递归重试，保留请求标志供存活期监督/事件恢复。
+            runtime.reconciling.set(false);
+            synchronized (runtime) {
+                if (!runtime.closed) {
+                    runtime.reconcileRequested.set(true);
+                    runtime.nextReconcileAt = Math.max(runtime.nextReconcileAt, System.currentTimeMillis() + 5_000L);
                 }
             }
-        });
+            log.warn("策略对账任务未能提交，已释放对账占用标志 instanceId={} credentialId={} symbol={} executorShutdown={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), recoveryExecutor.isShutdown());
+        }
     }
 
     /**
@@ -542,12 +556,18 @@ public class StrategyRuntimeService {
         log.debug("策略持仓核验/恢复尚未解除开仓阻断，安排自动重试 instanceId={} credentialId={} symbol={} runMode={} reason={} retryAfterMillis={}",
             runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
             runtime.positionReconciliationBlockReason, delayMillis);
-        java.util.concurrent.CompletableFuture.delayedExecutor(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS, recoveryExecutor)
-            .execute(() -> {
-                if (!runtime.closed) {
-                    requestReconciliation(runtime);
-                }
-            });
+        try {
+            java.util.concurrent.CompletableFuture.delayedExecutor(delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS, recoveryExecutor)
+                .execute(() -> {
+                    if (!runtime.closed) {
+                        requestReconciliation(runtime);
+                    }
+                });
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            // 关闭阶段不再安排新任务；Runtime 仍保持事实未核实，不能因调度失败而放开开仓。
+            log.debug("策略对账延迟重试未能提交，通常表示运行时正在关闭 instanceId={} symbol={} executorShutdown={}",
+                runtime.instance.getId(), runtime.symbol.getSymbol(), recoveryExecutor.isShutdown());
+        }
     }
 
     /**
