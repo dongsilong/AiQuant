@@ -234,7 +234,8 @@ public class TradingReconciliationService {
                 syncPositions(credential, positions);
                 if (snapshotFence != null && snapshotFence.advance(credential.getId(), fetchStartedAt) != 1) {
                     throw new IllegalStateException("Position snapshot fence advance failed");
-                }            });
+                }
+            });
             if (positionFreshness != null) {
                 if (!positionFreshness.runIfGenerationUnchanged(credential.getId(), eventGeneration, commitSnapshot)) {
                     throw new SnapshotSupersededException("Position snapshot superseded before atomic commit");
