@@ -2,7 +2,8 @@
 -- Run against the configured quant database after a verified backup.
 -- Existing tranId=0 rows require a source-backed fingerprint; do not guess their identity or
 -- timezone. Refuse this migration before altering anything if such rows exist.
-DELIMITER $$
+DELIMITER $
+DROP PROCEDURE IF EXISTS migrate_financial_event_identity_key$
 CREATE PROCEDURE migrate_financial_event_identity_key()
 BEGIN
     IF EXISTS (
