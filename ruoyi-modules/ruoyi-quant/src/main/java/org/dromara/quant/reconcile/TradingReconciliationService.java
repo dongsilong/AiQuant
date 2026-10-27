@@ -216,7 +216,7 @@ public class TradingReconciliationService {
             if (runtimeSnapshotGeneration(credential.getId()) != runtimeGeneration) {
                 throw new SnapshotSupersededException("Account position snapshot superseded by a private-stream event");
             }
-            transaction.executeWithoutResult(status -> {
+            Runnable commitSnapshot = () -> transaction.executeWithoutResult(status -> {
                 if (openCapacityMapper != null && openCapacityMapper.lockCredential(credential.getId()).isEmpty()) {
                     throw new IllegalStateException("Cannot lock credential for position snapshot reconciliation");
                 }
@@ -234,8 +234,14 @@ public class TradingReconciliationService {
                 syncPositions(credential, positions);
                 if (snapshotFence != null && snapshotFence.advance(credential.getId(), fetchStartedAt) != 1) {
                     throw new IllegalStateException("Position snapshot fence advance failed");
+                }            });
+            if (positionFreshness != null) {
+                if (!positionFreshness.runIfGenerationUnchanged(credential.getId(), eventGeneration, commitSnapshot)) {
+                    throw new SnapshotSupersededException("Position snapshot superseded before atomic commit");
                 }
-            });
+            } else {
+                commitSnapshot.run();
+            }
             if (!markPositionVerified(credential.getId(), eventGeneration)) {
                 // A private-stream event can race the final commit/verification boundary.
                 // The database may contain this older snapshot, but it must never become
