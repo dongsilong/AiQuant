@@ -960,13 +960,16 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     @Override
     public List<OrderSnapshot> queryOrders(Credential credential, String symbol) {
-        ApiResponse<CurrentAllOpenOrdersResponse> response = api(credential).currentAllOpenOrders(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS);
-        if (response == null || response.getData() == null) {
-            return List.of();
-        }
-        return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
-            item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
-            "getAvgPrice")))).toList();
+        return signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
+            ApiResponse<CurrentAllOpenOrdersResponse> response =
+                client.currentAllOpenOrders(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS);
+            if (response == null || response.getData() == null) {
+                return List.of();
+            }
+            return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
+                item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
+                "getAvgPrice")))).toList();
+        });
     }
 
     /**
@@ -1027,9 +1030,15 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         Long from = range == null || range.from() == null ? null : range.from().toEpochMilli();
         Long to = range == null || range.to() == null ? null : range.to().toEpochMilli();
-        ApiResponse<AccountTradeListResponse> response = api(credential).accountTradeList(symbol == null ? null : symbol.trim(), null, from, to, null, 1000L, RECV_WINDOW_MILLIS);
-        return response.getData().stream().map(item -> new TradeSnapshot(item.getSymbol(), item.getId(), item.getOrderId(), item.getSide(), decimal(item.getQty()),
-            decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()), instant(item.getTime()), string(item, "getCommissionAsset"))).toList();
+        return signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
+            ApiResponse<AccountTradeListResponse> response =
+                client.accountTradeList(symbol.trim(), null, from, to, null, 1000L, RECV_WINDOW_MILLIS);
+            if (response == null || response.getData() == null) {
+                return List.of();
+            }
+            return response.getData().stream().map(item -> new TradeSnapshot(item.getSymbol(), item.getId(), item.getOrderId(), item.getSide(), decimal(item.getQty()),
+                decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()), instant(item.getTime()), string(item, "getCommissionAsset"))).toList();
+        });
     }
 
     /**
