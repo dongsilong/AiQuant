@@ -2355,6 +2355,114 @@ class StrategyRuntimeSafetyTest {
         }
     }
 
+    @Test
+    void missingExactOrderUsesStrictlyMatchedOpenOrdersFallbackWithoutClearingUnknown() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingAction("OPEN");
+            state.setPendingOrderId(55L);
+            state.setPendingClientOrderId("open-client");
+            state.setPendingIdempotencyKey("open-key");
+            state.setPendingOrderTime(System.currentTimeMillis());
+            state.setDirection("LONG");
+            state.setStatus("OPEN_PENDING");
+            state.setRecoveryRequired(true);
+            state.setUnsafeRecovery(true);
+
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            var reconciliation = (org.dromara.quant.reconcile.TradingReconciliationService) ReflectionTestUtils.getField(f.service, "reconciliationService");
+            var matching = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "open-client", "BUY", "MARKET", "NEW",
+                new BigDecimal("100"), BigDecimal.ONE, BigDecimal.ZERO, Instant.now());
+            when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(55L), eq("open-client"))).thenReturn(null);
+            when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(matching));
+            when(reconciliation.refreshSymbolPosition(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+
+            assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime));
+
+            verify(gateway).queryOrder(any(), eq("BTCUSDT"), eq(55L), eq("open-client"));
+            verify(gateway).queryOrders(any(), eq("BTCUSDT"));
+            assertEquals("OPEN", state.getPendingAction(), "活动订单只能证明订单仍在交易所，不能清除待确认动作");
+            assertEquals(55L, state.getPendingOrderId());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
+    void exactOrderQueryFailureKeepsUnknownAndDoesNotCompoundWithOpenOrdersQuery() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingAction("OPEN");
+            state.setPendingOrderId(56L);
+            state.setPendingClientOrderId("open-client-56");
+            state.setPendingIdempotencyKey("open-key-56");
+            state.setPendingOrderTime(System.currentTimeMillis());
+            state.setDirection("LONG");
+            state.setStatus("OPEN_PENDING");
+            state.setRecoveryRequired(true);
+            state.setUnsafeRecovery(true);
+
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            var reconciliation = (org.dromara.quant.reconcile.TradingReconciliationService) ReflectionTestUtils.getField(f.service, "reconciliationService");
+            when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(56L), eq("open-client-56")))
+                .thenThrow(new IllegalStateException("simulated REST rate limit"));
+            when(reconciliation.refreshSymbolPosition(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+
+            assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime));
+
+            verify(gateway).queryOrder(any(), eq("BTCUSDT"), eq(56L), eq("open-client-56"));
+            verify(gateway, never()).queryOrders(any(), anyString());
+            assertEquals("OPEN", state.getPendingAction(), "查询异常不能被解释为订单不存在");
+            assertEquals(56L, state.getPendingOrderId());
+            assertEquals("open-client-56", state.getPendingClientOrderId());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+            assertEquals("IllegalStateException", ReflectionTestUtils.getField(f.runtime, "lastPendingOrderQueryFailure"));
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
+    void openOrdersFallbackRejectsMismatchedClientOrderIdAndKeepsUnknown() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingAction("OPEN");
+            state.setPendingOrderId(57L);
+            state.setPendingClientOrderId("expected-client-57");
+            state.setPendingIdempotencyKey("open-key-57");
+            state.setPendingOrderTime(System.currentTimeMillis());
+            state.setDirection("LONG");
+            state.setStatus("OPEN_PENDING");
+            state.setRecoveryRequired(true);
+            state.setUnsafeRecovery(true);
+
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            var reconciliation = (org.dromara.quant.reconcile.TradingReconciliationService) ReflectionTestUtils.getField(f.service, "reconciliationService");
+            var wrongIdentity = new ExchangeGateway.OrderSnapshot("BTCUSDT", 57L, "different-client-id", "BUY", "MARKET", "NEW",
+                new BigDecimal("100"), BigDecimal.ONE, BigDecimal.ZERO, Instant.now());
+            when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(57L), eq("expected-client-57"))).thenReturn(null);
+            when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(wrongIdentity));
+            when(reconciliation.refreshSymbolPosition(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+
+            assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime));
+
+            verify(gateway).queryOrders(any(), eq("BTCUSDT"));
+            assertEquals("OPEN", state.getPendingAction(), "订单号相同但客户订单号不符时不得接受模糊匹配");
+            assertEquals(57L, state.getPendingOrderId());
+            assertEquals("expected-client-57", state.getPendingClientOrderId());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"CANCELED", "EXPIRED", "REJECTED"})
     void terminalPartialOpenReadsFreshPositionBeforeApplyingExecution(String status) throws Exception {

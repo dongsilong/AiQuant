@@ -21,6 +21,8 @@ public class StrategyFillAuditController {
     private final StrategyFillAuditService audit;
     private final StrategyFillJournalService journal;
 
+    @GetMapping("/summary")
+    @SaCheckPermission("quant:allocation:view")
     public R<StrategyFillAuditService.Summary> summary(@RequestParam String credentialId, @RequestParam String strategyId, @RequestParam String instanceId,
                                                        @RequestParam String symbol) {
         return R.ok(audit.summarize(Long.valueOf(credentialId), Long.valueOf(strategyId), Long.valueOf(instanceId), symbol));

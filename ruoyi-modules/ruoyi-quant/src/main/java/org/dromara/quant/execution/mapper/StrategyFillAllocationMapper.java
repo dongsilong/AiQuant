@@ -4,6 +4,7 @@ import org.apache.ibatis.annotations.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -25,6 +26,9 @@ public interface StrategyFillAllocationMapper {
      */
 
     Map<String, Object> summarizeVerifiedFills(@Param("credentialId") Long credentialId, @Param("strategyId") Long strategyId, @Param("instanceId") Long instanceId, @Param(
+        "symbol") String symbol);
+
+    List<Map<String, Object>> summarizeFeesByAsset(@Param("credentialId") Long credentialId, @Param("strategyId") Long strategyId, @Param("instanceId") Long instanceId, @Param(
         "symbol") String symbol);
 
 }

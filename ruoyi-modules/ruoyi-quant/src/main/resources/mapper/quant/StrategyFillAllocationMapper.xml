@@ -26,4 +26,11 @@ VALUES (#{credentialId},#{symbol},#{tradeId},#{orderId},#{strategyId},
 FROM quant_strategy_fill_allocation
 WHERE credential_id=#{credentialId} AND strategy_id=#{strategyId}
   AND strategy_instance_id=#{instanceId} AND symbol=#{symbol}]]></select>
+    <select id="summarizeFeesByAsset" resultType="map" timeout="3"><![CDATA[SELECT COALESCE(NULLIF(UPPER(TRIM(allocated_fee_asset)),''),'UNKNOWN') AS fee_asset,
+       COALESCE(SUM(allocated_fee),0) AS total_fees
+FROM quant_strategy_fill_allocation
+WHERE credential_id=#{credentialId} AND strategy_id=#{strategyId}
+  AND strategy_instance_id=#{instanceId} AND symbol=#{symbol}
+GROUP BY COALESCE(NULLIF(UPPER(TRIM(allocated_fee_asset)),''),'UNKNOWN')
+ORDER BY fee_asset]]></select>
 </mapper>

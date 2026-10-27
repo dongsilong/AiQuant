@@ -9,6 +9,8 @@ import org.mybatis.spring.SqlSessionFactoryBean;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.web.bind.annotation.GetMapping;
 
 import java.math.BigDecimal;
 import java.util.Objects;
@@ -43,6 +45,7 @@ class StrategyFillAuditServiceTest {
         var factory = new SqlSessionFactoryBean();
         factory.setDataSource(source);
         factory.setConfiguration(conf);
+        factory.setMapperLocations(new PathMatchingResourcePatternResolver().getResources("classpath*:mapper/quant/StrategyFillAllocationMapper.xml"));
         var mapper = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject())).getMapper(StrategyFillAllocationMapper.class);
         var audit = new StrategyFillAuditService(mapper);
         var totals = audit.summarize(9007199254740993L, 10L, 20L, "btcusdt");
@@ -52,16 +55,31 @@ class StrategyFillAuditServiceTest {
         assertEquals(0, new BigDecimal("0.125").compareTo(new BigDecimal(totals.boughtQty())));
         assertEquals(0, new BigDecimal("0.050").compareTo(new BigDecimal(totals.soldQty())));
         assertEquals(0, new BigDecimal("0.70").compareTo(new BigDecimal(totals.totalFees())));
+        assertEquals(1, totals.feeBreakdown().size());
+        assertEquals("USDT", totals.feeBreakdown().getFirst().asset());
+        assertEquals(0, new BigDecimal("0.70").compareTo(new BigDecimal(totals.feeBreakdown().getFirst().amount())));
         assertEquals(0, new BigDecimal("47.50").compareTo(new BigDecimal(totals.realizedPnl())));
         assertEquals("LIFETIME_VERIFIED_FILLS_NOT_OPEN_POSITION", totals.allocationScope());
         jdbc.update("UPDATE quant_strategy_fill_allocation SET allocated_fee_asset='BNB' WHERE id=2");
-        assertThrows(IllegalStateException.class, () -> audit.summarize(9007199254740993L, 10L, 20L, "BTCUSDT"));
+        var mixedFees = audit.summarize(9007199254740993L, 10L, 20L, "BTCUSDT");
+        assertNull(mixedFees.totalFees());
+        assertNull(mixedFees.feeAsset());
+        assertEquals(2, mixedFees.feeBreakdown().size());
+        assertEquals("BNB", mixedFees.feeBreakdown().getFirst().asset());
+        assertEquals(0, new BigDecimal("0.20").compareTo(new BigDecimal(mixedFees.feeBreakdown().getFirst().amount())));
+        assertEquals("USDT", mixedFees.feeBreakdown().get(1).asset());
+        jdbc.update("UPDATE quant_strategy_fill_allocation SET allocated_fee_asset='' WHERE id=2");
+        var unknownFee = audit.summarize(9007199254740993L, 10L, 20L, "BTCUSDT");
+        assertEquals("UNKNOWN", unknownFee.feeBreakdown().getFirst().asset());
+        assertNull(unknownFee.totalFees());
         assertThrows(IllegalArgumentException.class, () -> audit.summarize(1L, 10L, 20L, "BTCUSDT;DROP TABLE"));
     }
 
     @Test
     void endpointRequiresAllocationViewPermission() throws Exception {
-        var perm = StrategyFillAuditController.class.getMethod("summary", String.class, String.class, String.class, String.class).getAnnotation(SaCheckPermission.class);
+        var method = StrategyFillAuditController.class.getMethod("summary", String.class, String.class, String.class, String.class);
+        assertArrayEquals(new String[]{"/summary"}, method.getAnnotation(GetMapping.class).value());
+        var perm = method.getAnnotation(SaCheckPermission.class);
         assertNotNull(perm);
         assertEquals("quant:allocation:view", perm.value()[0]);
     }

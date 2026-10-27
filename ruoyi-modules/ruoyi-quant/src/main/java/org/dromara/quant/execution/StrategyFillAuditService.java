@@ -5,6 +5,7 @@ import org.dromara.quant.execution.mapper.StrategyFillAllocationMapper;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -46,19 +47,22 @@ public class StrategyFillAuditService {
         if (r == null || r.get("fill_count") == null) {
             throw new IllegalStateException("策略成交归属数据不可用，拒绝返回伪造的持仓汇总");
         }
-        Object feeCount = r.get("fee_asset_count");
-        if (!(feeCount instanceof Number n) || n.longValue() != 1L || !(r.get("fee_asset") instanceof String asset) || asset.isBlank()) {
-            throw new IllegalStateException("Mixed or unknown fee assets; do not sum currencies");
-        }
+        List<FeeAmount> feeBreakdown = mapper.summarizeFeesByAsset(credentialId, strategyId, instanceId, normalized).stream()
+            .map(row -> new FeeAmount(String.valueOf(row.get("fee_asset")), decimal(row, "total_fees")))
+            .toList();
+        FeeAmount singleFee = feeBreakdown.size() == 1 && !"UNKNOWN".equals(feeBreakdown.getFirst().asset()) ? feeBreakdown.getFirst() : null;
         return new Summary(credentialId.toString(), strategyId.toString(), instanceId.toString(), normalized, "LIFETIME_VERIFIED_FILLS_NOT_OPEN_POSITION", number(r,
-            "fill_count"), decimal(r, "bought_qty"), decimal(r, "sold_qty"), decimal(r, "bought_notional"), decimal(r, "sold_notional"), decimal(r, "total_fees"),
-            (String) r.get("fee_asset"), decimal(r, "realized_pnl"));
+            "fill_count"), decimal(r, "bought_qty"), decimal(r, "sold_qty"), decimal(r, "bought_notional"), decimal(r, "sold_notional"),
+            singleFee == null ? null : singleFee.amount(), singleFee == null ? null : singleFee.asset(), feeBreakdown, decimal(r, "realized_pnl"));
     }
 
     /**
      * Return decimal and identifier values as strings for lossless JSON clients.
      */
+    public record FeeAmount(String asset, String amount) {
+    }
+
     public record Summary(String credentialId, String strategyId, String instanceId, String symbol, String allocationScope, String fillCount, String boughtQty, String soldQty,
-                          String boughtNotional, String soldNotional, String totalFees, String feeAsset, String realizedPnl) {
+                          String boughtNotional, String soldNotional, String totalFees, String feeAsset, List<FeeAmount> feeBreakdown, String realizedPnl) {
     }
 }
