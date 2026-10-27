@@ -2665,6 +2665,18 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                     orderQueryFailure = "openOrders " + ex.getClass().getSimpleName();
                 }
             }
+            // 当前活动订单只覆盖仍处于活动态的订单。若下单响应丢失而订单已成交/撤销，
+            // 仅反复查活动订单会永久停留在 UNKNOWN。每 6 次未找到才查询历史，避免把历史接口
+            // 加入每个 5 秒恢复周期，且只接受完整历史返回中身份完全匹配的订单。
+            int priorNotFound = expectedState.getPendingNotFoundConfirmations() == null ? 0 : expectedState.getPendingNotFoundConfirmations();
+            if (order == null && orderQueryFailure == null && (priorNotFound + 1) % 6 == 0) {
+                try {
+                    order = findPendingOrderInHistory(credential, runtime.symbol.getSymbol(), orderId, clientOrderId,
+                        expectedState.getPendingOrderTime());
+                } catch (RuntimeException ex) {
+                    orderQueryFailure = "orderHistory " + ex.getClass().getSimpleName();
+                }
+            }
         }
         List<ExchangeGateway.PositionSnapshot> snapshots = null;
         if (order == null || "NEW".equalsIgnoreCase(order.status()) || "PARTIALLY_FILLED".equalsIgnoreCase(order.status()) || "FILLED".equalsIgnoreCase(order.status())
@@ -2735,6 +2747,49 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
         }
         ExchangeGateway.OrderSnapshot matched = matches.get(0);
         log.info("待确认订单通过活动订单列表精确发现 symbol={} orderId={} clientOrderId={} status={}",
+            symbol, matched.orderId(), matched.clientOrderId(), matched.status());
+        return matched;
+    }
+
+    /**
+     * 在活动订单未发现时，从交易所历史订单中按完整订单身份补偿恢复。
+     * 不能把历史接口成功但未匹配到订单当作“订单肯定未发送”；此方法只补充正向事实。
+     */
+    private ExchangeGateway.OrderSnapshot findPendingOrderInHistory(ExchangeGateway.Credential credential, String symbol,
+                                                                      Long orderId, String clientOrderId, Long pendingOrderTime) {
+        if (orderId == null && (clientOrderId == null || clientOrderId.isBlank())) {
+            return null;
+        }
+        Instant now = Instant.now();
+        Instant from = pendingOrderTime == null
+            ? now.minusSeconds(24 * 3600L)
+            : Instant.ofEpochMilli(pendingOrderTime).minusSeconds(60L);
+        // Binance 历史订单查询窗口有上限；超出可查询范围时不能将“未找到”解释成终态。
+        if (from.isBefore(now.minusSeconds(6 * 24 * 3600L))) {
+            from = now.minusSeconds(6 * 24 * 3600L);
+        }
+        List<ExchangeGateway.OrderSnapshot> history = gateway.queryOrderHistory(
+            credential, symbol, new ExchangeGateway.TimeRange(from, now), 1000L);
+        if (history == null || history.isEmpty()) {
+            return null;
+        }
+        List<ExchangeGateway.OrderSnapshot> matches = history.stream()
+            .filter(Objects::nonNull)
+            .filter(candidate -> candidate.symbol() != null && candidate.symbol().equalsIgnoreCase(symbol))
+            .filter(candidate -> candidate.orderId() != null)
+            .filter(candidate -> orderId == null || orderId.equals(candidate.orderId()))
+            .filter(candidate -> clientOrderId == null || clientOrderId.isBlank()
+                || clientOrderId.equals(candidate.clientOrderId()))
+            .toList();
+        if (matches.size() != 1) {
+            if (!matches.isEmpty()) {
+                log.warn("待确认订单历史发现结果不唯一，继续保持 UNKNOWN symbol={} orderId={} clientOrderId={} matches={}",
+                    symbol, orderId, clientOrderId, matches.size());
+            }
+            return null;
+        }
+        ExchangeGateway.OrderSnapshot matched = matches.get(0);
+        log.info("待确认订单通过历史订单精确发现 symbol={} orderId={} clientOrderId={} status={}",
             symbol, matched.orderId(), matched.clientOrderId(), matched.status());
         return matched;
     }
