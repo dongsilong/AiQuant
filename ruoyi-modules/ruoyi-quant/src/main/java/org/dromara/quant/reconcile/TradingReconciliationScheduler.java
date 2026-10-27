@@ -49,6 +49,9 @@ public class TradingReconciliationScheduler {
             }
             try {
                 reconciliationService.reconcileCredential(credential, properties.getReconcile().getHistoryHours());
+            } catch (TradingReconciliationService.SnapshotSupersededException ex) {
+                // 私有流事件取代旧 REST 快照是正常并发冲突；服务层已安排重试。
+                log.debug("账户持仓快照被较新的私有流事件取代，已安排后续核实 credentialId={}", credential.getId());
             } catch (RuntimeException ex) {
                 log.error("量化账户事实对账失败 credentialId={}", credential.getId(), ex);
             }
