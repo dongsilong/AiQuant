@@ -38,6 +38,24 @@ public class LivePositionFreshness {
     }
 
     /**
+     * 将快照代次检查与数据库提交串行化，避免私有流事件在检查后、事务提交前推进代次。
+     * action 执行期间，新事件的 invalidate() 会等待；提交完成后事件再推进代次并触发新一轮核实。
+     */
+    public boolean runIfGenerationUnchanged(Long credentialId, long expectedGeneration, Runnable action) {
+        if (credentialId == null || action == null) {
+            throw new IllegalArgumentException("credentialId and action are required");
+        }
+        var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+        synchronized (counter) {
+            if (counter.get() != expectedGeneration) {
+                return false;
+            }
+            action.run();
+            return true;
+        }
+    }
+
+    /**
      * 标记本代持仓事实已经由交易所完整核验。
      */
     public void verified(Long credentialId) {
