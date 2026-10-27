@@ -2612,13 +2612,13 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 order = gateway.queryOrder(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
             } catch (RuntimeException ex) {
                 // 查询异常不是“订单不存在”；记录诊断并保持 UNKNOWN，不因异常尝试重发交易。
-                orderQueryFailure = ex.getClass().getSimpleName() + ": " + ex.getMessage();
+                orderQueryFailure = ex.getClass().getSimpleName();
             }
             if (order == null && orderQueryFailure == null) {
                 try {
                     order = findPendingOrderInOpenOrders(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
                 } catch (RuntimeException ex) {
-                    orderQueryFailure = "openOrders " + ex.getClass().getSimpleName() + ": " + ex.getMessage();
+                    orderQueryFailure = "openOrders " + ex.getClass().getSimpleName();
                 }
             }
         }
