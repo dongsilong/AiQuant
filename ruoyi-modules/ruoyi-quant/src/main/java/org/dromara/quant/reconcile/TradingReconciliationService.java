@@ -333,7 +333,10 @@ public class TradingReconciliationService {
             created.complete(snapshots);
             return snapshots;
         } catch (SnapshotSupersededException ex) {
-            // 过期结果必须原样通知共享等待方，既不提交也不记作交易所请求失败。
+            // 私有流事件/其他更新已使本次快照过期：不能提交旧快照，也不能把它当成交易所故障。
+            // 同时安排一个按 credential 合并的只读刷新，避免仅依赖策略行情事件触发恢复，
+            // 否则低流动性交易对可能长期停留在 POSITION_FACTS_UNVERIFIED。
+            schedulePositionSnapshotRetry(credential, trigger + ":superseded", 1_000L);
             created.completeExceptionally(ex);
             throw ex;
         } catch (RuntimeException ex) {
