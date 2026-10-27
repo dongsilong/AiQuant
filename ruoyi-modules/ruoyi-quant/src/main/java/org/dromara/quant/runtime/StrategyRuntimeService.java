@@ -11,6 +11,7 @@ import org.dromara.quant.decision.DecisionLogCursor;
 import org.dromara.quant.decision.DecisionLogEvent;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.ExchangeTradingPort;
+import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.dromara.quant.execution.ExecutionRecordService;
 import org.dromara.quant.execution.ExecutionResult;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
@@ -834,7 +835,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 }
             }
             if (!stateConflict) {
-                runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
+                long exchangeRetryDelay = exchangeRetryAfterMillis(ex);
+                runtime.nextReconcileAt = System.currentTimeMillis() + Math.max(5_000L, exchangeRetryDelay);
             }
             recordError(runtime.instance, ex);
         } finally {
@@ -1396,6 +1398,23 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return false;
         }
         return !Objects.equals(expected.getVersion(), latest.getVersion());
+    }
+
+    /**
+     * Preserve exchange/scheduler retry windows during reconciliation. Retrying at the generic
+     * five-second interval while Binance has explicitly deferred requests only creates a local
+     * retry loop; entry remains blocked until facts are verified.
+     */
+    private long exchangeRetryAfterMillis(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof ExchangeMarketPort.RequestDeferredException deferred) {
+                return deferred.retryAfterMillis();
+            }
+            if (current instanceof ExchangeMarketPort.RateLimitException rateLimited) {
+                return rateLimited.retryAfterMillis();
+            }
+        }
+        return 0L;
     }
 
     private boolean containsMessage(Throwable error, String message) {
