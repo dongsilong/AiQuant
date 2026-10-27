@@ -542,6 +542,12 @@ public class TradingReconciliationService {
             commitPositionSnapshot(credential, account, positions, fetchStartedAt, positionGeneration, runtimeGeneration, "full-reconcile");
             ExchangeFacts facts = collectExchangeFacts(credential, historyHours, exchangeCredential, account, positions);
             transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
+        } catch (SnapshotSupersededException ex) {
+            // The account snapshot lost the generation fence to a newer private-stream fact.
+            // Schedule a fresh read-only full reconciliation so this credential can converge
+            // even if no subsequent market event arrives for the affected symbols.
+            schedulePositionSnapshotRetry(credential, "full-reconcile:superseded", 1_000L);
+            throw ex;
         } catch (RuntimeException ex) {
             failureRecorder.record(credential.getId(), ex.getMessage());
             throw ex;
