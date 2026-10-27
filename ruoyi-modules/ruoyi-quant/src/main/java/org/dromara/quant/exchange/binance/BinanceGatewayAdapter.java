@@ -924,6 +924,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     private List<PositionSnapshot> queryPositions(DerivativesTradingUsdsFuturesRestApi client, String symbol) {
+        // A successful positionInformationV3 response is a complete exchange fact. This adapter
+        // intentionally filters zero-quantity rows, so an empty list means the requested symbol
+        // (or the whole account when symbol == null) was successfully verified flat. Transport,
+        // rate-limit, decoding, and API errors must throw instead of being converted to empty.
         var response = client.positionInformationV3(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData();
         var positions =
             response.stream().filter(item -> symbol == null || symbol.equalsIgnoreCase(item.getSymbol())).filter(item -> decimal(item.getPositionAmt()).signum() != 0).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
