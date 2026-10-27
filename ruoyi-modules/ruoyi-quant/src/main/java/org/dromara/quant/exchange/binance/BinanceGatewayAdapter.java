@@ -829,7 +829,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     @Override
     public PositionMode queryPositionMode(Credential credential) {
         requireCredential(credential);
-        var data = api(credential).getCurrentPositionMode(RECV_WINDOW_MILLIS).getData();
+        var data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+            client -> client.getCurrentPositionMode(RECV_WINDOW_MILLIS).getData());
         return new PositionMode(Boolean.TRUE.equals(data.getDualSidePosition()));
     }
 
