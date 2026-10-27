@@ -106,7 +106,7 @@ public class QuantSymbolController extends BaseController {
     /**
      * 新增或取消交易对收藏。
      */
-    @SaCheckPermission("quant:symbol:list")
+    @SaCheckPermission("quant:symbol:edit")
     @PostMapping("/{id}/favorite")
     public R<Void> favorite(@PathVariable Long id, @RequestBody FavoriteRequest request) {
         LambdaQueryWrapper<QuantSymbolFavorite> wrapper =
