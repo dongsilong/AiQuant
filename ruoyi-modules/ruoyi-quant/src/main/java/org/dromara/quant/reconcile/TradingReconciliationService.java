@@ -530,6 +530,10 @@ public class TradingReconciliationService {
             commitPositionSnapshot(credential, account, positions, fetchStartedAt, positionGeneration, runtimeGeneration, "full-reconcile");
             ExchangeFacts facts = collectExchangeFacts(credential, historyHours, exchangeCredential, account, positions);
             transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
+        } catch (SnapshotSupersededException ex) {
+            // 私有流在 REST 快照读取期间推进了持仓事实；丢弃旧快照并合并一次只读重试。
+            schedulePositionSnapshotRetry(credential, "full-reconcile:superseded", 1_000L);
+            throw ex;
         } catch (RuntimeException ex) {
             failureRecorder.record(credential.getId(), ex.getMessage());
             throw ex;
