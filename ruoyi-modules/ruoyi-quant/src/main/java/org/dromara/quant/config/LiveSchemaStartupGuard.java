@@ -82,9 +82,6 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
             if (missingTables.contains("quant_financial_event_sync_cursor") || missingUnique.contains("quant_financial_event_sync_cursor|credential_id")) {
                 requiredMigrations.add("script/sql/quant/V20261025_02__financial_event_sync_cursor.sql");
             }
-            if (missingTables.contains("quant_financial_event") || missingUnique.contains("quant_financial_event|credential_id,exchange_transaction_id,event_type")) {
-                requiredMigrations.add("script/sql/quant/V20261024_01__financial_event_income_type_identity.sql");
-            }
             if (missingTables.contains("quant_financial_event") || missingUnique.contains("quant_financial_event|credential_id,event_identity_key")) {
                 requiredMigrations.add("script/sql/quant/V20261026_01__financial_event_identity_key.sql");
             }
