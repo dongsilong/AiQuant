@@ -12,70 +12,49 @@ import org.dromara.system.api.model.LoginUser;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
- * sa-token 权限管理实现类
- *
- * @author Lion Li
+ * sa-token 权限管理实现类。
  */
 public class SaPermissionImpl implements StpInterface {
 
-    /**
-     * 获取指定登录对象的菜单权限列表。
-     *
-     * @param loginId   登录ID
-     * @param loginType 登录类型
-     * @return 菜单权限列表
-     */
     @Override
     public List<String> getPermissionList(Object loginId, String loginType) {
         return resolvePermissionList(loginId, LoginUser::getMenuPermission, PermissionService::getMenuPermission);
     }
 
-    /**
-     * 获取指定登录对象的角色权限列表。
-     *
-     * @param loginId   登录ID
-     * @param loginType 登录类型
-     * @return 角色权限列表
-     */
     @Override
     public List<String> getRoleList(Object loginId, String loginType) {
         return resolvePermissionList(loginId, LoginUser::getRolePermission, PermissionService::getRolePermission);
     }
 
     /**
-     * 解析当前登录对象的权限列表。
-     *
-     * @param loginId                   登录ID
-     * @param localPermissionExtractor  当前登录用户权限提取器
-     * @param remotePermissionExtractor 远程权限提取器
-     * @return 权限列表
+     * 优先使用当前会话中与目标登录ID匹配的权限快照；否则按登录ID查询权限。
+     * 无法解析登录ID或缺少权限服务时失败关闭，不返回任何隐式授权。
      */
-    private List<String> resolvePermissionList(Object loginId,
-                                               java.util.function.Function<LoginUser, Collection<String>> localPermissionExtractor,
-                                               BiFunction<PermissionService, Long, Collection<String>> remotePermissionExtractor) {
+    private List<String> resolvePermissionList(
+        Object loginId,
+        Function<LoginUser, Collection<String>> localPermissionExtractor,
+        BiFunction<PermissionService, Long, Collection<String>> remotePermissionExtractor
+    ) {
+        String normalizedLoginId = normalizeLoginId(loginId);
         LoginUser loginUser = LoginHelper.getLoginUser();
-        if (ObjectUtil.isNull(loginUser) || !loginUser.getLoginId().equals(normalizeLoginId(loginId))) {
-            PermissionService permissionService = getPermissionService();
-            if (ObjectUtil.isNotNull(permissionService)) {
-                return new ArrayList<>(remotePermissionExtractor.apply(permissionService, resolveUserId(loginId)));
-            }
+        if (loginUser != null && Objects.equals(loginUser.getLoginId(), normalizedLoginId)) {
+            Collection<String> permissionList = localPermissionExtractor.apply(loginUser);
+            return CollUtil.isEmpty(permissionList) ? new ArrayList<>() : new ArrayList<>(permissionList);
+        }
+
+        PermissionService permissionService = getPermissionService();
+        if (permissionService == null) {
             throw new ServiceException("PermissionService 实现类不存在");
         }
-        Collection<String> permissionList = localPermissionExtractor.apply(loginUser);
-        if (CollUtil.isNotEmpty(permissionList)) {
-            return new ArrayList<>(permissionList);
-        }
-        return new ArrayList<>();
+        Collection<String> permissions = remotePermissionExtractor.apply(permissionService, resolveUserId(normalizedLoginId));
+        return CollUtil.isEmpty(permissions) ? new ArrayList<>() : new ArrayList<>(permissions);
     }
 
-    /**
-     * 获取权限服务实现。
-     *
-     * @return 权限服务
-     */
     private PermissionService getPermissionService() {
         try {
             return SpringUtils.getBean(PermissionService.class);
@@ -85,13 +64,16 @@ public class SaPermissionImpl implements StpInterface {
     }
 
     /**
-     * 将历史冒号格式的登录ID规范化为当前分隔符格式，保证与旧 token 会话比较的一致性。
-     *
-     * @param loginId 登录ID
-     * @return 规范化后的登录ID
+     * 兼容历史冒号格式，并拒绝空登录ID。
      */
     private String normalizeLoginId(Object loginId) {
-        String loginIdStr = loginId.toString();
+        if (loginId == null) {
+            throw new ServiceException("登录ID不能为空");
+        }
+        String loginIdStr = loginId.toString().trim();
+        if (loginIdStr.isEmpty()) {
+            throw new ServiceException("登录ID不能为空");
+        }
         int separatorIndex = loginIdStr.indexOf(':');
         if (separatorIndex < 0) {
             return loginIdStr;
@@ -100,21 +82,17 @@ public class SaPermissionImpl implements StpInterface {
     }
 
     /**
-     * 从登录ID中提取用户ID，兼容历史冒号格式与当前分隔符格式。
-     *
-     * @param loginId 登录ID
-     * @return 用户ID
+     * 从规范化登录ID提取用户ID，并将格式错误转换为明确的业务异常。
      */
-    private Long resolveUserId(Object loginId) {
-        String loginIdStr = loginId.toString();
-        int separatorIndex = loginIdStr.indexOf(':');
-        if (separatorIndex < 0) {
-            separatorIndex = loginIdStr.lastIndexOf(LoginUser.LOGIN_ID_SEPARATOR);
-        }
-        if (separatorIndex < 0 || separatorIndex == loginIdStr.length() - 1) {
+    private Long resolveUserId(String loginId) {
+        int separatorIndex = loginId.lastIndexOf(LoginUser.LOGIN_ID_SEPARATOR);
+        if (separatorIndex < 0 || separatorIndex == loginId.length() - 1) {
             throw new ServiceException("登录ID格式错误");
         }
-        return Long.parseLong(loginIdStr.substring(separatorIndex + 1));
+        try {
+            return Long.parseLong(loginId.substring(separatorIndex + 1));
+        } catch (NumberFormatException e) {
+            throw new ServiceException("登录ID格式错误");
+        }
     }
-
 }
