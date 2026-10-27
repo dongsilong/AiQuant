@@ -484,6 +484,11 @@ public class TradingReconciliationService {
         try {
             snapshots = List.copyOf(java.util.Objects.requireNonNull(gateway.queryPositions(exchangeCredential, symbol),
                 "Binance symbol position snapshot missing"));
+        } catch (SnapshotSupersededException ex) {
+            // A newer private-stream fact won the race. Schedule a fresh read-only snapshot
+            // rather than leaving the strategy blocked until another market event arrives.
+            schedulePositionSnapshotRetry(credential, "symbol:" + symbol + ":superseded", 1_000L);
+            throw ex;
         } catch (RuntimeException ex) {
             long retryAfterMillis = snapshotRetryAfterMillis(ex);
             if (retryAfterMillis > 0) {
