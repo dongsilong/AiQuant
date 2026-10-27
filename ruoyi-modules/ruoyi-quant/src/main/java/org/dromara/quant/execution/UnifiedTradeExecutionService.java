@@ -319,6 +319,21 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     }
 
     /**
+     * 本地 REST 调度器明确表示请求尚未发出时，不能把它记为 UNKNOWN。
+     * 仅在尚未收到交易所订单结果的执行阶段使用该判定。
+     */
+    private static boolean isDefinitelyNotSent(RuntimeException error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException
+                || current instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException
+                || current instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * 执行统一交易流水：幂等、安全检查、标准化、交易所调用和账本落库。
      */
     private ExecutionResult execute(String operationType, Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol,
@@ -512,7 +527,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
         } catch (RuntimeException ex) {
             if (dispatchTicket != null) {
                 try {
-                    if (exchangeResult == null && (!exchangeAttempted || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException)) {
+                    if (exchangeResult == null && (!exchangeAttempted || isDefinitelyNotSent(ex))) {
                         requireLiveDispatcher().notSent(dispatchTicket);
                     } else {
                         requireLiveDispatcher().unknown(dispatchTicket);
@@ -522,10 +537,10 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                 }
             }
             String logStatus = exchangeResult != null ? "ACCEPTED" :
-                exchangeAttempted && !(ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException) ? "UNKNOWN" : "FAILED";
+                exchangeAttempted && !isDefinitelyNotSent(ex) ? "UNKNOWN" : "FAILED";
             recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode, logStatus,
                 org.dromara.quant.decision.TradeDecisionLogService.safeReason(ex), logRequest, exchangeResult, ex == null ? null : "EXECUTION_FAILURE", null);
-            if (exchangeResult == null && (ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException || ex instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderNotSentException)) {
+            if (exchangeResult == null && isDefinitelyNotSent(ex)) {
                 executionRecordService.failed(reservation.record(), ex.getMessage());
                 if (openCommand != null) {
                     openCapacityService.releaseFailed(credentialId, idempotencyKey);
