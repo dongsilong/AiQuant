@@ -2929,6 +2929,17 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 // 查不到订单不代表没有敞口：刷新实际持仓，外层继续挂载硬止损，保留待确认身份。
                 runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
             }
+            if (runtime.lastPendingOrderQueryFailure != null) {
+                // A timeout, rate limit, or other query error is not evidence that the order
+                // was absent. Keep the original pending identity and recovery block; do not
+                // increase not-found confirmations based on a failed read.
+                runtime.state.setRecoveryRequired(true);
+                stateService.save(runtime.state);
+                log.warn("待确认订单查询失败，保留 UNKNOWN 身份且不累计未找到次数 instanceId={} credentialId={} symbol={} runMode={} orderId={} clientOrderId={} queryFailure={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
+                    runtime.state.getPendingOrderId(), runtime.state.getPendingClientOrderId(), runtime.lastPendingOrderQueryFailure);
+                return true;
+            }
             int confirmations = runtime.state.getPendingNotFoundConfirmations() == null ? 0 : runtime.state.getPendingNotFoundConfirmations();
             confirmations++;
             runtime.state.setPendingNotFoundConfirmations(confirmations);
