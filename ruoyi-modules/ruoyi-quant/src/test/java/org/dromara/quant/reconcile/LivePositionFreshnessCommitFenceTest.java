@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -33,6 +34,7 @@ class LivePositionFreshnessCommitFenceTest {
         var actionEntered = new CountDownLatch(1);
         var finishAction = new CountDownLatch(1);
         var eventStarted = new CountDownLatch(1);
+        var eventThread = new AtomicReference<Thread>();
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             var commit = executor.submit(() -> freshness.runIfGenerationUnchanged(8L, generation, () -> {
@@ -49,12 +51,18 @@ class LivePositionFreshnessCommitFenceTest {
 
             assertTrue(actionEntered.await(5, TimeUnit.SECONDS));
             var event = executor.submit(() -> {
+                eventThread.set(Thread.currentThread());
                 eventStarted.countDown();
                 freshness.invalidate(8L);
                 return freshness.generation(8L);
             });
             assertTrue(eventStarted.await(5, TimeUnit.SECONDS));
-            assertFalse(event.isDone(), "invalidation must wait while the snapshot commit holds the generation fence");
+            long waitUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (eventThread.get().getState() != Thread.State.BLOCKED && System.nanoTime() < waitUntil) {
+                Thread.sleep(5);
+            }
+            assertEquals(Thread.State.BLOCKED, eventThread.get().getState(),
+                "invalidation must block on the generation fence while the snapshot commit is active");
 
             finishAction.countDown();
             assertTrue(commit.get(5, TimeUnit.SECONDS));
