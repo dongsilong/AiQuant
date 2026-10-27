@@ -64,6 +64,36 @@ class StrategyFillJournalServiceTest {
     }
 
     @Test
+    void laterCompleteReplayEnrichesPreviouslyUnknownMoneyFactsWithoutConflict() {
+        var incoming = fill();
+        var stored = new StrategyFillJournalRecord();
+        stored.setId(77L);
+        stored.setCredentialId(1L);
+        stored.setSymbol("BTCUSDT");
+        stored.setExchangeTradeId(101L);
+        stored.setExchangeOrderId(202L);
+        stored.setSide("BUY");
+        stored.setQuantity(BigDecimal.ONE);
+        stored.setPrice(BigDecimal.TEN);
+        stored.setTradeTime(java.time.LocalDateTime.ofInstant(incoming.time(), java.time.ZoneOffset.UTC));
+        stored.setAttributionStatus("WAITING_ORDER");
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(stored, stored);
+        when(journal.enrichMissingFacts(any())).thenReturn(1);
+        when(journal.updateStatus(77L, "WAITING_ORDER", "未找到具有明确策略实例归属的本地订单")).thenReturn(1);
+
+        String status = service.attribute(incoming, null, 1L);
+
+        assertEquals("WAITING_ORDER", status);
+        var enriched = org.mockito.ArgumentCaptor.forClass(StrategyFillJournalRecord.class);
+        verify(journal).enrichMissingFacts(enriched.capture());
+        assertEquals(77L, enriched.getValue().getId());
+        assertNull(enriched.getValue().getCommission());
+        assertNull(enriched.getValue().getRealizedPnl());
+        verify(journal, never()).insertRaw(any());
+        verify(journal, never()).updateStatus(eq(77L), eq("CONFLICT"), anyString());
+    }
+
+    @Test
     void conflictingDuplicateIsQuarantinedWithoutOverwritingFirstRawFact() {
         var stored = new StrategyFillJournalRecord();
         stored.setId(77L);
