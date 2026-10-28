@@ -25,6 +25,13 @@ public class OrderLedgerService {
     private TradeDecisionLogService decisionLogs;
 
     /**
+     * 按主键重新读取持久化订单，供恢复流程核验并发更新后的最终状态。
+     */
+    public QuantOrder findById(Long orderId) {
+        return orderId == null ? null : mapper.selectById(orderId);
+    }
+
+    /**
      * 同步对应业务事实。
      */
     public QuantOrder syncSnapshot(Long credentialId, ExchangeGateway.OrderSnapshot snapshot) {
