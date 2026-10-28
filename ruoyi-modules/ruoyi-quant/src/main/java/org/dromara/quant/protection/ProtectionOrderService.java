@@ -1130,10 +1130,28 @@ public class ProtectionOrderService {
         if (!matching) {
             throw new IllegalStateException("Binance 保护单字段与持久化意图不一致");
         }
-        boolean newlyConfirmed = !"WORKING".equals(local.getStatus());
-        local.setStatus("WORKING");
-        if (mapper.updateById(local) != 1) {
-            throw new IllegalStateException("保护单已生效但本地账本更新失败，保持调度占用");
+        BigDecimal confirmedExecuted = actual.executedQuantity();
+        int transitioned = mapper.markWorkingIfNotWorking(local.getId(), credentialId, local.getClientOrderId(),
+            actual.algoId(), confirmedExecuted);
+        boolean newlyConfirmed = transitioned == 1;
+        if (transitioned == 0) {
+            // Another confirmation worker may have won the conditional transition.
+            // Treat that as idempotent only after re-reading the same durable identity.
+            QuantProtectionOrder current = mapper.selectById(local.getId());
+            if (current == null || !"WORKING".equals(current.getStatus())
+                || !Objects.equals(credentialId, current.getCredentialId())
+                || !Objects.equals(local.getClientOrderId(), current.getClientOrderId())
+                || !Objects.equals(actual.algoId(), current.getExchangeOrderId())) {
+                throw new IllegalStateException("保护单已生效，但原子确认状态迁移失败且数据库事实不匹配，保持调度占用");
+            }
+            local = current;
+        } else {
+            local.setExchangeOrderId(actual.algoId());
+            local.setStatus("WORKING");
+            if (confirmedExecuted != null && (local.getExecutedQuantity() == null
+                || local.getExecutedQuantity().compareTo(confirmedExecuted) < 0)) {
+                local.setExecutedQuantity(confirmedExecuted);
+            }
         }
         // Restore a previously uncertain LIVE placement only after the exact
         // Binance algo ID, client algo ID, parameters and durable local status agree.
