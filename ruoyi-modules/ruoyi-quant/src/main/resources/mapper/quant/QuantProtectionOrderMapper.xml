@@ -11,4 +11,20 @@ WHERE i.credential_id=#{credentialId} AND s.position_id=#{positionId}
     <update id="bindCycleOwner" timeout="3"><![CDATA[UPDATE quant_protection_order SET strategy_id=#{strategyId}, strategy_instance_id=#{instanceId}
 WHERE id=#{id} AND credential_id=#{credentialId} AND position_cycle_key=#{cycleKey}
   AND strategy_id IS NULL AND strategy_instance_id IS NULL]]></update>
+    <update id="markWorkingIfNotWorking" timeout="3"><![CDATA[
+UPDATE quant_protection_order
+SET status='WORKING',
+    exchange_order_id=COALESCE(exchange_order_id, #{exchangeOrderId}),
+    executed_quantity=CASE
+      WHEN #{executedQuantity} IS NULL THEN executed_quantity
+      WHEN executed_quantity IS NULL OR executed_quantity < #{executedQuantity} THEN #{executedQuantity}
+      ELSE executed_quantity
+    END,
+    updated_at=NOW(6)
+WHERE id=#{id}
+  AND credential_id=#{credentialId}
+  AND client_order_id=#{clientOrderId}
+  AND (exchange_order_id IS NULL OR exchange_order_id=#{exchangeOrderId})
+  AND status IN ('NEW','ACCEPTED','PAPER_ACCEPTED','PREPARED','DISPATCHING','PENDING','UNKNOWN','CANCEL_FAILED')
+]]></update>
 </mapper>
