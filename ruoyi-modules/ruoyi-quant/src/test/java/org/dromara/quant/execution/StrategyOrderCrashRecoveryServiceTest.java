@@ -56,6 +56,49 @@ class StrategyOrderCrashRecoveryServiceTest {
     }
 
     @Test
+    void zeroUpdateCountIsIdempotentOnlyWhenPersistedBindingMatchesExactly() {
+        when(intents.pending(1L, "dispatch-a")).thenReturn(pending());
+        QuantOrder order = new QuantOrder();
+        order.setId(18L);
+        order.setCredentialId(1L);
+        order.setSymbol("BTCUSDT");
+        order.setExchangeOrderId(9L);
+        order.setClientOrderId("cid-a");
+        order.setStrategyId(2L);
+        order.setStrategyInstanceId(3L);
+        order.setPositionSide("LONG");
+        order.setReduceOnly(false);
+        when(ledger.syncSnapshot(1L, exact("cid-a"))).thenReturn(order);
+        when(intents.promote(1L, "BTCUSDT", "dispatch-a", "cid-a", 9L)).thenReturn(1);
+        when(intents.bindRecoveredOrder(18L, 1L, "BTCUSDT", 9L, "cid-a", 2L, 3L, "LONG", false)).thenReturn(0);
+        when(ledger.findById(18L)).thenReturn(order);
+
+        assertSame(order, recovery.restore(record(), exact("cid-a")));
+        verify(ledger).findById(18L);
+    }
+
+    @Test
+    void zeroUpdateCountWithConflictingPersistedBindingRemainsFailure() {
+        when(intents.pending(1L, "dispatch-a")).thenReturn(pending());
+        QuantOrder order = new QuantOrder();
+        order.setId(18L);
+        order.setCredentialId(1L);
+        order.setSymbol("BTCUSDT");
+        order.setExchangeOrderId(9L);
+        order.setClientOrderId("cid-a");
+        order.setStrategyId(999L);
+        order.setStrategyInstanceId(3L);
+        order.setPositionSide("LONG");
+        order.setReduceOnly(false);
+        when(ledger.syncSnapshot(1L, exact("cid-a"))).thenReturn(order);
+        when(intents.promote(1L, "BTCUSDT", "dispatch-a", "cid-a", 9L)).thenReturn(1);
+        when(intents.bindRecoveredOrder(18L, 1L, "BTCUSDT", 9L, "cid-a", 2L, 3L, "LONG", false)).thenReturn(0);
+        when(ledger.findById(18L)).thenReturn(order);
+
+        assertThrows(IllegalStateException.class, () -> recovery.restore(record(), exact("cid-a")));
+    }
+
+    @Test
     void missingPresendIntentCannotAttributeExchangeOrder() {
         assertThrows(IllegalStateException.class, () -> recovery.restore(record(), exact("cid-a")));
         verifyNoInteractions(ledger);
