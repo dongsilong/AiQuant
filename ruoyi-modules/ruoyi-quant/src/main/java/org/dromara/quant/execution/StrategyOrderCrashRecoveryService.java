@@ -24,8 +24,6 @@ public class StrategyOrderCrashRecoveryService {
     @NonNull private final StrategyOrderIntentMapper intents;
     @NonNull private final OrderLedgerService ledger;
 
-
-
     private static boolean sameId(Object actual, Long expected) {
         return expected != null && actual instanceof Number n && n.longValue() == expected;
     }
@@ -58,10 +56,37 @@ public class StrategyOrderCrashRecoveryService {
                 throw new IllegalStateException("Conflicting recovered strategy order intent", duplicate);
             }
         }
-        if (intents.bindRecoveredOrder(order.getId(), credentialId, symbol, exact.orderId(), record.getClientOrderId(), record.getStrategyId(), record.getStrategyInstanceId(),
-            (String) pre.get("position_side"), "CLOSE".equals(record.getOperationType())) != 1) {
-            throw new IllegalStateException("Cannot bind exact recovered order to strategy");
+
+        boolean reduceOnly = "CLOSE".equals(record.getOperationType());
+        int updateCount = intents.bindRecoveredOrder(order.getId(), credentialId, symbol, exact.orderId(), record.getClientOrderId(),
+            record.getStrategyId(), record.getStrategyInstanceId(), (String) pre.get("position_side"), reduceOnly);
+        if (updateCount == 0) {
+            // MySQL may report zero affected rows when an idempotent UPDATE writes
+            // values already present. Re-read and accept only a fully matching row.
+            QuantOrder persisted = ledger.findById(order.getId());
+            if (isExactBinding(persisted, credentialId, symbol, exact, record, (String) pre.get("position_side"), reduceOnly)) {
+                return persisted;
+            }
+            throw new IllegalStateException("Cannot bind exact recovered order to strategy: updateCount=0 and persisted binding does not match");
+        }
+        if (updateCount != 1) {
+            throw new IllegalStateException("Cannot bind exact recovered order to strategy: unexpected updateCount=" + updateCount);
         }
         return order;
+    }
+
+    private static boolean isExactBinding(QuantOrder order, long credentialId, String symbol,
+                                          ExchangeGateway.OrderSnapshot exact, QuantExecutionRecord record,
+                                          String positionSide, boolean reduceOnly) {
+        return order != null
+            && order.getId() != null
+            && Objects.equals(order.getCredentialId(), credentialId)
+            && symbol.equalsIgnoreCase(order.getSymbol())
+            && Objects.equals(order.getExchangeOrderId(), exact.orderId())
+            && Objects.equals(order.getClientOrderId(), exact.clientOrderId())
+            && Objects.equals(order.getStrategyId(), record.getStrategyId())
+            && Objects.equals(order.getStrategyInstanceId(), record.getStrategyInstanceId())
+            && Objects.equals(order.getPositionSide(), positionSide)
+            && Objects.equals(order.getReduceOnly(), reduceOnly);
     }
 }
