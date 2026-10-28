@@ -54,6 +54,9 @@ public class OrderLedgerService {
             entity.setCreatedAt(LocalDateTime.now());
             entity.setIdempotencyKey(clientOrderId);
         }
+        // Exchange-order lookup may find a legacy row with an EXCHANGE:<id> placeholder.
+        // Always persist the exact client order ID returned by Binance before strategy binding.
+        entity.setClientOrderId(clientOrderId);
         entity.setSymbol(snapshot.symbol());
         entity.setExchangeOrderId(snapshot.orderId());
         entity.setSide(snapshot.side());
