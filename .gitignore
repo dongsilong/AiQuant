@@ -53,3 +53,11 @@ nbdist/
 
 application-local.yml
 application-ga.yml
+
+# Generated Graphify analysis artifacts (regenerate when needed)
+graphify-out/cache/
+graphify-out/graph.json
+graphify-out/GRAPH_TREE.html
+graphify-out/.graphify_analysis.json
+graphify-out/.graphify_detect.json
+graphify-out/manifest.json
