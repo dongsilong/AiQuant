@@ -1130,10 +1130,26 @@ public class ProtectionOrderService {
         if (!matching) {
             throw new IllegalStateException("Binance 保护单字段与持久化意图不一致");
         }
-        boolean newlyConfirmed = !"WORKING".equals(local.getStatus());
-        local.setStatus("WORKING");
-        if (mapper.updateById(local) != 1) {
-            throw new IllegalStateException("保护单已生效但本地账本更新失败，保持调度占用");
+        int confirmCount = mapper.markWorkingIfNotWorking(local.getId(), credentialId, local.getSymbol(), local.getClientOrderId(), actual.algoId());
+        boolean newlyConfirmed = confirmCount == 1;
+        if (confirmCount == 0) {
+            // A concurrent confirmer may have committed WORKING first. Accept only
+            // the same durable order identity; never log this as a second transition.
+            QuantProtectionOrder persisted = mapper.selectById(local.getId());
+            if (persisted == null
+                || !Objects.equals(persisted.getCredentialId(), credentialId)
+                || !Objects.equals(persisted.getSymbol(), local.getSymbol())
+                || !Objects.equals(persisted.getClientOrderId(), local.getClientOrderId())
+                || !Objects.equals(persisted.getExchangeOrderId(), actual.algoId())
+                || !"WORKING".equalsIgnoreCase(persisted.getStatus())) {
+                throw new IllegalStateException("保护单确认状态发生并发冲突，保持调度占用");
+            }
+            local = persisted;
+        } else if (confirmCount != 1) {
+            throw new IllegalStateException("保护单确认状态迁移返回异常行数，保持调度占用");
+        } else {
+            local.setExchangeOrderId(actual.algoId());
+            local.setStatus("WORKING");
         }
         // Restore a previously uncertain LIVE placement only after the exact
         // Binance algo ID, client algo ID, parameters and durable local status agree.
