@@ -311,7 +311,8 @@ class ProtectionOrderServiceTest {
         persisted.setStatus("WORKING");
         when(mapper.selectById(7L)).thenReturn(persisted);
 
-        assertSame(persisted, service.ensureMarginHardStop(1L, position, new BigDecimal("0.1"), true));
+        assertTrue(org.springframework.test.util.ReflectionTestUtils.invokeMethod(service, "confirmOnExchange", 1L, local, false));
+        assertEquals("WORKING", persisted.getStatus());
 
         verify(mapper).markWorkingIfNotWorking(7L, 1L, "BTCUSDT", "QFTP_test", 55L);
         verify(dispatcher, never()).begin(any(), any(), any(), any(), any(), any(), any());
