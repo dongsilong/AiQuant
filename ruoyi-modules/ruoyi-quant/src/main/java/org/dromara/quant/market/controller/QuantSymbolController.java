@@ -1,6 +1,7 @@
 package org.dromara.quant.market.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
@@ -48,7 +49,7 @@ public class QuantSymbolController extends BaseController {
     /**
      * 查询列表数据。
      */
-    @SaCheckPermission("quant:symbol:list")
+    @SaCheckPermission(value = {"quant:symbol:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/list")
     public R<PageResult<QuantSymbolVo>> list(QuantSymbolBo bo, PageQuery q) {
         return R.ok(service.queryPageList(bo, q));
@@ -106,7 +107,7 @@ public class QuantSymbolController extends BaseController {
     /**
      * 新增或取消交易对收藏。
      */
-    @SaCheckPermission("quant:symbol:list")
+    @SaCheckPermission("quant:symbol:edit")
     @PostMapping("/{id}/favorite")
     public R<Void> favorite(@PathVariable Long id, @RequestBody FavoriteRequest request) {
         LambdaQueryWrapper<QuantSymbolFavorite> wrapper =

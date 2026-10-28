@@ -657,15 +657,30 @@ public class TradingReconciliationService {
         for (var entry : facts.protections().entrySet()) {
             unmatchedProtections += syncProtectionOrders(credential, entry.getKey(), facts.positions(), entry.getValue());
         }
-        syncFinancialEvents(credential, facts.income());
-        incomeSyncCursorService.advance(credential.getId(), facts.incomeCursorEnd());
+        boolean financialLedgerConflict = false;
+        try {
+            syncFinancialEvents(credential, facts.income());
+            incomeSyncCursorService.advance(credential.getId(), facts.incomeCursorEnd());
+        } catch (IllegalStateException ex) {
+            // An immutable financial-ledger conflict must not roll back verified order/fill facts
+            // written earlier in this transaction. Do not advance the income cursor: the
+            // conflicting event must be retried/reviewed, while already inserted income events
+            // remain idempotently replayable on the next reconciliation.
+            if (ex.getMessage() == null || !ex.getMessage().startsWith("Binance financial event conflicts with persisted ledger:")) {
+                throw ex;
+            }
+            financialLedgerConflict = true;
+            log.error("Binance 财务事件账本冲突；已保留本轮成交同步结果且不推进财务游标 credentialId={} cursorEnd={}",
+                credential.getId(), facts.incomeCursorEnd(), ex);
+        }
         int fillHistoryBacklogSymbols = facts.fillHistoryBacklogSymbols().size();
-        if (unmatchedProtections > 0 || unattributedFills > 0 || fillHistoryBacklogSymbols > 0 || facts.incomeHistoryBacklog()) {
-            // Unmatched protections, unattributed fills, or a catch-up cursor
+        if (unmatchedProtections > 0 || unattributedFills > 0 || fillHistoryBacklogSymbols > 0 || facts.incomeHistoryBacklog() || financialLedgerConflict) {
+            // Unmatched protections, unattributed fills, financial conflicts, or a catch-up cursor
             // behind the current interval may not be reported as complete.
             reconcileMapper.insert(record(credential.getId(), "DEGRADED",
                 "{\"unmatchedLiveProtections\":" + unmatchedProtections + ",\"unattributedFills\":" + unattributedFills
-                    + ",\"fillHistoryBacklogSymbols\":" + fillHistoryBacklogSymbols + ",\"incomeHistoryBacklog\":" + facts.incomeHistoryBacklog() + "}"));
+                    + ",\"fillHistoryBacklogSymbols\":" + fillHistoryBacklogSymbols + ",\"incomeHistoryBacklog\":" + facts.incomeHistoryBacklog()
+                    + ",\"financialLedgerConflict\":" + financialLedgerConflict + "}"));
         } else {
             reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
         }

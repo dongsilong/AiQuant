@@ -1,6 +1,7 @@
 package org.dromara.quant.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -89,7 +90,7 @@ public class QuantAdminController {
     /**
      * 汇总当前量化模块的运行概况。
      */
-    @SaCheckPermission("quant:dashboard:list")
+    @SaCheckPermission(value = {"quant:dashboard:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/dashboard/overview")
     public R<Map<String, Object>> overview() {
         List<Long> credentialIds = accessibleCredentialIds();

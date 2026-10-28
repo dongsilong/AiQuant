@@ -58,9 +58,19 @@ public class StrategyOrderCrashRecoveryService {
                 throw new IllegalStateException("Conflicting recovered strategy order intent", duplicate);
             }
         }
-        if (intents.bindRecoveredOrder(order.getId(), credentialId, symbol, exact.orderId(), record.getClientOrderId(), record.getStrategyId(), record.getStrategyInstanceId(),
-            (String) pre.get("position_side"), "CLOSE".equals(record.getOperationType())) != 1) {
-            throw new IllegalStateException("Cannot bind exact recovered order to strategy");
+        boolean reduceOnly = "CLOSE".equals(record.getOperationType());
+        String positionSide = (String) pre.get("position_side");
+        int bound = intents.bindRecoveredOrder(order.getId(), credentialId, symbol, exact.orderId(),
+            record.getClientOrderId(), record.getStrategyId(), record.getStrategyInstanceId(),
+            positionSide, reduceOnly);
+        if (bound != 1 && intents.countExactRecoveredBinding(order.getId(), credentialId, symbol,
+            exact.orderId(), record.getClientOrderId(), record.getStrategyId(),
+            record.getStrategyInstanceId(), positionSide, reduceOnly) != 1) {
+            throw new IllegalStateException("Cannot bind exact recovered order to strategy: "
+                + "localOrderId=" + order.getId() + ", credentialId=" + credentialId
+                + ", symbol=" + symbol + ", exchangeOrderId=" + exact.orderId()
+                + ", clientOrderId=" + record.getClientOrderId()
+                + ", updateCount=" + bound);
         }
         return order;
     }

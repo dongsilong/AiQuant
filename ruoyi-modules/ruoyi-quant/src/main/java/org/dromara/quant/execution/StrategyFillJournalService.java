@@ -122,6 +122,15 @@ public class StrategyFillJournalService {
             if (!conflicts.isEmpty()) {
                 updateStatus(existing, CONFLICT, "同一成交 ID 对应的 Binance 原始成交字段发生冲突，保留首次事实; conflictingFields=" + String.join(",", conflicts));
                 existing.setAttributionStatus(CONFLICT);
+                return existing;
+            }
+            // Early WebSocket/history snapshots can omit commission, realized PnL, or other
+            // money facts. A later authenticated REST replay may fill those unknown fields,
+            // but may never overwrite a previously persisted non-null exchange fact.
+            StrategyFillJournalRecord incoming = fromSnapshot(fill, credentialId, symbol);
+            incoming.setId(existing.getId());
+            if (journal.enrichMissingFacts(incoming) > 0) {
+                existing = journal.selectByKey(credentialId, symbol, fill.tradeId());
             }
             return existing;
         }
@@ -165,15 +174,19 @@ public class StrategyFillJournalService {
         if (!Objects.equals(record.getCredentialId(), credentialId)) conflicts.add("credentialId");
         if (!symbol.equalsIgnoreCase(record.getSymbol())) conflicts.add("symbol");
         if (!Objects.equals(record.getExchangeTradeId(), fill.tradeId())) conflicts.add("exchangeTradeId");
-        if (!Objects.equals(record.getExchangeOrderId(), fill.orderId())) conflicts.add("exchangeOrderId");
-        if (!equalText(record.getSide(), fill.side(), true)) conflicts.add("side");
-        if (!equalDecimal(record.getQuantity(), fill.quantity())) conflicts.add("quantity");
-        if (!equalDecimal(record.getPrice(), fill.price())) conflicts.add("price");
-        if (!equalDecimal(record.getCommission(), fill.commission())) conflicts.add("commission");
-        if (!equalText(record.getCommissionAsset(), fill.commissionAsset(), true)) conflicts.add("commissionAsset");
-        if (!equalDecimal(record.getRealizedPnl(), fill.realizedPnl())) conflicts.add("realizedPnl");
-        if (!equalTime(record.getTradeTime(), fill.time())) conflicts.add("tradeTime");
+        if (bothKnown(record.getExchangeOrderId(), fill.orderId()) && !Objects.equals(record.getExchangeOrderId(), fill.orderId())) conflicts.add("exchangeOrderId");
+        if (bothKnown(record.getSide(), fill.side()) && !equalText(record.getSide(), fill.side(), true)) conflicts.add("side");
+        if (bothKnown(record.getQuantity(), fill.quantity()) && !equalDecimal(record.getQuantity(), fill.quantity())) conflicts.add("quantity");
+        if (bothKnown(record.getPrice(), fill.price()) && !equalDecimal(record.getPrice(), fill.price())) conflicts.add("price");
+        if (bothKnown(record.getCommission(), fill.commission()) && !equalDecimal(record.getCommission(), fill.commission())) conflicts.add("commission");
+        if (bothKnown(record.getCommissionAsset(), fill.commissionAsset()) && !equalText(record.getCommissionAsset(), fill.commissionAsset(), true)) conflicts.add("commissionAsset");
+        if (bothKnown(record.getRealizedPnl(), fill.realizedPnl()) && !equalDecimal(record.getRealizedPnl(), fill.realizedPnl())) conflicts.add("realizedPnl");
+        if (record.getTradeTime() != null && fill.time() != null && !equalTime(record.getTradeTime(), fill.time())) conflicts.add("tradeTime");
         return conflicts;
+    }
+
+    private static boolean bothKnown(Object left, Object right) {
+        return left != null && right != null;
     }
 
     private static boolean equalText(String left, String right, boolean ignoreCase) {

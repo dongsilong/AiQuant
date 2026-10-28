@@ -56,6 +56,22 @@ class StrategyOrderCrashRecoveryServiceTest {
     }
 
     @Test
+    void alreadyBoundExactOrderIsAcceptedAsIdempotentRecovery() {
+        when(intents.pending(1L, "dispatch-a")).thenReturn(pending());
+        var order = new QuantOrder();
+        order.setId(18L);
+        when(ledger.syncSnapshot(1L, exact("cid-a"))).thenReturn(order);
+        when(intents.promote(1L, "BTCUSDT", "dispatch-a", "cid-a", 9L)).thenReturn(1);
+        when(intents.bindRecoveredOrder(18L, 1L, "BTCUSDT", 9L, "cid-a", 2L, 3L, "LONG", false))
+            .thenReturn(0);
+        when(intents.countExactRecoveredBinding(18L, 1L, "BTCUSDT", 9L, "cid-a", 2L, 3L, "LONG", false))
+            .thenReturn(1);
+
+        assertSame(order, recovery.restore(record(), exact("cid-a")));
+        verify(intents).countExactRecoveredBinding(18L, 1L, "BTCUSDT", 9L, "cid-a", 2L, 3L, "LONG", false);
+    }
+
+    @Test
     void missingPresendIntentCannotAttributeExchangeOrder() {
         assertThrows(IllegalStateException.class, () -> recovery.restore(record(), exact("cid-a")));
         verifyNoInteractions(ledger);

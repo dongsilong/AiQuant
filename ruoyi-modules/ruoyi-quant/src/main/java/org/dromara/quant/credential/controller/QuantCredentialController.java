@@ -1,6 +1,7 @@
 package org.dromara.quant.credential.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -40,7 +41,7 @@ public class QuantCredentialController extends BaseController {
     /**
      * 查询列表数据。
      */
-    @SaCheckPermission("quant:credential:list")
+    @SaCheckPermission(value = {"quant:credential:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/list")
     public R<PageResult<QuantCredentialVo>> list(QuantCredentialBo bo, PageQuery pageQuery) {
         return R.ok(credentialService.queryPageList(bo, pageQuery));

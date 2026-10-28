@@ -47,6 +47,11 @@ public class OrderLedgerService {
             entity.setCreatedAt(LocalDateTime.now());
             entity.setIdempotencyKey(clientOrderId);
         }
+        // Always carry the exchange-confirmed client ID into the merge statement.
+        // Existing rows may have been found by exchangeOrderId and still contain an
+        // EXCHANGE:<id> placeholder; leaving the old value on the entity prevents
+        // mergeExchangeFactIfMonotonic from enriching that identity.
+        entity.setClientOrderId(clientOrderId);
         entity.setSymbol(snapshot.symbol());
         entity.setExchangeOrderId(snapshot.orderId());
         entity.setSide(snapshot.side());

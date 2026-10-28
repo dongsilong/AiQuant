@@ -178,7 +178,7 @@ public class QuantStrategyBindingController {
     /**
      * 查询策略账户绑定。
      */
-    @SaCheckPermission("quant:strategy:edit")
+    @SaCheckPermission("quant:strategy:list")
     @GetMapping("/{strategyId}/accounts")
     public R<List<QuantStrategyAccount>> accounts(@PathVariable Long strategyId) {
         checkStrategy(strategyId);
@@ -221,7 +221,7 @@ public class QuantStrategyBindingController {
     /**
      * 查询策略交易对绑定。
      */
-    @SaCheckPermission("quant:strategy:edit")
+    @SaCheckPermission("quant:strategy:list")
     @GetMapping("/{strategyId}/symbols")
     public R<List<QuantStrategySymbol>> symbols(@PathVariable Long strategyId) {
         checkStrategy(strategyId);

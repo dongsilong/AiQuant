@@ -1,6 +1,7 @@
 package org.dromara.quant.account.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -56,7 +57,7 @@ public class QuantAccountQueryController {
     /**
      * 查询指定凭证的账户资金快照。
      */
-    @SaCheckPermission("quant:account:list")
+    @SaCheckPermission(value = {"quant:account:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/account/{credentialId}")
     public R<ExchangeGateway.AccountSnapshot> account(@PathVariable Long credentialId) {
         return R.ok(gateway.queryAccount(credential(credentialId)));
@@ -65,7 +66,7 @@ public class QuantAccountQueryController {
     /**
      * 查询当日零点附近的账户权益基线；缺少可信基线时返回空。
      */
-    @SaCheckPermission("quant:account:list")
+    @SaCheckPermission(value = {"quant:account:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/account/{credentialId}/daily-baseline")
     public R<DailyAccountBaseline> dailyBaseline(@PathVariable Long credentialId) {
         credentialEntity(credentialId);
@@ -89,7 +90,7 @@ public class QuantAccountQueryController {
     /**
      * 查询指定凭证的当前持仓。
      */
-    @SaCheckPermission("quant:position:list")
+    @SaCheckPermission(value = {"quant:position:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/position/{credentialId}")
     public R<List<ExchangeGateway.PositionSnapshot>> positions(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
         return R.ok(gateway.queryPositions(credential(credentialId), symbol));
@@ -98,7 +99,7 @@ public class QuantAccountQueryController {
     /**
      * 查询指定凭证的当前/历史订单。
      */
-    @SaCheckPermission("quant:order:list")
+    @SaCheckPermission(value = {"quant:order:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/order/{credentialId}")
     public R<List<ExchangeGateway.OrderSnapshot>> orders(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
         return R.ok(gateway.queryOrders(credential(credentialId), symbol));
@@ -107,7 +108,7 @@ public class QuantAccountQueryController {
     /**
      * 只读查询交易所当前条件单，包含止盈止损，复用账户访问权限校验。
      */
-    @SaCheckPermission("quant:order:list")
+    @SaCheckPermission(value = {"quant:order:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/order/{credentialId}/protection")
     public R<List<ExchangeGateway.ProtectionOrderSnapshot>> protectionOrders(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
         return R.ok(gateway.queryProtectionOrders(credential(credentialId), symbol));

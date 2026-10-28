@@ -32,7 +32,7 @@ quant:
     recovery-seconds: 5
   paper:
     # 生产环境禁止模拟账本入口；历史代码与数据结构暂保留用于迁移兼容。
-    enabled: false
+    enabled: true
   # 交易所事实对账与用户数据流协调配置
   reconcile:
     # 是否启用周期账户/订单/成交全量对账及持久化执行记录恢复扫描；运行时持仓核实与用户数据流恢复仍运行

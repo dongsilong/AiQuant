@@ -64,6 +64,38 @@ class StrategyFillJournalServiceTest {
     }
 
     @Test
+    void laterCompleteReplayEnrichesPreviouslyUnknownMoneyFactsWithoutConflict() {
+        var incoming = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00.123Z"), "USDT");
+        var stored = new StrategyFillJournalRecord();
+        stored.setId(77L);
+        stored.setCredentialId(1L);
+        stored.setSymbol("BTCUSDT");
+        stored.setExchangeTradeId(101L);
+        stored.setExchangeOrderId(202L);
+        stored.setSide("BUY");
+        stored.setQuantity(BigDecimal.ONE);
+        stored.setPrice(BigDecimal.TEN);
+        stored.setTradeTime(java.time.LocalDateTime.ofInstant(incoming.time(), java.time.ZoneOffset.UTC));
+        stored.setAttributionStatus("WAITING_ORDER");
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(stored, stored);
+        when(journal.enrichMissingFacts(any())).thenReturn(1);
+        when(journal.updateStatus(77L, "WAITING_ORDER", "未找到具有明确策略实例归属的本地订单")).thenReturn(1);
+
+        String status = service.attribute(incoming, null, 1L);
+
+        assertEquals("WAITING_ORDER", status);
+        var enriched = org.mockito.ArgumentCaptor.forClass(StrategyFillJournalRecord.class);
+        verify(journal).enrichMissingFacts(enriched.capture());
+        assertEquals(77L, enriched.getValue().getId());
+        assertEquals(new BigDecimal("0.01"), enriched.getValue().getCommission());
+        assertEquals(BigDecimal.ZERO, enriched.getValue().getRealizedPnl());
+        assertEquals("USDT", enriched.getValue().getCommissionAsset());
+        verify(journal, never()).insertRaw(any());
+        verify(journal, never()).updateStatus(eq(77L), eq("CONFLICT"), anyString());
+    }
+
+    @Test
     void conflictingDuplicateIsQuarantinedWithoutOverwritingFirstRawFact() {
         var stored = new StrategyFillJournalRecord();
         stored.setId(77L);

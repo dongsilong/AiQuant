@@ -1,6 +1,7 @@
 package org.dromara.quant.strategy.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaMode;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.domain.PageResult;
@@ -28,7 +29,7 @@ public class QuantStrategyController {
     /**
      * 查询列表数据。
      */
-    @SaCheckPermission("quant:strategy:list")
+    @SaCheckPermission(value = {"quant:strategy:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/list")
     public R<PageResult<QuantStrategy>> list(PageQuery pageQuery) {
         return R.ok(service.queryPage(pageQuery));

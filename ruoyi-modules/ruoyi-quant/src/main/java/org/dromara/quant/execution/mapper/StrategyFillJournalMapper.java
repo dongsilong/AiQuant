@@ -14,6 +14,9 @@ public interface StrategyFillJournalMapper {
 
     int insertRaw(StrategyFillJournalRecord record);
 
+    /** Fill previously unknown fields only when all known facts still match. */
+    int enrichMissingFacts(StrategyFillJournalRecord record);
+
     int updateStatus(@Param("id") Long id, @Param("status") String status, @Param("reason") String reason);
 
     List<StrategyFillJournalRecord> selectPending(@Param("credentialId") Long credentialId, @Param("limit") int limit);
