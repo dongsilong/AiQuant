@@ -44,7 +44,16 @@
 
 未仅凭“静态搜索没有发现引用”删除 Maven/npm 依赖或 Spring 配置。框架自动装配、反射、组件扫描、插件与运行时配置可能不体现为普通源码调用。当前环境没有可用的仓库本地构建环境，不能据此声称依赖清理已经过构建验证。
 
-## 4. 数据库 SQL 审计
+## 4. 第二轮源码瘦身（2026-10-28）
+
+在初轮生成物清理之外，进一步执行了基于当前瘦身分支的静态源码检查，并提交以下两项低风险改动：
+
+- `StrategyRuntimeService.java`：删除私有方法 `upsertPaperPosition(...)`（19 行方法体/注释），在该类完整源码内方法名只出现在定义处，无调用点。该方法单独创建 PAPER 持仓，而现有运行时路径通过持仓加载/同步与 `PaperTradingService` 处理 PAPER 交易；删除该未引用方法不改变现有调用路径。提交：[`0b9054c`](https://github.com/dongsilong/AiQuant/commit/0b9054c081752cb4563a5b62e151d4049f4789cf)。
+- `RealtimeKlineMomentumStrategy.java`：删除仅转调 `decimal(...)` 的 `requirePositive(...)` 私有包装方法，三个参数校验点直接调用原校验函数。提交：[`5144020`](https://github.com/dongsilong/AiQuant/commit/5144020dbbda251df649b8c97c29a65577d76132)。
+
+对 `ProtectionOrderService`、`BinanceGatewayAdapter`、`TradingReconciliationService`、`MarketStreamHub` 和 `UnifiedTradeExecutionService` 执行了私有方法引用次数扫描，未发现方法名只在定义处出现的候选项，因此没有为减少行数而删除其代码。扫描不是完整的 Java AST/字节码分析，仍需构建与测试验证。
+
+## 5. 数据库 SQL 审计
 
 ### 指定文件 `script/sql/quant/quantdb.sql`
 
@@ -62,14 +71,14 @@ Git 树确认文件存在，大小 3,287,403 bytes（约 3.29 MB），不是空�
 
 **数据库删除结果：本轮没有删除任何表、字段、索引或 SQL 文件。** 目前证据不足以安全删除某张量化表；特别是 `quant_credential_user` 尚不能判定为废表。
 
-## 5. 验证结果与限制
+## 6. 验证结果与限制
 
 - 已通过 GitHub 递归文件树核验两个瘦身分支；未修改 `fix/dev` 或 `fix/dev-ui` 基线。
 - 已核对后端指定 SQL dump 的真实大小与内容类型。
-- 未运行 Maven 编译、Java 测试、前端 pnpm build/lint 或数据库恢复演练；不能声称构建/回归/生产验证通过。
+- 本轮仅完成静态源码检查与小范围低风险删除；未运行 Maven 编译、Java 测试、前端 pnpm build/lint 或数据库恢复演练，不能声称构建/回归/生产验证通过。
 - 未创建 PR，未合并分支。
 - 本报告是本轮静态审计结果，不代表已证明整个仓库所有潜在死代码均已清除。
 
-## 6. 结论
+## 7. 结论
 
 已完成有充分证据的生成分析产物清理；未对量化交易业务逻辑、框架配置、依赖或数据库对象做猜测性删除。下一轮若要进一步减少源码和数据库体积，必须基于完整分支级符号引用分析、反射/组件扫描审查、测试与构建验证，以及 SQL dump 的初始化/恢复依赖核验后实施。
