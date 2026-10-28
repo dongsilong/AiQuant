@@ -59,6 +59,7 @@ class ProtectionOrderServiceTest {
         }).when(mapper).insert(any(QuantProtectionOrder.class));
         when(mapper.updateById(any(QuantProtectionOrder.class))).thenReturn(1);
         when(mapper.update(any(QuantProtectionOrder.class), any())).thenReturn(1);
+        when(mapper.markWorkingIfNotWorking(any(), any(), any(), any(), any())).thenReturn(1);
     }
 
     @Test
@@ -294,6 +295,27 @@ class ProtectionOrderServiceTest {
         assertTrue(service.cancelStrategyProtection(1L, position, "FIRST_TP"));
         verify(gateway, never()).cancelProtectionOrder(any());
         verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "pending-protection-cancel", "QFTP_test", 55L);
+    }
+
+    @Test
+    void concurrentProtectionConfirmationAcceptsOnlyAlreadyPersistedExactWorkingOrder() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        local.setStatus("NEW");
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(gateway.queryProtectionOrder(any(), eq(55L), eq("QFTP_test"), eq("BTCUSDT")))
+            .thenReturn(snapshot(55L, "QFTP_test", BigDecimal.ONE, "NEW", null));
+        when(mapper.markWorkingIfNotWorking(7L, 1L, "BTCUSDT", "QFTP_test", 55L)).thenReturn(0);
+        QuantProtectionOrder persisted = order();
+        persisted.setCredentialId(1L);
+        persisted.setStatus("WORKING");
+        when(mapper.selectById(7L)).thenReturn(persisted);
+
+        assertSame(persisted, service.ensureMarginHardStop(1L, position, new BigDecimal("0.1"), true));
+
+        verify(mapper).markWorkingIfNotWorking(7L, 1L, "BTCUSDT", "QFTP_test", 55L);
+        verify(dispatcher, never()).begin(any(), any(), any(), any(), any(), any(), any());
+        verify(gateway, never()).placeProtectionOrder(any());
     }
 
     @Test
