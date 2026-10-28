@@ -3342,25 +3342,6 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     }
 
     /**
-     * 创建或更新 PAPER 本地持仓。
-     */
-    private QuantPosition upsertPaperPosition(ActiveRuntime runtime, String direction, BigDecimal quantity, BigDecimal entryPrice, int leverage) {
-        QuantPosition position = new QuantPosition();
-        position.setCredentialId(runtime.credential.getId());
-        position.setSymbol(runtime.symbol.getSymbol());
-        position.setPositionSide(direction);
-        position.setQuantity(quantity);
-        position.setEntryPrice(entryPrice);
-        position.setMarkPrice(entryPrice);
-        position.setMargin(entryPrice.multiply(quantity).divide(BigDecimal.valueOf(Math.max(1, leverage)), 16, RoundingMode.HALF_UP));
-        position.setLeverage(leverage);
-        position.setUnrealizedPnl(BigDecimal.ZERO);
-        position.setUpdatedAt(LocalDateTime.now());
-        positionMapper.insert(position);
-        return position;
-    }
-
-    /**
      * 用当前持仓事实校准策略运行状态。
      */
     private void syncRuntimeStateWithPosition(ActiveRuntime runtime) {
