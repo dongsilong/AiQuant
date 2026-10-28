@@ -57,13 +57,6 @@ public final class RealtimeKlineMomentumStrategy implements StrategyPlugin {
     }
 
     /**
-     * 读取必需数据，不满足条件时抛出异常。
-     */
-    private static void requirePositive(Map<String, Object> params, String key, BigDecimal defaultValue) {
-        decimal(params, key, defaultValue);
-    }
-
-    /**
      * 返回当前策略插件的编码、版本和展示名称。
      */
     @Override
@@ -76,9 +69,9 @@ public final class RealtimeKlineMomentumStrategy implements StrategyPlugin {
      */
     @Override
     public void validateConfig(Map<String, Object> params) {
-        requirePositive(params, "entryChangeRatio", DEFAULT_ENTRY_CHANGE_RATIO);
-        requirePositive(params, "takeProfitRatio", DEFAULT_TAKE_PROFIT_RATIO);
-        requirePositive(params, "stopLossRatio", DEFAULT_STOP_LOSS_RATIO);
+        decimal(params, "entryChangeRatio", DEFAULT_ENTRY_CHANGE_RATIO);
+        decimal(params, "takeProfitRatio", DEFAULT_TAKE_PROFIT_RATIO);
+        decimal(params, "stopLossRatio", DEFAULT_STOP_LOSS_RATIO);
     }
 
     /**
