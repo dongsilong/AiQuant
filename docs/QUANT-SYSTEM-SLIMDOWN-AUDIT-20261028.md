@@ -90,3 +90,12 @@ Git 树确认文件存在，大小 3,287,403 bytes（约 3.29 MB），不是空�
 - 删除提交：`2e8691695151665cc57b388a828c1b8c12781774`。
 - 本次仍未删除任何交易表、字段、索引或迁移 SQL；也未删除示例/测试类，因为它们可能承担回归测试或手工诊断用途。
 - 验证限制：尚未运行 Maven 构建或测试套件。删除的是纯注释文件，理论上不影响编译输入，但仍不能将此表述为构建通过。
+
+
+### 第三轮核查结果（2026-10-28）
+
+- 对策略包进行二次目录核查：除已删除的全注释 `EmaCrossRateStrategy.java` 外，剩余策略接口、信号对象、策略上下文、注册表、控制器、实体、Mapper 和服务均属于当前策略配置/运行路径，未按“文件名旧”或“简单搜索无引用”删除。
+- 对 `TradeDecisionLogService`、`PaperTradingService`、`StrategyPlugin`、`StrategyContext`、`TradeHistoryAssembler`、`QuantityNormalizer`、`StrategyPositionReturnRate`、`CredentialMasker` 进行导入符号计数检查，未发现可安全删除的普通未使用 import。
+- 对 `StrategyRuntimeService`、`ProtectionOrderService`、`BinanceGatewayAdapter`、`TradingReconciliationService`、`MarketStreamHub`、`UnifiedTradeExecutionService` 的私有方法名称引用进行文本筛查；未发现新的“声明存在但方法名只出现一次”的可靠删除候选。该检查不是 AST/字节码级死代码分析，不能证明不存在所有死代码。
+- 没有进一步删除交易运行时、配置属性、测试示例或数据库对象：目前证据不足以证明它们在反射、Spring 自动注入、MyBatis XML、迁移、运维诊断或回归测试中无用。
+- 未执行 Maven/前端构建或测试；数据库未连接，未执行迁移/恢复演练。验收状态仍为“源码静态清理已提交，构建与运行回归待验证”。
