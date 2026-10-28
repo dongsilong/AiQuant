@@ -1331,6 +1331,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     log.warn("开仓暂停：账户级持仓快照已过期 instanceId={} credentialId={} symbol={} ageMs={} maxAgeMs={}", runtime.instance.getId(), runtime.credential.getId(),
                         runtime.symbol.getSymbol(), now - runtime.positionFactsVerifiedAt, positionFactsMaxAgeMillis);
                 }
+                // A stale snapshot is not only a decision gate: actively request a
+                // credential-coalesced reconciliation so recovery does not depend on
+                // an unrelated future event. The request path is single-flight and
+                // preserves REST scheduler backoff and all existing safety gates.
+                requestReconciliation(runtime);
                 return;
             }
             if (!"RUNNING".equals(runtime.instance.getStatus())) {
