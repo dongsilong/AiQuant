@@ -28,17 +28,41 @@ public class OrderLedgerService {
      * 同步对应业务事实。
      */
     public QuantOrder syncSnapshot(Long credentialId, ExchangeGateway.OrderSnapshot snapshot) {
+        return syncSnapshot(credentialId, snapshot == null ? null : snapshot.symbol(), snapshot, true);
+    }
+
+    public QuantOrder syncSnapshot(Long credentialId, String expectedSymbol, ExchangeGateway.OrderSnapshot snapshot) {
+        return syncSnapshot(credentialId, expectedSymbol, snapshot, true);
+    }
+
+    public QuantOrder syncHistoricalSnapshot(Long credentialId, String expectedSymbol, ExchangeGateway.OrderSnapshot snapshot) {
+        return syncSnapshot(credentialId, expectedSymbol, snapshot, false);
+    }
+
+    private QuantOrder syncSnapshot(Long credentialId, String expectedSymbol, ExchangeGateway.OrderSnapshot snapshot, boolean publishDecisionLog) {
         if (snapshot == null) {
             return null;
         }
-        if (decisionLogs != null) {
+        if (expectedSymbol == null || snapshot.symbol() == null || !expectedSymbol.equalsIgnoreCase(snapshot.symbol())) {
+            throw new IllegalStateException("交易所订单交易对与精确查询条件不匹配，拒绝补齐订单来源");
+        }
+        if (publishDecisionLog && decisionLogs != null) {
             decisionLogs.order(credentialId, snapshot);
         }
         String clientOrderId = snapshot.clientOrderId() == null ? "EXCHANGE:" + snapshot.orderId() : snapshot.clientOrderId();
         QuantOrder entity = snapshot.orderId() == null ? null :
-            mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getExchangeOrderId, snapshot.orderId()));
+            mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getSymbol, expectedSymbol).eq(QuantOrder::getExchangeOrderId,
+                snapshot.orderId()));
         if (entity == null) {
-            entity = mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getClientOrderId, clientOrderId));
+            entity = mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getSymbol, expectedSymbol).eq(QuantOrder::getClientOrderId,
+                clientOrderId));
+        }
+        if (entity != null && snapshot.positionSide() != null && entity.getPositionSide() != null && !entity.getPositionSide().isBlank()
+            && !entity.getPositionSide().equalsIgnoreCase(snapshot.positionSide())) {
+            throw new IllegalStateException("订单持仓方向事实冲突，拒绝覆盖");
+        }
+        if (entity != null && snapshot.reduceOnly() != null && entity.getReduceOnly() != null && !entity.getReduceOnly().equals(snapshot.reduceOnly())) {
+            throw new IllegalStateException("订单 reduceOnly 事实冲突，拒绝覆盖");
         }
         if (entity == null) {
             entity = new QuantOrder();
@@ -57,9 +81,11 @@ public class OrderLedgerService {
         entity.setSide(snapshot.side());
         entity.setOrderType(snapshot.type());
         entity.setStatus(snapshot.status());
+        entity.setPositionSide(snapshot.positionSide());
         entity.setPrice(snapshot.price());
         entity.setOriginalQuantity(snapshot.originalQuantity());
         entity.setExecutedQuantity(snapshot.executedQuantity());
+        entity.setReduceOnly(snapshot.reduceOnly());
         entity.setUpdatedAt(snapshot.updateTime() == null ? LocalDateTime.now() : LocalDateTime.ofInstant(snapshot.updateTime(), java.time.ZoneOffset.UTC));
         return persistMonotonic(entity);
     }

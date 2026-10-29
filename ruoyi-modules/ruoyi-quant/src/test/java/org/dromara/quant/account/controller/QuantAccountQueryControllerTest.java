@@ -13,12 +13,16 @@ import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.domain.vo.QuantTradeVo;
 import org.dromara.quant.account.mapper.QuantAccountSnapshotMapper;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
+import org.dromara.quant.account.mapper.TradeHistoryMapper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.execution.OrderLedgerService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -36,7 +40,7 @@ class QuantAccountQueryControllerTest {
         credential.setRunMode("TESTNET");
         when(mapper.selectById(10L)).thenReturn(credential);
         when(gateway.queryProtectionOrders(any(), eq("PUMPUSDT"))).thenReturn(List.of());
-        var controller = new QuantAccountQueryController(mapper, gateway, mock(QuantTradeMapper.class), mock(QuantAccountSnapshotMapper.class));
+        var controller = new QuantAccountQueryController(mapper, gateway, mock(QuantTradeMapper.class), mock(QuantAccountSnapshotMapper.class), mock(TradeHistoryMapper.class), mock(OrderLedgerService.class));
         try (var login = mockStatic(LoginHelper.class)) {
             login.when(LoginHelper::getUserId).thenReturn(1L);
             login.when(() -> LoginHelper.isSuperAdmin(1L)).thenReturn(false);
@@ -54,7 +58,7 @@ class QuantAccountQueryControllerTest {
         QuantCredential credential = new QuantCredential();
         credential.setUserId(1L);
         when(mapper.selectById(10L)).thenReturn(credential);
-        var controller = new QuantAccountQueryController(mapper, gateway, mock(QuantTradeMapper.class), mock(QuantAccountSnapshotMapper.class));
+        var controller = new QuantAccountQueryController(mapper, gateway, mock(QuantTradeMapper.class), mock(QuantAccountSnapshotMapper.class), mock(TradeHistoryMapper.class), mock(OrderLedgerService.class));
         try (var login = mockStatic(LoginHelper.class)) {
             login.when(LoginHelper::getUserId).thenReturn(2L);
             login.when(() -> LoginHelper.isSuperAdmin(2L)).thenReturn(false);
@@ -82,7 +86,7 @@ class QuantAccountQueryControllerTest {
         tradePage.setTotal(1);
         when(tradeMapper.selectPage(any(Page.class), any())).thenReturn(tradePage);
 
-        var controller = new QuantAccountQueryController(credentialMapper, mock(ExchangeGateway.class), tradeMapper, mock(QuantAccountSnapshotMapper.class));
+        var controller = new QuantAccountQueryController(credentialMapper, mock(ExchangeGateway.class), tradeMapper, mock(QuantAccountSnapshotMapper.class), mock(TradeHistoryMapper.class), mock(OrderLedgerService.class));
         PageQuery pageQuery = new PageQuery();
         pageQuery.setPageNum(1);
         pageQuery.setPageSize(10);
@@ -100,5 +104,39 @@ class QuantAccountQueryControllerTest {
             verify(credentialMapper).selectList(argThat(wrapper -> wrapper instanceof AbstractWrapper<?, ?, ?> abstractWrapper
                 && abstractWrapper.getSqlSegment().contains("user_id") && abstractWrapper.getParamNameValuePairs().containsValue(2L)));
         }
+    }
+
+    @Test
+    void explicitTradeSyncQueriesOnlyMissingSourceByExactOrderIdentity() {
+        QuantCredentialMapper credentialMapper = mock(QuantCredentialMapper.class);
+        QuantTradeMapper tradeMapper = mock(QuantTradeMapper.class);
+        TradeHistoryMapper historyMapper = mock(TradeHistoryMapper.class);
+        OrderLedgerService orderLedger = mock(OrderLedgerService.class);
+        ExchangeGateway gateway = mock(ExchangeGateway.class);
+        QuantCredential credential = new QuantCredential();
+        credential.setId(10L);
+        credential.setUserId(1L);
+        credential.setApiKey("key");
+        credential.setSecretKey("secret");
+        credential.setSignatureType("HMAC");
+        credential.setRunMode("TESTNET");
+        when(credentialMapper.selectById(10L)).thenReturn(credential);
+        when(gateway.queryTrades(any(), eq("ZROUSDT"), any())).thenReturn(List.of(new ExchangeGateway.TradeSnapshot("ZROUSDT", 101L, 202L, "SELL",
+            BigDecimal.ONE, new BigDecimal("100"), BigDecimal.ZERO, BigDecimal.ZERO, Instant.parse("2026-10-28T00:00:00Z"), "USDT")));
+        when(tradeMapper.selectOne(any())).thenReturn(null);
+        when(historyMapper.selectOrderIdsMissingOrderFacts(10L, "ZROUSDT", 200)).thenReturn(List.of(202L));
+        var order = new ExchangeGateway.OrderSnapshot("ZROUSDT", 202L, "client-202", "SELL", "MARKET", "FILLED", BigDecimal.ZERO, BigDecimal.ONE,
+            BigDecimal.ONE, Instant.parse("2026-10-28T00:00:00Z"), new BigDecimal("100"), "BOTH", false);
+        when(gateway.queryOrder(any(), eq("ZROUSDT"), eq(202L), isNull())).thenReturn(order);
+        var controller = new QuantAccountQueryController(credentialMapper, gateway, tradeMapper, mock(QuantAccountSnapshotMapper.class), historyMapper, orderLedger);
+
+        try (var login = mockStatic(LoginHelper.class)) {
+            login.when(LoginHelper::getUserId).thenReturn(1L);
+            login.when(() -> LoginHelper.isSuperAdmin(1L)).thenReturn(false);
+            controller.syncTrades(10L, "ZROUSDT");
+        }
+
+        verify(gateway).queryOrder(argThat(value -> "TESTNET".equals(value.runMode())), eq("ZROUSDT"), eq(202L), isNull());
+        verify(orderLedger).syncHistoricalSnapshot(10L, "ZROUSDT", order);
     }
 }

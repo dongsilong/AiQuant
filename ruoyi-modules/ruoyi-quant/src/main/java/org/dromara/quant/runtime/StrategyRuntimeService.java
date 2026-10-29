@@ -1325,6 +1325,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             long positionFactsMaxAgeMillis = Math.max(1, properties.getReconcile().getIntervalSeconds()) * 1_000L + 15_000L;
             if (System.currentTimeMillis() - runtime.positionFactsVerifiedAt > positionFactsMaxAgeMillis) {
                 logEntryDecision(runtime, context, "POSITION_FACTS_STALE", "账户持仓事实已过期，等待新快照后再开仓");
+                // Staleness must actively trigger reconciliation; otherwise an idle or low-volume
+                // symbol can remain blocked indefinitely because no later event requests a refresh.
+                // requestReconciliation is bounded by nextReconcileAt and coalesces concurrent requests.
+                requestReconciliation(runtime);
                 long now = System.currentTimeMillis();
                 if (now >= runtime.nextPositionReconcilingLogAt) {
                     runtime.nextPositionReconcilingLogAt = now + 30_000L;

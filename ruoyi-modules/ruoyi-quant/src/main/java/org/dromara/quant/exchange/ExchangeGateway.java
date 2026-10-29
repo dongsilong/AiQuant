@@ -168,14 +168,21 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param executedQuantity 订单已成交数量
      * @param updateTime       交易所事实更新时间
      * @param averagePrice     实际累计成交均价，未知时为空，不能用委托价格代替
+     * @param positionSide     币安返回的持仓方向，例如 LONG/SHORT/BOTH
+     * @param reduceOnly       币安返回的只减仓事实；未知时为空
      */
     record OrderSnapshot(String symbol,
                          @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId,
                          String clientOrderId, String side, String type, String status, BigDecimal price, BigDecimal originalQuantity, BigDecimal executedQuantity,
-                         Instant updateTime, BigDecimal averagePrice) {
+                         Instant updateTime, BigDecimal averagePrice, String positionSide, Boolean reduceOnly) {
+        public OrderSnapshot(String symbol, Long orderId, String clientOrderId, String side, String type, String status, BigDecimal price, BigDecimal originalQuantity,
+                             BigDecimal executedQuantity, Instant updateTime, BigDecimal averagePrice) {
+            this(symbol, orderId, clientOrderId, side, type, status, price, originalQuantity, executedQuantity, updateTime, averagePrice, null, null);
+        }
+
         public OrderSnapshot(String symbol, Long orderId, String clientOrderId, String side, String type, String status, BigDecimal price, BigDecimal originalQuantity,
                              BigDecimal executedQuantity, Instant updateTime) {
-            this(symbol, orderId, clientOrderId, side, type, status, price, originalQuantity, executedQuantity, updateTime, null);
+            this(symbol, orderId, clientOrderId, side, type, status, price, originalQuantity, executedQuantity, updateTime, null, null, null);
         }
     }
 

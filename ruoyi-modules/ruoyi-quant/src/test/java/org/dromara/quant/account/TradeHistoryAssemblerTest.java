@@ -105,11 +105,14 @@ class TradeHistoryAssemblerTest {
     }
 
     @Test
-    void excludesIncompleteChainsRatherThanInventingAnOpening() {
+    void infersLegacyOpeningButKeepsAnUnmatchedCloseIncomplete() {
         var result = TradeHistoryAssembler.assemble(List.of(fill(1, 10, "BTCUSDT", "SELL", "LONG", "CLOSE", "1", "100", "0", "0"), fill(2, 10, "PUMPUSDT", "BUY", null, null, "1"
             , "1", "0", "0")), Map.of());
-        assertTrue(result.rows().isEmpty());
-        assertEquals(2, result.incompleteCount());
+        assertEquals(1, result.rows().size());
+        assertEquals("INFERRED", result.rows().getFirst().get("reconstructionSource"));
+        assertEquals("OPEN", result.rows().getFirst().get("status"));
+        assertEquals(1, result.incompleteCount());
+        assertEquals(1, result.inferredCount());
     }
 
     @Test
@@ -127,5 +130,58 @@ class TradeHistoryAssemblerTest {
             "2", "90", "0", "20")), Map.of());
         assertEquals("SHORT", result.rows().getFirst().get("direction"));
         assertEquals("20", result.rows().getFirst().get("realizedPnl"));
+    }
+
+    @Test
+    void infersLegacyCyclesFromFlatAndMarksThemAsInferred() {
+        var result = TradeHistoryAssembler.assemble(List.of(
+            fill(1, 10, "ZROUSDT", "SELL", null, null, "3", "100", "0", "0"),
+            fill(2, 10, "ZROUSDT", "BUY", null, null, "1", "90", "0", "1"),
+            fill(3, 10, "ZROUSDT", "BUY", null, null, "2", "80", "0", "2"),
+            fill(4, 10, "ZROUSDT", "BUY", null, null, "2", "70", "0", "0")
+        ), Map.of());
+
+        assertEquals(2, result.rows().size());
+        var shortCycle = result.rows().stream().filter(row -> "SHORT".equals(row.get("direction"))).findFirst().orElseThrow();
+        var openLongCycle = result.rows().stream().filter(row -> "LONG".equals(row.get("direction"))).findFirst().orElseThrow();
+        assertEquals("CLOSED", shortCycle.get("status"));
+        assertEquals("INFERRED", shortCycle.get("reconstructionSource"));
+        assertEquals("OPEN", openLongCycle.get("status"));
+        assertEquals("INFERRED", openLongCycle.get("reconstructionSource"));
+    }
+
+    @Test
+    void keepsExchangeSourcedCyclesDistinctFromInferredCycles() {
+        var result = TradeHistoryAssembler.assemble(List.of(
+            fill(1, 10, "BTCUSDT", "BUY", "LONG", "OPEN", "1", "100", "0", "0"),
+            fill(2, 10, "BTCUSDT", "SELL", "LONG", "CLOSE", "1", "110", "0", "10")
+        ), Map.of());
+
+        assertEquals("EXCHANGE", result.rows().getFirst().get("reconstructionSource"));
+    }
+
+    @Test
+    void doesNotInferAcrossAZeroCrossingFill() {
+        var result = TradeHistoryAssembler.assemble(List.of(
+            fill(1, 10, "BTCUSDT", "SELL", null, null, "1", "100", "0", "0"),
+            fill(2, 10, "BTCUSDT", "BUY", null, null, "2", "90", "0", "0")
+        ), Map.of());
+
+        assertTrue(result.rows().isEmpty());
+        assertEquals(1, result.incompleteCount());
+    }
+
+    @Test
+    void classifiesOneWayBothSideOrdersFromExactReduceOnlyFact() {
+        LocalDateTime time = LocalDateTime.of(2026, 10, 9, 1, 0);
+        var result = TradeHistoryAssembler.assemble(List.of(
+            new TradeHistoryAssembler.Fill(1L, 10L, "BTCUSDT", "SELL", "BOTH", null, false, BigDecimal.ONE, new BigDecimal("100"), BigDecimal.ZERO, BigDecimal.ZERO,
+                time),
+            new TradeHistoryAssembler.Fill(2L, 10L, "BTCUSDT", "BUY", "BOTH", null, true, BigDecimal.ONE, new BigDecimal("90"), BigDecimal.ZERO, BigDecimal.TEN,
+                time.plusMinutes(1))
+        ), Map.of());
+
+        assertEquals("SHORT", result.rows().getFirst().get("direction"));
+        assertEquals("EXCHANGE", result.rows().getFirst().get("reconstructionSource"));
     }
 }

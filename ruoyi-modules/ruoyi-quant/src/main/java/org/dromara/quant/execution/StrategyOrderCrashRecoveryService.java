@@ -63,9 +63,8 @@ public class StrategyOrderCrashRecoveryService {
         int bound = intents.bindRecoveredOrder(order.getId(), credentialId, symbol, exact.orderId(),
             record.getClientOrderId(), record.getStrategyId(), record.getStrategyInstanceId(),
             positionSide, reduceOnly);
-        if (bound != 1 && intents.countExactRecoveredBinding(order.getId(), credentialId, symbol,
-            exact.orderId(), record.getClientOrderId(), record.getStrategyId(),
-            record.getStrategyInstanceId(), positionSide, reduceOnly) != 1) {
+        int recoveredCount = intents.countExactRecoveredBinding(order.getId(), credentialId, symbol, exact.orderId(), record.getClientOrderId(), record.getStrategyId(), record.getStrategyInstanceId(), positionSide, reduceOnly);
+        if (bound != 1 && recoveredCount != 1) {
             throw new IllegalStateException("Cannot bind exact recovered order to strategy: "
                 + "localOrderId=" + order.getId() + ", credentialId=" + credentialId
                 + ", symbol=" + symbol + ", exchangeOrderId=" + exact.orderId()

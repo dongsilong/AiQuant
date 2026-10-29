@@ -108,6 +108,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
     }
 
+    private static Boolean nullableBoolean(Object bean, String getter) {
+        String value = string(bean, getter);
+        return value == null || value.isBlank() ? null : Boolean.valueOf(value);
+    }
+
     /**
      * Normalize status-token casing and whitespace at the Binance boundary.
      * Unknown values remain unknown to the protection lifecycle and fail closed.
@@ -978,7 +983,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             }
             return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
                 item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
-                "getAvgPrice")))).toList();
+                "getAvgPrice")), string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"))).toList();
         });
     }
 
@@ -1028,7 +1033,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             type = "UNKNOWN";
         }
         return new OrderSnapshot(actualSymbol, actualOrderId, actualClientOrderId, string(data, "getSide"), type, status, decimal(string(data, "getPrice")), decimal(string(data,
-            "getOrigQty")), decimal(string(data, "getExecutedQty")), instant(number(data, "getUpdateTime")), decimal(string(data, "getAvgPrice")));
+            "getOrigQty")), decimal(string(data, "getExecutedQty")), instant(number(data, "getUpdateTime")), decimal(string(data, "getAvgPrice")), string(data, "getPositionSide"),
+            nullableBoolean(data, "getReduceOnly"));
     }
 
     /**
@@ -1066,7 +1072,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             return List.of();
         }
         return data.stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(), item.getStatus(),
-            decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item, "getAvgPrice")))).toList();
+            decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item, "getAvgPrice")),
+            string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"))).toList();
     }
 
     /**

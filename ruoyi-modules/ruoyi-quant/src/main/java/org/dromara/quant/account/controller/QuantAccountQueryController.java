@@ -5,6 +5,7 @@ import cn.dev33.satoken.annotation.SaMode;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.dromara.common.core.domain.PageResult;
 import org.dromara.common.core.domain.R;
@@ -16,9 +17,11 @@ import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.domain.vo.QuantTradeVo;
 import org.dromara.quant.account.mapper.QuantAccountSnapshotMapper;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
+import org.dromara.quant.account.mapper.TradeHistoryMapper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.execution.OrderLedgerService;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -35,6 +38,7 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequiredArgsConstructor
+@Slf4j
 @RequestMapping("/quant")
 public class QuantAccountQueryController {
     /**
@@ -53,6 +57,8 @@ public class QuantAccountQueryController {
      * 已持久化的账户权益快照。
      */
     private final QuantAccountSnapshotMapper accountSnapshotMapper;
+    private final TradeHistoryMapper tradeHistoryMapper;
+    private final OrderLedgerService orderLedgerService;
 
     /**
      * 查询指定凭证的账户资金快照。
@@ -210,7 +216,31 @@ public class QuantAccountQueryController {
             }
             count++;
         }
+        backfillTradeOrderFacts(credential, symbol);
         return R.ok(count);
+    }
+
+    private void backfillTradeOrderFacts(QuantCredential credential, String symbol) {
+        List<Long> orderIds = tradeHistoryMapper.selectOrderIdsMissingOrderFacts(credential.getId(), symbol.trim().toUpperCase(), 200);
+        int restored = 0;
+        for (Long orderId : orderIds) {
+            try {
+                ExchangeGateway.OrderSnapshot snapshot = gateway.queryOrder(credential(credential.getId()), symbol, orderId, null);
+                if (snapshot == null || !symbol.equalsIgnoreCase(snapshot.symbol()) || !orderId.equals(snapshot.orderId())
+                    || (snapshot.positionSide() == null && snapshot.reduceOnly() == null)) {
+                    continue;
+                }
+                orderLedgerService.syncHistoricalSnapshot(credential.getId(), symbol, snapshot);
+                restored++;
+            } catch (RuntimeException ex) {
+                log.warn("历史成交订单来源补齐暂停，保留未补齐事实供推断展示 credentialId={} symbol={} orderId={} errorType={}",
+                    credential.getId(), symbol, orderId, ex.getClass().getSimpleName());
+                break;
+            }
+        }
+        if (restored > 0) {
+            log.info("历史成交订单来源事实已补齐 credentialId={} symbol={} restoredOrderCount={}", credential.getId(), symbol, restored);
+        }
     }
 
     private ExchangeGateway.Credential credential(Long id) {

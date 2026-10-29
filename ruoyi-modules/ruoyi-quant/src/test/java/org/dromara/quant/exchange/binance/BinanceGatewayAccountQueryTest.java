@@ -53,7 +53,7 @@ class BinanceGatewayAccountQueryTest {
         server.createContext("/", exchange -> {
             String path = exchange.getRequestURI().getPath();
             String order = "{\"symbol\":\"BTCUSDT\",\"orderId\":88,\"clientOrderId\":\"client\",\"side\":\"BUY\"," + "\"type\":\"MARKET\",\"status\":\"FILLED\",\"price\":\"0\"," +
-                "\"avgPrice\":\"101.25\"," + "\"origQty\":\"2\",\"executedQty\":\"2\",\"updateTime\":" + System.currentTimeMillis() + "}";
+                "\"avgPrice\":\"101.25\",\"positionSide\":\"BOTH\",\"reduceOnly\":false," + "\"origQty\":\"2\",\"executedQty\":\"2\",\"updateTime\":" + System.currentTimeMillis() + "}";
             String response = path.endsWith("/time") ? "{\"serverTime\":" + System.currentTimeMillis() + "}" : path.endsWith("/order") ? order : "[" + order + "]";
             byte[] body = response.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
@@ -70,10 +70,16 @@ class BinanceGatewayAccountQueryTest {
             assertEquals(0, new BigDecimal("101.25").compareTo(order.averagePrice()));
             assertEquals(0, BigDecimal.ZERO.compareTo(order.price()));
             assertEquals(0, new BigDecimal("2").compareTo(order.executedQuantity()));
+            assertEquals("BOTH", order.positionSide());
+            assertEquals(Boolean.FALSE, order.reduceOnly());
             var now = java.time.Instant.now();
             var history = gateway.queryOrderHistory(credential, "BTCUSDT", new ExchangeGateway.TimeRange(now.minusSeconds(60), now), 10L);
             assertEquals(0, new BigDecimal("101.25").compareTo(history.getFirst().averagePrice()));
+            assertEquals("BOTH", history.getFirst().positionSide());
+            assertEquals(Boolean.FALSE, history.getFirst().reduceOnly());
             assertEquals(0, new BigDecimal("101.25").compareTo(gateway.queryOrders(credential, "BTCUSDT").getFirst().averagePrice()));
+            assertEquals("BOTH", gateway.queryOrders(credential, "BTCUSDT").getFirst().positionSide());
+            assertEquals(Boolean.FALSE, gateway.queryOrders(credential, "BTCUSDT").getFirst().reduceOnly());
         } finally {
             server.stop(0);
         }

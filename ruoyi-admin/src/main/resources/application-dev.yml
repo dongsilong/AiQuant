@@ -16,7 +16,7 @@ quant:
     secret-key: 303815efc2e94ed3b5dadfc487d5ef7c
   proxy:
     host: 127.0.0.1
-    port: 7897
+    port: 20809
   market:
     # 行情无事件后判定断连的秒数
     idle-timeout-seconds: 15
@@ -128,7 +128,7 @@ mybatis-plus:
     enabled: true
     # 输出方式，可选 console、log
     output: console
-    log-success: false
+    log-success: true
     log-error: true
     # 默认隐藏 SQL 和参数，避免敏感信息进入日志
     include-sql: true
