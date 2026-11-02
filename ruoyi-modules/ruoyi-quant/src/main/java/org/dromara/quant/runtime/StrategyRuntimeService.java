@@ -2398,6 +2398,10 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
             } else {
                 BigDecimal previousQuantity = state.getPositionQty();
                 runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), executionService.toCredential(runtime.credential));
+                if (!hasExclusiveStrategyInventory(runtime)) {
+                    blockUnownedAccountExposure(runtime, "close-order-fill-confirmation");
+                    return;
+                }
                 if (executionResult == null || !"FILLED".equalsIgnoreCase(executionResult.status())) {
                     state.setStatus("EXIT_PENDING");
                     state.setRecoveryRequired(true);
