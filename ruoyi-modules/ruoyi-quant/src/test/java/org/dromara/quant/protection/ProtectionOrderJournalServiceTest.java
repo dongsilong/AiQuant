@@ -4,6 +4,7 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.execution.mapper.StrategyFillAllocationMapper;
+import org.dromara.quant.execution.mapper.StrategyFillJournalMapper;
 import org.dromara.quant.execution.StrategyOrderIntentService;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
@@ -28,7 +29,8 @@ class ProtectionOrderJournalServiceTest {
     private final StrategyOrderIntentService intents = mock(StrategyOrderIntentService.class);
     private final QuantTradeMapper trades = mock(QuantTradeMapper.class);
     private final StrategyFillAllocationMapper allocations = mock(StrategyFillAllocationMapper.class);
-    private final ProtectionOrderJournalService journal = new ProtectionOrderJournalService(protections, orders, intents, trades, allocations);
+    private final StrategyFillJournalMapper fillJournal = mock(StrategyFillJournalMapper.class);
+    private final ProtectionOrderJournalService journal = new ProtectionOrderJournalService(protections, orders, intents, trades, allocations, fillJournal);
     private final ExchangeGateway.Credential credential = new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE");
 
     private QuantProtectionOrder local() {
@@ -68,6 +70,7 @@ class ProtectionOrderJournalServiceTest {
         when(trades.selectList(any())).thenReturn(List.of(fill));
         when(allocations.summarizeOrderFills(1L, "BTCUSDT", 91L, 2L, 3L))
             .thenReturn(Map.of("allocated_qty", BigDecimal.ONE, "conflicting_owner_count", 0L));
+        when(fillJournal.countUnresolvedByOrder(1L, "BTCUSDT", 91L)).thenReturn(0L);
     }
 
     @Test
@@ -107,7 +110,7 @@ class ProtectionOrderJournalServiceTest {
 
         var testnet = new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET");
         assertTrue(journal.bindChild(testnet, local(), actual("BOTH"), child(91L)));
-        verifyNoInteractions(allocations);
+        verifyNoInteractions(allocations, fillJournal);
     }
 
     @Test
@@ -118,6 +121,22 @@ class ProtectionOrderJournalServiceTest {
         assertFalse(journal.bindChild(credential, local(), actual("BOTH"), child(91L)));
         verify(orders).insert(any(QuantOrder.class));
         verify(intents).record(eq(1L), eq(2L), eq(3L), eq("CLOSE"), any(), any());
+    }
+
+    @Test
+    void childWithConflictingRawFillRemainsUnresolvedEvenWhenOldAllocationMatches() {
+        var fill = new QuantTrade();
+        fill.setStrategyId(2L);
+        fill.setStrategyInstanceId(3L);
+        fill.setSide("SELL");
+        fill.setQuantity(BigDecimal.ONE);
+        when(trades.selectList(any())).thenReturn(List.of(fill));
+        when(allocations.summarizeOrderFills(1L, "BTCUSDT", 91L, 2L, 3L))
+            .thenReturn(Map.of("allocated_qty", BigDecimal.ONE, "conflicting_owner_count", 0L));
+        when(fillJournal.countUnresolvedByOrder(1L, "BTCUSDT", 91L)).thenReturn(1L);
+        when(orders.insert(any(QuantOrder.class))).thenReturn(1);
+
+        assertFalse(journal.bindChild(credential, local(), actual("BOTH"), child(91L)));
     }
 
     @Test
