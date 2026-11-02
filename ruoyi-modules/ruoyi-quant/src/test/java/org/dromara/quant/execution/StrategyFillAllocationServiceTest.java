@@ -114,6 +114,20 @@ class StrategyFillAllocationServiceTest {
     }
 
     @Test
+    void replayWithMissingExchangeTimeFailsAsDomainErrorBeforeImmutableComparison() throws Exception {
+        var f = fixture();
+        var baseline = fill("1.25");
+        f.service().allocate(baseline, order(11L), 2L);
+        var missingTime = new ExchangeGateway.TradeSnapshot(baseline.symbol(), baseline.tradeId(), baseline.orderId(), baseline.side(),
+            baseline.quantity(), baseline.price(), baseline.commission(), baseline.realizedPnl(), null, baseline.commissionAsset());
+
+        var failure = assertThrows(IllegalStateException.class, () -> f.service().allocate(missingTime, order(11L), 2L));
+
+        assertEquals("交易所成交缺少方向或成交时间", failure.getMessage());
+        assertEquals(1L, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_strategy_fill_allocation", Long.class));
+    }
+
+    @Test
     void cannotAllocateAUnverifiedOrderOrUnknownInstance() throws Exception {
         var f = fixture();
         var foreign = order(11L);
