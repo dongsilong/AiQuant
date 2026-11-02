@@ -103,7 +103,7 @@ public class ProtectionOrderJournalService {
         }
         order.setStrategyId(local.getStrategyId());
         order.setStrategyInstanceId(local.getStrategyInstanceId());
-        // Keep Binance's exact positionSide in the order ledger; the immutable strategy intent stores the frozen LONG/SHORT direction. 
+        // Keep Binance's exact positionSide in the order ledger; the immutable strategy intent stores the frozen LONG/SHORT direction.
         order.setPositionSide(actual.positionSide());
         order.setReduceOnly(true);
         order.setSide(child.side());
