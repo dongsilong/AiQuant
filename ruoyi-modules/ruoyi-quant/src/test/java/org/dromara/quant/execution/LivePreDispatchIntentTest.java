@@ -20,6 +20,8 @@ class LivePreDispatchIntentTest {
 
     LivePreDispatchIntentTest() {
         when(manager.getTransaction(any())).thenReturn(status);
+        when(mapper.lockGuard(1L, "BTCUSDT")).thenReturn(new java.util.HashMap<>());
+        when(mapper.claimOpenWithLease(1L, "BTCUSDT", "dispatch-a", 3L, 4L)).thenReturn(1);
         when(mapper.claimWithLease(1L, "BTCUSDT", "dispatch-a", 3L, 4L)).thenReturn(1);
         when(mapper.insertTicket(1L, "BTCUSDT", "dispatch-a", "OPEN", "cid-a", 3L, 4L)).thenReturn(1);
         dispatcher = new LiveOrderDispatcher(mapper, manager);
