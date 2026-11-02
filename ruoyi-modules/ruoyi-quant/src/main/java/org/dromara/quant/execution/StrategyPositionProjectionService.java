@@ -94,13 +94,16 @@ public class StrategyPositionProjectionService {
             throw new IllegalStateException("Missing exact strategy order or exchange fill identity");
         }
         Map<String, Object> intent = mapper.verifiedIntent(credentialId, trade.symbol().toUpperCase(Locale.ROOT), trade.orderId());
-        if (intent == null || asLong(intent, "strategy_id") != verifiedOrder.getStrategyId()
+        if (intent == null) {
+            throw new IllegalStateException("No immutable strategy execution intent for exchange fill");
+        }
+        if (asLong(intent, "strategy_id") != verifiedOrder.getStrategyId()
             || asLong(intent, "strategy_instance_id") != verifiedOrder.getStrategyInstanceId()
             || verifiedOrder.getPositionSide() == null || !verifiedOrder.getPositionSide().equalsIgnoreCase(String.valueOf(intent.get("position_side")))
             || !verifiedOrder.getClientOrderId().equals(intent.get("client_order_id"))
             || !trade.side().equalsIgnoreCase(String.valueOf(intent.get("exchange_side")))
             || verifiedOrder.getSide() == null || !trade.side().equalsIgnoreCase(verifiedOrder.getSide())) {
-            throw new IllegalStateException("No immutable, matching strategy execution intent");
+            throw new IllegalStateException("策略订单意图与成交新事实冲突");
         }
         StrategyPositionAccounting.PositionSide positionSide;
         StrategyPositionAccounting.Role role;
@@ -114,7 +117,7 @@ public class StrategyPositionProjectionService {
         if (!expectedSide.equalsIgnoreCase(trade.side())
             || role == StrategyPositionAccounting.Role.OPEN && Boolean.TRUE.equals(verifiedOrder.getReduceOnly())
             || role == StrategyPositionAccounting.Role.CLOSE && !Boolean.TRUE.equals(verifiedOrder.getReduceOnly())) {
-            throw new IllegalStateException("Immutable strategy execution intent conflicts with order direction or reduce-only state");
+            throw new IllegalStateException("策略订单意图与成交新事实冲突：订单方向或 reduce-only 状态不匹配");
         }
         return intent;
     }
