@@ -57,6 +57,7 @@ public class StrategyFillJournalService {
             return updateStatus(record, WAITING_ORDER, "未找到具有明确策略实例归属的本地订单");
         }
         try {
+            projections.verifyAttribution(credentialId, order, fill);
             allocations.allocate(fill, order, credentialId);
             backfillTradeAttribution(record, order, credentialId);
             projections.projectAttributed(credentialId, order, fill);
