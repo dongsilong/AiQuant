@@ -58,6 +58,24 @@ class StrategyPositionProjectionValidationTest {
     }
 
     @Test
+    void flatAccountExposureRequiresZeroInventoryForTheRequestedSide() {
+        var empty = new java.util.HashMap<String, Object>();
+        empty.put("instance_quantity", BigDecimal.ZERO);
+        empty.put("aggregate_quantity", BigDecimal.ZERO);
+        org.mockito.Mockito.when(mapper.ownershipSnapshot(5L, "BTCUSDT", 8L, "LONG")).thenReturn(empty);
+        assertTrue(service.matchesExclusiveInventory(5L, "BTCUSDT", 7L, 8L, "LONG", BigDecimal.ZERO));
+
+        var residual = new java.util.HashMap<String, Object>();
+        residual.put("instance_strategy_id", 7L);
+        residual.put("instance_quantity", new BigDecimal("0.25"));
+        residual.put("aggregate_quantity", new BigDecimal("0.25"));
+        residual.put("instance_cycle_id", 100L);
+        residual.put("instance_cycle_number", 1L);
+        org.mockito.Mockito.when(mapper.ownershipSnapshot(5L, "BTCUSDT", 8L, "SHORT")).thenReturn(residual);
+        assertFalse(service.matchesExclusiveInventory(5L, "BTCUSDT", 7L, 8L, "SHORT", BigDecimal.ZERO));
+    }
+
+    @Test
     void sharedAccountExposureIsNotAssignedToOneStrategyInstance() {
         var snapshot = new java.util.HashMap<String, Object>();
         snapshot.put("instance_strategy_id", 7L);
