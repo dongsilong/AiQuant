@@ -19,7 +19,7 @@ SELECT * FROM quant_strategy_position_rebuild_run WHERE id=#{runId} FOR UPDATE
 INSERT INTO quant_strategy_position_rebuild_inventory
 (run_id,credential_id,symbol,strategy_instance_id,position_side,strategy_id,open_quantity,cost_basis,
  realized_pnl,preserved_realized_pnl,cycle_number,preserved_cycle_number,cycle_id,last_trade_time,last_trade_id,
- preserved_last_trade_time,preserved_last_trade_id)
+ preserved_last_trade_time,preserved_last_trade_id,base_exists,base_updated_at)
 SELECT #{runId},i.credential_id,i.symbol,i.strategy_instance_id,i.position_side,i.strategy_id,0,0,
        i.realized_pnl,i.realized_pnl,
        COALESCE((SELECT MAX(c.cycle_number) FROM quant_strategy_position_cycle c
@@ -30,7 +30,7 @@ SELECT #{runId},i.credential_id,i.symbol,i.strategy_instance_id,i.position_side,
           WHERE c.credential_id=i.credential_id AND c.symbol=i.symbol
             AND c.strategy_instance_id=i.strategy_instance_id AND c.position_side=i.position_side
             AND c.opened_at<r.history_from),0),
-       NULL,NULL,NULL,i.last_trade_time,i.last_trade_id
+       NULL,NULL,NULL,i.last_trade_time,i.last_trade_id,1,i.updated_at
 FROM quant_strategy_position_inventory i
 JOIN quant_strategy_position_rebuild_run r ON r.id=#{runId}
 WHERE i.credential_id=#{credentialId} AND i.symbol=#{symbol}
@@ -39,6 +39,16 @@ WHERE i.credential_id=#{credentialId} AND i.symbol=#{symbol}
 SELECT strategy_id,open_quantity,cost_basis,cycle_number,cycle_id,last_trade_time,last_trade_id
 FROM quant_strategy_position_rebuild_inventory
 WHERE run_id=#{runId} AND strategy_instance_id=#{instanceId} AND position_side=#{side}
+FOR UPDATE
+]]></select>
+    <select id="selectInventoryBaselineForUpdate" resultType="map" timeout="3"><![CDATA[
+SELECT s.strategy_instance_id,s.position_side,s.base_exists,s.base_updated_at,
+       i.id AS live_inventory_id,i.updated_at AS live_updated_at
+FROM quant_strategy_position_rebuild_inventory s
+LEFT JOIN quant_strategy_position_inventory i
+  ON i.credential_id=s.credential_id AND i.symbol=s.symbol
+ AND i.strategy_instance_id=s.strategy_instance_id AND i.position_side=s.position_side
+WHERE s.run_id=#{runId}
 FOR UPDATE
 ]]></select>
     <insert id="insertInventory" timeout="3"><![CDATA[

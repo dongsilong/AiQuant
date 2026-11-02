@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS quant_strategy_position_rebuild_inventory (
     last_trade_id bigint DEFAULT NULL COMMENT '窗口内最后 Binance 成交 ID',
     preserved_last_trade_time datetime(3) DEFAULT NULL COMMENT '窗口前最后成交时间基线',
     preserved_last_trade_id bigint DEFAULT NULL COMMENT '窗口前最后 Binance 成交 ID 基线',
+    base_exists tinyint(1) NOT NULL DEFAULT 0 COMMENT '重建开始时生产库存是否存在',
+    base_updated_at datetime(6) DEFAULT NULL COMMENT '重建开始时生产库存更新时间',
     PRIMARY KEY (run_id,strategy_instance_id,position_side),
     KEY idx_quant_strategy_position_rebuild_inventory_owner (credential_id,symbol,position_side,run_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='策略库存影子重建结果';

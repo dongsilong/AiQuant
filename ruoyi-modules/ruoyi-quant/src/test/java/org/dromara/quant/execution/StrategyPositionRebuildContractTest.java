@@ -43,6 +43,9 @@ class StrategyPositionRebuildContractTest {
         assertTrue(xml.contains("ON DUPLICATE KEY UPDATE"));
         assertTrue(xml.contains("c.closed_at IS NOT NULL"));
         assertTrue(xml.contains("c.opened_at<r.history_from"));
+        assertTrue(xml.contains("id=\"selectInventoryBaselineForUpdate\""));
+        assertTrue(xml.contains("base_updated_at"));
+        assertTrue(xml.contains("FOR UPDATE"));
         assertTrue(!xml.matches("(?s).*<!\\[CDATA\\[[^]]*&(lt|gt);[^]]*\\]\\]>.*"));
 
         String projection = resource("mapper/quant/StrategyPositionProjectionMapper.xml");
@@ -56,6 +59,7 @@ class StrategyPositionRebuildContractTest {
         assertTrue(service.contains("sumCostBasis"));
         assertTrue(service.contains("withinCostBasisTick"));
         assertTrue(service.contains("assertSourceStable"));
+        assertTrue(service.contains("assertInventoryBaselineStable"));
         assertTrue(service.contains("rebuilds.promoteInventory(runId)"));
         assertTrue(!service.contains("projector.project("));
     }
@@ -73,6 +77,7 @@ class StrategyPositionRebuildContractTest {
         assertTrue(migration.contains("PRIMARY KEY (run_id,exchange_trade_id)"));
         assertTrue(migration.contains("exchange_long_cost_basis"));
         assertTrue(migration.contains("rebuilt_short_cost_basis"));
+        assertTrue(migration.contains("base_updated_at"));
 
         String permission = Files.readString(Path.of("..", "..", "script", "sql", "quant", "V20261104_02__strategy_position_rebuild_permission.sql"), StandardCharsets.UTF_8);
         assertTrue(permission.contains("quant:allocation:rebuild"));

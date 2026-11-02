@@ -224,6 +224,7 @@ public class StrategyPositionRebuildService {
                 Map<String, Object> locked = rebuilds.lockRun(runId);
                 requireRunStatus(locked, "READY");
                 assertSourceStable(credentialId, symbol, maxId, from, dateTime(locked, "history_to"), sourceCount);
+                assertInventoryBaselineStable(runId);
                 if (rebuilds.countFills(runId) != sourceCount
                     || rebuilds.countInvalidOpenInventory(runId) != 0
                     || rebuilds.promoteInventory(runId) < 0
@@ -469,6 +470,22 @@ public class StrategyPositionRebuildService {
         }
         if (!unmatched.isEmpty()) {
             throw new IllegalStateException("重建期间出现尚未投影的新 Binance 成交");
+        }
+    }
+
+    /** 在提升事务中锁定原库存行，拒绝覆盖重建期间发生变化的生产投影。 */
+    private void assertInventoryBaselineStable(long runId) {
+        List<Map<String, Object>> baselines = rebuilds.selectInventoryBaselineForUpdate(runId);
+        if (baselines == null) {
+            throw new IllegalStateException("生产库存基线锁定查询失败");
+        }
+        for (Map<String, Object> baseline : baselines) {
+            boolean existedAtStart = number(baseline, "base_exists") == 1;
+            boolean existsNow = baseline.get("live_inventory_id") != null;
+            if (existedAtStart != existsNow || existedAtStart
+                && !sameTime(dateTime(baseline, "base_updated_at"), dateTime(baseline, "live_updated_at"))) {
+                throw new IllegalStateException("重建期间生产策略库存发生变化，拒绝覆盖当前库存");
+            }
         }
     }
 

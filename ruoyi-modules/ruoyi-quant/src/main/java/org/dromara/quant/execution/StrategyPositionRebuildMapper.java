@@ -24,6 +24,8 @@ public interface StrategyPositionRebuildMapper {
 
     Map<String, Object> lockInventory(@Param("runId") long runId, @Param("instanceId") long instanceId, @Param("side") String side);
 
+    List<Map<String, Object>> selectInventoryBaselineForUpdate(@Param("runId") long runId);
+
     int insertInventory(@Param("runId") long runId, @Param("credentialId") long credentialId, @Param("symbol") String symbol,
                         @Param("instanceId") long instanceId, @Param("side") String side, @Param("strategyId") long strategyId);
 
