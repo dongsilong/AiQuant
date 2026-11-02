@@ -149,6 +149,45 @@ class ExecutionRecoveryServiceTest {
         verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "cancel-key", "original-client", 99L);
     }
 
+
+    @Test
+    void cancelMayRecoverAndUnlockWhenExactExchangeFactIsExpiredInMatch() {
+        var records = mock(QuantExecutionRecordMapper.class);
+        var credentials = mock(QuantCredentialMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var recovery = mock(ExecutionRecordService.class);
+        var ledger = mock(OrderLedgerService.class);
+        var dispatcher = mock(LiveOrderDispatcher.class);
+        var record = new QuantExecutionRecord();
+        record.setCredentialId(1L);
+        record.setIdempotencyKey("cancel-key");
+        record.setSymbol("BTCUSDT");
+        record.setClientOrderId("original-client");
+        record.setExchangeOrderId(99L);
+        record.setOperationType("CANCEL");
+        record.setExecutionStatus("UNKNOWN");
+        when(records.selectList(any())).thenReturn(List.of(record));
+        var credential = new QuantCredential();
+        credential.setApiKey("test");
+        credential.setSecretKey("test");
+        credential.setRunMode("LIVE");
+        when(credentials.selectById(1L)).thenReturn(credential);
+        var expired = new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "original-client", "BUY", "LIMIT", "EXPIRED_IN_MATCH",
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, Instant.now());
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), eq("original-client"))).thenReturn(expired);
+        doAnswer(i -> {
+            record.setExecutionStatus("RECOVERED");
+            return null;
+        }).when(recovery).markRecovered(record, 99L, "EXPIRED_IN_MATCH");
+        var service = new ExecutionRecoveryService(records, credentials, gateway, recovery, ledger, new QuantProperties());
+        service.setLiveOrderDispatcher(dispatcher);
+
+        service.recover();
+
+        verify(recovery).markRecovered(record, 99L, "EXPIRED_IN_MATCH");
+        verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "cancel-key", "original-client", 99L);
+    }
+
     @Test
     void fallbackOrderMatchUsesExchangeStatusRatherThanStaleLocalStatus() {
         var records = mock(QuantExecutionRecordMapper.class);
