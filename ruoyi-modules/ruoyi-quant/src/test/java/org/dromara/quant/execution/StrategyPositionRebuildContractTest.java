@@ -45,14 +45,14 @@ class StrategyPositionRebuildContractTest {
         assertTrue(xml.contains("c.opened_at<r.history_from"));
         assertTrue(xml.contains("id=\"selectInventoryBaselineForUpdate\""));
         assertTrue(xml.contains("base_updated_at"));
-        assertTrue(service.contains("dateTime(baseline, \"base_updated_at\").equals"));
-        assertTrue(service.contains("rebuilds.selectInventoryBaselineForUpdate(runId)"));
         assertTrue(xml.contains("FOR UPDATE"));
         assertTrue(!xml.matches("(?s).*<!\\[CDATA\\[[^]]*&(lt|gt);[^]]*\\]\\]>.*"));
 
         String projection = resource("mapper/quant/StrategyPositionProjectionMapper.xml");
         assertTrue(projection.contains("id=\"cycleById\""));
         String service = Files.readString(Path.of("src", "main", "java", "org", "dromara", "quant", "execution", "StrategyPositionRebuildService.java"), StandardCharsets.UTF_8);
+        assertTrue(service.contains("dateTime(baseline, \"base_updated_at\").equals"));
+        assertTrue(service.contains("rebuilds.selectInventoryBaselineForUpdate(runId)"));
         assertTrue(service.contains("resolveVerifiedAttribution"));
         assertTrue(service.contains("existingFee"));
         assertTrue(service.contains("verifyShadowMatchesExchange"));
