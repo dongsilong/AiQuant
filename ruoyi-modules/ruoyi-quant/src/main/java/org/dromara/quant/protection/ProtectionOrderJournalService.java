@@ -96,12 +96,14 @@ public class ProtectionOrderJournalService {
         } else if (!Objects.equals(order.getClientOrderId(), child.clientOrderId())
             || order.getStrategyId() != null && !order.getStrategyId().equals(local.getStrategyId())
             || order.getStrategyInstanceId() != null && !order.getStrategyInstanceId().equals(local.getStrategyInstanceId())
-            || order.getPositionSide() != null && !order.getPositionSide().equalsIgnoreCase(actual.positionSide())) {
+            || order.getPositionSide() != null && !order.getPositionSide().equalsIgnoreCase(local.getPositionSide())
+                && !order.getPositionSide().equalsIgnoreCase(actual.positionSide())) {
             throw new IllegalStateException("保护子订单已有冲突的策略归属，禁止覆盖");
         }
         order.setStrategyId(local.getStrategyId());
         order.setStrategyInstanceId(local.getStrategyInstanceId());
-        order.setPositionSide(actual.positionSide());
+        // Binance reports BOTH in one-way mode; preserve the frozen LONG/SHORT owner direction locally.
+        order.setPositionSide(local.getPositionSide());
         order.setReduceOnly(true);
         order.setSide(child.side());
         order.setOrderType(child.type());
@@ -118,9 +120,9 @@ public class ProtectionOrderJournalService {
         if ((order.getId() == null ? orders.insert(order) : orders.updateById(order)) != 1) {
             throw new IllegalStateException("保护单子订单未可靠入账");
         }
-        if ("LIVE".equalsIgnoreCase(credential.runMode()) && Set.of("LONG", "SHORT").contains(actual.positionSide())) {
+        if ("LIVE".equalsIgnoreCase(credential.runMode())) {
             var request = new ExchangeGateway.OrderRequest(credential, local.getSymbol(), child.side(), child.type(), child.originalQuantity(), child.price(), true,
-                actual.positionSide(), child.clientOrderId(), true);
+                local.getPositionSide(), child.clientOrderId(), true);
             intents.record(local.getCredentialId(), local.getStrategyId(), local.getStrategyInstanceId(), "CLOSE", request,
                 new ExchangeGateway.OrderResult(child.orderId(), child.clientOrderId(), child.status()));
         }
