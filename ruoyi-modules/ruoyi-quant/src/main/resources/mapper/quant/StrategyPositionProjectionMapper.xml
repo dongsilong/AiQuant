@@ -34,6 +34,12 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
 VALUES (#{id},#{credentialId},#{symbol},#{instanceId},#{side},#{cycle},#{openedAt})]]></insert>
     <update id="closeCycle" timeout="3"><![CDATA[UPDATE quant_strategy_position_cycle SET closed_at=#{closedAt}
 WHERE id=#{cycleId} AND closed_at IS NULL]]></update>
+    <select id="existingFee" resultType="map" timeout="3"><![CDATA[SELECT strategy_id,strategy_instance_id,cycle_id,exchange_order_id,position_side,commission,commission_asset,trade_time
+FROM quant_strategy_position_fee_event
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND exchange_trade_id=#{tradeId}]]></select>
+    <insert id="insertFee" timeout="3"><![CDATA[INSERT INTO quant_strategy_position_fee_event
+(id,credential_id,symbol,strategy_id,strategy_instance_id,cycle_id,exchange_trade_id,exchange_order_id,position_side,commission,commission_asset,trade_time)
+VALUES (#{id},#{credentialId},#{symbol},#{strategyId},#{instanceId},#{cycleId},#{tradeId},#{orderId},#{side},#{fee},#{feeAsset},#{tradeTime})]]></insert>
     <insert id="insertFill" timeout="3"><![CDATA[INSERT INTO quant_strategy_position_fill_event
 (id,credential_id,symbol,strategy_id,strategy_instance_id,cycle_id,
  exchange_trade_id,exchange_order_id,position_side,fill_role,exchange_side,
