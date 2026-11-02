@@ -1327,6 +1327,39 @@ public class ProtectionOrderService {
     }
 
     /**
+     * 周期性核实本地仍处于活动状态的策略保护单，补偿私有流事件丢失或策略停机期间未绑定的触发子订单。
+     * 查询范围限制为单账户、可选交易对和最近的有限批次；每条记录仍通过原算法单标识精确查询。
+     */
+    public int recoverTriggeredProtectionChildren(Long credentialId, String symbol, int requestedLimit) {
+        if (credentialId == null || credentialId <= 0) {
+            return 0;
+        }
+        int limit = Math.max(1, Math.min(20, requestedLimit));
+        var query = new LambdaQueryWrapper<QuantProtectionOrder>()
+            .eq(QuantProtectionOrder::getCredentialId, credentialId)
+            .eq(symbol != null && !symbol.isBlank(), QuantProtectionOrder::getSymbol, symbol)
+            .in(QuantProtectionOrder::getProtectionType, STRATEGY_PROTECTION_TYPES)
+            .in(QuantProtectionOrder::getStatus, ACTIVE_STATUSES)
+            .isNotNull(QuantProtectionOrder::getExchangeOrderId)
+            .orderByDesc(QuantProtectionOrder::getId)
+            .last("LIMIT " + limit);
+        ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
+        int recovered = 0;
+        for (QuantProtectionOrder local : mapper.selectList(query)) {
+            try {
+                ExchangeGateway.ProtectionOrderSnapshot actual = readProtectionSnapshot(credential, local);
+                if (actual != null && "FINISHED".equalsIgnoreCase(actual.status()) && actual.actualOrderId() != null) {
+                    recovered++;
+                }
+            } catch (ProtectionExecutionPendingException pending) {
+                // A triggered child may already be persisted as partially filled; keep it eligible
+                // for the next bounded pass until its exact terminal snapshot is available.
+            }
+        }
+        return recovered;
+    }
+
+    /**
      * 条件单触发后，普通子订单也必须确认终态；不能仅凭算法订单 FINISHED 再发减仓。
      */
     private ExchangeGateway.ProtectionOrderSnapshot readProtectionSnapshot(ExchangeGateway.Credential credential, QuantProtectionOrder order) {
