@@ -281,7 +281,7 @@ public class ProtectionOrderService {
                 }
             }
             Long terminalAlgoId = persistVerifiedCancelledProtection(active.credentialId(), local, credential,
-                Set.of("CANCELED", "EXPIRED", "REJECTED"), true);
+                Set.of("CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"), true);
             if (terminalAlgoId == null) {
                 return false;
             }
@@ -1118,7 +1118,7 @@ public class ProtectionOrderService {
             if (targetLease.get() != null) {
                 targetLease.get().terminal(local);
             }
-            if (!"PAPER".equalsIgnoreCase(credential.runMode()) && Set.of("CANCELED", "EXPIRED", "REJECTED").contains(actual.status())
+            if (!"PAPER".equalsIgnoreCase(credential.runMode()) && Set.of("CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED").contains(actual.status())
                 && actual.executedQuantity() != null && actual.executedQuantity().signum() == 0) {
                 requireLiveDispatcher().recoverVerifiedProtection(credentialId, local.getSymbol(), local.getClientOrderId(), "PROTECT_CREATE", actual.algoId());
             }
@@ -1376,7 +1376,7 @@ public class ProtectionOrderService {
             return true;
         }
         // Cancel + exact terminal proof + durable state update execute under one dispatch ticket.
-        return cancelProtected(credentialId, local, true, Set.of("CANCELED", "EXPIRED", "REJECTED"), true);
+        return cancelProtected(credentialId, local, true, Set.of("CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"), true);
     }
 
     /**
@@ -1416,7 +1416,7 @@ public class ProtectionOrderService {
                 throw new IllegalStateException("首平精确查询与持久化身份或参数冲突");
             }
             boolean active = Set.of("NEW", "WORKING", "ACCEPTED").contains(actual.status());
-            if (!active && (!Set.of("FINISHED", "CANCELED", "EXPIRED", "REJECTED").contains(actual.status())
+            if (!active && (!Set.of("FINISHED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED").contains(actual.status())
                 || actual.executedQuantity() == null && !"REJECTED".equals(actual.status()))) {
                 throw new ProtectionExecutionPendingException();
             }
@@ -1636,7 +1636,7 @@ public class ProtectionOrderService {
                         return false;
                     }
                     order.setStatus("WORKING");
-                } else if (Set.of("FINISHED", "CANCELED", "EXPIRED", "REJECTED").contains(actual.status()) && actual.executedQuantity() != null) {
+                } else if (Set.of("FINISHED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED").contains(actual.status()) && actual.executedQuantity() != null) {
                     order.setStatus(actual.status());
                     order.setExecutedQuantity(actual.executedQuantity().max(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity()));
                 } else {
