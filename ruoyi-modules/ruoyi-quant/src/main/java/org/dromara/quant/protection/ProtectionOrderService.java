@@ -1656,19 +1656,19 @@ public class ProtectionOrderService {
                     || !("BOTH".equalsIgnoreCase(actual.positionSide()) || Objects.equals(order.getPositionSide(), actual.positionSide()))) {
                     return false;
                 }
+                String nextStatus;
                 if (Set.of("NEW", "WORKING", "ACCEPTED").contains(actual.status())) {
                     if (actual.executedQuantity() != null && actual.executedQuantity().signum() > 0) {
                         return false;
                     }
-                    order.setStatus("WORKING");
+                    nextStatus = "WORKING";
                 } else if (Set.of("FINISHED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED").contains(actual.status()) && actual.executedQuantity() != null) {
-                    order.setStatus(actual.status());
-                    order.setExecutedQuantity(actual.executedQuantity().max(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity()));
+                    nextStatus = actual.status();
                 } else {
                     return false;
                 }
-                order.setExchangeOrderId(actual.algoId());
-                if (mapper.updateById(order) != 1) {
+                if (!persistExchangeFactIfUnchanged(order, actual.algoId(), nextStatus,
+                    actual.executedQuantity() == null ? BigDecimal.ZERO : actual.executedQuantity())) {
                     return false;
                 }
             }
