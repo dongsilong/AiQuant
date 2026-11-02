@@ -33,6 +33,27 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void accountPositionCannotOverwriteStrategyQuantityWithoutExclusiveInventoryProof() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPositionQty(new BigDecimal("0.5"));
+            var projection = mock(org.dromara.quant.execution.StrategyPositionProjectionService.class);
+            ReflectionTestUtils.setField(f.service, "positionProjectionService", projection);
+            when(projection.matchesExclusiveInventory(3L, "BTCUSDT", 2L, 1L, "LONG", BigDecimal.ONE)).thenReturn(false);
+
+            ReflectionTestUtils.invokeMethod(f.service, "syncRuntimeStateWithPosition", f.runtime, false);
+
+            assertEquals(new BigDecimal("0.5"), state.getPositionQty());
+            assertTrue(Boolean.TRUE.equals(state.getRecoveryRequired()));
+            assertTrue(Boolean.TRUE.equals(state.getUnsafeRecovery()));
+            verify(projection).matchesExclusiveInventory(3L, "BTCUSDT", 2L, 1L, "LONG", BigDecimal.ONE);
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void publishesNewPositionPeakOnlyAfterStateSave() throws Exception {
         Fixture f = fixture();
         try {
