@@ -90,6 +90,27 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void finishedAlgoWithoutActualChildIdCannotBeCountedAsFirstProfitFill() {
+        position.setProtectionCycleKey("current-cycle");
+        var local = order();
+        local.setProtectionType("FIRST_TP");
+        local.setPositionCycleKey("current-cycle");
+        local.setPositionSide("LONG");
+        local.setStrategyId(2L);
+        local.setStrategyInstanceId(3L);
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenReturn(new ExchangeGateway.ProtectionOrderSnapshot(
+            "BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "BOTH", "STOP_MARKET", BigDecimal.ONE,
+            new BigDecimal("99"), Instant.now(), BigDecimal.ONE));
+
+        assertThrows(ProtectionOrderService.ProtectionExecutionPendingException.class,
+            () -> service.firstTakeProfitExecutedQuantity(1L, position));
+
+        verify(gateway, never()).queryOrder(any(), any(), any(), any());
+        verify(mapper, never()).updateExchangeFactIfUnchanged(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void protectionRecoveryCursorIsIndependentPerSymbol() {
         QuantProtectionOrder btc = order();
         when(mapper.selectList(any())).thenReturn(List.of(btc));
