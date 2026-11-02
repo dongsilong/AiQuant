@@ -18,7 +18,6 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -346,8 +345,8 @@ public class StrategyPositionRebuildService {
         if (oldQuantity.signum() == 0) {
             if (attribution.role() != StrategyPositionAccounting.Role.OPEN
                 || !sameTime(tradeTime, dateTime(cycle, "opened_at"))
-                || number(cycle, "cycle_number") <= oldCycleNumber) {
-                throw new IllegalStateException("库存重建缺少当前持仓周期的首笔 OPEN 成交");
+                || number(cycle, "cycle_number") != Math.addExact(oldCycleNumber, 1)) {
+                throw new IllegalStateException("历史持仓周期号与连续成交重放结果不一致");
             }
         } else if (oldCycleId == null || oldCycleId != cycleId
             || number(cycle, "cycle_number") != oldCycleNumber) {

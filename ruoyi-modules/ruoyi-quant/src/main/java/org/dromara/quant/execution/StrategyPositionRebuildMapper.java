@@ -2,7 +2,6 @@ package org.dromara.quant.execution;
 
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
-import org.dromara.quant.execution.StrategyFillJournalRecord;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
