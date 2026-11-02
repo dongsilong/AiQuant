@@ -29,6 +29,7 @@ class StrategyPositionRebuildContractTest {
         assertTrue(xml.contains("exchange_trade_id&gt;#{afterTradeId}"));
         assertTrue(xml.contains("ORDER BY trade_time ASC,exchange_trade_id ASC"));
         assertTrue(xml.contains("attribution_status='ATTRIBUTED'"));
+        assertTrue(!xml.matches("(?s).*<!\\[CDATA\\[[^]]*&(lt|gt);[^]]*\\]\\]>.*"));
     }
 
     @Test
@@ -42,6 +43,7 @@ class StrategyPositionRebuildContractTest {
         assertTrue(xml.contains("ON DUPLICATE KEY UPDATE"));
         assertTrue(xml.contains("c.closed_at IS NOT NULL"));
         assertTrue(xml.contains("c.opened_at<r.history_from"));
+        assertTrue(!xml.matches("(?s).*<!\\[CDATA\\[[^]]*&(lt|gt);[^]]*\\]\\]>.*"));
 
         String projection = resource("mapper/quant/StrategyPositionProjectionMapper.xml");
         assertTrue(projection.contains("id=\"cycleById\""));
