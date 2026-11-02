@@ -709,11 +709,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 }
                 QuantPosition previousPosition = runtime.position;
                 runtime.position = refreshed;
+                if (runtime.state != null && !hasExclusiveStrategyInventory(runtime)) {
+                    blockUnownedAccountExposure(runtime, "exchange-position-reconciliation");
+                    return;
+                }
                 if (runtime.position != null) {
-                    if (!hasExclusiveStrategyInventory(runtime)) {
-                        blockUnownedAccountExposure(runtime, "exchange-position-reconciliation");
-                        return;
-                    }
                     // 交易所确认当前仍有持仓时，不能继续沿用“空仓后的保护单清理”状态。
                     runtime.protectionCleanupPending = false;
                     if (previousPosition != null && previousPosition.getQuantity() != null && runtime.position.getQuantity() != null && runtime.position.getQuantity().compareTo(previousPosition.getQuantity()) < 0) {
@@ -1007,7 +1007,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (runtime.position != null && runtime.state == null) {
             runtime.state = recoverState(runtime);
         }
-        if (runtime.position != null && !hasExclusiveStrategyInventory(runtime)) {
+        if (runtime.state != null && !hasExclusiveStrategyInventory(runtime)) {
             blockUnownedAccountExposure(runtime, "strategy-startup");
         }
         if (runtime.position != null && !hasFrozenProtectionFacts(runtime)) {
@@ -3418,8 +3418,17 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         if ("PAPER".equalsIgnoreCase(runtime.credential.getRunMode())) {
             return true;
         }
-        String positionSide = runtime.position == null ? null : runtime.position.getPositionSide();
-        return runtime.state != null && runtime.position != null
+        if (runtime.state == null) {
+            return false;
+        }
+        if (runtime.position == null) {
+            return positionProjectionService.matchesExclusiveInventory(runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.strategy.getId(),
+                runtime.instance.getId(), "LONG", BigDecimal.ZERO)
+                && positionProjectionService.matchesExclusiveInventory(runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.strategy.getId(),
+                    runtime.instance.getId(), "SHORT", BigDecimal.ZERO);
+        }
+        String positionSide = runtime.position.getPositionSide();
+        return runtime.position.getQuantity() != null
             && (positionSide == null || "BOTH".equalsIgnoreCase(positionSide) || positionSide.equalsIgnoreCase(runtime.state.getDirection()))
             && positionProjectionService.matchesExclusiveInventory(runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.strategy.getId(),
                 runtime.instance.getId(), runtime.state.getDirection(), runtime.position.getQuantity());
