@@ -28,7 +28,7 @@ class LiveOrderDispatcherTest {
             """);
         jdbc.execute("""
             CREATE TABLE quant_strategy_position_rebuild_run (
-              id BIGINT PRIMARY KEY, status VARCHAR(16), active_run_key VARCHAR(64), failure_reason VARCHAR(500)
+              id BIGINT PRIMARY KEY, status VARCHAR(16), active_run_key VARCHAR(64), failure_reason VARCHAR(500), updated_at TIMESTAMP
             )
             """);
         jdbc.execute("""
