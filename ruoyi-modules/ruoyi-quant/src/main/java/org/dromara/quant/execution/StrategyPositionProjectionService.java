@@ -111,7 +111,8 @@ public class StrategyPositionProjectionService {
     private Map<String, Object> resolveIntent(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade) {
         if (credentialId <= 0 || verifiedOrder == null || trade == null || trade.symbol() == null || trade.orderId() == null || trade.orderId() <= 0
             || trade.side() == null || verifiedOrder.getCredentialId() == null || verifiedOrder.getCredentialId() != credentialId
-            || verifiedOrder.getStrategyId() == null || verifiedOrder.getStrategyInstanceId() == null
+            || verifiedOrder.getStrategyId() == null || verifiedOrder.getStrategyId() <= 0
+            || verifiedOrder.getStrategyInstanceId() == null || verifiedOrder.getStrategyInstanceId() <= 0
             || verifiedOrder.getClientOrderId() == null || verifiedOrder.getClientOrderId().isBlank()
             || !trade.orderId().equals(verifiedOrder.getExchangeOrderId()) || verifiedOrder.getSymbol() == null
             || !trade.symbol().equalsIgnoreCase(verifiedOrder.getSymbol())) {
