@@ -70,15 +70,21 @@ public class StrategyPositionProjectionService {
     public boolean matchesExclusiveInventory(long credentialId, String symbol, long strategyId, long instanceId, String side, BigDecimal accountQuantity) {
         if (credentialId <= 0 || symbol == null || symbol.isBlank() || strategyId <= 0 || instanceId <= 0
             || side == null || !(side.equalsIgnoreCase("LONG") || side.equalsIgnoreCase("SHORT"))
-            || accountQuantity == null || accountQuantity.signum() <= 0) {
+            || accountQuantity == null || accountQuantity.signum() < 0) {
             return false;
         }
         Map<String, Object> snapshot = mapper.ownershipSnapshot(credentialId, symbol.trim().toUpperCase(Locale.ROOT), instanceId, side.toUpperCase(Locale.ROOT));
-        return snapshot != null && snapshot.get("instance_strategy_id") instanceof Number owner && owner.longValue() == strategyId
+        if (snapshot == null || decimal(snapshot, "instance_quantity").compareTo(accountQuantity) != 0
+            || decimal(snapshot, "aggregate_quantity").compareTo(accountQuantity) != 0) {
+            return false;
+        }
+        Object owner = snapshot.get("instance_strategy_id");
+        if (accountQuantity.signum() == 0) {
+            return owner == null || owner instanceof Number number && number.longValue() == strategyId && snapshot.get("instance_cycle_id") == null;
+        }
+        return owner instanceof Number number && number.longValue() == strategyId
             && snapshot.get("instance_cycle_id") instanceof Number cycleId && cycleId.longValue() > 0
-            && snapshot.get("instance_cycle_number") instanceof Number cycleNumber && cycleNumber.longValue() > 0
-            && decimal(snapshot, "instance_quantity").compareTo(accountQuantity) == 0
-            && decimal(snapshot, "aggregate_quantity").compareTo(accountQuantity) == 0;
+            && snapshot.get("instance_cycle_number") instanceof Number cycleNumber && cycleNumber.longValue() > 0;
     }
 
     /**
