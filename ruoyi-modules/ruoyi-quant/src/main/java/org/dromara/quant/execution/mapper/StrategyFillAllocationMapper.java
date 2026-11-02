@@ -28,6 +28,10 @@ public interface StrategyFillAllocationMapper {
     Map<String, Object> summarizeVerifiedFills(@Param("credentialId") Long credentialId, @Param("strategyId") Long strategyId, @Param("instanceId") Long instanceId, @Param(
         "symbol") String symbol);
 
+    Map<String, Object> summarizeOrderFills(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
+                                           @Param("orderId") Long orderId, @Param("strategyId") Long strategyId,
+                                           @Param("instanceId") Long instanceId);
+
     List<Map<String, Object>> summarizeFeesByAsset(@Param("credentialId") Long credentialId, @Param("strategyId") Long strategyId, @Param("instanceId") Long instanceId, @Param(
         "symbol") String symbol);
 
