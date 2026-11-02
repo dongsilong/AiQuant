@@ -13,14 +13,14 @@ public interface QuantTradeMapper extends BaseMapperPlus<QuantTrade, QuantTradeV
     /** 仅补齐精确成交身份上尚未归属的策略来源，不覆盖已有归属。 */
     @Update("""
         UPDATE quant_trade
-        SET strategy_id = #{strategyId},
-            strategy_instance_id = #{strategyInstanceId}
+        SET strategy_id = COALESCE(strategy_id, #{strategyId}),
+            strategy_instance_id = COALESCE(strategy_instance_id, #{strategyInstanceId})
         WHERE credential_id = #{credentialId}
           AND symbol = #{symbol}
           AND exchange_trade_id = #{exchangeTradeId}
           AND exchange_order_id = #{exchangeOrderId}
-          AND strategy_id IS NULL
-          AND strategy_instance_id IS NULL
+          AND (strategy_id IS NULL OR strategy_id = #{strategyId})
+          AND (strategy_instance_id IS NULL OR strategy_instance_id = #{strategyInstanceId})
         """)
     int backfillStrategyAttribution(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
                                     @Param("exchangeTradeId") Long exchangeTradeId, @Param("exchangeOrderId") Long exchangeOrderId,
