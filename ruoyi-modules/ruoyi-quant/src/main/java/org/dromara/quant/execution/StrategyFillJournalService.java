@@ -38,6 +38,7 @@ public class StrategyFillJournalService {
 
     private final StrategyFillJournalMapper journal;
     private final StrategyFillAllocationService allocations;
+    private final StrategyPositionProjectionService projections;
     private final QuantOrderMapper orders;
     @Autowired
     private QuantTradeMapper trades;
@@ -58,6 +59,7 @@ public class StrategyFillJournalService {
         try {
             allocations.allocate(fill, order, credentialId);
             backfillTradeAttribution(record, order, credentialId);
+            projections.projectAttributed(credentialId, order, fill);
             return updateStatus(record, ATTRIBUTED, null);
         } catch (IllegalStateException incomplete) {
             String message = safeReason(incomplete.getMessage());
