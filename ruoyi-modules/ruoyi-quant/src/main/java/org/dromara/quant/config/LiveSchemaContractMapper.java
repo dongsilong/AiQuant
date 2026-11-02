@@ -25,4 +25,6 @@ public interface LiveSchemaContractMapper {
 
     List<String> recoveryReasonColumns();
 
+    List<String> positionRebuildCostBasisColumns();
+
 }
