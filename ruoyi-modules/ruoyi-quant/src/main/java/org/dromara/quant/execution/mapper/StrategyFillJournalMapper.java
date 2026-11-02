@@ -24,4 +24,5 @@ public interface StrategyFillJournalMapper {
     List<StrategyFillJournalRecord> selectUnresolved(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("limit") int limit);
 
     long countUnresolved(@Param("credentialId") Long credentialId);
+    long countUnresolvedByOrder(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("orderId") Long orderId);
 }
