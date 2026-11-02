@@ -3029,6 +3029,12 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
             if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                 blockCloseCandleAtExchangeTime(runtime, order.updateTime());
+                if (!matchesRemainingPosition(runtime.position, runtime.state.getPositionQty(), order.executedQuantity())) {
+                    runtime.state.setRecoveryRequired(true);
+                    runtime.state.setUnsafeRecovery(true);
+                    stateService.save(runtime.state);
+                    return true;
+                }
             }
             if (runtime.position != null) {
                 if ("OPEN".equals(runtime.state.getPendingAction())) {
@@ -3065,7 +3071,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 } else {
                     BigDecimal beforeQty = runtime.state.getPositionQty();
                     BigDecimal executedQty = order.executedQuantity();
-                    if (beforeQty == null || executedQty == null || executedQty.signum() <= 0 || runtime.state.getDirection() == null || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide()) || runtime.position.getQuantity().compareTo(beforeQty.subtract(executedQty).max(BigDecimal.ZERO)) > 0) {
+                    if (beforeQty == null || executedQty == null || executedQty.signum() <= 0 || runtime.state.getDirection() == null || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())) {
                         // FILLED 是订单事实，持仓快照必须同时反映全部成交数量，才能解除退出保护。
                         runtime.state.setRecoveryRequired(true);
                         runtime.state.setUnsafeRecovery(true);
@@ -3126,6 +3132,13 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                     blockCloseCandleAtExchangeTime(runtime, order.updateTime());
                 }
+                if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())
+                    && !matchesRemainingPosition(runtime.position, beforeQty, executed)) {
+                    runtime.state.setRecoveryRequired(true);
+                    runtime.state.setUnsafeRecovery(true);
+                    stateService.save(runtime.state);
+                    return true;
+                }
                 if ("OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                     if (runtime.position == null || runtime.state.getDirection() == null || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())
                         || runtime.position.getQuantity().compareTo(executed) != 0) {
@@ -3137,13 +3150,6 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                     runtime.state.setInitialPositionQty(executed);
                     runtime.state.setPositionQty(executed);
                     freezeFilledProtection(runtime);
-                } else if (runtime.position != null && (beforeQty == null || runtime.state.getDirection() == null
-                    || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())
-                    || runtime.position.getQuantity().compareTo(beforeQty.subtract(executed).max(BigDecimal.ZERO)) > 0)) {
-                    runtime.state.setRecoveryRequired(true);
-                    runtime.state.setUnsafeRecovery(true);
-                    stateService.save(runtime.state);
-                    return true;
                 } else if ("FIRST_TAKE_PROFIT".equalsIgnoreCase(runtime.state.getPendingAction())) {
                     PositionProtectionState.confirmLocalFirstProfit(runtime.state, executed);
                 }
@@ -3164,6 +3170,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             clearPending(runtime.state);
             runtime.partialOpenProtectionVerified = false;
             if (runtime.position != null) {
+                runtime.state.setPositionQty(runtime.position.getQuantity());
                 runtime.state.setStatus("OPEN");
                 runtime.state.setRecoveryRequired(false);
                 runtime.state.setUnsafeRecovery(false);
