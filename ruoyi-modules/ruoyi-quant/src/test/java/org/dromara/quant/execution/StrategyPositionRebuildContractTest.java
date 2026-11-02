@@ -24,9 +24,9 @@ class StrategyPositionRebuildContractTest {
     void journalPagingIsStableAndUsesAnImmutableHighWaterMark() throws Exception {
         String xml = resource("mapper/quant/StrategyFillJournalMapper.xml");
         assertTrue(xml.contains("id=\"selectAttributedPage\""));
-        assertTrue(xml.contains("id&lt;=#{maxId}"));
-        assertTrue(xml.contains("trade_time&gt;#{afterTradeTime}"));
-        assertTrue(xml.contains("exchange_trade_id&gt;#{afterTradeId}"));
+        assertTrue(xml.contains("id<=#{maxId}"));
+        assertTrue(xml.contains("trade_time>#{afterTradeTime}"));
+        assertTrue(xml.contains("exchange_trade_id>#{afterTradeId}"));
         assertTrue(xml.contains("ORDER BY trade_time ASC,exchange_trade_id ASC"));
         assertTrue(xml.contains("attribution_status='ATTRIBUTED'"));
         assertTrue(!xml.matches("(?s).*<!\\[CDATA\\[[^]]*&(lt|gt);[^]]*\\]\\]>.*"));
