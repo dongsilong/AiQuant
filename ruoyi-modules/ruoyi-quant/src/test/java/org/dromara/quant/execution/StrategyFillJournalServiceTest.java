@@ -207,11 +207,14 @@ class StrategyFillJournalServiceTest {
         var attribution = new StrategyPositionProjectionService.VerifiedAttribution(
             StrategyPositionAccounting.PositionSide.LONG, StrategyPositionAccounting.Role.CLOSE);
         when(projections.resolveVerifiedAttribution(1L, order, closeFill)).thenReturn(attribution);
+        when(rebuilds.invalidateForAttributedClose(1L, "BTCUSDT")).thenReturn(77L);
 
         assertEquals("ATTRIBUTED", service.attribute(closeFill, order, 1L));
 
-        verify(rebuilds).invalidateForAttributedClose(1L, "BTCUSDT");
-        verify(projections).projectAttributed(1L, order, closeFill, attribution);
+        var orderOfCalls = inOrder(rebuilds, projections);
+        orderOfCalls.verify(rebuilds).invalidateForAttributedClose(1L, "BTCUSDT");
+        orderOfCalls.verify(projections).projectAttributed(1L, order, closeFill, attribution);
+        orderOfCalls.verify(rebuilds).releaseAfterAttributedClose(1L, "BTCUSDT", 77L);
     }
 
     @Test
