@@ -902,8 +902,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
 
         QuantStrategyPositionState existingState = stateService.findByInstance(instance.getId());
-        boolean hasOpenPosition =
-                            existingState != null && !"CLOSED".equals(existingState.getStatus()) && ((existingState.getPositionQty() != null && existingState.getPositionQty().signum() > 0) || existingState.getPendingAction() != null || "PROTECTION_CLEANUP".equals(existingState.getStatus()));
+        boolean hasOpenPosition = existingState != null && (
+            !"CLOSED".equals(existingState.getStatus()) && ((existingState.getPositionQty() != null && existingState.getPositionQty().signum() > 0)
+                || existingState.getPendingAction() != null || "PROTECTION_CLEANUP".equals(existingState.getStatus()))
+                || Boolean.TRUE.equals(existingState.getRecoveryRequired()) || Boolean.TRUE.equals(existingState.getUnsafeRecovery()));
 
         boolean tradingAllowed =
          "1".equals(strategy.getStatus()) && "0".equals(strategySymbol.getStatus()) && !Boolean.FALSE.equals(strategySymbol.getRuntimeEnabled()) && "0".equals(credential.getStatus()) && "0".equals(symbol.getStatus()) && (!"PAPER".equalsIgnoreCase(credential.getRunMode()) || properties.getPaper().isEnabled());
