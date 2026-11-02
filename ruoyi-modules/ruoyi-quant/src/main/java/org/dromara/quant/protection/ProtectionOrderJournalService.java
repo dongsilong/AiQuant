@@ -6,6 +6,7 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.execution.mapper.StrategyFillAllocationMapper;
+import org.dromara.quant.execution.mapper.StrategyFillJournalMapper;
 import org.dromara.quant.execution.StrategyOrderIntentService;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
@@ -29,6 +30,7 @@ public class ProtectionOrderJournalService {
     private final StrategyOrderIntentService intents;
     private final QuantTradeMapper trades;
     private final StrategyFillAllocationMapper allocations;
+    private final StrategyFillJournalMapper fillJournal;
 
     /** 发送之前随保护意图保存来源；不能证明历史周期的记录保持未归属。 */
     public void captureOwner(QuantProtectionOrder local) {
@@ -161,6 +163,9 @@ public class ProtectionOrderJournalService {
                 || !(allocation.get("conflicting_owner_count") instanceof Number conflicts)
                 || new java.math.BigDecimal(allocated.toString()).compareTo(child.executedQuantity()) != 0
                 || conflicts.longValue() != 0) {
+                return false;
+            }
+            if (fillJournal.countUnresolvedByOrder(local.getCredentialId(), local.getSymbol(), child.orderId()) != 0) {
                 return false;
             }
         }
