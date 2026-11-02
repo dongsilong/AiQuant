@@ -21,17 +21,18 @@ INSERT INTO quant_strategy_position_rebuild_inventory
  realized_pnl,preserved_realized_pnl,cycle_number,preserved_cycle_number,cycle_id,last_trade_time,last_trade_id,
  preserved_last_trade_time,preserved_last_trade_id)
 SELECT #{runId},i.credential_id,i.symbol,i.strategy_instance_id,i.position_side,i.strategy_id,0,0,
-       i.realized_pnl,i.realized_pnl,cycle_floor.cycle_number,cycle_floor.cycle_number,
+       i.realized_pnl,i.realized_pnl,
+       COALESCE((SELECT MAX(c.cycle_number) FROM quant_strategy_position_cycle c
+          WHERE c.credential_id=i.credential_id AND c.symbol=i.symbol
+            AND c.strategy_instance_id=i.strategy_instance_id AND c.position_side=i.position_side
+            AND c.opened_at<r.history_from),0),
+       COALESCE((SELECT MAX(c.cycle_number) FROM quant_strategy_position_cycle c
+          WHERE c.credential_id=i.credential_id AND c.symbol=i.symbol
+            AND c.strategy_instance_id=i.strategy_instance_id AND c.position_side=i.position_side
+            AND c.opened_at<r.history_from),0),
        NULL,NULL,NULL,i.last_trade_time,i.last_trade_id
 FROM quant_strategy_position_inventory i
 JOIN quant_strategy_position_rebuild_run r ON r.id=#{runId}
-CROSS JOIN LATERAL (
-    SELECT COALESCE(MAX(c.cycle_number),0) AS cycle_number
-    FROM quant_strategy_position_cycle c
-    WHERE c.credential_id=i.credential_id AND c.symbol=i.symbol
-      AND c.strategy_instance_id=i.strategy_instance_id AND c.position_side=i.position_side
-      AND c.opened_at<r.history_from
-) cycle_floor
 WHERE i.credential_id=#{credentialId} AND i.symbol=#{symbol}
 ]]></insert>
     <select id="lockInventory" resultType="map" timeout="3"><![CDATA[
