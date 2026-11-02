@@ -31,6 +31,8 @@ class StrategyPositionProjectionContractTest {
         assertTrue(xml.contains("id=\"ownershipSnapshot\""));
         assertTrue(xml.contains("SUM(open_quantity) AS aggregate_quantity"));
         assertTrue(xml.contains("strategy_instance_id=#{instanceId} THEN open_quantity"));
+        assertTrue(xml.contains("THEN cycle_id ELSE NULL END) AS instance_cycle_id"));
+        assertTrue(xml.contains("THEN cycle_number ELSE NULL END) AS instance_cycle_number"));
         assertTrue(xml.contains("position_side=#{side}"));
 
         Path migrationPath = Path.of("..", "..", "script", "sql", "quant", "V20261102_01__strategy_position_projection.sql");
