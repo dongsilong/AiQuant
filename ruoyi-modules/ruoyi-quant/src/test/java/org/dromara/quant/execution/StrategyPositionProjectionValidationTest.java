@@ -47,6 +47,8 @@ class StrategyPositionProjectionValidationTest {
         snapshot.put("instance_strategy_id", 7L);
         snapshot.put("instance_quantity", new BigDecimal("1.25"));
         snapshot.put("aggregate_quantity", new BigDecimal("1.25"));
+        snapshot.put("instance_cycle_id", 100L);
+        snapshot.put("instance_cycle_number", 1L);
         org.mockito.Mockito.when(mapper.ownershipSnapshot(5L, "BTCUSDT", 8L, "LONG")).thenReturn(snapshot);
 
         assertTrue(service.matchesExclusiveInventory(5L, "BTCUSDT", 7L, 8L, "LONG", new BigDecimal("1.25")));
@@ -61,6 +63,8 @@ class StrategyPositionProjectionValidationTest {
         snapshot.put("instance_strategy_id", 7L);
         snapshot.put("instance_quantity", new BigDecimal("0.5"));
         snapshot.put("aggregate_quantity", new BigDecimal("1.0"));
+        snapshot.put("instance_cycle_id", 100L);
+        snapshot.put("instance_cycle_number", 1L);
         org.mockito.Mockito.when(mapper.ownershipSnapshot(5L, "BTCUSDT", 8L, "LONG")).thenReturn(snapshot);
 
         assertFalse(service.matchesExclusiveInventory(5L, "BTCUSDT", 7L, 8L, "LONG", BigDecimal.ONE));
