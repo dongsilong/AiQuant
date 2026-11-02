@@ -71,9 +71,11 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         List<String> recoveryReasonColumns = mapper.recoveryReasonColumns();
         List<String> positionRebuildCostBasisColumns = mapper.positionRebuildCostBasisColumns();
         List<String> positionRebuildInventoryBaselineColumns = mapper.positionRebuildInventoryBaselineColumns();
+        List<String> positionRebuildDispatchGateColumns = mapper.positionRebuildDispatchGateColumns();
         if (actualTables == null || actualUnique == null || leaseEpoch == null || entryGuardColumns == null
             || positionReturnRateColumns == null || orderBalanceSnapshotColumns == null || recoveryReasonColumns == null
-            || positionRebuildCostBasisColumns == null || positionRebuildInventoryBaselineColumns == null) {
+            || positionRebuildCostBasisColumns == null || positionRebuildInventoryBaselineColumns == null
+            || positionRebuildDispatchGateColumns == null) {
             throw new IllegalStateException("LIVE database metadata unavailable; refuse to enable real trading");
         }
         var missingTables = new java.util.TreeSet<>(TABLES);
@@ -91,9 +93,11 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         missingPositionRebuildCostBasisColumns.removeAll(positionRebuildCostBasisColumns);
         var missingPositionRebuildInventoryBaselineColumns = new java.util.TreeSet<>(POSITION_REBUILD_INVENTORY_BASELINE_COLUMNS);
         missingPositionRebuildInventoryBaselineColumns.removeAll(positionRebuildInventoryBaselineColumns);
+        boolean missingPositionRebuildDispatchGate = !positionRebuildDispatchGateColumns.contains("quant_live_dispatch_guard|rebuild_run_id");
         if (!missingTables.isEmpty() || !missingUnique.isEmpty() || missingEpoch || missingEntryGuardType || missingProtectionOwner
             || missingPositionReturnRate || !missingOrderBalanceSnapshotColumns.isEmpty() || missingRecoveryReason
-            || !missingPositionRebuildCostBasisColumns.isEmpty() || !missingPositionRebuildInventoryBaselineColumns.isEmpty()) {
+            || !missingPositionRebuildCostBasisColumns.isEmpty() || !missingPositionRebuildInventoryBaselineColumns.isEmpty()
+            || missingPositionRebuildDispatchGate) {
             List<String> requiredMigrations = new java.util.ArrayList<>();
             if (missingTables.contains("quant_strategy_fill_journal") || missingTables.contains("quant_strategy_fill_sync_cursor")
                 || missingUnique.contains("quant_strategy_fill_journal|credential_id,symbol,exchange_trade_id")
@@ -120,6 +124,9 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
                 || missingRecoveryReason || !missingPositionRebuildCostBasisColumns.isEmpty()
                 || !missingPositionRebuildInventoryBaselineColumns.isEmpty()) {
                 requiredMigrations.add("script/sql/quant/V20261104_01__strategy_position_rebuild.sql");
+            }
+            if (missingPositionRebuildDispatchGate) {
+                requiredMigrations.add("script/sql/quant/V20261104_03__position_rebuild_dispatch_gate.sql");
             }
             if (missingTables.contains("quant_strategy_order_intent") || missingUnique.contains("quant_strategy_order_intent|credential_id,symbol,client_order_id")) {
                 requiredMigrations.add("script/sql/quant/V20261014_09__strategy_order_intent.sql");
@@ -160,6 +167,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
                 + ", missingOrderBalanceSnapshotColumns=" + missingOrderBalanceSnapshotColumns + ", recoveryReasonMissing=" + missingRecoveryReason
                 + ", missingPositionRebuildCostBasisColumns=" + missingPositionRebuildCostBasisColumns
                 + ", missingPositionRebuildInventoryBaselineColumns=" + missingPositionRebuildInventoryBaselineColumns
+                + ", positionRebuildDispatchGateMissing=" + missingPositionRebuildDispatchGate
                 + ". On the application's configured MySQL database, " + migrationHint + ", then restart; LIVE schema preflight does not auto-create trading tables.");
         }
     }

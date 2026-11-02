@@ -20,6 +20,10 @@ public interface StrategyPositionRebuildMapper {
 
     Map<String, Object> lockRun(@Param("runId") long runId);
 
+    int updateRunSource(@Param("runId") long runId, @Param("historyFrom") LocalDateTime historyFrom,
+                        @Param("historyTo") LocalDateTime historyTo, @Param("sourceMaxJournalId") long sourceMaxJournalId,
+                        @Param("sourceFillCount") long sourceFillCount);
+
     int seedInventory(@Param("runId") long runId, @Param("credentialId") long credentialId, @Param("symbol") String symbol);
 
     Map<String, Object> lockInventory(@Param("runId") long runId, @Param("instanceId") long instanceId, @Param("side") String side);

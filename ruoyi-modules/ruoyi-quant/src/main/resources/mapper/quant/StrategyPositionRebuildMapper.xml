@@ -15,6 +15,12 @@ SELECT * FROM quant_strategy_position_rebuild_run WHERE id=#{runId}
     <select id="lockRun" resultType="map" timeout="3"><![CDATA[
 SELECT * FROM quant_strategy_position_rebuild_run WHERE id=#{runId} FOR UPDATE
 ]]></select>
+    <update id="updateRunSource" timeout="3"><![CDATA[
+UPDATE quant_strategy_position_rebuild_run
+SET history_from=#{historyFrom},history_to=#{historyTo},
+    source_max_journal_id=#{sourceMaxJournalId},source_fill_count=#{sourceFillCount},updated_at=NOW(3)
+WHERE id=#{runId} AND status='BUILDING' AND processed_count=0
+]]></update>
     <insert id="seedInventory" timeout="3"><![CDATA[
 INSERT INTO quant_strategy_position_rebuild_inventory
 (run_id,credential_id,symbol,strategy_instance_id,position_side,strategy_id,open_quantity,cost_basis,

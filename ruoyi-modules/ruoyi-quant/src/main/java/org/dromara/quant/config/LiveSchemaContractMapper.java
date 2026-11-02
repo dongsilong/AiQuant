@@ -29,4 +29,6 @@ public interface LiveSchemaContractMapper {
 
     List<String> positionRebuildInventoryBaselineColumns();
 
+    List<String> positionRebuildDispatchGateColumns();
+
 }

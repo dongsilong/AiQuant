@@ -63,7 +63,15 @@ class StrategyPositionRebuildContractTest {
         assertTrue(service.contains("assertSourceStable"));
         assertTrue(service.contains("assertInventoryBaselineStable"));
         assertTrue(service.contains("rebuilds.promoteInventory(runId)"));
+        assertTrue(service.contains("lockRunWithGate(runId)"));
+        assertTrue(service.contains("dispatches.releaseRebuild(credentialId, symbol, runId)"));
+        assertTrue(service.contains("dispatches.claimRebuild(credentialId, symbol, runId)"));
         assertTrue(!service.contains("projector.project("));
+        String dispatchXml = resource("mapper/quant/LiveOrderDispatchMapper.xml");
+        assertTrue(dispatchXml.contains("id=\"claimOpen\""));
+        assertTrue(dispatchXml.contains("id=\"claimOpenWithLease\""));
+        assertTrue(dispatchXml.contains("id=\"invalidateRebuildForClose\""));
+        assertTrue(dispatchXml.contains("rebuild_run_id IS NULL"));
     }
 
     @Test
@@ -82,6 +90,10 @@ class StrategyPositionRebuildContractTest {
         assertTrue(migration.contains("base_updated_at"));
         String schemaMapper = resource("mapper/quant/LiveSchemaContractMapper.xml");
         assertTrue(schemaMapper.contains("positionRebuildInventoryBaselineColumns"));
+        assertTrue(schemaMapper.contains("positionRebuildDispatchGateColumns"));
+        String dispatchGateMigration = Files.readString(Path.of("..", "..", "script", "sql", "quant", "V20261104_03__position_rebuild_dispatch_gate.sql"), StandardCharsets.UTF_8);
+        assertTrue(dispatchGateMigration.contains("ADD COLUMN rebuild_run_id bigint"));
+        assertTrue(dispatchGateMigration.contains("quant_live_dispatch_guard"));
 
         String permission = Files.readString(Path.of("..", "..", "script", "sql", "quant", "V20261104_02__strategy_position_rebuild_permission.sql"), StandardCharsets.UTF_8);
         assertTrue(permission.contains("quant:allocation:rebuild"));

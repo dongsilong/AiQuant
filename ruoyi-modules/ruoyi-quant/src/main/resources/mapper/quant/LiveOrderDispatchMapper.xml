@@ -4,6 +4,50 @@
     <insert id="ensureGuard" timeout="3"><![CDATA[INSERT IGNORE INTO quant_live_dispatch_guard
     (credential_id, symbol, active_dispatch_key, updated_at)
 VALUES (#{credentialId}, #{symbol}, NULL, NOW())]]></insert>
+    <select id="lockGuard" resultType="map" timeout="3"><![CDATA[
+SELECT credential_id AS credentialId,symbol,active_dispatch_key AS activeDispatchKey,
+       rebuild_run_id AS `rebuildRunId`
+FROM quant_live_dispatch_guard
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+FOR UPDATE
+]]></select>
+    <update id="claimRebuild" timeout="3"><![CDATA[
+UPDATE quant_live_dispatch_guard SET rebuild_run_id=#{runId},updated_at=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND active_dispatch_key IS NULL AND rebuild_run_id IS NULL
+]]></update>
+    <update id="releaseRebuild" timeout="3"><![CDATA[
+UPDATE quant_live_dispatch_guard SET rebuild_run_id=NULL,updated_at=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND rebuild_run_id=#{runId}
+]]></update>
+    <update id="claimOpen" timeout="3"><![CDATA[
+UPDATE quant_live_dispatch_guard SET active_dispatch_key=#{key},updated_at=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND active_dispatch_key IS NULL AND rebuild_run_id IS NULL
+]]></update>
+    <update id="claimOpenWithLease" timeout="3"><![CDATA[
+UPDATE quant_live_dispatch_guard SET active_dispatch_key=#{key},updated_at=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND active_dispatch_key IS NULL AND rebuild_run_id IS NULL
+  AND EXISTS (
+      SELECT 1 FROM quant_strategy_runtime_lease l
+      WHERE l.credential_id=#{credentialId} AND l.symbol=#{symbol}
+        AND l.instance_id=#{instanceId} AND l.lease_epoch=#{epoch}
+        AND l.lease_until>NOW() AND l.owner_token IS NOT NULL
+  )
+]]></update>
+    <update id="invalidateRebuildForClose" timeout="3"><![CDATA[
+UPDATE quant_strategy_position_rebuild_run
+SET status='FAILED',active_run_key=NULL,
+    failure_reason='已发生平仓派单，库存重建任务自动失效',updated_at=NOW(3)
+WHERE id=(SELECT rebuild_run_id FROM quant_live_dispatch_guard
+          WHERE credential_id=#{credentialId} AND symbol=#{symbol})
+  AND status IN ('BUILDING','READY')
+]]></update>
+    <update id="releaseRebuildForClose" timeout="3"><![CDATA[
+UPDATE quant_live_dispatch_guard SET rebuild_run_id=NULL,updated_at=NOW()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND rebuild_run_id IS NOT NULL
+]]></update>
     <insert id="ensureSettingsIntent" timeout="3"><![CDATA[INSERT IGNORE INTO quant_live_account_settings_intent
     (credential_id, symbol, margin_mode, leverage, created_at)
 VALUES (#{credentialId}, #{symbol}, #{marginMode}, #{leverage}, NOW())]]></insert>

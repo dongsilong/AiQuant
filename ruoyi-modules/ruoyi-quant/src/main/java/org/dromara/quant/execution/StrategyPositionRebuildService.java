@@ -66,7 +66,7 @@ public class StrategyPositionRebuildService {
         this.tx.setTimeout(15);
     }
 
-    /** 通过交易所完整保留窗口核对原始成交后，创建隔离重建任务。 */
+    /** 先持久化取得账户交易对重建门禁，再访问 Binance，避免扫描窗口内出现新开仓。 */
     public long begin(long credentialId, String requestedSymbol) {
         if (credentialId <= 0 || requestedSymbol == null || !requestedSymbol.matches("[A-Za-z0-9]{2,32}")) {
             throw new IllegalArgumentException("有效的 credentialId 和 symbol 是必需的");
@@ -81,29 +81,51 @@ public class StrategyPositionRebuildService {
             throw new IllegalStateException("该账户交易对仍有未归属或冲突成交，必须先处理原始成交缺口");
         }
 
-        Instant historyTo = exchangeNow(credential);
-        Instant historyFrom = historyTo.minusSeconds(180L * 24 * 60 * 60);
-        List<ExchangeGateway.TradeSnapshot> exchangeFills = collector.collect(
-            toExchangeCredential(credential), symbol, historyFrom, historyTo);
-        long sourceMaxId = journal.maxIdByScope(credentialId, symbol);
-        LocalDateTime from = utc(historyFrom);
-        LocalDateTime to = utc(historyTo);
-        long sourceCount = journal.countAttributedInWindow(credentialId, symbol, sourceMaxId, from, to);
-        verifyJournalMatchesExchange(credentialId, symbol, sourceMaxId, from, to, sourceCount, exchangeFills);
-
         long runId = IdWorker.getId();
         String activeKey = credentialId + ":" + symbol;
+        Instant provisionalTo = Instant.now();
+        LocalDateTime provisionalFrom = utc(provisionalTo.minusSeconds(180L * 24 * 60 * 60));
+        LocalDateTime provisionalEnd = utc(provisionalTo);
         try {
             tx.executeWithoutResult(status -> {
-                if (rebuilds.insertRun(runId, credentialId, symbol, activeKey, from, to, sourceMaxId, sourceCount) != 1
-                    || rebuilds.seedInventory(runId, credentialId, symbol) < 0) {
+                dispatches.ensureGuard(credentialId, symbol);
+                Map<String, Object> gate = dispatches.lockGuard(credentialId, symbol);
+                if (gate == null || gate.get("activeDispatchKey") != null || gate.get("rebuildRunId") != null
+                    || dispatches.claimRebuild(credentialId, symbol, runId) != 1) {
+                    throw new IllegalStateException("该账户交易对存在派单或库存重建任务，不能开始新的库存重建");
+                }
+                if (rebuilds.insertRun(runId, credentialId, symbol, activeKey, provisionalFrom, provisionalEnd, 0, 0) != 1) {
                     throw new IllegalStateException("无法创建策略库存隔离重建任务");
                 }
             });
         } catch (DuplicateKeyException activeRun) {
             throw new IllegalStateException("该凭证和交易对已有未完成的库存重建任务", activeRun);
         }
-        return runId;
+
+        try {
+            Instant historyTo = exchangeNow(credential);
+            Instant historyFrom = historyTo.minusSeconds(180L * 24 * 60 * 60);
+            long sourceMaxId = journal.maxIdByScope(credentialId, symbol);
+            List<ExchangeGateway.TradeSnapshot> exchangeFills = collector.collect(
+                toExchangeCredential(credential), symbol, historyFrom, historyTo);
+            LocalDateTime from = utc(historyFrom);
+            LocalDateTime to = utc(historyTo);
+            long sourceCount = journal.countAttributedInWindow(credentialId, symbol, sourceMaxId, from, to);
+            verifyJournalMatchesExchange(credentialId, symbol, sourceMaxId, from, to, sourceCount, exchangeFills);
+
+            tx.executeWithoutResult(status -> {
+                Map<String, Object> run = lockRunWithGate(runId);
+                requireRunStatus(run, "BUILDING");
+                if (rebuilds.updateRunSource(runId, from, to, sourceMaxId, sourceCount) != 1
+                    || rebuilds.seedInventory(runId, credentialId, symbol) < 0) {
+                    throw new IllegalStateException("重建任务历史边界或影子库存基线初始化失败");
+                }
+            });
+            return runId;
+        } catch (RuntimeException ex) {
+            failRun(runId, ex.getMessage());
+            throw ex;
+        }
     }
 
     /** 按成交时间和成交 ID 稳定分页重放一个批次。 */

@@ -105,10 +105,27 @@ public class LiveOrderDispatcher {
         try {
             return transaction.execute(status -> {
                 mapper.ensureGuard(credentialId, normalized);
-                int claimed = instanceId == null ? mapper.claim(credentialId, normalized, key) : mapper.claimWithLease(credentialId, normalized, key, instanceId, epoch);
+                java.util.Map<String, Object> guard = mapper.lockGuard(credentialId, normalized);
+                if (guard == null) {
+                    throw new DispatchBlockedException("账户交易对派单门禁不可用，订单未发送");
+                }
+                if ("CLOSE".equalsIgnoreCase(operation)) {
+                    mapper.invalidateRebuildForClose(credentialId, normalized);
+                    mapper.releaseRebuildForClose(credentialId, normalized);
+                }
+                int claimed;
+                if ("OPEN".equalsIgnoreCase(operation)) {
+                    claimed = instanceId == null ? mapper.claimOpen(credentialId, normalized, key)
+                        : mapper.claimOpenWithLease(credentialId, normalized, key, instanceId, epoch);
+                } else {
+                    claimed = instanceId == null ? mapper.claim(credentialId, normalized, key)
+                        : mapper.claimWithLease(credentialId, normalized, key, instanceId, epoch);
+                }
                 if (claimed != 1) {
                     boolean slotOccupied = mapper.activeDispatch(credentialId, normalized) != null;
+                    boolean rebuildActive = value(guard, "rebuildRunId") != null;
                     String reason = slotOccupied ? "同账户交易对存在未完成交易所操作，订单未发送"
+                        : rebuildActive && "OPEN".equalsIgnoreCase(operation) ? "该账户交易对正在重建策略库存，禁止新开仓"
                         : "策略租约已过期或转移，订单未发送";
                     throw new DispatchBlockedException(reason);
                 }

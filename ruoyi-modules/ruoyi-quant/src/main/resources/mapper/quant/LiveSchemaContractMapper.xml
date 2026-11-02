@@ -42,4 +42,10 @@ WHERE table_schema=DATABASE() AND table_name='quant_strategy_position_rebuild_in
   AND ((column_name='base_exists' AND data_type='tinyint' AND is_nullable='NO')
     OR (column_name='base_updated_at' AND data_type='datetime' AND datetime_precision=6))
 ]]></select>
+    <select id="positionRebuildDispatchGateColumns" resultType="java.lang.String" timeout="3"><![CDATA[
+SELECT CONCAT(table_name,'|',column_name)
+FROM information_schema.columns
+WHERE table_schema=DATABASE() AND table_name='quant_live_dispatch_guard'
+  AND column_name='rebuild_run_id' AND data_type='bigint'
+]]></select>
 </mapper>

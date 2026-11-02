@@ -11,6 +11,15 @@ public interface LiveOrderDispatchMapper {
 
     int ensureGuard(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
+    java.util.Map<String, Object> lockGuard(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+    int claimRebuild(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("runId") Long runId);
+    int releaseRebuild(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("runId") Long runId);
+    int claimOpen(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
+    int claimOpenWithLease(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key,
+                           @Param("instanceId") Long instanceId, @Param("epoch") Long epoch);
+    int invalidateRebuildForClose(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+    int releaseRebuildForClose(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
     /**
      * Immutable approved desired configuration, created in the same transaction
      * as the account-symbol dispatch claim. Concurrent contradictory nodes

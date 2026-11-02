@@ -23,8 +23,13 @@ class LiveOrderDispatcherTest {
         jdbc.execute("""
             CREATE TABLE quant_live_dispatch_guard (
               credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
-              active_dispatch_key VARCHAR(160), updated_at TIMESTAMP,
+              active_dispatch_key VARCHAR(160), rebuild_run_id BIGINT, updated_at TIMESTAMP,
               PRIMARY KEY(credential_id,symbol))
+            """);
+        jdbc.execute("""
+            CREATE TABLE quant_strategy_position_rebuild_run (
+              id BIGINT PRIMARY KEY, status VARCHAR(16), active_run_key VARCHAR(64), failure_reason VARCHAR(500)
+            )
             """);
         jdbc.execute("""
             CREATE TABLE quant_order_dispatch_ticket (
@@ -254,6 +259,29 @@ class LiveOrderDispatcherTest {
         assertThrows(IllegalArgumentException.class, () -> f.first().begin(1L, "BTCUSDT", "bad", "OPEN", "cid", 12L, null));
         assertThrows(IllegalArgumentException.class, () -> f.first().begin(1L, "BTCUSDT", "bad", "OPEN", "cid", 12L, 0L));
         assertEquals(0L, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_order_dispatch_ticket", Long.class));
+    }
+
+    @Test
+    void rebuildGateBlocksOnlyOpenAndCloseInvalidatesItBeforeDispatch() throws Exception {
+        var f = fixture();
+        f.mapper().ensureGuard(1L, "BTCUSDT");
+        f.jdbc().update("INSERT INTO quant_strategy_position_rebuild_run(id,status,active_run_key) VALUES (77,'BUILDING','1:BTCUSDT')");
+        assertEquals(1, f.mapper().claimRebuild(1L, "BTCUSDT", 77L));
+
+        var blocked = assertThrows(LiveOrderDispatcher.DispatchBlockedException.class,
+            () -> f.first().begin(1L, "BTCUSDT", "blocked-open", "OPEN", "cid-open", null, null));
+        assertTrue(blocked.getMessage().contains("正在重建策略库存"));
+
+        var protection = f.first().begin(1L, "BTCUSDT", "protect", "PROTECT_CREATE", "algo-client", null, null);
+        f.first().notSent(protection);
+
+        var close = f.other().begin(1L, "BTCUSDT", "close", "CLOSE", "cid-close", null, null);
+        assertEquals("FAILED", f.jdbc().queryForObject("SELECT status FROM quant_strategy_position_rebuild_run WHERE id=77", String.class));
+        assertNull(f.jdbc().queryForObject("SELECT rebuild_run_id FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", Long.class));
+        f.other().notSent(close);
+
+        var open = f.first().begin(1L, "BTCUSDT", "open-after-close", "OPEN", "cid-open-next", null, null);
+        f.first().notSent(open);
     }
 
     private record Fixture(LiveOrderDispatcher first, LiveOrderDispatcher other, LiveOrderDispatchMapper mapper, JdbcTemplate jdbc) {
