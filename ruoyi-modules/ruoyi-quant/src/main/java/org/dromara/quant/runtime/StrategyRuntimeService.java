@@ -3471,8 +3471,13 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         if (runtime.state == null) {
             return;
         }
+        boolean inventoryMismatchOnly = !Boolean.TRUE.equals(runtime.state.getRecoveryRequired())
+            && !Boolean.TRUE.equals(runtime.state.getUnsafeRecovery()) && runtime.state.getRecoveryReason() == null;
         runtime.state.setRecoveryRequired(true);
         runtime.state.setUnsafeRecovery(true);
+        if (inventoryMismatchOnly) {
+            runtime.state.setRecoveryReason("STRATEGY_ACCOUNT_INVENTORY_MISMATCH");
+        }
         runtime.positionFactsReady = false;
         runtime.positionReconciliationBlockReason = "STRATEGY_ACCOUNT_INVENTORY_MISMATCH";
         stateService.save(runtime.state);
@@ -3503,6 +3508,13 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         }
         runtime.state.setStatus("OPEN");
         clearPending(runtime.state);
+        if ("STRATEGY_ACCOUNT_INVENTORY_MISMATCH".equals(runtime.state.getRecoveryReason())
+            && !runtime.hasPendingAction() && !runtime.protectionCleanupPending && !runtime.protectionDegraded
+            && hasFrozenProtectionFacts(runtime)) {
+            runtime.state.setRecoveryRequired(false);
+            runtime.state.setUnsafeRecovery(false);
+            runtime.state.setRecoveryReason(null);
+        }
         stateService.save(runtime.state);
     }
 

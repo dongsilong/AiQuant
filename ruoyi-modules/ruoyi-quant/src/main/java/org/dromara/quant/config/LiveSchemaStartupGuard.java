@@ -25,7 +25,8 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_protection_target", "quant_trade", "quant_financial_event", "quant_financial_event_sync_cursor", "quant_trade_decision_log", "quant_live_dispatch_guard", "quant_order_dispatch_ticket", "quant_strategy_fill_allocation",
         "quant_strategy_fill_journal", "quant_strategy_fill_sync_cursor", "quant_live_account_settings_intent", "quant_position_sync_fence", "quant_live_user_stream_lease",
         "quant_strategy_order_intent", "quant_strategy_pre_dispatch_intent", "quant_live_recovery_case", "quant_live_recovery_audit",
-        "quant_strategy_position_inventory", "quant_strategy_position_cycle", "quant_strategy_position_fill_event", "quant_strategy_position_fee_event");
+        "quant_strategy_position_inventory", "quant_strategy_position_cycle", "quant_strategy_position_fill_event", "quant_strategy_position_fee_event",
+        "quant_strategy_position_rebuild_run", "quant_strategy_position_rebuild_inventory", "quant_strategy_position_rebuild_fill");
 
     private static final Set<String> ORDER_BALANCE_SNAPSHOT_COLUMNS = Set.of("leverage_snapshot", "price_tick_size_snapshot",
         "post_fill_wallet_balance", "post_fill_balance_at", "post_fill_balance_requested_at");
@@ -40,7 +41,10 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_strategy_pre_dispatch_intent|credential_id,idempotency_key", "quant_position_sync_fence|credential_id",
         "quant_strategy_position_inventory|credential_id,symbol,strategy_instance_id,position_side",
         "quant_strategy_position_cycle|credential_id,symbol,strategy_instance_id,position_side,cycle_number",
-        "quant_strategy_position_fill_event|credential_id,symbol,exchange_trade_id", "quant_strategy_position_fee_event|credential_id,symbol,exchange_trade_id");
+        "quant_strategy_position_fill_event|credential_id,symbol,exchange_trade_id", "quant_strategy_position_fee_event|credential_id,symbol,exchange_trade_id",
+        "quant_strategy_position_rebuild_run|active_run_key",
+        "quant_strategy_position_rebuild_inventory|run_id,strategy_instance_id,position_side",
+        "quant_strategy_position_rebuild_fill|run_id,exchange_trade_id");
 
     private final LiveSchemaContractMapper mapper;
 
@@ -60,8 +64,9 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         List<String> protectionOwnerColumns = mapper.protectionOwnerColumns();
         List<String> positionReturnRateColumns = mapper.positionReturnRateColumns();
         List<String> orderBalanceSnapshotColumns = mapper.orderBalanceSnapshotColumns();
+        List<String> recoveryReasonColumns = mapper.recoveryReasonColumns();
         if (actualTables == null || actualUnique == null || leaseEpoch == null || entryGuardColumns == null
-            || positionReturnRateColumns == null || orderBalanceSnapshotColumns == null) {
+            || positionReturnRateColumns == null || orderBalanceSnapshotColumns == null || recoveryReasonColumns == null) {
             throw new IllegalStateException("LIVE database metadata unavailable; refuse to enable real trading");
         }
         var missingTables = new java.util.TreeSet<>(TABLES);
@@ -74,8 +79,9 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         boolean missingPositionReturnRate = !positionReturnRateColumns.contains("maximum_return_rate");
         var missingOrderBalanceSnapshotColumns = new java.util.TreeSet<>(ORDER_BALANCE_SNAPSHOT_COLUMNS);
         missingOrderBalanceSnapshotColumns.removeAll(orderBalanceSnapshotColumns);
+        boolean missingRecoveryReason = !recoveryReasonColumns.contains("quant_strategy_position_state|recovery_reason");
         if (!missingTables.isEmpty() || !missingUnique.isEmpty() || missingEpoch || missingEntryGuardType || missingProtectionOwner
-            || missingPositionReturnRate || !missingOrderBalanceSnapshotColumns.isEmpty()) {
+            || missingPositionReturnRate || !missingOrderBalanceSnapshotColumns.isEmpty() || missingRecoveryReason) {
             List<String> requiredMigrations = new java.util.ArrayList<>();
             if (missingTables.contains("quant_strategy_fill_journal") || missingTables.contains("quant_strategy_fill_sync_cursor")
                 || missingUnique.contains("quant_strategy_fill_journal|credential_id,symbol,exchange_trade_id")
@@ -92,6 +98,15 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
             if (missingTables.contains("quant_strategy_position_fee_event")
                 || missingUnique.contains("quant_strategy_position_fee_event|credential_id,symbol,exchange_trade_id")) {
                 requiredMigrations.add("script/sql/quant/V20261103_01__strategy_position_fee_asset_ledger.sql");
+            }
+            if (missingTables.contains("quant_strategy_position_rebuild_run")
+                || missingTables.contains("quant_strategy_position_rebuild_inventory")
+                || missingTables.contains("quant_strategy_position_rebuild_fill")
+                || missingUnique.contains("quant_strategy_position_rebuild_run|active_run_key")
+                || missingUnique.contains("quant_strategy_position_rebuild_inventory|run_id,strategy_instance_id,position_side")
+                || missingUnique.contains("quant_strategy_position_rebuild_fill|run_id,exchange_trade_id")
+                || missingRecoveryReason) {
+                requiredMigrations.add("script/sql/quant/V20261104_01__strategy_position_rebuild.sql");
             }
             if (missingTables.contains("quant_strategy_order_intent") || missingUnique.contains("quant_strategy_order_intent|credential_id,symbol,client_order_id")) {
                 requiredMigrations.add("script/sql/quant/V20261014_09__strategy_order_intent.sql");
@@ -129,7 +144,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
                 : "apply required migration(s): " + String.join(", ", requiredMigrations);
             throw new IllegalStateException("LIVE schema preflight rejected startup; missing InnoDB tables=" + missingTables + ", missing unique-index contracts=" + missingUnique
                 + ", leaseEpochMissing=" + missingEpoch + ", entryGuardTypeMissing=" + missingEntryGuardType
-                + ", missingOrderBalanceSnapshotColumns=" + missingOrderBalanceSnapshotColumns
+                + ", missingOrderBalanceSnapshotColumns=" + missingOrderBalanceSnapshotColumns + ", recoveryReasonMissing=" + missingRecoveryReason
                 + ". On the application's configured MySQL database, " + migrationHint + ", then restart; LIVE schema preflight does not auto-create trading tables.");
         }
     }

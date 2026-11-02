@@ -24,4 +24,10 @@ WHERE table_schema=DATABASE() AND table_name='quant_protection_order'
         <![CDATA[SELECT column_name FROM information_schema.columns
 WHERE table_schema=DATABASE() AND table_name='quant_order'
   AND column_name IN ('leverage_snapshot','price_tick_size_snapshot','post_fill_wallet_balance','post_fill_balance_at','post_fill_balance_requested_at')]]></select>
+    <select id="recoveryReasonColumns" resultType="java.lang.String" timeout="3"><![CDATA[
+SELECT CONCAT(table_name,'|',column_name)
+FROM information_schema.columns
+WHERE table_schema=DATABASE() AND table_name='quant_strategy_position_state'
+  AND column_name='recovery_reason' AND data_type='varchar' AND character_maximum_length=64
+]]></select>
 </mapper>

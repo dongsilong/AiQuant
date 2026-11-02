@@ -149,6 +149,8 @@ public class QuantStrategyPositionState {
      * 恢复状态是否不安全；为 true 时禁止继续自动交易。
      */
     private Boolean unsafeRecovery;
+    /** 可自动解除的恢复阻断类型；其他恢复原因必须独立核验。 */
+    private String recoveryReason;
     /**
      * 待确认订单连续未查询到的确认次数。
      */

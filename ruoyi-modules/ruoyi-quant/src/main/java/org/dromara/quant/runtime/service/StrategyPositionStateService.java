@@ -154,6 +154,7 @@ public class StrategyPositionStateService {
         state.setPendingIdempotencyKey(null);
         state.setRecoveryRequired(false);
         state.setUnsafeRecovery(false);
+        state.setRecoveryReason(null);
         save(state);
     }
 
