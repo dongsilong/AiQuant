@@ -112,4 +112,26 @@ class ProtectionOrderJournalServiceTest {
         assertEquals(3L, local.getStrategyInstanceId());
         verifyNoInteractions(orders);
     }
+
+    @Test
+    void delayedChildSnapshotCannotRegressExpiredInMatchTerminalState() {
+        var existing = new QuantOrder();
+        existing.setId(11L);
+        existing.setCredentialId(1L);
+        existing.setSymbol("BTCUSDT");
+        existing.setExchangeOrderId(91L);
+        existing.setClientOrderId("child-client");
+        existing.setStrategyId(2L);
+        existing.setStrategyInstanceId(3L);
+        existing.setPositionSide("BOTH");
+        existing.setStatus("EXPIRED_IN_MATCH");
+        when(orders.selectOne(any())).thenReturn(existing);
+        when(orders.updateById(any(QuantOrder.class))).thenReturn(1);
+
+        assertTrue(journal.bindChild(credential, local(), actual("BOTH"), child(91L)));
+
+        var saved = org.mockito.ArgumentCaptor.forClass(QuantOrder.class);
+        verify(orders).updateById(saved.capture());
+        assertEquals("EXPIRED_IN_MATCH", saved.getValue().getStatus());
+    }
 }
