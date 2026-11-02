@@ -25,7 +25,7 @@ class StrategyPositionProjectionContractTest {
         assertTrue(xml.contains("quant_strategy_order_intent"));
         assertTrue(xml.contains("exchange_order_id=#{orderId}"));
         assertTrue(xml.contains("exchange_trade_id=#{tradeId}"));
-        assertTrue(xml.contains("quant_strategy_position_fill_event"));
+        assertTrue(xml.contains("quant_strategy_position_fill_event"));\n        assertTrue(xml.contains("quant_strategy_position_fee_event"));\n        assertTrue(xml.contains("id=\"existingFee\""));\n        assertTrue(xml.contains("id=\"insertFee\""));\n        assertTrue(xml.contains("commission_asset=#{feeAsset}"));\n        assertTrue(!xml.contains("commission_asset IS NULL OR commission_asset=#{feeAsset}"));
         assertTrue(xml.contains("quant_strategy_position_inventory"));
         assertTrue(xml.contains("strategy_instance_id=#{instanceId}"));
         assertTrue(xml.contains("id=\"ownershipSnapshot\""));
@@ -43,5 +43,12 @@ class StrategyPositionProjectionContractTest {
         assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS quant_strategy_position_fill_event"));
         assertTrue(migration.contains("UNIQUE KEY uk_quant_strategy_position_inventory (credential_id, symbol, strategy_instance_id, position_side)"));
         assertTrue(migration.contains("UNIQUE KEY uk_quant_strategy_position_fill_event (credential_id, symbol, exchange_trade_id)"));
+
+        Path feeMigrationPath = Path.of("..", "..", "script", "sql", "quant", "V20261103_01__strategy_position_fee_asset_ledger.sql");
+        assertTrue(Files.isRegularFile(feeMigrationPath), feeMigrationPath + " must exist");
+        String feeMigration = Files.readString(feeMigrationPath, StandardCharsets.UTF_8);
+        assertTrue(feeMigration.contains("CREATE TABLE IF NOT EXISTS quant_strategy_position_fee_event"));
+        assertTrue(feeMigration.contains("UNIQUE KEY uk_quant_strategy_position_fee_event (credential_id, symbol, exchange_trade_id)"));
+        assertTrue(feeMigration.contains("commission_asset varchar(20) NOT NULL"));
     }
 }
