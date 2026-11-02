@@ -3109,7 +3109,7 @@ class StrategyRuntimeSafetyTest {
         Object[] args = Arrays.stream(constructor.getParameterTypes()).map(type -> type == QuantProperties.class ? new QuantProperties() : mock(type)).toArray();
         var service = (StrategyRuntimeService) constructor.newInstance(args);
         var projection = (org.dromara.quant.execution.StrategyPositionProjectionService) ReflectionTestUtils.getField(service, "positionProjectionService");
-        when(projection.matchesExclusiveInventory(anyLong(), anyString(), anyLong(), anyLong(), anyString(), any())).thenReturn(true);
+        when(projection.matchesExclusiveInventory(anyLong(), anyString(), anyLong(), anyLong(), nullable(String.class), any())).thenReturn(true);
         var gateway = (ExchangeGateway) ReflectionTestUtils.getField(service, "gateway");
         var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(service, "leaseService");
         when(lease.acquireOrRenew(any(), any(), any())).thenReturn(true);
