@@ -26,6 +26,13 @@ VALUES (#{credentialId},#{symbol},#{tradeId},#{orderId},#{strategyId},
 FROM quant_strategy_fill_allocation
 WHERE credential_id=#{credentialId} AND strategy_id=#{strategyId}
   AND strategy_instance_id=#{instanceId} AND symbol=#{symbol}]]></select>
+    <select id="summarizeOrderFills" resultType="map" timeout="3"><![CDATA[SELECT COUNT(*) AS fill_count,
+       COALESCE(SUM(allocated_qty),0) AS allocated_qty,
+       COALESCE(SUM(CASE WHEN NOT (strategy_id <=> #{strategyId}
+           AND strategy_instance_id <=> #{instanceId}) THEN 1 ELSE 0 END),0) AS conflicting_owner_count
+FROM quant_strategy_fill_allocation
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND exchange_order_id=#{orderId}]]></select>
     <select id="summarizeFeesByAsset" resultType="map" timeout="3"><![CDATA[SELECT COALESCE(NULLIF(UPPER(TRIM(allocated_fee_asset)),''),'UNKNOWN') AS fee_asset,
        COALESCE(SUM(allocated_fee),0) AS total_fees
 FROM quant_strategy_fill_allocation
