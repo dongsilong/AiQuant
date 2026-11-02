@@ -64,7 +64,7 @@ class ProtectionOrderJournalServiceTest {
         assertEquals(3L, saved.getValue().getStrategyInstanceId());
         assertEquals(91L, saved.getValue().getExchangeOrderId());
         assertTrue(saved.getValue().getReduceOnly());
-        assertEquals("LONG", saved.getValue().getPositionSide());
+        assertEquals("BOTH", saved.getValue().getPositionSide());
         verify(intents).record(eq(1L), eq(2L), eq(3L), eq("CLOSE"),
             argThat(request -> request.reduceOnly() && "LONG".equals(request.positionSide())), any());
         verifyNoInteractions(protections);
@@ -144,6 +144,6 @@ class ProtectionOrderJournalServiceTest {
         var saved = org.mockito.ArgumentCaptor.forClass(QuantOrder.class);
         verify(orders).updateById(saved.capture());
         assertEquals("EXPIRED_IN_MATCH", saved.getValue().getStatus());
-        assertEquals("LONG", saved.getValue().getPositionSide());
+        assertEquals("BOTH", saved.getValue().getPositionSide());
     }
 }
