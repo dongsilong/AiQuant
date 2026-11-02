@@ -268,9 +268,15 @@ class StrategyFillJournalServiceTest {
         order.setExchangeOrderId(202L);
         order.setStrategyId(3L);
         order.setStrategyInstanceId(4L);
+        when(projections.resolveVerifiedAttribution(1L, order, fill())).thenReturn(
+            new StrategyPositionProjectionService.VerifiedAttribution(
+                StrategyPositionAccounting.PositionSide.LONG, StrategyPositionAccounting.Role.CLOSE));
+        when(rebuilds.invalidateForAttributedClose(1L, "BTCUSDT")).thenReturn(77L);
 
         assertEquals("PENDING_FACTS", service.attribute(fill(), order, 1L));
 
+        verify(rebuilds).invalidateForAttributedClose(1L, "BTCUSDT");
+        verify(rebuilds, never()).releaseAfterAttributedClose(anyLong(), anyString(), anyLong());
         verify(projections).projectAttributed(eq(1L), eq(order), eq(fill()), any(StrategyPositionProjectionService.VerifiedAttribution.class));
         verify(journal).updateStatus(anyLong(), eq("PENDING_FACTS"), contains("immutable"));
         verify(journal, never()).updateStatus(anyLong(), eq("ATTRIBUTED"), isNull());
