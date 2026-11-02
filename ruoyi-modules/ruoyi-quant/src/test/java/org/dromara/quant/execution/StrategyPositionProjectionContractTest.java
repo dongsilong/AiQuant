@@ -55,5 +55,7 @@ class StrategyPositionProjectionContractTest {
         assertTrue(feeMigration.contains("CREATE TABLE IF NOT EXISTS quant_strategy_position_fee_event"));
         assertTrue(feeMigration.contains("UNIQUE KEY uk_quant_strategy_position_fee_event (credential_id, symbol, exchange_trade_id)"));
         assertTrue(feeMigration.contains("commission_asset varchar(20) NOT NULL"));
+        assertTrue(feeMigration.contains("INSERT IGNORE INTO quant_strategy_position_fee_event"));
+        assertTrue(feeMigration.contains("FROM quant_strategy_position_fill_event"));
     }
 }
