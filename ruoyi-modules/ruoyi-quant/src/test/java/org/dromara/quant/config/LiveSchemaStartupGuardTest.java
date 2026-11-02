@@ -35,7 +35,7 @@ class LiveSchemaStartupGuardTest {
         assertTrue(error.getMessage().contains("quant_live_recovery_case|credential_id,symbol,active_case_key"));
         assertTrue(error.getMessage().contains("quant_strategy_position_inventory"));
         assertTrue(error.getMessage().contains("quant_strategy_position_cycle"));
-        assertTrue(error.getMessage().contains("quant_strategy_position_fill_event"));
+        assertTrue(error.getMessage().contains("quant_strategy_position_fill_event"));\n        assertTrue(error.getMessage().contains("quant_strategy_position_fee_event"));\n        assertTrue(error.getMessage().contains("V20261103_01__strategy_position_fee_asset_ledger.sql"));
         assertTrue(error.getMessage().contains("V20261102_01__strategy_position_projection.sql"));
         assertTrue(error.getMessage().contains("quant_strategy_order_intent"));
         assertTrue(error.getMessage().contains("quant_strategy_pre_dispatch_intent"));
