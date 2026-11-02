@@ -62,6 +62,7 @@ public class ProtectionOrderJournalService {
             || local.getQuantity() == null || actual.quantity() == null || local.getQuantity().compareTo(actual.quantity()) != 0
             || local.getStopPrice() == null || actual.triggerPrice() == null || local.getStopPrice().compareTo(actual.triggerPrice()) != 0
             || local.getOrderType() == null || !local.getOrderType().equalsIgnoreCase(actual.type())
+            || !("LONG".equalsIgnoreCase(local.getPositionSide()) || "SHORT".equalsIgnoreCase(local.getPositionSide()))
             || !("SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" : "SELL").equalsIgnoreCase(child.side())
             || !child.side().equalsIgnoreCase(actual.side())
             || !("BOTH".equalsIgnoreCase(actual.positionSide()) || local.getPositionSide().equalsIgnoreCase(actual.positionSide()))) {
