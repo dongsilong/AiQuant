@@ -23,6 +23,9 @@ public interface StrategyPositionProjectionMapper {
 
     Map<String, Object> lock(@Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("instanceId") long instanceId, @Param("side") String side);
 
+    Map<String, Object> ownershipSnapshot(@Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("instanceId") long instanceId,
+                                          @Param("side") String side);
+
     Map<String, Object> existing(@Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("tradeId") long tradeId);
 
     int openCycle(@Param("id") long id, @Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("instanceId") long instanceId,
