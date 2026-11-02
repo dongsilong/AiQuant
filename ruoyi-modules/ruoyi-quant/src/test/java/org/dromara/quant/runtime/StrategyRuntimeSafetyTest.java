@@ -935,6 +935,91 @@ class StrategyRuntimeSafetyTest {
         assertFalse(Boolean.TRUE.equals(state.getFirstTakeProfitTriggered()));
     }
 
+    @Test
+    void filledPartialCloseWithExcessPositionReductionRemainsPending() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("EXIT_PENDING");
+            state.setPendingAction("FIRST_TAKE_PROFIT");
+            state.setPendingOrderId(55L);
+            state.setPendingOrderTime(System.currentTimeMillis());
+            state.setDirection("LONG");
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            configureFreshPosition(f, new BigDecimal("0.2"));
+            when(gateway.queryOrder(any(), any(), any(), any())).thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close", "SELL", "MARKET", "FILLED",
+                BigDecimal.ZERO, new BigDecimal("0.5"), new BigDecimal("0.5"), Instant.now()));
+
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+
+            assertEquals("EXIT_PENDING", state.getStatus());
+            assertEquals("FIRST_TAKE_PROFIT", state.getPendingAction());
+            assertEquals(BigDecimal.ONE, state.getPositionQty());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+            assertFalse(Boolean.TRUE.equals(state.getFirstTakeProfitTriggered()));
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
+    void filledPartialCloseCannotMarkFlatWhenOrderOnlyExplainsPartOfTheReduction() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("EXIT_PENDING");
+            state.setPendingAction("FIRST_TAKE_PROFIT");
+            state.setPendingOrderId(55L);
+            state.setPendingOrderTime(System.currentTimeMillis());
+            state.setDirection("LONG");
+            configureFreshPosition(f, BigDecimal.ZERO);
+            var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+            when(mapper.selectList(any())).thenReturn(List.of());
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            when(gateway.queryOrder(any(), any(), any(), any())).thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close", "SELL", "MARKET", "FILLED",
+                BigDecimal.ZERO, new BigDecimal("0.5"), new BigDecimal("0.5"), Instant.now()));
+
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+
+            assertEquals("EXIT_PENDING", state.getStatus());
+            assertEquals("FIRST_TAKE_PROFIT", state.getPendingAction());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+            verify(f.protection, never()).cancelActiveProtectionOrders(any(), any(), anyBoolean());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
+    void canceledPartialClosePersistsTheExactRemainingPositionQuantity() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("EXIT_PENDING");
+            state.setPendingAction("FIRST_TAKE_PROFIT");
+            state.setPendingOrderId(55L);
+            state.setPendingOrderTime(System.currentTimeMillis());
+            state.setDirection("LONG");
+            var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            configureFreshPosition(f, new BigDecimal("0.5"));
+            when(gateway.queryOrder(any(), any(), any(), any())).thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close", "SELL", "MARKET", "CANCELED",
+                BigDecimal.ZERO, BigDecimal.ONE, new BigDecimal("0.5"), Instant.now()));
+
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+
+            assertNull(state.getPendingAction());
+            assertEquals("OPEN", state.getStatus());
+            assertEquals(new BigDecimal("0.5"), state.getPositionQty());
+            assertEquals(new BigDecimal("0.5"), state.getFirstTakeProfitLocalExecutedQty());
+            assertFalse(state.getRecoveryRequired());
+            assertFalse(state.getUnsafeRecovery());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
     void partiallyFilledExitRetainsPendingEvenWhenPositionIsEmpty(boolean emptyPosition) throws Exception {
