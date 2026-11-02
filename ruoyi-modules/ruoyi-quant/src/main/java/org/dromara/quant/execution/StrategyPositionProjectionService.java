@@ -173,9 +173,8 @@ public class StrategyPositionProjectionService {
         if (credentialId <= 0 || verifiedOrder == null || trade == null || verifiedOrder.getCredentialId() == null || verifiedOrder.getCredentialId() != credentialId || verifiedOrder.getStrategyId() == null || verifiedOrder.getStrategyId() <= 0 || verifiedOrder.getStrategyInstanceId() == null || verifiedOrder.getStrategyInstanceId() <= 0 || trade.tradeId() == null || trade.tradeId() <= 0 || trade.orderId() == null || trade.orderId() <= 0 || !trade.orderId().equals(verifiedOrder.getExchangeOrderId()) || trade.symbol() == null || verifiedOrder.getSymbol() == null || !trade.symbol().equalsIgnoreCase(verifiedOrder.getSymbol()) || trade.time() == null || trade.side() == null || !(trade.side().equalsIgnoreCase("BUY") || trade.side().equalsIgnoreCase("SELL")) || trade.quantity() == null || trade.price() == null || trade.commission() == null || trade.realizedPnl() == null || positionSide == null || verifiedRole == null || verifiedOrder.getPositionSide() == null || !verifiedOrder.getPositionSide().equalsIgnoreCase(positionSide.name()) || verifiedOrder.getSide() == null || !verifiedOrder.getSide().equalsIgnoreCase(trade.side()) || verifiedRole == StrategyPositionAccounting.Role.OPEN && Boolean.TRUE.equals(verifiedOrder.getReduceOnly()) || verifiedRole == StrategyPositionAccounting.Role.CLOSE && !Boolean.TRUE.equals(verifiedOrder.getReduceOnly())) {
             throw new IllegalStateException("Unverified strategy order, position side or OPEN/CLOSE origin");
         }
-        // Commission amounts are not fungible across assets (USDT/BNB/etc).
-        // Refuse unknown fees and mixed-asset positions rather than converting
-        // them at an unverified FX rate or silently aggregating currencies.
+        // Commission amounts remain in their Binance-reported asset. The fee event
+        // ledger stores each fill independently; inventory totals never mix currencies.
         String feeAsset = trade.commissionAsset() == null ? "" : trade.commissionAsset().toUpperCase(Locale.ROOT);
         if (!feeAsset.matches("[A-Z0-9]{2,20}")) {
             throw new IllegalStateException("Missing authenticated Binance commission asset");
