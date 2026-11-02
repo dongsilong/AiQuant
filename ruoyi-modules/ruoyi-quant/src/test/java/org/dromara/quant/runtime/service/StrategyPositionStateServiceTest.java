@@ -13,6 +13,13 @@ import static org.mockito.Mockito.*;
 
 @org.junit.jupiter.api.Tag("dev")
 class StrategyPositionStateServiceTest {
+    static {
+        var configuration = new com.baomidou.mybatisplus.core.MybatisConfiguration();
+        var assistant = new org.apache.ibatis.builder.MapperBuilderAssistant(configuration, "test");
+        assistant.setCurrentNamespace("org.dromara.quant.runtime.domain.QuantStrategyPositionState");
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(assistant, QuantStrategyPositionState.class);
+    }
+
     private final QuantStrategyPositionStateMapper mapper = mock(QuantStrategyPositionStateMapper.class);
     private final StrategyPositionStateService service = new StrategyPositionStateService(mapper);
 
