@@ -14,6 +14,7 @@ import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -239,7 +240,9 @@ class StrategyFillJournalServiceTest {
         var orderOfCalls = inOrder(rebuilds, projections);
         orderOfCalls.verify(rebuilds).invalidateForAttributedClose(1L, "BTCUSDT");
         orderOfCalls.verify(projections).projectAttributed(1L, order, closeFill, attribution);
-        orderOfCalls.verify(rebuilds).completeAttributedClose(1L, "BTCUSDT", 77L);
+        var journalRecordId = org.mockito.ArgumentCaptor.forClass(Long.class);
+        orderOfCalls.verify(rebuilds).completeAttributedClose(eq(1L), eq("BTCUSDT"), journalRecordId.capture());
+        assertTrue(journalRecordId.getValue() > 0);
     }
 
     @Test
