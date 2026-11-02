@@ -90,6 +90,25 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void protectionRecoveryCursorIsIndependentPerSymbol() {
+        QuantProtectionOrder btc = order();
+        when(mapper.selectList(any())).thenReturn(List.of(btc));
+        assertEquals(0, service.recoverTriggeredProtectionChildren(1L, "BTCUSDT", 5));
+
+        QuantProtectionOrder eth = order();
+        eth.setId(6L);
+        eth.setSymbol("ETHUSDT");
+        when(mapper.selectList(any())).thenReturn(List.of(eth));
+        assertEquals(0, service.recoverTriggeredProtectionChildren(1L, "ETHUSDT", 5));
+
+        var cursors = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(service, "protectionChildRecoveryCursors");
+        assertNotNull(cursors);
+        assertEquals(2, cursors.size());
+        verify(gateway).queryProtectionOrder(any(), eq(55L), eq("QFTP_test"), eq("BTCUSDT"));
+        verify(gateway).queryProtectionOrder(any(), eq(55L), eq("QFTP_test"), eq("ETHUSDT"));
+    }
+
+    @Test
     void wrongBinanceAlgoIdMustNotConfirmOrReleaseAnUncertainProtection() {
         QuantProtectionOrder local = order();
         local.setStatus("UNKNOWN");
