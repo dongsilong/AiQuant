@@ -140,6 +140,7 @@ public class StrategyRuntimeService {
      * 交易执行应用服务。
      */
     private final TradeExecutionApplicationService executionService;
+    private final StrategyPositionProjectionService positionProjectionService;
     /**
      * 保护单服务。
      */
@@ -178,8 +179,6 @@ public class StrategyRuntimeService {
     private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
     @Autowired
     private StrategyPositionPerformanceHub positionPerformanceHub;
-    @Autowired
-    private StrategyPositionProjectionService positionProjectionService;
 
     /**
      * 返回运行时生效的保证金模式；交易对覆盖优先于策略默认值。
