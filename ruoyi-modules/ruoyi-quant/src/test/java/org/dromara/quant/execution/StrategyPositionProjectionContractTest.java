@@ -1,28 +1,29 @@
 package org.dromara.quant.execution;
 
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Select;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Tag("dev")
 class StrategyPositionProjectionContractTest {
     @Test
     void inventoryUsesRowLockAndReplayIsUnique() throws Exception {
-        var lock = StrategyPositionProjectionMapper.class.getMethod("lock", long.class, String.class, long.class, String.class);
-        String sql = String.join(" ", lock.getAnnotation(Select.class).value());
-        assertTrue(sql.contains("FOR UPDATE"));
-        var intent = StrategyPositionProjectionMapper.class.getMethod("verifiedIntent", long.class, String.class, long.class);
-        String intentSql = String.join(" ", intent.getAnnotation(Select.class).value());
-        assertTrue(intentSql.contains("quant_strategy_order_intent"));
-        assertTrue(intentSql.contains("exchange_order_id=#{orderId}"));
-        var existing = StrategyPositionProjectionMapper.class.getMethod("existing", long.class, String.class, long.class);
-        assertTrue(String.join(" ", existing.getAnnotation(Select.class).value()).contains("exchange_trade_id=#{tradeId}"));
-        var insert = StrategyPositionProjectionMapper.class.getMethod("insertFill", long.class, long.class, String.class, long.class, long.class, long.class, long.class,
-            long.class, String.class, String.class, String.class, java.math.BigDecimal.class, java.math.BigDecimal.class, java.math.BigDecimal.class, String.class,
-            java.math.BigDecimal.class, java.time.LocalDateTime.class);
-        assertTrue(String.join(" ", insert.getAnnotation(Insert.class).value()).contains("quant_strategy_position_fill_event"));
+        String resource = "mapper/quant/StrategyPositionProjectionMapper.xml";
+        String xml;
+        try (InputStream input = getClass().getClassLoader().getResourceAsStream(resource)) {
+            assertNotNull(input, resource + " must be packaged");
+            xml = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        assertTrue(xml.contains("FOR UPDATE"));
+        assertTrue(xml.contains("quant_strategy_order_intent"));
+        assertTrue(xml.contains("exchange_order_id=#{orderId}"));
+        assertTrue(xml.contains("exchange_trade_id=#{tradeId}"));
+        assertTrue(xml.contains("quant_strategy_position_fill_event"));
+        assertTrue(xml.contains("quant_strategy_position_inventory"));
     }
 }
