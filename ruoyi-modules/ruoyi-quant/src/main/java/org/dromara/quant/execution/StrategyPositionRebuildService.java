@@ -203,10 +203,18 @@ public class StrategyPositionRebuildService {
             ExchangePosition actual = exchangePosition(positions, symbol);
             BigDecimal rebuiltLong = zero(rebuilds.sumOpenQuantity(runId, "LONG"));
             BigDecimal rebuiltShort = zero(rebuilds.sumOpenQuantity(runId, "SHORT"));
+            BigDecimal rebuiltLongCost = zero(rebuilds.sumCostBasis(runId, "LONG"));
+            BigDecimal rebuiltShortCost = zero(rebuilds.sumCostBasis(runId, "SHORT"));
             if (actual.longQuantity().compareTo(rebuiltLong) != 0 || actual.shortQuantity().compareTo(rebuiltShort) != 0) {
                 throw new IllegalStateException("重建库存与 Binance 实际持仓数量不一致: exchangeLong="
                     + actual.longQuantity() + ", rebuiltLong=" + rebuiltLong
                     + ", exchangeShort=" + actual.shortQuantity() + ", rebuiltShort=" + rebuiltShort);
+            }
+            ExchangeGateway.SymbolRule symbolRule = gateway.queryTradingRule(toExchangeCredential(credential), symbol);
+            if (symbolRule == null || symbolRule.priceTickSize() == null || symbolRule.priceTickSize().signum() <= 0
+                || !withinCostBasisTick(actual.longCostBasis(), rebuiltLongCost, rebuiltLong, symbolRule.priceTickSize())
+                || !withinCostBasisTick(actual.shortCostBasis(), rebuiltShortCost, rebuiltShort, symbolRule.priceTickSize())) {
+                throw new IllegalStateException("重建库存加权成本与 Binance 持仓均价不一致或交易规则无法验证");
             }
             if (rebuilds.countInvalidOpenInventory(runId) != 0) {
                 throw new IllegalStateException("影子库存存在缺失持仓周期或无效成本，拒绝提升");
@@ -219,7 +227,8 @@ public class StrategyPositionRebuildService {
                 if (rebuilds.countFills(runId) != sourceCount
                     || rebuilds.countInvalidOpenInventory(runId) != 0
                     || rebuilds.promoteInventory(runId) < 0
-                    || rebuilds.markVerified(runId, actual.longQuantity(), actual.shortQuantity(), rebuiltLong, rebuiltShort) != 1) {
+                    || rebuilds.markVerified(runId, actual.longQuantity(), actual.shortQuantity(), rebuiltLong, rebuiltShort,
+                        actual.longCostBasis(), actual.shortCostBasis(), rebuiltLongCost, rebuiltShortCost) != 1) {
                     throw new IllegalStateException("库存提升事务的最终 CAS 或数据校验失败");
                 }
             });
@@ -489,6 +498,8 @@ public class StrategyPositionRebuildService {
     private static ExchangePosition exchangePosition(List<ExchangeGateway.PositionSnapshot> snapshots, String symbol) {
         BigDecimal longQuantity = BigDecimal.ZERO;
         BigDecimal shortQuantity = BigDecimal.ZERO;
+        BigDecimal longCostBasis = BigDecimal.ZERO;
+        BigDecimal shortCostBasis = BigDecimal.ZERO;
         for (ExchangeGateway.PositionSnapshot snapshot : snapshots) {
             if (snapshot == null || snapshot.symbol() == null || !symbol.equalsIgnoreCase(snapshot.symbol())
                 || snapshot.quantity() == null) {
@@ -498,21 +509,37 @@ public class StrategyPositionRebuildService {
             if (quantity.signum() == 0) {
                 continue;
             }
+            if (snapshot.entryPrice() == null || snapshot.entryPrice().signum() <= 0) {
+                throw new IllegalStateException("Binance 非零持仓缺少有效开仓均价，拒绝成本核验");
+            }
+            BigDecimal cost = quantity.abs().multiply(snapshot.entryPrice());
             if ("BOTH".equalsIgnoreCase(snapshot.side())) {
                 if (quantity.signum() > 0) {
                     longQuantity = longQuantity.add(quantity);
+                    longCostBasis = longCostBasis.add(cost);
                 } else {
                     shortQuantity = shortQuantity.add(quantity.abs());
+                    shortCostBasis = shortCostBasis.add(cost);
                 }
             } else if ("LONG".equalsIgnoreCase(snapshot.side())) {
                 longQuantity = longQuantity.add(quantity.abs());
+                longCostBasis = longCostBasis.add(cost);
             } else if ("SHORT".equalsIgnoreCase(snapshot.side())) {
                 shortQuantity = shortQuantity.add(quantity.abs());
+                shortCostBasis = shortCostBasis.add(cost);
             } else {
                 throw new IllegalStateException("Binance 持仓方向无法规范化: " + snapshot.side());
             }
         }
-        return new ExchangePosition(longQuantity, shortQuantity);
+        return new ExchangePosition(longQuantity, shortQuantity, longCostBasis, shortCostBasis);
+    }
+
+    private static boolean withinCostBasisTick(BigDecimal exchangeCost, BigDecimal rebuiltCost,
+                                               BigDecimal quantity, BigDecimal priceTick) {
+        if (quantity.signum() == 0) {
+            return exchangeCost.signum() == 0 && rebuiltCost.signum() == 0;
+        }
+        return exchangeCost.subtract(rebuiltCost).abs().compareTo(quantity.multiply(priceTick)) <= 0;
     }
 
     private static boolean sameJournalFill(StrategyFillJournalRecord journal, ExchangeGateway.TradeSnapshot exchange) {
@@ -613,6 +640,7 @@ public class StrategyPositionRebuildService {
                                   String lastTradeTime, Long lastTradeId) {
     }
 
-    private record ExchangePosition(BigDecimal longQuantity, BigDecimal shortQuantity) {
+    private record ExchangePosition(BigDecimal longQuantity, BigDecimal shortQuantity,
+                                    BigDecimal longCostBasis, BigDecimal shortCostBasis) {
     }
 }

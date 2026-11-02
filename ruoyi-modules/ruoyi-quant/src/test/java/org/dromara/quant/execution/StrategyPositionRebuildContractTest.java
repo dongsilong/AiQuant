@@ -53,6 +53,8 @@ class StrategyPositionRebuildContractTest {
         assertTrue(service.contains("verifyShadowMatchesExchange"));
         assertTrue(service.contains("Math.addExact(oldCycleNumber, 1)"));
         assertTrue(service.contains("gateway.queryPositions"));
+        assertTrue(service.contains("sumCostBasis"));
+        assertTrue(service.contains("withinCostBasisTick"));
         assertTrue(service.contains("assertSourceStable"));
         assertTrue(service.contains("rebuilds.promoteInventory(runId)"));
         assertTrue(!service.contains("projector.project("));
@@ -69,6 +71,8 @@ class StrategyPositionRebuildContractTest {
         assertTrue(migration.contains("UNIQUE KEY uk_quant_strategy_position_rebuild_run"));
         assertTrue(migration.contains("PRIMARY KEY (run_id,strategy_instance_id,position_side)"));
         assertTrue(migration.contains("PRIMARY KEY (run_id,exchange_trade_id)"));
+        assertTrue(migration.contains("exchange_long_cost_basis"));
+        assertTrue(migration.contains("rebuilt_short_cost_basis"));
 
         String permission = Files.readString(Path.of("..", "..", "script", "sql", "quant", "V20261104_02__strategy_position_rebuild_permission.sql"), StandardCharsets.UTF_8);
         assertTrue(permission.contains("quant:allocation:rebuild"));

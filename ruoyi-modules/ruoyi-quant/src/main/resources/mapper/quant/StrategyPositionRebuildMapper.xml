@@ -83,6 +83,10 @@ SELECT COUNT(*) FROM quant_strategy_position_rebuild_fill WHERE run_id=#{runId}
 SELECT COALESCE(SUM(open_quantity),0) FROM quant_strategy_position_rebuild_inventory
 WHERE run_id=#{runId} AND position_side=#{side}
 ]]></select>
+    <select id="sumCostBasis" resultType="java.math.BigDecimal" timeout="3"><![CDATA[
+SELECT COALESCE(SUM(cost_basis),0) FROM quant_strategy_position_rebuild_inventory
+WHERE run_id=#{runId} AND position_side=#{side}
+]]></select>
     <select id="countInvalidOpenInventory" resultType="long" timeout="3"><![CDATA[
 SELECT COUNT(*) FROM quant_strategy_position_rebuild_inventory i
 LEFT JOIN quant_strategy_position_cycle c ON c.id=i.cycle_id
@@ -131,7 +135,9 @@ last_trade_time=VALUES(last_trade_time),last_trade_id=VALUES(last_trade_id),upda
 UPDATE quant_strategy_position_rebuild_run
 SET status='VERIFIED',active_run_key=NULL,exchange_long_quantity=#{exchangeLong},
     exchange_short_quantity=#{exchangeShort},rebuilt_long_quantity=#{rebuiltLong},
-    rebuilt_short_quantity=#{rebuiltShort},updated_at=NOW(3)
+    rebuilt_short_quantity=#{rebuiltShort},exchange_long_cost_basis=#{exchangeLongCost},
+    exchange_short_cost_basis=#{exchangeShortCost},rebuilt_long_cost_basis=#{rebuiltLongCost},
+    rebuilt_short_cost_basis=#{rebuiltShortCost},updated_at=NOW(3)
 WHERE id=#{runId} AND status='READY'
 ]]></update>
 </mapper>

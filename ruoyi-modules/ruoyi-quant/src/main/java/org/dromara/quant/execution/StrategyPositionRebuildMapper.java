@@ -46,6 +46,8 @@ public interface StrategyPositionRebuildMapper {
 
     BigDecimal sumOpenQuantity(@Param("runId") long runId, @Param("side") String side);
 
+    BigDecimal sumCostBasis(@Param("runId") long runId, @Param("side") String side);
+
     long countInvalidOpenInventory(@Param("runId") long runId);
 
     long countJournalAfterId(@Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("maxId") long maxId);
@@ -61,5 +63,7 @@ public interface StrategyPositionRebuildMapper {
 
     int markVerified(@Param("runId") long runId, @Param("exchangeLong") BigDecimal exchangeLong,
                      @Param("exchangeShort") BigDecimal exchangeShort, @Param("rebuiltLong") BigDecimal rebuiltLong,
-                     @Param("rebuiltShort") BigDecimal rebuiltShort);
+                     @Param("rebuiltShort") BigDecimal rebuiltShort,
+                     @Param("exchangeLongCost") BigDecimal exchangeLongCost, @Param("exchangeShortCost") BigDecimal exchangeShortCost,
+                     @Param("rebuiltLongCost") BigDecimal rebuiltLongCost, @Param("rebuiltShortCost") BigDecimal rebuiltShortCost);
 }
