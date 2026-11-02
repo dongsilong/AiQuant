@@ -120,8 +120,8 @@ public class StrategyPositionProjectionService {
     }
 
     /** 已核验的不可变成交归属可在同一处理链路内复用，避免重复解析订单意图。 */
-    public void projectAttributed(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade,
-                                  VerifiedAttribution attribution) {
+    void projectAttributed(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade,
+                           VerifiedAttribution attribution) {
         if (attribution == null) {
             throw new IllegalStateException("Missing verified strategy fill attribution");
         }
