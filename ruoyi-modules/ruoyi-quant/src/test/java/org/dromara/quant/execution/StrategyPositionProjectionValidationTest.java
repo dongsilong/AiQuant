@@ -11,6 +11,8 @@ import java.time.Instant;
 
 import static org.dromara.quant.execution.StrategyPositionAccounting.PositionSide;
 import static org.dromara.quant.execution.StrategyPositionAccounting.Role;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -37,6 +39,31 @@ class StrategyPositionProjectionValidationTest {
     private ExchangeGateway.TradeSnapshot fill() {
         return new ExchangeGateway.TradeSnapshot("BTCUSDT", 11L, 9L, "BUY", BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, Instant.parse("2026-10-14T02:00:00Z"
         ));
+    }
+
+    @Test
+    void exclusiveInventoryRequiresInstanceAndAggregateToEqualExchangeExposure() {
+        var snapshot = new java.util.HashMap<String, Object>();
+        snapshot.put("instance_strategy_id", 7L);
+        snapshot.put("instance_quantity", new BigDecimal("1.25"));
+        snapshot.put("aggregate_quantity", new BigDecimal("1.25"));
+        org.mockito.Mockito.when(mapper.ownershipSnapshot(5L, "BTCUSDT", 8L, "LONG")).thenReturn(snapshot);
+
+        assertTrue(service.matchesExclusiveInventory(5L, "BTCUSDT", 7L, 8L, "LONG", new BigDecimal("1.25")));
+        assertFalse(service.matchesExclusiveInventory(5L, "BTCUSDT", 7L, 8L, "LONG", new BigDecimal("1.20")));
+        assertFalse(service.matchesExclusiveInventory(5L, "BTCUSDT", 9L, 8L, "LONG", new BigDecimal("1.25")));
+        assertFalse(service.matchesExclusiveInventory(5L, "BTCUSDT", 7L, 8L, "SHORT", new BigDecimal("1.25")));
+    }
+
+    @Test
+    void sharedAccountExposureIsNotAssignedToOneStrategyInstance() {
+        var snapshot = new java.util.HashMap<String, Object>();
+        snapshot.put("instance_strategy_id", 7L);
+        snapshot.put("instance_quantity", new BigDecimal("0.5"));
+        snapshot.put("aggregate_quantity", new BigDecimal("1.0"));
+        org.mockito.Mockito.when(mapper.ownershipSnapshot(5L, "BTCUSDT", 8L, "LONG")).thenReturn(snapshot);
+
+        assertFalse(service.matchesExclusiveInventory(5L, "BTCUSDT", 7L, 8L, "LONG", BigDecimal.ONE));
     }
 
     @Test
