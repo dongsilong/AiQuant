@@ -972,13 +972,38 @@ public class ProtectionOrderService {
         if (decisionLogs != null) {
             decisionLogs.protection(credentialId, local, actual);
         }
-        local.setExchangeOrderId(actual.algoId());
-        local.setStatus(actual.status());
-        local.setExecutedQuantity(actual.executedQuantity().max(local.getExecutedQuantity() == null ? BigDecimal.ZERO : local.getExecutedQuantity()));
-        if (mapper.updateById(local) != 1) {
-            throw new IllegalStateException("保护撤单终态未可靠写入本地账本");
+        if (!persistExchangeFactIfUnchanged(local, actual.algoId(), actual.status(), actual.executedQuantity())) {
+            throw new IllegalStateException("保护撤单终态与并发更新的本地状态冲突，保持派发阻断");
         }
         return actual.algoId();
+    }
+
+    /**
+     * 仅在本地状态仍等于远端查询前读取的版本时写入交易所事实；冲突时只接受已存在的相同或更新事实。
+     */
+    private boolean persistExchangeFactIfUnchanged(QuantProtectionOrder local, Long exchangeOrderId, String status, BigDecimal executedQuantity) {
+        BigDecimal expectedExecuted = local.getExecutedQuantity();
+        BigDecimal monotonicExecuted = executedQuantity.max(expectedExecuted == null ? BigDecimal.ZERO : expectedExecuted);
+        int updated = mapper.updateExchangeFactIfUnchanged(local.getId(), local.getCredentialId(), local.getClientOrderId(), local.getStatus(),
+            local.getExchangeOrderId(), expectedExecuted, exchangeOrderId, status, monotonicExecuted);
+        if (updated == 1) {
+            local.setExchangeOrderId(exchangeOrderId);
+            local.setStatus(status);
+            local.setExecutedQuantity(monotonicExecuted);
+            return true;
+        }
+        QuantProtectionOrder latest = mapper.selectById(local.getId());
+        if (latest == null || !Objects.equals(latest.getCredentialId(), local.getCredentialId())
+            || !Objects.equals(latest.getClientOrderId(), local.getClientOrderId())
+            || !Objects.equals(latest.getExchangeOrderId(), exchangeOrderId)
+            || !Objects.equals(latest.getStatus(), status)
+            || latest.getExecutedQuantity() == null || latest.getExecutedQuantity().compareTo(monotonicExecuted) < 0) {
+            return false;
+        }
+        local.setExchangeOrderId(latest.getExchangeOrderId());
+        local.setStatus(latest.getStatus());
+        local.setExecutedQuantity(latest.getExecutedQuantity());
+        return true;
     }
 
     /**
