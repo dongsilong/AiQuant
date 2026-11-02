@@ -40,6 +40,14 @@ class StrategyPositionProjectionValidationTest {
     }
 
     @Test
+    void rejectsFillWithoutImmutableAcceptedOrderIntent() {
+        org.mockito.Mockito.when(mapper.verifiedIntent(5L, "BTCUSDT", 9L)).thenReturn(null);
+        assertThrows(IllegalStateException.class, () -> service.projectAttributed(5L, order(), fill()));
+        verifyNoInteractions(manager);
+        org.mockito.Mockito.verify(mapper).verifiedIntent(5L, "BTCUSDT", 9L);
+    }
+
+    @Test
     void rejectsAmbiguousCloseWithoutAnyDatabaseMutation() {
         var o = order();
         assertThrows(IllegalStateException.class, () -> service.project(5L, o, fill(), PositionSide.LONG, Role.CLOSE));
