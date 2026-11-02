@@ -25,7 +25,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_protection_target", "quant_trade", "quant_financial_event", "quant_financial_event_sync_cursor", "quant_trade_decision_log", "quant_live_dispatch_guard", "quant_order_dispatch_ticket", "quant_strategy_fill_allocation",
         "quant_strategy_fill_journal", "quant_strategy_fill_sync_cursor", "quant_live_account_settings_intent", "quant_position_sync_fence", "quant_live_user_stream_lease",
         "quant_strategy_order_intent", "quant_strategy_pre_dispatch_intent", "quant_live_recovery_case", "quant_live_recovery_audit",
-        "quant_strategy_position_inventory", "quant_strategy_position_cycle", "quant_strategy_position_fill_event");
+        "quant_strategy_position_inventory", "quant_strategy_position_cycle", "quant_strategy_position_fill_event", "quant_strategy_position_fee_event");
 
     private static final Set<String> ORDER_BALANCE_SNAPSHOT_COLUMNS = Set.of("leverage_snapshot", "price_tick_size_snapshot",
         "post_fill_wallet_balance", "post_fill_balance_at", "post_fill_balance_requested_at");
@@ -40,7 +40,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         "quant_strategy_pre_dispatch_intent|credential_id,idempotency_key", "quant_position_sync_fence|credential_id",
         "quant_strategy_position_inventory|credential_id,symbol,strategy_instance_id,position_side",
         "quant_strategy_position_cycle|credential_id,symbol,strategy_instance_id,position_side,cycle_number",
-        "quant_strategy_position_fill_event|credential_id,symbol,exchange_trade_id");
+        "quant_strategy_position_fill_event|credential_id,symbol,exchange_trade_id", "quant_strategy_position_fee_event|credential_id,symbol,exchange_trade_id");
 
     private final LiveSchemaContractMapper mapper;
 
@@ -86,7 +86,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
                 || missingTables.contains("quant_strategy_position_fill_event")
                 || missingUnique.contains("quant_strategy_position_inventory|credential_id,symbol,strategy_instance_id,position_side")
                 || missingUnique.contains("quant_strategy_position_cycle|credential_id,symbol,strategy_instance_id,position_side,cycle_number")
-                || missingUnique.contains("quant_strategy_position_fill_event|credential_id,symbol,exchange_trade_id")) {
+                || missingUnique.contains("quant_strategy_position_fill_event|credential_id,symbol,exchange_trade_id")\n                || missingUnique.contains("quant_strategy_position_fee_event|credential_id,symbol,exchange_trade_id")) {
                 requiredMigrations.add("script/sql/quant/V20261102_01__strategy_position_projection.sql");
             }
             if (missingTables.contains("quant_strategy_order_intent") || missingUnique.contains("quant_strategy_order_intent|credential_id,symbol,client_order_id")) {
