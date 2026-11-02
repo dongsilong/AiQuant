@@ -103,8 +103,8 @@ public class ProtectionOrderJournalService {
         }
         order.setStrategyId(local.getStrategyId());
         order.setStrategyInstanceId(local.getStrategyInstanceId());
-        // Binance reports BOTH in one-way mode; preserve the frozen LONG/SHORT owner direction locally.
-        order.setPositionSide(local.getPositionSide());
+        // Keep Binance's exact positionSide in the order ledger; the immutable strategy intent stores the frozen LONG/SHORT direction. 
+        order.setPositionSide(actual.positionSide());
         order.setReduceOnly(true);
         order.setSide(child.side());
         order.setOrderType(child.type());
