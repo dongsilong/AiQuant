@@ -86,8 +86,9 @@ public class StrategyPositionProjectionService {
 
     private Map<String, Object> resolveIntent(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade) {
         if (credentialId <= 0 || verifiedOrder == null || trade == null || trade.symbol() == null || trade.orderId() == null || trade.orderId() <= 0
-            || verifiedOrder.getCredentialId() == null || verifiedOrder.getCredentialId() != credentialId
+            || trade.side() == null || verifiedOrder.getCredentialId() == null || verifiedOrder.getCredentialId() != credentialId
             || verifiedOrder.getStrategyId() == null || verifiedOrder.getStrategyInstanceId() == null
+            || verifiedOrder.getClientOrderId() == null || verifiedOrder.getClientOrderId().isBlank()
             || !trade.orderId().equals(verifiedOrder.getExchangeOrderId()) || verifiedOrder.getSymbol() == null
             || !trade.symbol().equalsIgnoreCase(verifiedOrder.getSymbol())) {
             throw new IllegalStateException("Missing exact strategy order or exchange fill identity");
@@ -95,17 +96,25 @@ public class StrategyPositionProjectionService {
         Map<String, Object> intent = mapper.verifiedIntent(credentialId, trade.symbol().toUpperCase(Locale.ROOT), trade.orderId());
         if (intent == null || asLong(intent, "strategy_id") != verifiedOrder.getStrategyId()
             || asLong(intent, "strategy_instance_id") != verifiedOrder.getStrategyInstanceId()
-            || !Objects.equals(verifiedOrder.getPositionSide(), intent.get("position_side"))
-            || !Objects.equals(verifiedOrder.getClientOrderId(), intent.get("client_order_id"))
+            || verifiedOrder.getPositionSide() == null || !verifiedOrder.getPositionSide().equalsIgnoreCase(String.valueOf(intent.get("position_side")))
+            || !verifiedOrder.getClientOrderId().equals(intent.get("client_order_id"))
             || !trade.side().equalsIgnoreCase(String.valueOf(intent.get("exchange_side")))
-            || !trade.side().equalsIgnoreCase(String.valueOf(verifiedOrder.getSide()))) {
+            || verifiedOrder.getSide() == null || !trade.side().equalsIgnoreCase(verifiedOrder.getSide())) {
             throw new IllegalStateException("No immutable, matching strategy execution intent");
         }
-        String role = String.valueOf(intent.get("fill_role"));
-        if (!"OPEN".equals(role) && !"CLOSE".equals(role)
-            || "OPEN".equals(role) && Boolean.TRUE.equals(verifiedOrder.getReduceOnly())
-            || "CLOSE".equals(role) && !Boolean.TRUE.equals(verifiedOrder.getReduceOnly())) {
-            throw new IllegalStateException("Immutable strategy execution intent conflicts with order reduce-only state");
+        StrategyPositionAccounting.PositionSide positionSide;
+        StrategyPositionAccounting.Role role;
+        try {
+            positionSide = StrategyPositionAccounting.PositionSide.valueOf(String.valueOf(intent.get("position_side")));
+            role = StrategyPositionAccounting.Role.valueOf(String.valueOf(intent.get("fill_role")));
+        } catch (IllegalArgumentException invalidIntent) {
+            throw new IllegalStateException("Immutable strategy execution intent has an unsupported position side or fill role", invalidIntent);
+        }
+        String expectedSide = (positionSide == StrategyPositionAccounting.PositionSide.LONG) == (role == StrategyPositionAccounting.Role.OPEN) ? "BUY" : "SELL";
+        if (!expectedSide.equalsIgnoreCase(trade.side())
+            || role == StrategyPositionAccounting.Role.OPEN && Boolean.TRUE.equals(verifiedOrder.getReduceOnly())
+            || role == StrategyPositionAccounting.Role.CLOSE && !Boolean.TRUE.equals(verifiedOrder.getReduceOnly())) {
+            throw new IllegalStateException("Immutable strategy execution intent conflicts with order direction or reduce-only state");
         }
         return intent;
     }
