@@ -3148,6 +3148,7 @@ class StrategyRuntimeSafetyTest {
         state.setInstanceId(1L);
         state.setPositionId(4L);
         state.setStatus("OPEN");
+        state.setDirection("LONG");
         state.setPositionQty(BigDecimal.ONE);
         state.setInitialPositionQty(BigDecimal.ONE);
         state.setUnsafeRecovery(false);
