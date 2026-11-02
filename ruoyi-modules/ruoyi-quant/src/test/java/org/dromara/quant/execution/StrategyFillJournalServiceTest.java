@@ -186,6 +186,27 @@ class StrategyFillJournalServiceTest {
 
 
     @Test
+    void projectionFailureKeepsFillPendingAfterTradeAttributionBackfill() {
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(null);
+        when(journal.insertRaw(any())).thenReturn(1);
+        when(journal.updateStatus(anyLong(), anyString(), any())).thenReturn(1);
+        when(trades.backfillStrategyAttribution(1L, "BTCUSDT", 101L, 202L, 3L, 4L)).thenReturn(1);
+        doThrow(new IllegalStateException("No immutable strategy execution intent")).when(projections).projectAttributed(eq(1L), any(), any());
+        var order = new QuantOrder();
+        order.setCredentialId(1L);
+        order.setSymbol("BTCUSDT");
+        order.setExchangeOrderId(202L);
+        order.setStrategyId(3L);
+        order.setStrategyInstanceId(4L);
+
+        assertEquals("PENDING_FACTS", service.attribute(fill(), order, 1L));
+
+        verify(projections).projectAttributed(1L, order, fill());
+        verify(journal).updateStatus(anyLong(), eq("PENDING_FACTS"), contains("immutable"));
+        verify(journal, never()).updateStatus(anyLong(), eq("ATTRIBUTED"), isNull());
+    }
+
+    @Test
     void tradeAttributionBackfillFillsMissingColumnsWithoutOverwritingConflictingValues() throws Exception {
         var method = org.dromara.quant.account.mapper.QuantTradeMapper.class.getMethod("backfillStrategyAttribution",
             Long.class, String.class, Long.class, Long.class, Long.class, Long.class);
