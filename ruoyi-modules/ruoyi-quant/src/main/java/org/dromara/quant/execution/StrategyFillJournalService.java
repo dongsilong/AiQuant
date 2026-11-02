@@ -4,9 +4,12 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.account.domain.QuantTrade;
+import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.execution.mapper.StrategyFillJournalMapper;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
@@ -36,6 +39,8 @@ public class StrategyFillJournalService {
     private final StrategyFillJournalMapper journal;
     private final StrategyFillAllocationService allocations;
     private final QuantOrderMapper orders;
+    @Autowired
+    private QuantTradeMapper trades;
 
     /** Persist the immutable exchange fact, then attempt exact strategy attribution. */
     public String attribute(ExchangeGateway.TradeSnapshot fill, QuantOrder order, Long credentialId) {
@@ -52,6 +57,7 @@ public class StrategyFillJournalService {
         }
         try {
             allocations.allocate(fill, order, credentialId);
+            backfillTradeAttribution(record, order, credentialId);
             return updateStatus(record, ATTRIBUTED, null);
         } catch (IllegalStateException incomplete) {
             String message = safeReason(incomplete.getMessage());
@@ -60,6 +66,32 @@ public class StrategyFillJournalService {
             }
             String status = message.contains("与新事实冲突") ? CONFLICT : PENDING_FACTS;
             return updateStatus(record, status, message);
+        }
+    }
+
+    /**
+     * Delayed attribution must also repair the ordinary trade ledger, using the immutable exchange fill identity.
+     */
+    private void backfillTradeAttribution(StrategyFillJournalRecord record, QuantOrder order, Long credentialId) {
+        if (record.getExchangeOrderId() == null || record.getExchangeTradeId() == null) {
+            throw new IllegalStateException("成交缺少精确交易所订单或成交身份，无法回写普通成交账本");
+        }
+        int updated = trades.backfillStrategyAttribution(credentialId, record.getSymbol(), record.getExchangeTradeId(),
+            record.getExchangeOrderId(), order.getStrategyId(), order.getStrategyInstanceId());
+        if (updated == 1) {
+            return;
+        }
+        QuantTrade existing = trades.selectOne(new LambdaQueryWrapper<QuantTrade>()
+            .eq(QuantTrade::getCredentialId, credentialId)
+            .eq(QuantTrade::getSymbol, record.getSymbol())
+            .eq(QuantTrade::getExchangeTradeId, record.getExchangeTradeId())
+            .eq(QuantTrade::getExchangeOrderId, record.getExchangeOrderId()));
+        if (existing == null) {
+            throw new IllegalStateException("普通成交账本尚无对应精确成交记录，等待下一轮归属重试");
+        }
+        if (!Objects.equals(existing.getStrategyId(), order.getStrategyId())
+            || !Objects.equals(existing.getStrategyInstanceId(), order.getStrategyInstanceId())) {
+            throw new IllegalStateException("普通成交策略归属与新事实冲突，禁止覆盖已有归属");
         }
     }
 
