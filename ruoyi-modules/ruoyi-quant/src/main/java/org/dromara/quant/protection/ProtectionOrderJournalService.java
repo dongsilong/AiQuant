@@ -3,6 +3,9 @@ package org.dromara.quant.protection;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.account.domain.QuantTrade;
+import org.dromara.quant.account.mapper.QuantTradeMapper;
+import org.dromara.quant.execution.mapper.StrategyFillAllocationMapper;
 import org.dromara.quant.execution.StrategyOrderIntentService;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
@@ -23,6 +26,8 @@ public class ProtectionOrderJournalService {
     private final QuantProtectionOrderMapper protections;
     private final QuantOrderMapper orders;
     private final StrategyOrderIntentService intents;
+    private final QuantTradeMapper trades;
+    private final StrategyFillAllocationMapper allocations;
 
     /** 发送之前随保护意图保存来源；不能证明历史周期的记录保持未归属。 */
     public void captureOwner(QuantProtectionOrder local) {
@@ -59,6 +64,7 @@ public class ProtectionOrderJournalService {
             || local.getExchangeOrderId() != null && !local.getExchangeOrderId().equals(actual.algoId())
             || !local.getSymbol().equalsIgnoreCase(actual.symbol()) || !local.getSymbol().equalsIgnoreCase(child.symbol())
             || child.clientOrderId() == null || child.clientOrderId().isBlank()
+            || child.executedQuantity() == null || child.executedQuantity().signum() < 0
             || local.getQuantity() == null || actual.quantity() == null || local.getQuantity().compareTo(actual.quantity()) != 0
             || local.getStopPrice() == null || actual.triggerPrice() == null || local.getStopPrice().compareTo(actual.triggerPrice()) != 0
             || local.getOrderType() == null || !local.getOrderType().equalsIgnoreCase(actual.type())
@@ -126,6 +132,36 @@ public class ProtectionOrderJournalService {
                 local.getPositionSide(), child.clientOrderId(), true);
             intents.record(local.getCredentialId(), local.getStrategyId(), local.getStrategyInstanceId(), "CLOSE", request,
                 new ExchangeGateway.OrderResult(child.orderId(), child.clientOrderId(), child.status()));
+        }
+
+        // The algo-order quantity and its child-order fill ledger are two views of the same execution.
+        // Keep the protection unresolved until every child fill is present and attributed exactly once.
+        var fills = trades.selectList(new LambdaQueryWrapper<QuantTrade>()
+            .eq(QuantTrade::getCredentialId, local.getCredentialId())
+            .eq(QuantTrade::getSymbol, local.getSymbol())
+            .eq(QuantTrade::getExchangeOrderId, child.orderId()));
+        BigDecimal ordinaryExecuted = BigDecimal.ZERO;
+        for (QuantTrade fill : fills) {
+            if (fill.getQuantity() == null || fill.getQuantity().signum() <= 0
+                || !Objects.equals(fill.getStrategyId(), local.getStrategyId())
+                || !Objects.equals(fill.getStrategyInstanceId(), local.getStrategyInstanceId())
+                || !child.side().equalsIgnoreCase(Objects.toString(fill.getSide(), ""))) {
+                return false;
+            }
+            ordinaryExecuted = ordinaryExecuted.add(fill.getQuantity());
+        }
+        if (ordinaryExecuted.compareTo(child.executedQuantity()) != 0) {
+            return false;
+        }
+        if ("LIVE".equalsIgnoreCase(credential.runMode())) {
+            var allocation = allocations.summarizeOrderFills(local.getCredentialId(), local.getSymbol(), child.orderId(),
+                local.getStrategyId(), local.getStrategyInstanceId());
+            if (allocation == null || !(allocation.get("allocated_qty") instanceof Number allocated)
+                || !(allocation.get("conflicting_owner_count") instanceof Number conflicts)
+                || new java.math.BigDecimal(allocated.toString()).compareTo(child.executedQuantity()) != 0
+                || conflicts.longValue() != 0) {
+                return false;
+            }
         }
         return true;
     }
