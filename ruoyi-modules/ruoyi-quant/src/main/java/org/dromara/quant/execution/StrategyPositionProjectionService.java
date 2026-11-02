@@ -147,6 +147,24 @@ public class StrategyPositionProjectionService {
         return intent;
     }
 
+    private void persistFeeEvent(long credentialId, String symbol, long strategyId, long instanceId, long cycleId, long tradeId, long orderId,
+                                 String side, BigDecimal fee, String feeAsset, LocalDateTime tradeTime) {
+        Map<String, Object> existing = mapper.existingFee(credentialId, symbol, tradeId);
+        if (existing != null) {
+            if (asLong(existing, "strategy_id") != strategyId || asLong(existing, "strategy_instance_id") != instanceId
+                || asLong(existing, "cycle_id") != cycleId || asLong(existing, "exchange_order_id") != orderId
+                || !side.equals(existing.get("position_side")) || decimal(existing, "commission").compareTo(fee) != 0
+                || !feeAsset.equals(existing.get("commission_asset")) || !tradeTime.equals(time(existing, "trade_time"))) {
+                throw new IllegalStateException("Strategy fee event conflicts with immutable exchange fill");
+            }
+            return;
+        }
+        if (mapper.insertFee(IdWorker.getId(), credentialId, symbol, strategyId, instanceId, cycleId, tradeId, orderId,
+            side, fee, feeAsset, tradeTime) != 1) {
+            throw new IllegalStateException("Cannot persist immutable strategy fee event");
+        }
+    }
+
     /**
      * 将归属确定的成交投影到账户内对应的策略持仓状态。
      */
@@ -186,6 +204,8 @@ public class StrategyPositionProjectionService {
                 if (asLong(previous, "strategy_id") != strategyId || asLong(previous, "strategy_instance_id") != instanceId || asLong(previous, "exchange_order_id") != trade.orderId() || !positionSide.name().equals(previous.get("position_side")) || !verifiedRole.name().equals(previous.get("fill_role")) || !trade.side().equalsIgnoreCase(String.valueOf(previous.get("exchange_side"))) || decimal(previous, "quantity").compareTo(trade.quantity()) != 0 || decimal(previous, "fill_price").compareTo(trade.price()) != 0 || decimal(previous, "commission").compareTo(trade.commission()) != 0 || !feeAsset.equals(previous.get("commission_asset")) || decimal(previous, "realized_pnl").compareTo(trade.realizedPnl()) != 0 || !when.equals(time(previous, "trade_time"))) {
                     throw new IllegalStateException("Exchange trade replay conflicts with immutable attribution");
                 }
+                persistFeeEvent(credentialId, symbol, strategyId, instanceId, asLong(previous, "cycle_id"), trade.tradeId(), trade.orderId(),
+                    positionSide.name(), trade.commission(), feeAsset, when);
                 return;
             }
             LocalDateTime previousTime = time(row, "last_trade_time");
@@ -193,12 +213,8 @@ public class StrategyPositionProjectionService {
             if (previousTime != null && (when.isBefore(previousTime) || when.equals(previousTime) && previousId != null && trade.tradeId() <= previousId)) {
                 throw new IllegalStateException("Unordered historical fill; reconstruct from verified history first");
             }
-            Object originalAsset = row.get("commission_asset");
-            if (originalAsset != null && !feeAsset.equals(originalAsset)) {
-                throw new IllegalStateException("Mixed commission assets require separate financial ledgers");
-            }
-            var current = new StrategyPositionAccounting.State(decimal(row, "open_quantity"), decimal(row, "cost_basis"), decimal(row, "realized_pnl"), decimal(row, "commissions"
-            ), asLong(row, "cycle_number"));
+            var current = new StrategyPositionAccounting.State(decimal(row, "open_quantity"), decimal(row, "cost_basis"), decimal(row, "realized_pnl"), BigDecimal.ZERO,
+                asLong(row, "cycle_number"));
             var next = StrategyPositionAccounting.apply(current, fact);
             Long cycleId = row.get("cycle_id") == null ? null : asLong(row, "cycle_id");
             if (verifiedRole == StrategyPositionAccounting.Role.OPEN && current.openQuantity().signum() == 0) {
@@ -214,14 +230,16 @@ public class StrategyPositionProjectionService {
                 verifiedRole.name(), trade.side().toUpperCase(Locale.ROOT), trade.quantity(), trade.price(), trade.commission(), feeAsset, trade.realizedPnl(), when) != 1) {
                 throw new IllegalStateException("Cannot persist immutable fill event");
             }
+            persistFeeEvent(credentialId, symbol, strategyId, instanceId, cycleId, trade.tradeId(), trade.orderId(), positionSide.name(),
+                trade.commission(), feeAsset, when);
             if (verifiedRole == StrategyPositionAccounting.Role.CLOSE && next.openQuantity().signum() == 0) {
                 if (mapper.closeCycle(cycleId, when) != 1) {
                     throw new IllegalStateException("Cannot close position cycle");
                 }
                 cycleId = null;
             }
-            if (mapper.update(credentialId, symbol, instanceId, positionSide.name(), strategyId, next.openQuantity(), next.costBasis(), next.realizedPnl(), next.commissions(),
-                feeAsset, next.cycle(), cycleId, when, trade.tradeId()) != 1) {
+            if (mapper.update(credentialId, symbol, instanceId, positionSide.name(), strategyId, next.openQuantity(), next.costBasis(), next.realizedPnl(),
+                next.cycle(), cycleId, when, trade.tradeId()) != 1) {
                 throw new IllegalStateException("Inventory CAS failed");
             }
         });
