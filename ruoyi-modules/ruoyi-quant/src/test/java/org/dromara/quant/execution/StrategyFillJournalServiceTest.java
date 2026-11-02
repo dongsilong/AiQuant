@@ -1,9 +1,11 @@
 package org.dromara.quant.execution;
 
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.execution.mapper.StrategyFillJournalMapper;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -20,7 +22,13 @@ class StrategyFillJournalServiceTest {
     private final StrategyFillJournalMapper journal = mock(StrategyFillJournalMapper.class);
     private final StrategyFillAllocationService allocations = mock(StrategyFillAllocationService.class);
     private final QuantOrderMapper orders = mock(QuantOrderMapper.class);
+    private final QuantTradeMapper trades = mock(QuantTradeMapper.class);
     private final StrategyFillJournalService service = new StrategyFillJournalService(journal, allocations, orders);
+
+    @BeforeEach
+    void setup() {
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "trades", trades);
+    }
 
     private ExchangeGateway.TradeSnapshot fill() {
         return new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN, null, null, Instant.parse("2026-10-17T00:00:00.123Z"), null);
@@ -158,6 +166,7 @@ class StrategyFillJournalServiceTest {
         when(journal.selectPending(1L, 100)).thenReturn(java.util.List.of(stored));
         when(journal.selectByKey(1L, "BTCUSDT", fill.tradeId())).thenReturn(stored);
         when(journal.updateStatus(77L, "ATTRIBUTED", null)).thenReturn(1);
+        when(trades.backfillStrategyAttribution(1L, "BTCUSDT", 101L, 202L, 3L, 4L)).thenReturn(1);
         var order = new QuantOrder();
         order.setCredentialId(1L);
         order.setSymbol("BTCUSDT");
@@ -169,6 +178,7 @@ class StrategyFillJournalServiceTest {
         assertEquals(1, service.retryPending(1L));
 
         verify(allocations).allocate(fill, order, 1L);
+        verify(trades).backfillStrategyAttribution(1L, "BTCUSDT", 101L, 202L, 3L, 4L);
         verify(journal).updateStatus(77L, "ATTRIBUTED", null);
     }
 
