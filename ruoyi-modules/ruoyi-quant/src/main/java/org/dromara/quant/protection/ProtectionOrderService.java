@@ -1318,7 +1318,7 @@ public class ProtectionOrderService {
         if ("MISSING".equals(order.getStatus()) && !live) {
             return true;
         }
-        if (cancelProtected(credentialId, order, live, Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED"), false)) {
+        if (cancelProtected(credentialId, order, live, Set.of("CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED", "FINISHED"), false)) {
             return true;
         }
         // No terminal exchange fact means cancellation is still unresolved; do not
@@ -1338,7 +1338,7 @@ public class ProtectionOrderService {
         if (child != null && protectionJournal != null) {
             protectionJournal.bindChild(credential, order, actual, child);
         }
-        if (child == null || child.executedQuantity() == null || !Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(child.status())) {
+        if (child == null || child.executedQuantity() == null || !Set.of("FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED").contains(child.status())) {
             throw new ProtectionExecutionPendingException();
         }
         return new ExchangeGateway.ProtectionOrderSnapshot(actual.symbol(), actual.algoId(), actual.clientAlgoId(), "FINISHED", actual.side(), actual.positionSide(),
@@ -1461,7 +1461,7 @@ public class ProtectionOrderService {
                 position.getId()).eq(QuantProtectionOrder::getPositionCycleKey, position.getProtectionCycleKey()).in(QuantProtectionOrder::getProtectionType, "HARD_STOP",
                 "LOCAL_STOP", "SYMBOL_STOP", "FIRST_TP", "STEP_TP").in(QuantProtectionOrder::getStatus, ACTIVE_STATUSES));
         for (QuantProtectionOrder order : orders) {
-            if (!cancelProtected(credentialId, order, true, Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED"), false)) {
+            if (!cancelProtected(credentialId, order, true, Set.of("CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED", "FINISHED"), false)) {
                 return false;
             }
         }
