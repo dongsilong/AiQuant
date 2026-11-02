@@ -95,6 +95,24 @@ public class StrategyPositionProjectionService {
     }
 
     /**
+     * 重新验证成交对应的不可变订单意图，并返回受服务端意图约束的持仓方向和开平角色。
+     */
+    public VerifiedAttribution resolveVerifiedAttribution(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade) {
+        Map<String, Object> intent = resolveIntent(credentialId, verifiedOrder, trade);
+        try {
+            return new VerifiedAttribution(
+                StrategyPositionAccounting.PositionSide.valueOf(String.valueOf(intent.get("position_side"))),
+                StrategyPositionAccounting.Role.valueOf(String.valueOf(intent.get("fill_role"))));
+        } catch (IllegalArgumentException invalidIntent) {
+            throw new IllegalStateException("Immutable strategy execution intent has an unsupported position side or fill role", invalidIntent);
+        }
+    }
+
+    /** 不可变订单意图验证后得到的成交归属。 */
+    public record VerifiedAttribution(StrategyPositionAccounting.PositionSide positionSide, StrategyPositionAccounting.Role role) {
+    }
+
+    /**
      * Resolve OPEN/CLOSE and LONG/SHORT only from the immutable accepted-order intent.
      */
     public void projectAttributed(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade) {
