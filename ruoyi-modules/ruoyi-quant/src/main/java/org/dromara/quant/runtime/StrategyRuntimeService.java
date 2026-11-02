@@ -15,6 +15,7 @@ import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.dromara.quant.execution.ExecutionRecordService;
 import org.dromara.quant.execution.ExecutionResult;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
+import org.dromara.quant.execution.StrategyPositionProjectionService;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.market.MarketStreamHub;
 import org.dromara.quant.market.UserDataStreamHub;
@@ -177,6 +178,8 @@ public class StrategyRuntimeService {
     private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
     @Autowired
     private StrategyPositionPerformanceHub positionPerformanceHub;
+    @Autowired
+    private StrategyPositionProjectionService positionProjectionService;
 
     /**
      * 返回运行时生效的保证金模式；交易对覆盖优先于策略默认值。
@@ -708,6 +711,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 QuantPosition previousPosition = runtime.position;
                 runtime.position = refreshed;
                 if (runtime.position != null) {
+                    if (!hasExclusiveStrategyInventory(runtime)) {
+                        blockUnownedAccountExposure(runtime, "exchange-position-reconciliation");
+                        return;
+                    }
                     // 交易所确认当前仍有持仓时，不能继续沿用“空仓后的保护单清理”状态。
                     runtime.protectionCleanupPending = false;
                     if (previousPosition != null && previousPosition.getQuantity() != null && runtime.position.getQuantity() != null && runtime.position.getQuantity().compareTo(previousPosition.getQuantity()) < 0) {
@@ -1000,6 +1007,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         if (runtime.position != null && runtime.state == null) {
             runtime.state = recoverState(runtime);
+        }
+        if (runtime.position != null && !hasExclusiveStrategyInventory(runtime)) {
+            blockUnownedAccountExposure(runtime, "strategy-startup");
         }
         if (runtime.position != null && !hasFrozenProtectionFacts(runtime)) {
             runtime.state.setRecoveryRequired(true);
@@ -3402,6 +3412,32 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     }
 
     /**
+     * 账户级净持仓只有在可证明完全属于当前策略实例时，才允许进入策略运行状态。
+     * 多策略共享净持仓或存在人工交易残差时，保持恢复阻断，不把账户总量分摊给当前策略。
+     */
+    private boolean hasExclusiveStrategyInventory(ActiveRuntime runtime) {
+        if ("PAPER".equalsIgnoreCase(runtime.credential.getRunMode())) {
+            return true;
+        }
+        return runtime.state != null && runtime.position != null
+            && positionProjectionService.matchesExclusiveInventory(runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.strategy.getId(),
+                runtime.instance.getId(), runtime.state.getDirection(), runtime.position.getQuantity());
+    }
+
+    private void blockUnownedAccountExposure(ActiveRuntime runtime, String source) {
+        if (runtime.state == null) {
+            return;
+        }
+        runtime.state.setRecoveryRequired(true);
+        runtime.state.setUnsafeRecovery(true);
+        runtime.positionFactsReady = false;
+        runtime.positionReconciliationBlockReason = "STRATEGY_ACCOUNT_INVENTORY_MISMATCH";
+        stateService.save(runtime.state);
+        log.error("账户持仓无法证明完全归属当前策略实例，暂停自动持仓管理 instanceId={} credentialId={} symbol={} source={}",
+            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), source);
+    }
+
+    /**
      * 将运行时策略状态与已核验的账户持仓事实对齐。
      */
     private void syncRuntimeStateWithPosition(ActiveRuntime runtime, boolean firstTpFilled) {
@@ -3410,6 +3446,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         }
         if (runtime.state == null) {
             runtime.state = recoverState(runtime);
+        }
+        if (!hasExclusiveStrategyInventory(runtime)) {
+            blockUnownedAccountExposure(runtime, "runtime-state-sync");
+            return;
         }
         if (runtime.state.getPositionId() == null || !runtime.position.getId().equals(runtime.state.getPositionId())) {
             runtime.state.setPositionId(runtime.position.getId());
