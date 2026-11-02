@@ -118,14 +118,14 @@ public class ExecutionRecoveryService {
                         // identity changing unexpectedly. Keep UNKNOWN, block dispatch.
                         throw new IllegalStateException("Binance recovery returned conflicting order identity");
                     }
-                    if ("CANCEL".equalsIgnoreCase(record.getOperationType()) && ("CANCELED".equalsIgnoreCase(exact.status()) || "EXPIRED".equalsIgnoreCase(exact.status()) ||
+                    if ("CANCEL".equalsIgnoreCase(record.getOperationType()) && ("CANCELED".equalsIgnoreCase(exact.status()) || "EXPIRED".equalsIgnoreCase(exact.status()) || "EXPIRED_IN_MATCH".equalsIgnoreCase(exact.status()) ||
                         "FILLED".equalsIgnoreCase(exact.status()) || "REJECTED".equalsIgnoreCase(exact.status())) && (exact.executedQuantity() == null || exact.executedQuantity().signum() < 0 || exact.originalQuantity() == null || exact.originalQuantity().signum() <= 0 || exact.executedQuantity().compareTo(exact.originalQuantity()) > 0)) {
                         throw new IllegalStateException("取消恢复缺少可信的累计成交数量，不得解除调度占用");
                     }
                     syncExchangeWithProvenance(credential, record, exact);
                     if ("CANCEL".equalsIgnoreCase(record.getOperationType())) {
                         String status = exact.status();
-                        if ("CANCELED".equalsIgnoreCase(status) || "EXPIRED".equalsIgnoreCase(status) || "REJECTED".equalsIgnoreCase(status)) {
+                        if ("CANCELED".equalsIgnoreCase(status) || "EXPIRED".equalsIgnoreCase(status) || "EXPIRED_IN_MATCH".equalsIgnoreCase(status) || "REJECTED".equalsIgnoreCase(status)) {
                             recordService.markRecovered(record, exact.orderId(), exact.status());
                         } else if ("FILLED".equalsIgnoreCase(status)) {
                             recordService.markRecovered(record, exact.orderId(), exact.status());
@@ -243,7 +243,7 @@ public class ExecutionRecoveryService {
      * order ledger must all agree before releasing the durable LIVE dispatch slot.
      */
     private void releaseRecoveredTicket(QuantCredential credential, QuantExecutionRecord record, ExchangeGateway.OrderSnapshot snapshot) {
-        if (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || liveOrderDispatcher == null || !"RECOVERED".equals(record.getExecutionStatus()) || record.getClientOrderId() == null || !record.getClientOrderId().equals(snapshot.clientOrderId()) || snapshot.orderId() == null || snapshot.symbol() == null || !record.getSymbol().equalsIgnoreCase(snapshot.symbol()) || "CANCEL".equalsIgnoreCase(record.getOperationType()) && (snapshot.originalQuantity() == null || snapshot.originalQuantity().signum() <= 0 || snapshot.executedQuantity() == null || snapshot.executedQuantity().signum() < 0 || snapshot.executedQuantity().compareTo(snapshot.originalQuantity()) > 0) || "CANCEL".equalsIgnoreCase(record.getOperationType()) && !java.util.Set.of("CANCELED", "EXPIRED", "FILLED", "REJECTED").contains(snapshot.status() == null ? "" : snapshot.status().toUpperCase(java.util.Locale.ROOT))) {
+        if (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || liveOrderDispatcher == null || !"RECOVERED".equals(record.getExecutionStatus()) || record.getClientOrderId() == null || !record.getClientOrderId().equals(snapshot.clientOrderId()) || snapshot.orderId() == null || snapshot.symbol() == null || !record.getSymbol().equalsIgnoreCase(snapshot.symbol()) || "CANCEL".equalsIgnoreCase(record.getOperationType()) && (snapshot.originalQuantity() == null || snapshot.originalQuantity().signum() <= 0 || snapshot.executedQuantity() == null || snapshot.executedQuantity().signum() < 0 || snapshot.executedQuantity().compareTo(snapshot.originalQuantity()) > 0) || "CANCEL".equalsIgnoreCase(record.getOperationType()) && !java.util.Set.of("CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "FILLED", "REJECTED").contains(snapshot.status() == null ? "" : snapshot.status().toUpperCase(java.util.Locale.ROOT))) {
             return;
         }
         liveOrderDispatcher.recoveredFromExchange(record.getCredentialId(), record.getSymbol(), record.getIdempotencyKey(), record.getClientOrderId(), snapshot.orderId());
