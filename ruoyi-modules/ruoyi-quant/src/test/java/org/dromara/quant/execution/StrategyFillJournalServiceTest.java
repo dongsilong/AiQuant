@@ -207,6 +207,24 @@ class StrategyFillJournalServiceTest {
     }
 
     @Test
+    void immutableIntentConflictIsQuarantinedInsteadOfRetriedAsMissingFacts() {
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(null);
+        when(journal.insertRaw(any())).thenReturn(1);
+        when(journal.updateStatus(anyLong(), anyString(), any())).thenReturn(1);
+        var order = new QuantOrder();
+        order.setCredentialId(1L);
+        order.setSymbol("BTCUSDT");
+        order.setExchangeOrderId(202L);
+        order.setStrategyId(3L);
+        order.setStrategyInstanceId(4L);
+        doThrow(new IllegalStateException("策略订单意图与成交新事实冲突")).when(projections).verifyAttribution(1L, order, fill());
+
+        assertEquals("CONFLICT", service.attribute(fill(), order, 1L));
+        verifyNoInteractions(allocations);
+        verify(journal).updateStatus(anyLong(), eq("CONFLICT"), contains("新事实冲突"));
+    }
+
+    @Test
     void projectionFailureKeepsFillPendingAfterTradeAttributionBackfill() {
         when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(null);
         when(journal.insertRaw(any())).thenReturn(1);
