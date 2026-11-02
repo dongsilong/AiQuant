@@ -1377,8 +1377,8 @@ public class ProtectionOrderService {
             return actual;
         }
         ExchangeGateway.OrderSnapshot child = gateway.queryOrder(credential, order.getSymbol(), actual.actualOrderId(), null);
-        if (child != null && protectionJournal != null) {
-            protectionJournal.bindChild(credential, order, actual, child);
+        if (child != null && protectionJournal != null && !protectionJournal.bindChild(credential, order, actual, child)) {
+            throw new ProtectionExecutionPendingException();
         }
         if (child == null || child.executedQuantity() == null || !Set.of("FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED").contains(child.status())) {
             throw new ProtectionExecutionPendingException();
