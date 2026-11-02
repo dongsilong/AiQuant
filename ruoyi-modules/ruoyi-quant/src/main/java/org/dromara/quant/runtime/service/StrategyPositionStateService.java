@@ -66,7 +66,13 @@ public class StrategyPositionStateService {
      * 返回仍需监管的持仓或待确认执行，支持应用重启恢复。
      */
     public java.util.List<QuantStrategyPositionState> findUnclosed() {
-        return mapper.selectList(new LambdaQueryWrapper<QuantStrategyPositionState>().ne(QuantStrategyPositionState::getStatus, "CLOSED").and(query -> query.gt(QuantStrategyPositionState::getPositionQty, BigDecimal.ZERO).or().isNotNull(QuantStrategyPositionState::getPendingAction).or().eq(QuantStrategyPositionState::getStatus, "PROTECTION_CLEANUP")));
+        return mapper.selectList(new LambdaQueryWrapper<QuantStrategyPositionState>().and(query -> query
+            .ne(QuantStrategyPositionState::getStatus, "CLOSED")
+            .and(open -> open.gt(QuantStrategyPositionState::getPositionQty, BigDecimal.ZERO)
+                .or().isNotNull(QuantStrategyPositionState::getPendingAction)
+                .or().eq(QuantStrategyPositionState::getStatus, "PROTECTION_CLEANUP"))
+            .or().eq(QuantStrategyPositionState::getRecoveryRequired, true)
+            .or().eq(QuantStrategyPositionState::getUnsafeRecovery, true)));
     }
 
     /**
