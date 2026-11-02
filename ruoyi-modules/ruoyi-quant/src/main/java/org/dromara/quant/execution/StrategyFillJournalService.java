@@ -67,7 +67,7 @@ public class StrategyFillJournalService {
             if (message == null) {
                 message = "成交归属校验未通过";
             }
-            String status = message.contains("与新事实冲突") ? CONFLICT : PENDING_FACTS;
+            String status = message.contains("冲突") || message.contains("unsupported") ? CONFLICT : PENDING_FACTS;
             return updateStatus(record, status, message);
         }
     }
