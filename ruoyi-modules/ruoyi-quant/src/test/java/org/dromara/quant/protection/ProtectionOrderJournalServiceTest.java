@@ -55,7 +55,7 @@ class ProtectionOrderJournalServiceTest {
     }
 
     @Test
-    void childRetainsFrozenOwnerAfterRuntimeHasMovedToAnotherCycle() {
+    void oneWayChildRetainsFrozenDirectionAndRecordsImmutableCloseRole() {
         when(orders.insert(any(QuantOrder.class))).thenReturn(1);
         assertTrue(journal.bindChild(credential, local(), actual("BOTH"), child(91L)));
         var saved = org.mockito.ArgumentCaptor.forClass(QuantOrder.class);
@@ -64,7 +64,10 @@ class ProtectionOrderJournalServiceTest {
         assertEquals(3L, saved.getValue().getStrategyInstanceId());
         assertEquals(91L, saved.getValue().getExchangeOrderId());
         assertTrue(saved.getValue().getReduceOnly());
-        verifyNoInteractions(protections, intents);
+        assertEquals("LONG", saved.getValue().getPositionSide());
+        verify(intents).record(eq(1L), eq(2L), eq(3L), eq("CLOSE"),
+            argThat(request -> request.reduceOnly() && "LONG".equals(request.positionSide())), any());
+        verifyNoInteractions(protections);
     }
 
     @Test
@@ -133,5 +136,6 @@ class ProtectionOrderJournalServiceTest {
         var saved = org.mockito.ArgumentCaptor.forClass(QuantOrder.class);
         verify(orders).updateById(saved.capture());
         assertEquals("EXPIRED_IN_MATCH", saved.getValue().getStatus());
+        assertEquals("LONG", saved.getValue().getPositionSide());
     }
 }
