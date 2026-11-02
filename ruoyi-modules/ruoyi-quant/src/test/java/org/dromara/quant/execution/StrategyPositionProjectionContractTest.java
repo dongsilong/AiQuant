@@ -25,7 +25,12 @@ class StrategyPositionProjectionContractTest {
         assertTrue(xml.contains("quant_strategy_order_intent"));
         assertTrue(xml.contains("exchange_order_id=#{orderId}"));
         assertTrue(xml.contains("exchange_trade_id=#{tradeId}"));
-        assertTrue(xml.contains("quant_strategy_position_fill_event"));\n        assertTrue(xml.contains("quant_strategy_position_fee_event"));\n        assertTrue(xml.contains("id=\"existingFee\""));\n        assertTrue(xml.contains("id=\"insertFee\""));\n        assertTrue(xml.contains("commission_asset=#{feeAsset}"));\n        assertTrue(!xml.contains("commission_asset IS NULL OR commission_asset=#{feeAsset}"));
+        assertTrue(xml.contains("quant_strategy_position_fill_event"));
+        assertTrue(xml.contains("quant_strategy_position_fee_event"));
+        assertTrue(xml.contains("id=\"existingFee\""));
+        assertTrue(xml.contains("id=\"insertFee\""));
+        assertTrue(xml.contains("commission_asset=#{feeAsset}"));
+        assertTrue(!xml.contains("commission_asset IS NULL OR commission_asset=#{feeAsset}"));
         assertTrue(xml.contains("quant_strategy_position_inventory"));
         assertTrue(xml.contains("strategy_instance_id=#{instanceId}"));
         assertTrue(xml.contains("id=\"ownershipSnapshot\""));
