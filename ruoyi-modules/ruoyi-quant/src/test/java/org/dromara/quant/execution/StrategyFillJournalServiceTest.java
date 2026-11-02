@@ -24,11 +24,15 @@ class StrategyFillJournalServiceTest {
     private final QuantOrderMapper orders = mock(QuantOrderMapper.class);
     private final StrategyPositionProjectionService projections = mock(StrategyPositionProjectionService.class);
     private final QuantTradeMapper trades = mock(QuantTradeMapper.class);
-    private final StrategyFillJournalService service = new StrategyFillJournalService(journal, allocations, projections, orders);
+    private final StrategyPositionRebuildService rebuilds = mock(StrategyPositionRebuildService.class);
+    private final StrategyFillJournalService service = new StrategyFillJournalService(journal, allocations, projections, orders, rebuilds);
 
     @BeforeEach
     void setup() {
         org.springframework.test.util.ReflectionTestUtils.setField(service, "trades", trades);
+        when(projections.resolveVerifiedAttribution(anyLong(), any(), any())).thenReturn(
+            new StrategyPositionProjectionService.VerifiedAttribution(
+                StrategyPositionAccounting.PositionSide.LONG, StrategyPositionAccounting.Role.OPEN));
     }
 
     private ExchangeGateway.TradeSnapshot fill() {
@@ -178,13 +182,37 @@ class StrategyFillJournalServiceTest {
 
         assertEquals(1, service.retryPending(1L));
 
-        verify(projections).verifyAttribution(1L, order, fill);
+        verify(projections).resolveVerifiedAttribution(1L, order, fill);
         verify(allocations).allocate(fill, order, 1L);
         verify(trades).backfillStrategyAttribution(1L, "BTCUSDT", 101L, 202L, 3L, 4L);
-        verify(projections).projectAttributed(1L, order, fill);
+        verify(projections).projectAttributed(eq(1L), eq(order), eq(fill), any(StrategyPositionProjectionService.VerifiedAttribution.class));
         verify(journal).updateStatus(77L, "ATTRIBUTED", null);
     }
 
+
+    @Test
+    void attributedCloseFillInvalidatesAnActiveRebuildBeforeProjection() {
+        var closeFill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "SELL", BigDecimal.ONE, BigDecimal.TEN,
+            BigDecimal.ZERO, BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00.123Z"), "USDT");
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(null);
+        when(journal.insertRaw(any())).thenReturn(1);
+        when(journal.updateStatus(anyLong(), anyString(), any())).thenReturn(1);
+        when(trades.backfillStrategyAttribution(1L, "BTCUSDT", 101L, 202L, 3L, 4L)).thenReturn(1);
+        var order = new QuantOrder();
+        order.setCredentialId(1L);
+        order.setSymbol("BTCUSDT");
+        order.setExchangeOrderId(202L);
+        order.setStrategyId(3L);
+        order.setStrategyInstanceId(4L);
+        var attribution = new StrategyPositionProjectionService.VerifiedAttribution(
+            StrategyPositionAccounting.PositionSide.LONG, StrategyPositionAccounting.Role.CLOSE);
+        when(projections.resolveVerifiedAttribution(1L, order, closeFill)).thenReturn(attribution);
+
+        assertEquals("ATTRIBUTED", service.attribute(closeFill, order, 1L));
+
+        verify(rebuilds).invalidateForAttributedClose(1L, "BTCUSDT");
+        verify(projections).projectAttributed(1L, order, closeFill, attribution);
+    }
 
     @Test
     void missingImmutableIntentPreventsAnyStrategyAllocation() {
@@ -197,13 +225,13 @@ class StrategyFillJournalServiceTest {
         order.setExchangeOrderId(202L);
         order.setStrategyId(3L);
         order.setStrategyInstanceId(4L);
-        doThrow(new IllegalStateException("No immutable strategy execution intent")).when(projections).verifyAttribution(1L, order, fill());
+        doThrow(new IllegalStateException("No immutable strategy execution intent")).when(projections).resolveVerifiedAttribution(1L, order, fill());
 
         assertEquals("PENDING_FACTS", service.attribute(fill(), order, 1L));
 
         verifyNoInteractions(allocations);
         verify(trades, never()).backfillStrategyAttribution(any(), anyString(), any(), any(), any(), any());
-        verify(projections, never()).projectAttributed(anyLong(), any(), any());
+        verify(projections, never()).projectAttributed(anyLong(), any(), any(), any());
     }
 
     @Test
@@ -217,7 +245,7 @@ class StrategyFillJournalServiceTest {
         order.setExchangeOrderId(202L);
         order.setStrategyId(3L);
         order.setStrategyInstanceId(4L);
-        doThrow(new IllegalStateException("策略订单意图与成交新事实冲突")).when(projections).verifyAttribution(1L, order, fill());
+        doThrow(new IllegalStateException("策略订单意图与成交新事实冲突")).when(projections).resolveVerifiedAttribution(1L, order, fill());
 
         assertEquals("CONFLICT", service.attribute(fill(), order, 1L));
         verifyNoInteractions(allocations);
@@ -230,7 +258,7 @@ class StrategyFillJournalServiceTest {
         when(journal.insertRaw(any())).thenReturn(1);
         when(journal.updateStatus(anyLong(), anyString(), any())).thenReturn(1);
         when(trades.backfillStrategyAttribution(1L, "BTCUSDT", 101L, 202L, 3L, 4L)).thenReturn(1);
-        doThrow(new IllegalStateException("No immutable strategy execution intent")).when(projections).projectAttributed(eq(1L), any(), any());
+        doThrow(new IllegalStateException("No immutable strategy execution intent")).when(projections).projectAttributed(eq(1L), any(), any(), any());
         var order = new QuantOrder();
         order.setCredentialId(1L);
         order.setSymbol("BTCUSDT");
@@ -240,7 +268,7 @@ class StrategyFillJournalServiceTest {
 
         assertEquals("PENDING_FACTS", service.attribute(fill(), order, 1L));
 
-        verify(projections).projectAttributed(1L, order, fill());
+        verify(projections).projectAttributed(eq(1L), eq(order), eq(fill()), any(StrategyPositionProjectionService.VerifiedAttribution.class));
         verify(journal).updateStatus(anyLong(), eq("PENDING_FACTS"), contains("immutable"));
         verify(journal, never()).updateStatus(anyLong(), eq("ATTRIBUTED"), isNull());
     }

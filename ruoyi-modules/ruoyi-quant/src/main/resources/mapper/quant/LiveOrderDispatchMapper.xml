@@ -39,10 +39,10 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
     <update id="invalidateRebuildForClose" timeout="3"><![CDATA[
 UPDATE quant_strategy_position_rebuild_run
 SET status='FAILED',active_run_key=NULL,
-    failure_reason='已发生平仓派单，库存重建任务自动失效',updated_at=NOW(3)
+    failure_reason='已发生平仓派单或成交，库存重建任务自动失效',updated_at=NOW(3)
 WHERE id=(SELECT rebuild_run_id FROM quant_live_dispatch_guard
           WHERE credential_id=#{credentialId} AND symbol=#{symbol})
-  AND status IN ('BUILDING','READY')
+  AND status IN ('PREPARING','BUILDING','READY')
 ]]></update>
     <update id="releaseRebuildForClose" timeout="3"><![CDATA[
 UPDATE quant_live_dispatch_guard SET rebuild_run_id=NULL,updated_at=NOW()

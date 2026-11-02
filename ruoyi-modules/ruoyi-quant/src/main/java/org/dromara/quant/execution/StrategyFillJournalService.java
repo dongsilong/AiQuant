@@ -40,6 +40,7 @@ public class StrategyFillJournalService {
     private final StrategyFillAllocationService allocations;
     private final StrategyPositionProjectionService projections;
     private final QuantOrderMapper orders;
+    private final StrategyPositionRebuildService rebuilds;
     @Autowired
     private QuantTradeMapper trades;
 
@@ -57,10 +58,14 @@ public class StrategyFillJournalService {
             return updateStatus(record, WAITING_ORDER, "未找到具有明确策略实例归属的本地订单");
         }
         try {
-            projections.verifyAttribution(credentialId, order, fill);
+            StrategyPositionProjectionService.VerifiedAttribution attribution =
+                projections.resolveVerifiedAttribution(credentialId, order, fill);
+            if (attribution.role() == StrategyPositionAccounting.Role.CLOSE) {
+                rebuilds.invalidateForAttributedClose(credentialId, fill.symbol());
+            }
             allocations.allocate(fill, order, credentialId);
             backfillTradeAttribution(record, order, credentialId);
-            projections.projectAttributed(credentialId, order, fill);
+            projections.projectAttributed(credentialId, order, fill, attribution);
             return updateStatus(record, ATTRIBUTED, null);
         } catch (IllegalStateException incomplete) {
             String message = safeReason(incomplete.getMessage());

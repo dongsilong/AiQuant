@@ -116,14 +116,16 @@ public class StrategyPositionProjectionService {
      * Resolve OPEN/CLOSE and LONG/SHORT only from the immutable accepted-order intent.
      */
     public void projectAttributed(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade) {
-        Map<String, Object> intent = resolveIntent(credentialId, verifiedOrder, trade);
-        try {
-            StrategyPositionAccounting.PositionSide positionSide = StrategyPositionAccounting.PositionSide.valueOf(String.valueOf(intent.get("position_side")));
-            StrategyPositionAccounting.Role role = StrategyPositionAccounting.Role.valueOf(String.valueOf(intent.get("fill_role")));
-            project(credentialId, verifiedOrder, trade, positionSide, role);
-        } catch (IllegalArgumentException invalidIntent) {
-            throw new IllegalStateException("Immutable strategy execution intent has an unsupported position side or fill role", invalidIntent);
+        projectAttributed(credentialId, verifiedOrder, trade, resolveVerifiedAttribution(credentialId, verifiedOrder, trade));
+    }
+
+    /** 已核验的不可变成交归属可在同一处理链路内复用，避免重复解析订单意图。 */
+    public void projectAttributed(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade,
+                                  VerifiedAttribution attribution) {
+        if (attribution == null) {
+            throw new IllegalStateException("Missing verified strategy fill attribution");
         }
+        project(credentialId, verifiedOrder, trade, attribution.positionSide(), attribution.role());
     }
 
     private Map<String, Object> resolveIntent(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade) {

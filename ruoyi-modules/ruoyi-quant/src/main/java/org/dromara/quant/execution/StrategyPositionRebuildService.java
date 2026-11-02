@@ -130,6 +130,24 @@ public class StrategyPositionRebuildService {
         }
     }
 
+    /**
+     * Binance 已确认的策略平仓成交（包括保护单子订单）会使正在进行的影子重建失效。
+     * 该事务与派单和最终提升共用账户交易对门禁及锁顺序。
+     */
+    public void invalidateForAttributedClose(long credentialId, String requestedSymbol) {
+        if (credentialId <= 0 || requestedSymbol == null || !requestedSymbol.matches("[A-Za-z0-9]{2,32}")) {
+            throw new IllegalArgumentException("有效的 credentialId 和 symbol 是必需的");
+        }
+        String symbol = requestedSymbol.toUpperCase(Locale.ROOT);
+        tx.executeWithoutResult(status -> {
+            Map<String, Object> gate = dispatches.lockGuard(credentialId, symbol);
+            if (gate != null && nullableLong(gate, "rebuildRunId") != null) {
+                dispatches.invalidateRebuildForClose(credentialId, symbol);
+                dispatches.releaseRebuildForClose(credentialId, symbol);
+            }
+        });
+    }
+
     /** 按成交时间和成交 ID 稳定分页重放一个批次。 */
     public RebuildProgress processNext(long runId) {
         if (runId <= 0) {
