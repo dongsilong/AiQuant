@@ -96,6 +96,21 @@ class ProtectionOrderJournalServiceTest {
     }
 
     @Test
+    void testnetChildRequiresOrdinaryFillsButDoesNotRequireLiveAllocationRows() {
+        var fill = new QuantTrade();
+        fill.setStrategyId(2L);
+        fill.setStrategyInstanceId(3L);
+        fill.setSide("SELL");
+        fill.setQuantity(BigDecimal.ONE);
+        when(trades.selectList(any())).thenReturn(List.of(fill));
+        when(orders.insert(any(QuantOrder.class))).thenReturn(1);
+
+        var testnet = new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET");
+        assertTrue(journal.bindChild(testnet, local(), actual("BOTH"), child(91L)));
+        verifyNoInteractions(allocations);
+    }
+
+    @Test
     void childWithMissingOrdinaryFillsRemainsUnresolved() {
         when(orders.insert(any(QuantOrder.class))).thenReturn(1);
         when(trades.selectList(any())).thenReturn(List.of());
