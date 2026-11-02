@@ -1018,6 +1018,8 @@ class ProtectionOrderServiceTest {
     void localFirstProfitFallbackRetainsWorkingStops() {
         var hard = scopedStop("HARD_STOP", "99");
         when(mapper.selectList(any())).thenReturn(List.of(hard));
+        when(mapper.updateExchangeFactIfUnchanged(any(), any(), any(), any(), nullable(Long.class), nullable(BigDecimal.class), any(), any(), any())).thenReturn(1);
+
         when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenReturn(snapshot(55L, hard.getClientOrderId(), BigDecimal.ONE, "NEW", BigDecimal.ZERO));
         assertEquals(Boolean.TRUE, org.springframework.test.util.ReflectionTestUtils.invokeMethod(service, "prepareLocalExit", 1L, position, "FIRST_TP"));
         verify(gateway, never()).cancelProtectionOrder(any());
@@ -1053,6 +1055,8 @@ class ProtectionOrderServiceTest {
     void localExitWaitsForProtectionChildTerminalWithoutCancelingStops() {
         var hard = scopedStop("HARD_STOP", "99");
         when(mapper.selectList(any())).thenReturn(List.of(hard));
+        when(mapper.updateExchangeFactIfUnchanged(any(), any(), any(), any(), nullable(Long.class), nullable(BigDecimal.class), any(), any(), any())).thenReturn(1);
+
         when(gateway.queryProtectionOrder(any(), any(), any(), any())).thenReturn(new ExchangeGateway.ProtectionOrderSnapshot(
             "BTCUSDT", 55L, hard.getClientOrderId(), "TRIGGERED", "SELL", "BOTH", "STOP_MARKET", BigDecimal.ONE,
             new BigDecimal("99"), Instant.now(), BigDecimal.ZERO, true, false, 777L, null));
