@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,12 +30,9 @@ class StrategyPositionProjectionContractTest {
         assertTrue(xml.contains("strategy_instance_id=#{instanceId}"));
         assertTrue(xml.contains("position_side=#{side}"));
 
-        String migrationResource = "V20261102_01__strategy_position_projection.sql";
-        String migration;
-        try (InputStream input = getClass().getClassLoader().getResourceAsStream(migrationResource)) {
-            assertNotNull(input, migrationResource + " must be packaged");
-            migration = new String(input.readAllBytes(), StandardCharsets.UTF_8);
-        }
+        Path migrationPath = Path.of("..", "..", "script", "sql", "quant", "V20261102_01__strategy_position_projection.sql");
+        assertTrue(Files.isRegularFile(migrationPath), migrationPath + " must exist");
+        String migration = Files.readString(migrationPath, StandardCharsets.UTF_8);
         assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS quant_strategy_position_inventory"));
         assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS quant_strategy_position_cycle"));
         assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS quant_strategy_position_fill_event"));
