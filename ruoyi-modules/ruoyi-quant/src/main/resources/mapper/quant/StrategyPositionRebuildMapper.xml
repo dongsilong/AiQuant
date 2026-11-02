@@ -18,9 +18,10 @@ SELECT * FROM quant_strategy_position_rebuild_run WHERE id=#{runId} FOR UPDATE
     <insert id="seedInventory" timeout="3"><![CDATA[
 INSERT INTO quant_strategy_position_rebuild_inventory
 (run_id,credential_id,symbol,strategy_instance_id,position_side,strategy_id,open_quantity,cost_basis,
- realized_pnl,preserved_realized_pnl,cycle_number,preserved_cycle_number,cycle_id,last_trade_time,last_trade_id)
+ realized_pnl,preserved_realized_pnl,cycle_number,preserved_cycle_number,cycle_id,last_trade_time,last_trade_id,
+ preserved_last_trade_time,preserved_last_trade_id)
 SELECT #{runId},credential_id,symbol,strategy_instance_id,position_side,strategy_id,0,0,
-       realized_pnl,realized_pnl,0,cycle_number,NULL,last_trade_time,last_trade_id
+       realized_pnl,realized_pnl,0,cycle_number,NULL,NULL,NULL,last_trade_time,last_trade_id
 FROM quant_strategy_position_inventory
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
 ]]></insert>
@@ -53,7 +54,7 @@ VALUES
  #{side},#{role},#{exchangeSide},#{quantity},#{price},#{fee},#{feeAsset},#{pnl},#{tradeTime})
 ]]></insert>
     <select id="selectFillPage" resultType="map" timeout="3"><![CDATA[
-SELECT exchange_trade_id,exchange_order_id,strategy_id,strategy_instance_id,cycle_id,position_side,
+SELECT symbol,exchange_trade_id,exchange_order_id,strategy_id,strategy_instance_id,cycle_id,position_side,
        fill_role,exchange_side,quantity,fill_price,commission,commission_asset,realized_pnl,trade_time
 FROM quant_strategy_position_rebuild_fill
 WHERE run_id=#{runId}
@@ -73,8 +74,12 @@ SELECT COALESCE(SUM(open_quantity),0) FROM quant_strategy_position_rebuild_inven
 WHERE run_id=#{runId} AND position_side=#{side}
 ]]></select>
     <select id="countInvalidOpenInventory" resultType="long" timeout="3"><![CDATA[
-SELECT COUNT(*) FROM quant_strategy_position_rebuild_inventory
-WHERE run_id=#{runId} AND open_quantity&gt;0 AND (cycle_id IS NULL OR cost_basis&lt;0)
+SELECT COUNT(*) FROM quant_strategy_position_rebuild_inventory i
+LEFT JOIN quant_strategy_position_cycle c ON c.id=i.cycle_id
+WHERE i.run_id=#{runId} AND i.open_quantity&gt;0
+  AND (i.cycle_id IS NULL OR i.cost_basis&lt;=0 OR c.id IS NULL OR c.closed_at IS NOT NULL
+       OR c.credential_id&lt;&gt;i.credential_id OR c.symbol&lt;&gt;i.symbol
+       OR c.strategy_instance_id&lt;&gt;i.strategy_instance_id OR c.position_side&lt;&gt;i.position_side)
 ]]></select>
     <select id="countJournalAfterId" resultType="long" timeout="3"><![CDATA[
 SELECT COUNT(*) FROM quant_strategy_fill_journal
@@ -102,7 +107,8 @@ INSERT INTO quant_strategy_position_inventory
  commissions,commission_asset,cycle_number,cycle_id,last_trade_time,last_trade_id,updated_at)
 SELECT credential_id,symbol,strategy_instance_id,position_side,strategy_id,open_quantity,cost_basis,
        preserved_realized_pnl,0,NULL,GREATEST(cycle_number,preserved_cycle_number),cycle_id,
-       last_trade_time,last_trade_id,NOW(6)
+       COALESCE(last_trade_time,preserved_last_trade_time),
+       COALESCE(last_trade_id,preserved_last_trade_id),NOW(6)
 FROM quant_strategy_position_rebuild_inventory
 WHERE run_id=#{runId}
 ON DUPLICATE KEY UPDATE

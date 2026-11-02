@@ -168,9 +168,11 @@ public class StrategyPositionRebuildService {
         if (runId <= 0) {
             throw new IllegalArgumentException("有效的重建任务 ID 是必需的");
         }
+        Map<String, Object> initialRun = rebuilds.selectRun(runId);
+        requireRunStatus(initialRun, "READY");
         try {
-            Map<String, Object> run = rebuilds.selectRun(runId);
-            requireRunStatus(run, "READY");
+            Map<String, Object> run = initialRun;
+            
             long credentialId = number(run, "credential_id");
             String symbol = text(run, "symbol");
             long maxId = number(run, "source_max_journal_id");
