@@ -1376,7 +1376,14 @@ public class ProtectionOrderService {
      */
     private ExchangeGateway.ProtectionOrderSnapshot readProtectionSnapshot(ExchangeGateway.Credential credential, QuantProtectionOrder order) {
         ExchangeGateway.ProtectionOrderSnapshot actual = gateway.queryProtectionOrder(credential, order.getExchangeOrderId(), order.getClientOrderId(), order.getSymbol());
-        if (actual == null || actual.actualOrderId() == null || actual.actualOrderId() <= 0) {
+        if (actual == null) {
+            return null;
+        }
+        if (actual.actualOrderId() == null || actual.actualOrderId() <= 0) {
+            if (actual.status() != null && Set.of("TRIGGERING", "TRIGGERED", "FINISHED").contains(actual.status().toUpperCase(java.util.Locale.ROOT))
+                || actual.executedQuantity() != null && actual.executedQuantity().signum() > 0) {
+                throw new ProtectionExecutionPendingException();
+            }
             return actual;
         }
         ExchangeGateway.OrderSnapshot child = gateway.queryOrder(credential, order.getSymbol(), actual.actualOrderId(), null);
