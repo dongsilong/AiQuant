@@ -75,6 +75,8 @@ public class StrategyPositionProjectionService {
         }
         Map<String, Object> snapshot = mapper.ownershipSnapshot(credentialId, symbol.trim().toUpperCase(Locale.ROOT), instanceId, side.toUpperCase(Locale.ROOT));
         return snapshot != null && snapshot.get("instance_strategy_id") instanceof Number owner && owner.longValue() == strategyId
+            && snapshot.get("instance_cycle_id") instanceof Number cycleId && cycleId.longValue() > 0
+            && snapshot.get("instance_cycle_number") instanceof Number cycleNumber && cycleNumber.longValue() > 0
             && decimal(snapshot, "instance_quantity").compareTo(accountQuantity) == 0
             && decimal(snapshot, "aggregate_quantity").compareTo(accountQuantity) == 0;
     }
