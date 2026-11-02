@@ -17,7 +17,7 @@ import java.util.Objects;
 /**
  * Opt-in strict strategy position projection. The caller must prove the fill's
  * OPEN/CLOSE role from immutable execution intent; Binance BUY/SELL alone does
- * NOT establish it. No automatic reconciliation wiring is enabled here.
+ * NOT establish it. The fill journal invokes this projector only after exact strategy attribution succeeds.
  * <p>
  * An InnoDB row lock spans read / cycle / fill / inventory updates, but never
  * external HTTP. Gaps or out-of-order facts require explicit reconciliation.
@@ -61,6 +61,26 @@ public class StrategyPositionProjectionService {
             return t;
         }
         throw new IllegalStateException("Invalid " + name);
+    }
+
+    /**
+     * Resolve OPEN/CLOSE and LONG/SHORT only from the immutable accepted-order intent.
+     */
+    public void projectAttributed(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade) {
+        if (credentialId <= 0 || trade == null || trade.symbol() == null || trade.orderId() == null || trade.orderId() <= 0) {
+            throw new IllegalStateException("Missing exact exchange fill identity for strategy projection");
+        }
+        Map<String, Object> intent = mapper.verifiedIntent(credentialId, trade.symbol().toUpperCase(Locale.ROOT), trade.orderId());
+        if (intent == null) {
+            throw new IllegalStateException("No immutable strategy execution intent for exchange fill");
+        }
+        try {
+            StrategyPositionAccounting.PositionSide positionSide = StrategyPositionAccounting.PositionSide.valueOf(String.valueOf(intent.get("position_side")));
+            StrategyPositionAccounting.Role role = StrategyPositionAccounting.Role.valueOf(String.valueOf(intent.get("fill_role")));
+            project(credentialId, verifiedOrder, trade, positionSide, role);
+        } catch (IllegalArgumentException invalidIntent) {
+            throw new IllegalStateException("Immutable strategy execution intent has an unsupported position side or fill role", invalidIntent);
+        }
     }
 
     /**
