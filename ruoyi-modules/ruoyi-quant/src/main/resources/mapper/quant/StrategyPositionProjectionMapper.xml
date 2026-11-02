@@ -23,7 +23,7 @@ FOR UPDATE]]></select>
        MAX(CASE WHEN strategy_instance_id=#{instanceId} THEN cycle_number ELSE NULL END) AS instance_cycle_number
 FROM quant_strategy_position_inventory
 WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND position_side=#{side}]]></select>
-    <select id="existing" resultType="map" timeout="3"><![CDATA[SELECT strategy_id,strategy_instance_id,exchange_order_id,position_side,
+    <select id="existing" resultType="map" timeout="3"><![CDATA[SELECT strategy_id,strategy_instance_id,cycle_id,exchange_order_id,position_side,
        fill_role,exchange_side,quantity,fill_price,commission,commission_asset,realized_pnl,trade_time
 FROM quant_strategy_position_fill_event
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
