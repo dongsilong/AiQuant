@@ -1393,6 +1393,9 @@ public class ProtectionOrderService {
         if (child == null || child.executedQuantity() == null || !Set.of("FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED").contains(child.status())) {
             throw new ProtectionExecutionPendingException();
         }
+        if (actual.executedQuantity() != null && actual.executedQuantity().compareTo(child.executedQuantity()) != 0) {
+            throw new ProtectionExecutionPendingException("保护算法单累计成交量与普通子订单累计成交量不一致，保持恢复阻断");
+        }
         return new ExchangeGateway.ProtectionOrderSnapshot(actual.symbol(), actual.algoId(), actual.clientAlgoId(), "FINISHED", actual.side(), actual.positionSide(),
             actual.type(), actual.quantity(), actual.triggerPrice(), actual.updateTime(), child.executedQuantity(), actual.reduceOnly(), actual.closePosition(),
             actual.actualOrderId(), child.averagePrice());
