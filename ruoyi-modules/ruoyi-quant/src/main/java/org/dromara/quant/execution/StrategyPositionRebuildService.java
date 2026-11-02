@@ -483,7 +483,7 @@ public class StrategyPositionRebuildService {
             boolean existedAtStart = number(baseline, "base_exists") == 1;
             boolean existsNow = baseline.get("live_inventory_id") != null;
             if (existedAtStart != existsNow || existedAtStart
-                && !sameTime(dateTime(baseline, "base_updated_at"), dateTime(baseline, "live_updated_at"))) {
+                && !dateTime(baseline, "base_updated_at").equals(dateTime(baseline, "live_updated_at"))) {
                 throw new IllegalStateException("重建期间生产策略库存发生变化，拒绝覆盖当前库存");
             }
         }

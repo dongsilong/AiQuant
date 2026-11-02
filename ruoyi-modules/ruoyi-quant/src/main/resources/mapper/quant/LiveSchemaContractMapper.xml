@@ -36,4 +36,10 @@ WHERE table_schema=DATABASE() AND table_name='quant_strategy_position_rebuild_ru
   AND column_name IN ('exchange_long_cost_basis','exchange_short_cost_basis','rebuilt_long_cost_basis','rebuilt_short_cost_basis')
   AND data_type='decimal' AND numeric_precision=32 AND numeric_scale=16
 ]]></select>
+    <select id="positionRebuildInventoryBaselineColumns" resultType="java.lang.String" timeout="3"><![CDATA[
+SELECT column_name FROM information_schema.columns
+WHERE table_schema=DATABASE() AND table_name='quant_strategy_position_rebuild_inventory'
+  AND ((column_name='base_exists' AND data_type='tinyint' AND is_nullable='NO')
+    OR (column_name='base_updated_at' AND data_type='datetime' AND datetime_precision=6))
+]]></select>
 </mapper>

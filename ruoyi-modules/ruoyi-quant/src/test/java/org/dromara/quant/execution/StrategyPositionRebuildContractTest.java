@@ -45,6 +45,8 @@ class StrategyPositionRebuildContractTest {
         assertTrue(xml.contains("c.opened_at<r.history_from"));
         assertTrue(xml.contains("id=\"selectInventoryBaselineForUpdate\""));
         assertTrue(xml.contains("base_updated_at"));
+        assertTrue(service.contains("dateTime(baseline, \"base_updated_at\").equals"));
+        assertTrue(service.contains("rebuilds.selectInventoryBaselineForUpdate(runId)"));
         assertTrue(xml.contains("FOR UPDATE"));
         assertTrue(!xml.matches("(?s).*<!\\[CDATA\\[[^]]*&(lt|gt);[^]]*\\]\\]>.*"));
 
@@ -78,6 +80,8 @@ class StrategyPositionRebuildContractTest {
         assertTrue(migration.contains("exchange_long_cost_basis"));
         assertTrue(migration.contains("rebuilt_short_cost_basis"));
         assertTrue(migration.contains("base_updated_at"));
+        String schemaMapper = resource("mapper/quant/LiveSchemaContractMapper.xml");
+        assertTrue(schemaMapper.contains("positionRebuildInventoryBaselineColumns"));
 
         String permission = Files.readString(Path.of("..", "..", "script", "sql", "quant", "V20261104_02__strategy_position_rebuild_permission.sql"), StandardCharsets.UTF_8);
         assertTrue(permission.contains("quant:allocation:rebuild"));
