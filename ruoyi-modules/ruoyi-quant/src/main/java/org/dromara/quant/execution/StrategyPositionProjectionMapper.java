@@ -12,10 +12,7 @@ import java.util.Map;
  */
 @Mapper
 public interface StrategyPositionProjectionMapper {
-    /**
-     * Immutable, server-owned order intent; never caller-supplied role alone.
-     */
-
+    /** Immutable, server-owned order intent; never caller-supplied role alone. */
     Map<String, Object> verifiedIntent(@Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("orderId") long orderId);
 
     int ensure(@Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("instanceId") long instanceId, @Param("side") String side,
@@ -27,6 +24,8 @@ public interface StrategyPositionProjectionMapper {
                                           @Param("side") String side);
 
     Map<String, Object> existing(@Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("tradeId") long tradeId);
+
+    Map<String, Object> cycleById(@Param("cycleId") long cycleId);
 
     int openCycle(@Param("id") long id, @Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("instanceId") long instanceId,
                   @Param("side") String side, @Param("cycle") long cycle, @Param("openedAt") LocalDateTime openedAt);

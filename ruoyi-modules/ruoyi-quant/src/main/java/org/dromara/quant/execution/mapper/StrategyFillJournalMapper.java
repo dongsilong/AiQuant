@@ -4,6 +4,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.dromara.quant.execution.StrategyFillJournalRecord;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /** 持久化不可变交易所成交事实及其策略归属处理状态。 */
@@ -24,5 +25,18 @@ public interface StrategyFillJournalMapper {
     List<StrategyFillJournalRecord> selectUnresolved(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("limit") int limit);
 
     long countUnresolved(@Param("credentialId") Long credentialId);
+
     long countUnresolvedByOrder(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("orderId") Long orderId);
+
+    long countUnresolvedByScope(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
+    long maxIdByScope(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
+    long countAttributedInWindow(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
+                                 @Param("maxId") long maxId, @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+
+    List<StrategyFillJournalRecord> selectAttributedPage(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
+                                                         @Param("maxId") long maxId, @Param("from") LocalDateTime from,
+                                                         @Param("to") LocalDateTime to, @Param("afterTradeTime") LocalDateTime afterTradeTime,
+                                                         @Param("afterTradeId") Long afterTradeId, @Param("limit") int limit);
 }

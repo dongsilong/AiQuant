@@ -28,6 +28,11 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND position_side=#{sid
 FROM quant_strategy_position_fill_event
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND exchange_trade_id=#{tradeId}]]></select>
+    <select id="cycleById" resultType="map" timeout="3"><![CDATA[
+SELECT id,credential_id,symbol,strategy_instance_id,position_side,cycle_number,opened_at,closed_at
+FROM quant_strategy_position_cycle
+WHERE id=#{cycleId}
+]]></select>
     <insert id="openCycle" timeout="3"><![CDATA[INSERT INTO quant_strategy_position_cycle
 (id,credential_id,symbol,strategy_instance_id,position_side,
  cycle_number,opened_at)

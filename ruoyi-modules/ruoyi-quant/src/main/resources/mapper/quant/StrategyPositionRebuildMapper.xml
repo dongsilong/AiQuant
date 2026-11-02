@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.execution.StrategyPositionRebuildMapper">
+    <insert id="insertRun" timeout="3"><![CDATA[
+INSERT INTO quant_strategy_position_rebuild_run
+(id,credential_id,symbol,active_run_key,status,history_from,history_to,source_max_journal_id,
+ source_fill_count,processed_count,created_at,updated_at)
+VALUES
+(#{id},#{credentialId},#{symbol},#{activeKey},'BUILDING',#{historyFrom},#{historyTo},
+ #{sourceMaxJournalId},#{sourceFillCount},0,NOW(3),NOW(3))
+]]></insert>
+    <select id="selectRun" resultType="map" timeout="3"><![CDATA[
+SELECT * FROM quant_strategy_position_rebuild_run WHERE id=#{runId}
+]]></select>
+    <select id="lockRun" resultType="map" timeout="3"><![CDATA[
+SELECT * FROM quant_strategy_position_rebuild_run WHERE id=#{runId} FOR UPDATE
+]]></select>
+    <insert id="seedInventory" timeout="3"><![CDATA[
+INSERT INTO quant_strategy_position_rebuild_inventory
+(run_id,credential_id,symbol,strategy_instance_id,position_side,strategy_id,open_quantity,cost_basis,
+ realized_pnl,preserved_realized_pnl,cycle_number,preserved_cycle_number,cycle_id,last_trade_time,last_trade_id)
+SELECT #{runId},credential_id,symbol,strategy_instance_id,position_side,strategy_id,0,0,
+       realized_pnl,realized_pnl,0,cycle_number,NULL,last_trade_time,last_trade_id
+FROM quant_strategy_position_inventory
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+]]></insert>
+    <select id="lockInventory" resultType="map" timeout="3"><![CDATA[
+SELECT strategy_id,open_quantity,cost_basis,cycle_number,cycle_id,last_trade_time,last_trade_id
+FROM quant_strategy_position_rebuild_inventory
+WHERE run_id=#{runId} AND strategy_instance_id=#{instanceId} AND position_side=#{side}
+FOR UPDATE
+]]></select>
+    <insert id="insertInventory" timeout="3"><![CDATA[
+INSERT INTO quant_strategy_position_rebuild_inventory
+(run_id,credential_id,symbol,strategy_instance_id,position_side,strategy_id,open_quantity,cost_basis,
+ realized_pnl,preserved_realized_pnl,cycle_number,preserved_cycle_number,cycle_id,last_trade_time,last_trade_id)
+VALUES
+(#{runId},#{credentialId},#{symbol},#{instanceId},#{side},#{strategyId},0,0,0,0,0,0,NULL,NULL,NULL)
+]]></insert>
+    <update id="updateInventory" timeout="3"><![CDATA[
+UPDATE quant_strategy_position_rebuild_inventory
+SET open_quantity=#{quantity},cost_basis=#{cost},cycle_number=#{cycleNumber},cycle_id=#{cycleId},
+    last_trade_time=#{tradeTime},last_trade_id=#{tradeId}
+WHERE run_id=#{runId} AND strategy_instance_id=#{instanceId} AND position_side=#{side}
+  AND strategy_id=#{strategyId}
+]]></update>
+    <insert id="insertFill" timeout="3"><![CDATA[
+INSERT INTO quant_strategy_position_rebuild_fill
+(run_id,credential_id,symbol,strategy_id,strategy_instance_id,cycle_id,exchange_trade_id,exchange_order_id,
+ position_side,fill_role,exchange_side,quantity,fill_price,commission,commission_asset,realized_pnl,trade_time)
+VALUES
+(#{runId},#{credentialId},#{symbol},#{strategyId},#{instanceId},#{cycleId},#{tradeId},#{orderId},
+ #{side},#{role},#{exchangeSide},#{quantity},#{price},#{fee},#{feeAsset},#{pnl},#{tradeTime})
+]]></insert>
+    <select id="selectFillPage" resultType="map" timeout="3"><![CDATA[
+SELECT exchange_trade_id,exchange_order_id,strategy_id,strategy_instance_id,cycle_id,position_side,
+       fill_role,exchange_side,quantity,fill_price,commission,commission_asset,realized_pnl,trade_time
+FROM quant_strategy_position_rebuild_fill
+WHERE run_id=#{runId}
+  AND (
+    #{afterTradeTime} IS NULL
+    OR trade_time&gt;#{afterTradeTime}
+    OR (trade_time=#{afterTradeTime} AND exchange_trade_id&gt;#{afterTradeId})
+  )
+ORDER BY trade_time ASC,exchange_trade_id ASC
+LIMIT #{limit}
+]]></select>
+    <select id="countFills" resultType="long" timeout="3"><![CDATA[
+SELECT COUNT(*) FROM quant_strategy_position_rebuild_fill WHERE run_id=#{runId}
+]]></select>
+    <select id="sumOpenQuantity" resultType="java.math.BigDecimal" timeout="3"><![CDATA[
+SELECT COALESCE(SUM(open_quantity),0) FROM quant_strategy_position_rebuild_inventory
+WHERE run_id=#{runId} AND position_side=#{side}
+]]></select>
+    <select id="countInvalidOpenInventory" resultType="long" timeout="3"><![CDATA[
+SELECT COUNT(*) FROM quant_strategy_position_rebuild_inventory
+WHERE run_id=#{runId} AND open_quantity&gt;0 AND (cycle_id IS NULL OR cost_basis&lt;0)
+]]></select>
+    <select id="countJournalAfterId" resultType="long" timeout="3"><![CDATA[
+SELECT COUNT(*) FROM quant_strategy_fill_journal
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND id&gt;#{maxId}
+]]></select>
+    <update id="updateProgress" timeout="3"><![CDATA[
+UPDATE quant_strategy_position_rebuild_run
+SET processed_count=processed_count+#{processed},cursor_trade_time=#{cursorTradeTime},
+    cursor_trade_id=#{cursorTradeId},updated_at=NOW(3)
+WHERE id=#{runId} AND status='BUILDING'
+]]></update>
+    <update id="markReady" timeout="3"><![CDATA[
+UPDATE quant_strategy_position_rebuild_run
+SET status='READY',updated_at=NOW(3)
+WHERE id=#{runId} AND status='BUILDING'
+]]></update>
+    <update id="markFailed" timeout="3"><![CDATA[
+UPDATE quant_strategy_position_rebuild_run
+SET status='FAILED',failure_reason=#{reason},active_run_key=NULL,updated_at=NOW(3)
+WHERE id=#{runId} AND status IN ('BUILDING','READY')
+]]></update>
+    <insert id="promoteInventory" timeout="5"><![CDATA[
+INSERT INTO quant_strategy_position_inventory
+(credential_id,symbol,strategy_instance_id,position_side,strategy_id,open_quantity,cost_basis,realized_pnl,
+ commissions,commission_asset,cycle_number,cycle_id,last_trade_time,last_trade_id,updated_at)
+SELECT credential_id,symbol,strategy_instance_id,position_side,strategy_id,open_quantity,cost_basis,
+       preserved_realized_pnl,0,NULL,GREATEST(cycle_number,preserved_cycle_number),cycle_id,
+       last_trade_time,last_trade_id,NOW(6)
+FROM quant_strategy_position_rebuild_inventory
+WHERE run_id=#{runId}
+ON DUPLICATE KEY UPDATE
+strategy_id=VALUES(strategy_id),open_quantity=VALUES(open_quantity),cost_basis=VALUES(cost_basis),
+realized_pnl=VALUES(realized_pnl),commissions=0,commission_asset=NULL,
+cycle_number=VALUES(cycle_number),cycle_id=VALUES(cycle_id),
+last_trade_time=VALUES(last_trade_time),last_trade_id=VALUES(last_trade_id),updated_at=NOW(6)
+]]></insert>
+    <update id="markVerified" timeout="3"><![CDATA[
+UPDATE quant_strategy_position_rebuild_run
+SET status='VERIFIED',active_run_key=NULL,exchange_long_quantity=#{exchangeLong},
+    exchange_short_quantity=#{exchangeShort},rebuilt_long_quantity=#{rebuiltLong},
+    rebuilt_short_quantity=#{rebuiltShort},updated_at=NOW(3)
+WHERE id=#{runId} AND status='READY'
+]]></update>
+</mapper>

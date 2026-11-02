@@ -58,8 +58,8 @@ WHERE id=#{id}
   AND (
       #{status}='CONFLICT'
       OR (
-          attribution_status <> 'CONFLICT'
-          AND (#{status}='ATTRIBUTED' OR attribution_status <> 'ATTRIBUTED')
+          attribution_status &lt;&gt; 'CONFLICT'
+          AND (#{status}='ATTRIBUTED' OR attribution_status &lt;&gt; 'ATTRIBUTED')
       )
   )]]></update>
     <select id="selectPending" timeout="3" resultMap="strategyFillJournal"><![CDATA[SELECT * FROM quant_strategy_fill_journal
@@ -75,7 +75,32 @@ LIMIT #{limit}]]></select>
     </select>
     <select id="countUnresolvedByOrder" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_strategy_fill_journal
 WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND exchange_order_id=#{orderId}
-  AND attribution_status!='ATTRIBUTED']]></select>
+  AND attribution_status&lt;&gt;'ATTRIBUTED']]></select>
     <select id="countUnresolved" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_strategy_fill_journal
-WHERE credential_id=#{credentialId} AND attribution_status!='ATTRIBUTED']]></select>
+WHERE credential_id=#{credentialId} AND attribution_status&lt;&gt;'ATTRIBUTED']]></select>
+    <select id="countUnresolvedByScope" resultType="long" timeout="3"><![CDATA[
+SELECT COUNT(*) FROM quant_strategy_fill_journal
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND attribution_status&lt;&gt;'ATTRIBUTED'
+]]></select>
+    <select id="maxIdByScope" resultType="long" timeout="3"><![CDATA[
+SELECT COALESCE(MAX(id),0) FROM quant_strategy_fill_journal
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+]]></select>
+    <select id="countAttributedInWindow" resultType="long" timeout="3"><![CDATA[
+SELECT COUNT(*) FROM quant_strategy_fill_journal
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND id&lt;=#{maxId}
+  AND attribution_status='ATTRIBUTED' AND trade_time&gt;=#{from} AND trade_time&lt;=#{to}
+]]></select>
+    <select id="selectAttributedPage" resultMap="strategyFillJournal" timeout="3"><![CDATA[
+SELECT * FROM quant_strategy_fill_journal
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND id&lt;=#{maxId}
+  AND attribution_status='ATTRIBUTED' AND trade_time&gt;=#{from} AND trade_time&lt;=#{to}
+  AND (
+    #{afterTradeTime} IS NULL
+    OR trade_time&gt;#{afterTradeTime}
+    OR (trade_time=#{afterTradeTime} AND exchange_trade_id&gt;#{afterTradeId})
+  )
+ORDER BY trade_time ASC,exchange_trade_id ASC
+LIMIT #{limit}
+]]></select>
 </mapper>
