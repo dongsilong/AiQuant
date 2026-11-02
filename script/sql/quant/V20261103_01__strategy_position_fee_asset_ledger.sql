@@ -22,3 +22,12 @@ CREATE TABLE IF NOT EXISTS quant_strategy_position_fee_event (
     KEY idx_quant_strategy_position_fee_asset (credential_id, strategy_instance_id, symbol, commission_asset, trade_time),
     KEY idx_quant_strategy_position_fee_cycle (cycle_id, commission_asset)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='策略成交手续费资产分账事件';
+
+-- Backfill fee facts already present in the immutable position fill journal.
+-- Re-running this migration is safe because exchange trade identity is unique.
+INSERT IGNORE INTO quant_strategy_position_fee_event
+(id,credential_id,symbol,strategy_id,strategy_instance_id,cycle_id,exchange_trade_id,exchange_order_id,
+ position_side,commission,commission_asset,trade_time)
+SELECT id,credential_id,symbol,strategy_id,strategy_instance_id,cycle_id,exchange_trade_id,exchange_order_id,
+       position_side,commission,commission_asset,trade_time
+FROM quant_strategy_position_fill_event;
