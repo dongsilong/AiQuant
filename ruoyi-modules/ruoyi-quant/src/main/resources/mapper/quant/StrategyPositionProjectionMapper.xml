@@ -49,11 +49,10 @@ VALUES (#{id},#{credentialId},#{symbol},#{strategyId},#{instanceId},
         #{quantity},#{price},#{fee},#{feeAsset},#{pnl},#{tradeTime})]]></insert>
     <update id="update" timeout="3"><![CDATA[UPDATE quant_strategy_position_inventory
 SET open_quantity=#{quantity},cost_basis=#{cost},
-    realized_pnl=#{pnl},commissions=#{fees},commission_asset=#{feeAsset},
+    realized_pnl=#{pnl},commissions=0,commission_asset=NULL,
     cycle_number=#{cycle},cycle_id=#{cycleId},
     last_trade_time=#{tradeTime},last_trade_id=#{tradeId},updated_at=NOW(6)
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND strategy_instance_id=#{instanceId} AND position_side=#{side}
-  AND strategy_id=#{strategyId}
-  AND (commission_asset IS NULL OR commission_asset=#{feeAsset})]]></update>
+  AND strategy_id=#{strategyId}]]></update>
 </mapper>
