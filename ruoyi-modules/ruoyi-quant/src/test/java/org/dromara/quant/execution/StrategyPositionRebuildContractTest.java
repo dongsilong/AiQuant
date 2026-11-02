@@ -38,6 +38,7 @@ class StrategyPositionRebuildContractTest {
         assertTrue(xml.contains("SELECT * FROM quant_strategy_position_rebuild_run WHERE id=#{runId} FOR UPDATE"));
         assertTrue(xml.contains("'PREPARING'"));
         assertTrue(xml.contains("SET status='BUILDING'"));
+        assertTrue(xml.contains("WHERE id=#{runId} AND status='PREPARING' AND processed_count=0"));
         assertTrue(xml.contains("quant_strategy_position_rebuild_inventory"));
         assertTrue(xml.contains("quant_strategy_position_rebuild_fill"));
         assertTrue(xml.contains("preserved_realized_pnl"));

@@ -19,7 +19,7 @@ SELECT * FROM quant_strategy_position_rebuild_run WHERE id=#{runId} FOR UPDATE
 UPDATE quant_strategy_position_rebuild_run
 SET status='BUILDING',history_from=#{historyFrom},history_to=#{historyTo},
     source_max_journal_id=#{sourceMaxJournalId},source_fill_count=#{sourceFillCount},updated_at=NOW(3)
-WHERE id=#{runId} AND status='BUILDING' AND processed_count=0
+WHERE id=#{runId} AND status='PREPARING' AND processed_count=0
 ]]></update>
     <insert id="seedInventory" timeout="3"><![CDATA[
 INSERT INTO quant_strategy_position_rebuild_inventory
