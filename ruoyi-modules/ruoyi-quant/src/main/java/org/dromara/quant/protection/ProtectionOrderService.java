@@ -1447,10 +1447,8 @@ public class ProtectionOrderService {
             }
             working |= active;
             BigDecimal executed = actual.executedQuantity() == null ? BigDecimal.ZERO : actual.executedQuantity();
-            order.setExecutedQuantity(executed.max(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity()));
-            order.setStatus(actual.status());
-            if (mapper.updateById(order) != 1) {
-                throw new IllegalStateException("首平成交事实未可靠持久化，禁止重建目标");
+            if (!persistExchangeFactIfUnchanged(order, actual.algoId(), actual.status(), executed)) {
+                throw new IllegalStateException("首平成交事实与并发更新的本地状态冲突，禁止重建目标");
             }
             total = total.add(order.getExecutedQuantity());
         }
