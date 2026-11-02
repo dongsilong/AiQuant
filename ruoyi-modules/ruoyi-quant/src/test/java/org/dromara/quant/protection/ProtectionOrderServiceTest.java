@@ -70,6 +70,8 @@ class ProtectionOrderServiceTest {
         local.setStatus("WORKING");
         local.setExchangeOrderId(55L);
         local.setPositionSide("LONG");
+        local.setStrategyId(2L);
+        local.setStrategyInstanceId(3L);
         when(mapper.selectList(any())).thenReturn(List.of(local));
         var actual = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "LONG",
             "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), BigDecimal.ONE, true, false, 91L, new BigDecimal("89"));
