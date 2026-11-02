@@ -47,7 +47,8 @@ public class ProtectionOrderService {
     private final TradeExecutionApplicationService executionApplicationService;
     private final ProtectionTargetCoordinator targets;
     private final ThreadLocal<ProtectionTargetCoordinator.Lease> targetLease = new ThreadLocal<>();
-    private final java.util.concurrent.ConcurrentHashMap<Long, Long> protectionChildRecoveryCursors = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<ProtectionRecoveryCursorKey, Long> protectionChildRecoveryCursors = new java.util.concurrent.ConcurrentHashMap<>();
+    private record ProtectionRecoveryCursorKey(Long credentialId, String symbol) { }
     @Autowired
     private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
     private volatile LiveOrderDispatcher liveOrderDispatcher;
@@ -1336,10 +1337,12 @@ public class ProtectionOrderService {
             return 0;
         }
         int limit = Math.max(1, Math.min(20, requestedLimit));
-        Long cursor = protectionChildRecoveryCursors.get(credentialId);
+        String normalizedSymbol = symbol == null || symbol.isBlank() ? null : symbol.trim().toUpperCase(java.util.Locale.ROOT);
+        var cursorKey = new ProtectionRecoveryCursorKey(credentialId, normalizedSymbol);
+        Long cursor = protectionChildRecoveryCursors.get(cursorKey);
         var query = new LambdaQueryWrapper<QuantProtectionOrder>()
             .eq(QuantProtectionOrder::getCredentialId, credentialId)
-            .eq(symbol != null && !symbol.isBlank(), QuantProtectionOrder::getSymbol, symbol)
+            .eq(normalizedSymbol != null, QuantProtectionOrder::getSymbol, normalizedSymbol)
             .gt(cursor != null, QuantProtectionOrder::getId, cursor)
             .in(QuantProtectionOrder::getProtectionType, STRATEGY_PROTECTION_TYPES)
             .in(QuantProtectionOrder::getStatus, ACTIVE_STATUSES)
@@ -1348,10 +1351,10 @@ public class ProtectionOrderService {
             .last("LIMIT " + limit);
         List<QuantProtectionOrder> candidates = mapper.selectList(query);
         if (candidates.isEmpty()) {
-            protectionChildRecoveryCursors.remove(credentialId);
+            protectionChildRecoveryCursors.remove(cursorKey);
             return 0;
         }
-        protectionChildRecoveryCursors.put(credentialId, candidates.getLast().getId());
+        protectionChildRecoveryCursors.put(cursorKey, candidates.getLast().getId());
         ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
         int recovered = 0;
         for (QuantProtectionOrder local : candidates) {
