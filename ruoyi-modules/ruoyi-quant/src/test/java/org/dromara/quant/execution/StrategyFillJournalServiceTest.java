@@ -182,6 +182,18 @@ class StrategyFillJournalServiceTest {
         verify(journal).updateStatus(77L, "ATTRIBUTED", null);
     }
 
+
+    @Test
+    void tradeAttributionBackfillFillsMissingColumnsWithoutOverwritingConflictingValues() throws Exception {
+        var method = org.dromara.quant.account.mapper.QuantTradeMapper.class.getMethod("backfillStrategyAttribution",
+            Long.class, String.class, Long.class, Long.class, Long.class, Long.class);
+        String sql = method.getAnnotation(org.apache.ibatis.annotations.Update.class).value()[0];
+        assertTrue(sql.contains("COALESCE(strategy_id"));
+        assertTrue(sql.contains("COALESCE(strategy_instance_id"));
+        assertTrue(sql.contains("(strategy_id IS NULL OR strategy_id = #{strategyId})"));
+        assertTrue(sql.contains("(strategy_instance_id IS NULL OR strategy_instance_id = #{strategyInstanceId})"));
+    }
+
     @Test
     void fillJournalSqlPreventsStaleWorkersFromRegressingAttributedOrConflictStates() throws Exception {
         try (var stream = getClass().getClassLoader().getResourceAsStream("mapper/quant/StrategyFillJournalMapper.xml")) {
