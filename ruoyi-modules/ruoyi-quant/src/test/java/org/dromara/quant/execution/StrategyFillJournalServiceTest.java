@@ -178,12 +178,33 @@ class StrategyFillJournalServiceTest {
 
         assertEquals(1, service.retryPending(1L));
 
+        verify(projections).verifyAttribution(1L, order, fill);
         verify(allocations).allocate(fill, order, 1L);
         verify(trades).backfillStrategyAttribution(1L, "BTCUSDT", 101L, 202L, 3L, 4L);
         verify(projections).projectAttributed(1L, order, fill);
         verify(journal).updateStatus(77L, "ATTRIBUTED", null);
     }
 
+
+    @Test
+    void missingImmutableIntentPreventsAnyStrategyAllocation() {
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(null);
+        when(journal.insertRaw(any())).thenReturn(1);
+        when(journal.updateStatus(anyLong(), anyString(), any())).thenReturn(1);
+        var order = new QuantOrder();
+        order.setCredentialId(1L);
+        order.setSymbol("BTCUSDT");
+        order.setExchangeOrderId(202L);
+        order.setStrategyId(3L);
+        order.setStrategyInstanceId(4L);
+        doThrow(new IllegalStateException("No immutable strategy execution intent")).when(projections).verifyAttribution(1L, order, fill());
+
+        assertEquals("PENDING_FACTS", service.attribute(fill(), order, 1L));
+
+        verifyNoInteractions(allocations);
+        verify(trades, never()).backfillStrategyAttribution(any(), anyString(), any(), any(), any(), any());
+        verify(projections, never()).projectAttributed(anyLong(), any(), any());
+    }
 
     @Test
     void projectionFailureKeepsFillPendingAfterTradeAttributionBackfill() {
