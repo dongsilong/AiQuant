@@ -106,7 +106,7 @@ public class ProtectionOrderJournalService {
         order.setSide(child.side());
         order.setOrderType(child.type());
         // 延迟的子订单查询不能把已落库的成交终态退回 NEW/PARTIALLY_FILLED。
-        boolean terminalAlreadyKnown = Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(Objects.toString(order.getStatus(), ""));
+        boolean terminalAlreadyKnown = Set.of("FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED").contains(Objects.toString(order.getStatus(), ""));
         if (!terminalAlreadyKnown) {
             order.setStatus(child.status());
         }
