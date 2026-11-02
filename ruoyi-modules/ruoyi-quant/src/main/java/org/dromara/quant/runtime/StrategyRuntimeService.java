@@ -1833,7 +1833,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 if (decisionLogs != null && filledOpen != null) {
                     decisionLogs.order(runtime.credential.getId(), filledOpen);
                 }
-                if (filledOpen == null || !"FILLED".equalsIgnoreCase(filledOpen.status()) || filledOpen.executedQuantity() == null || filledOpen.executedQuantity().signum() <= 0 || runtime.position.getQuantity().compareTo(filledOpen.executedQuantity()) > 0 || !direction.equalsIgnoreCase(runtime.position.getPositionSide())) {
+                if (filledOpen == null || !"FILLED".equalsIgnoreCase(filledOpen.status()) || filledOpen.executedQuantity() == null || filledOpen.executedQuantity().signum() <= 0 || runtime.position.getQuantity().compareTo(filledOpen.executedQuantity()) != 0 || !direction.equalsIgnoreCase(runtime.position.getPositionSide())) {
                     state.setRecoveryRequired(true);
                     state.setUnsafeRecovery(true);
                     stateService.save(state);
@@ -3016,7 +3016,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                     runtime.state.setPositionQty(runtime.position.getQuantity());
                     runtime.state.setEntryPrice(runtime.position.getEntryPrice());
                     if (order.executedQuantity() == null || order.executedQuantity().signum() <= 0 || runtime.state.getDirection() == null
-                        || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide()) || runtime.position.getQuantity().compareTo(order.executedQuantity()) > 0) {
+                        || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide()) || runtime.position.getQuantity().compareTo(order.executedQuantity()) != 0) {
                         runtime.state.setRecoveryRequired(true);
                         runtime.state.setUnsafeRecovery(true);
                         stateService.save(runtime.state);
