@@ -89,6 +89,14 @@ class ProtectionOrderJournalServiceTest {
     }
 
     @Test
+    void ambiguousLocalPositionDirectionCannotBeAttributed() {
+        var local = local();
+        local.setPositionSide("BOTH");
+        assertThrows(IllegalStateException.class, () -> journal.bindChild(credential, local, actual("BOTH"), child(91L)));
+        verifyNoInteractions(orders, intents);
+    }
+
+    @Test
     void wrongChildIdentityCannotReceiveParentAttribution() {
         assertThrows(IllegalStateException.class, () -> journal.bindChild(credential, local(), actual("BOTH"), child(92L)));
         verifyNoInteractions(orders);
