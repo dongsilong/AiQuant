@@ -73,6 +73,9 @@ LIMIT #{limit}]]></select>
         ORDER BY trade_time DESC, id DESC
         LIMIT #{limit}
     </select>
+    <select id="countUnresolvedByOrder" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_strategy_fill_journal
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND exchange_order_id=#{orderId}
+  AND attribution_status!='ATTRIBUTED']]></select>
     <select id="countUnresolved" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_strategy_fill_journal
 WHERE credential_id=#{credentialId} AND attribution_status!='ATTRIBUTED']]></select>
 </mapper>
