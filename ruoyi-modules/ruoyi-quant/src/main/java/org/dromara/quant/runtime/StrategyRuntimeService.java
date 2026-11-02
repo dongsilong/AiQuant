@@ -1849,6 +1849,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     return;
                 }
                 state.setInitialPositionQty(filledOpen.executedQuantity());
+                if (!hasExclusiveStrategyInventory(runtime)) {
+                    blockUnownedAccountExposure(runtime, "open-order-fill-confirmation");
+                    return;
+                }
             }
             state.setInitialMargin(runtime.position.getMargin());
             freezeFilledProtection(runtime);
@@ -2941,6 +2945,10 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
         }
         if (runtime.state.getPendingOrderId() == null && (runtime.state.getPendingClientOrderId() == null || runtime.state.getPendingClientOrderId().isBlank())) {
             runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
+            if (!hasExclusiveStrategyInventory(runtime)) {
+                blockUnownedAccountExposure(runtime, "pending-order-without-identity");
+                return true;
+            }
             if (runtime.position != null && "OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                 // 只有持仓不是本次订单成交证明；缺少订单身份时保留 pending，不猜测初始数量或归属。
                 runtime.state.setRecoveryRequired(true);
@@ -3015,6 +3023,10 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
         String status = order.status();
         if ("NEW".equalsIgnoreCase(status) || "PARTIALLY_FILLED".equalsIgnoreCase(status)) {
             runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
+            if (!hasExclusiveStrategyInventory(runtime)) {
+                blockUnownedAccountExposure(runtime, "pending-partial-order");
+                return true;
+            }
             runtime.partialOpenProtectionVerified = false;
             if ("OPEN".equals(runtime.state.getPendingAction()) && order.executedQuantity() != null && order.executedQuantity().signum() > 0
                 && runtime.position != null && runtime.state.getDirection() != null
@@ -3041,6 +3053,10 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
         if ("FILLED".equalsIgnoreCase(status)) {
             runtime.state.setPendingNotFoundConfirmations(0);
             runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
+            if (!hasExclusiveStrategyInventory(runtime)) {
+                blockUnownedAccountExposure(runtime, "pending-filled-order");
+                return true;
+            }
             if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                 blockCloseCandleAtExchangeTime(runtime, order.updateTime());
                 if (!matchesRemainingPosition(runtime.position, runtime.state.getPositionQty(), order.executedQuantity())) {
@@ -3143,6 +3159,10 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             if (executed.signum() > 0) {
                 BigDecimal beforeQty = runtime.state.getPositionQty();
                 runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
+                if (!hasExclusiveStrategyInventory(runtime)) {
+                    blockUnownedAccountExposure(runtime, "pending-partial-terminal-order");
+                    return true;
+                }
                 if (!"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())) {
                     blockCloseCandleAtExchangeTime(runtime, order.updateTime());
                 }
@@ -3172,6 +3192,10 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 }
             } else {
                 runtime.position = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
+                if (!hasExclusiveStrategyInventory(runtime)) {
+                    blockUnownedAccountExposure(runtime, "pending-unfilled-terminal-order");
+                    return true;
+                }
                 if (runtime.position != null && ("OPEN".equalsIgnoreCase(runtime.state.getPendingAction())
                     || runtime.state.getDirection() == null || !runtime.state.getDirection().equalsIgnoreCase(runtime.position.getPositionSide())
                     || runtime.state.getPositionQty() == null || runtime.position.getQuantity().compareTo(runtime.state.getPositionQty()) != 0)) {
