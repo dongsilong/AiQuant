@@ -25,5 +25,19 @@ class StrategyPositionProjectionContractTest {
         assertTrue(xml.contains("exchange_trade_id=#{tradeId}"));
         assertTrue(xml.contains("quant_strategy_position_fill_event"));
         assertTrue(xml.contains("quant_strategy_position_inventory"));
+        assertTrue(xml.contains("strategy_instance_id=#{instanceId}"));
+        assertTrue(xml.contains("position_side=#{side}"));
+
+        String migrationResource = "V20261102_01__strategy_position_projection.sql";
+        String migration;
+        try (InputStream input = getClass().getClassLoader().getResourceAsStream(migrationResource)) {
+            assertNotNull(input, migrationResource + " must be packaged");
+            migration = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS quant_strategy_position_inventory"));
+        assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS quant_strategy_position_cycle"));
+        assertTrue(migration.contains("CREATE TABLE IF NOT EXISTS quant_strategy_position_fill_event"));
+        assertTrue(migration.contains("UNIQUE KEY uk_quant_strategy_position_inventory (credential_id, symbol, strategy_instance_id, position_side)"));
+        assertTrue(migration.contains("UNIQUE KEY uk_quant_strategy_position_fill_event (credential_id, symbol, exchange_trade_id)"));
     }
 }
