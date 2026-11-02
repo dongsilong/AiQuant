@@ -1,6 +1,9 @@
 package org.dromara.quant.protection;
 
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.account.domain.QuantTrade;
+import org.dromara.quant.account.mapper.QuantTradeMapper;
+import org.dromara.quant.execution.mapper.StrategyFillAllocationMapper;
 import org.dromara.quant.execution.StrategyOrderIntentService;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
@@ -23,7 +26,9 @@ class ProtectionOrderJournalServiceTest {
     private final QuantProtectionOrderMapper protections = mock(QuantProtectionOrderMapper.class);
     private final QuantOrderMapper orders = mock(QuantOrderMapper.class);
     private final StrategyOrderIntentService intents = mock(StrategyOrderIntentService.class);
-    private final ProtectionOrderJournalService journal = new ProtectionOrderJournalService(protections, orders, intents);
+    private final QuantTradeMapper trades = mock(QuantTradeMapper.class);
+    private final StrategyFillAllocationMapper allocations = mock(StrategyFillAllocationMapper.class);
+    private final ProtectionOrderJournalService journal = new ProtectionOrderJournalService(protections, orders, intents, trades, allocations);
     private final ExchangeGateway.Credential credential = new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE");
 
     private QuantProtectionOrder local() {
@@ -54,8 +59,20 @@ class ProtectionOrderJournalServiceTest {
             BigDecimal.ONE, BigDecimal.ONE, Instant.now(), BigDecimal.TEN);
     }
 
+    private void stubCompleteFillLedgers() {
+        var fill = new QuantTrade();
+        fill.setStrategyId(2L);
+        fill.setStrategyInstanceId(3L);
+        fill.setSide("SELL");
+        fill.setQuantity(BigDecimal.ONE);
+        when(trades.selectList(any())).thenReturn(List.of(fill));
+        when(allocations.summarizeOrderFills(1L, "BTCUSDT", 91L, 2L, 3L))
+            .thenReturn(Map.of("allocated_qty", BigDecimal.ONE, "conflicting_owner_count", 0L));
+    }
+
     @Test
     void oneWayChildRetainsFrozenDirectionAndRecordsImmutableCloseRole() {
+        stubCompleteFillLedgers();
         when(orders.insert(any(QuantOrder.class))).thenReturn(1);
         assertTrue(journal.bindChild(credential, local(), actual("BOTH"), child(91L)));
         var saved = org.mockito.ArgumentCaptor.forClass(QuantOrder.class);
@@ -72,9 +89,35 @@ class ProtectionOrderJournalServiceTest {
 
     @Test
     void hedgeChildAlsoRecordsImmutableCloseRole() {
+        stubCompleteFillLedgers();
         when(orders.insert(any(QuantOrder.class))).thenReturn(1);
         assertTrue(journal.bindChild(credential, local(), actual("LONG"), child(91L)));
         verify(intents).record(eq(1L), eq(2L), eq(3L), eq("CLOSE"), argThat(r -> r.reduceOnly() && "LONG".equals(r.positionSide())), any());
+    }
+
+    @Test
+    void childWithMissingOrdinaryFillsRemainsUnresolved() {
+        when(orders.insert(any(QuantOrder.class))).thenReturn(1);
+        when(trades.selectList(any())).thenReturn(List.of());
+
+        assertFalse(journal.bindChild(credential, local(), actual("BOTH"), child(91L)));
+        verify(orders).insert(any(QuantOrder.class));
+        verify(intents).record(eq(1L), eq(2L), eq(3L), eq("CLOSE"), any(), any());
+    }
+
+    @Test
+    void childWithIncompleteStrategyAllocationRemainsUnresolved() {
+        var fill = new QuantTrade();
+        fill.setStrategyId(2L);
+        fill.setStrategyInstanceId(3L);
+        fill.setSide("SELL");
+        fill.setQuantity(BigDecimal.ONE);
+        when(trades.selectList(any())).thenReturn(List.of(fill));
+        when(allocations.summarizeOrderFills(1L, "BTCUSDT", 91L, 2L, 3L))
+            .thenReturn(Map.of("allocated_qty", BigDecimal.ZERO, "conflicting_owner_count", 0L));
+        when(orders.insert(any(QuantOrder.class))).thenReturn(1);
+
+        assertFalse(journal.bindChild(credential, local(), actual("BOTH"), child(91L)));
     }
 
     @Test
@@ -126,6 +169,7 @@ class ProtectionOrderJournalServiceTest {
 
     @Test
     void delayedChildSnapshotCannotRegressExpiredInMatchTerminalState() {
+        stubCompleteFillLedgers();
         var existing = new QuantOrder();
         existing.setId(11L);
         existing.setCredentialId(1L);
