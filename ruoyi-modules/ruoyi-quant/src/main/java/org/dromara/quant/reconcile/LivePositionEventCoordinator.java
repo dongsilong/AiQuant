@@ -155,6 +155,32 @@ public class LivePositionEventCoordinator {
         }
     }
 
+    /**
+     * Periodic bounded compensation for triggered algo orders whose private-stream event was lost.
+     * The scan is read-only at the exchange boundary; child attribution still uses exact identities.
+     */
+    @Scheduled(fixedDelay = 60000, initialDelay = 20000)
+    public void recoverTriggeredProtectionChildren() {
+        ProtectionOrderService recoveryService = protectionOrderService;
+        if (recoveryService == null) {
+            return;
+        }
+        var activeCredentials = credentials.selectList(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QuantCredential>()
+            .eq(QuantCredential::getStatus, "0")
+            .eq(QuantCredential::getRunMode, "LIVE")
+            .orderByAsc(QuantCredential::getId));
+        for (QuantCredential credential : activeCredentials) {
+            try {
+                int recovered = recoveryService.recoverTriggeredProtectionChildren(credential.getId(), null, 5);
+                if (recovered > 0) {
+                    log.info("周期性保护子订单恢复完成 credentialId={} recoveredCount={}", credential.getId(), recovered);
+                }
+            } catch (RuntimeException ex) {
+                log.warn("周期性保护子订单恢复失败 credentialId={} errorType={}", credential.getId(), ex.getClass().getSimpleName());
+            }
+        }
+    }
+
     private void drainProtectionRecoveryRequests() {
         ProtectionOrderService recoveryService = protectionOrderService;
         if (recoveryService == null) {
