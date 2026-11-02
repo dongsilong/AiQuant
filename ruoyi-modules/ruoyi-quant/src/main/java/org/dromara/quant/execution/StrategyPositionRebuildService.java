@@ -6,6 +6,7 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.mapper.StrategyFillJournalMapper;
+import org.dromara.quant.execution.mapper.LiveOrderDispatchMapper;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.springframework.dao.DuplicateKeyException;
@@ -40,6 +41,7 @@ public class StrategyPositionRebuildService {
     private static final ChronoUnit TIME_PRECISION = ChronoUnit.MILLIS;
 
     private final StrategyPositionRebuildMapper rebuilds;
+    private final LiveOrderDispatchMapper dispatches;
     private final StrategyFillJournalMapper journal;
     private final StrategyPositionProjectionMapper projections;
     private final StrategyPositionProjectionService projector;
@@ -49,12 +51,13 @@ public class StrategyPositionRebuildService {
     private final ExchangeGateway gateway;
     private final TransactionTemplate tx;
 
-    public StrategyPositionRebuildService(StrategyPositionRebuildMapper rebuilds, StrategyFillJournalMapper journal,
-                                          StrategyPositionProjectionMapper projections, StrategyPositionProjectionService projector,
-                                          QuantOrderMapper orders, QuantCredentialMapper credentials,
-                                          StrictBinanceTradeCollector collector, ExchangeGateway gateway,
-                                          PlatformTransactionManager manager) {
+    public StrategyPositionRebuildService(StrategyPositionRebuildMapper rebuilds, LiveOrderDispatchMapper dispatches,
+                                          StrategyFillJournalMapper journal, StrategyPositionProjectionMapper projections,
+                                          StrategyPositionProjectionService projector, QuantOrderMapper orders,
+                                          QuantCredentialMapper credentials, StrictBinanceTradeCollector collector,
+                                          ExchangeGateway gateway, PlatformTransactionManager manager) {
         this.rebuilds = Objects.requireNonNull(rebuilds);
+        this.dispatches = Objects.requireNonNull(dispatches);
         this.journal = Objects.requireNonNull(journal);
         this.projections = Objects.requireNonNull(projections);
         this.projector = Objects.requireNonNull(projector);
@@ -90,8 +93,7 @@ public class StrategyPositionRebuildService {
             tx.executeWithoutResult(status -> {
                 dispatches.ensureGuard(credentialId, symbol);
                 Map<String, Object> gate = dispatches.lockGuard(credentialId, symbol);
-                if (gate == null || gate.get("activeDispatchKey") != null || gate.get("rebuildRunId") != null
-                    || dispatches.claimRebuild(credentialId, symbol, runId) != 1) {
+                if (gate == null || dispatches.claimRebuild(credentialId, symbol, runId) != 1) {
                     throw new IllegalStateException("该账户交易对存在派单或库存重建任务，不能开始新的库存重建");
                 }
                 if (rebuilds.insertRun(runId, credentialId, symbol, activeKey, provisionalFrom, provisionalEnd, 0, 0) != 1) {
@@ -135,7 +137,7 @@ public class StrategyPositionRebuildService {
         }
         try {
             return tx.execute(status -> {
-                Map<String, Object> run = rebuilds.lockRun(runId);
+                Map<String, Object> run = lockRunWithGate(runId);
                 requireRunStatus(run, "BUILDING");
                 long credentialId = number(run, "credential_id");
                 String symbol = text(run, "symbol");
@@ -243,7 +245,7 @@ public class StrategyPositionRebuildService {
             }
 
             tx.executeWithoutResult(status -> {
-                Map<String, Object> locked = rebuilds.lockRun(runId);
+                Map<String, Object> locked = lockRunWithGate(runId);
                 requireRunStatus(locked, "READY");
                 assertSourceStable(credentialId, symbol, maxId, from, dateTime(locked, "history_to"), sourceCount);
                 assertInventoryBaselineStable(runId);
@@ -251,8 +253,9 @@ public class StrategyPositionRebuildService {
                     || rebuilds.countInvalidOpenInventory(runId) != 0
                     || rebuilds.promoteInventory(runId) < 0
                     || rebuilds.markVerified(runId, actual.longQuantity(), actual.shortQuantity(), rebuiltLong, rebuiltShort,
-                        actual.longCostBasis(), actual.shortCostBasis(), rebuiltLongCost, rebuiltShortCost) != 1) {
-                    throw new IllegalStateException("库存提升事务的最终 CAS 或数据校验失败");
+                        actual.longCostBasis(), actual.shortCostBasis(), rebuiltLongCost, rebuiltShortCost) != 1
+                    || dispatches.releaseRebuild(credentialId, symbol, runId) != 1) {
+                    throw new IllegalStateException("库存提升事务的最终 CAS、数据校验或门禁释放失败");
                 }
             });
             return new RebuildProgress(Long.toString(runId), "VERIFIED", sourceCount, sourceCount, null, null);
@@ -520,12 +523,42 @@ public class StrategyPositionRebuildService {
         }
     }
 
+    /** 所有重建事务统一先锁账户交易对门禁，再锁任务行，避免与 CLOSE 派单形成反向锁序。 */
+    private Map<String, Object> lockRunWithGate(long runId) {
+        Map<String, Object> snapshot = rebuilds.selectRun(runId);
+        if (snapshot == null) {
+            throw new IllegalArgumentException("重建任务不存在");
+        }
+        long credentialId = number(snapshot, "credential_id");
+        String symbol = text(snapshot, "symbol");
+        Map<String, Object> gate = dispatches.lockGuard(credentialId, symbol);
+        if (gate == null || !Objects.equals(nullableLong(gate, "rebuildRunId"), runId)) {
+            throw new IllegalStateException("策略库存重建门禁已失效，拒绝继续重放或提升");
+        }
+        return rebuilds.lockRun(runId);
+    }
+
     private void failRun(long runId, String reason) {
         if (runId <= 0) {
             return;
         }
+        Map<String, Object> snapshot = rebuilds.selectRun(runId);
+        if (snapshot == null) {
+            return;
+        }
         String safeReason = reason == null || reason.isBlank() ? "策略库存重建失败" : reason;
-        rebuilds.markFailed(runId, safeReason.substring(0, Math.min(500, safeReason.length())));
+        long credentialId = number(snapshot, "credential_id");
+        String symbol = text(snapshot, "symbol");
+        tx.executeWithoutResult(status -> {
+            Map<String, Object> gate = dispatches.lockGuard(credentialId, symbol);
+            Map<String, Object> run = rebuilds.lockRun(runId);
+            if (run != null && ("BUILDING".equals(text(run, "status")) || "READY".equals(text(run, "status")))) {
+                rebuilds.markFailed(runId, safeReason.substring(0, Math.min(500, safeReason.length())));
+            }
+            if (gate != null && Objects.equals(nullableLong(gate, "rebuildRunId"), runId)) {
+                dispatches.releaseRebuild(credentialId, symbol, runId);
+            }
+        });
     }
 
     private static void requireRunStatus(Map<String, Object> run, String status) {
