@@ -3418,7 +3418,9 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         if ("PAPER".equalsIgnoreCase(runtime.credential.getRunMode())) {
             return true;
         }
+        String positionSide = runtime.position == null ? null : runtime.position.getPositionSide();
         return runtime.state != null && runtime.position != null
+            && (positionSide == null || "BOTH".equalsIgnoreCase(positionSide) || positionSide.equalsIgnoreCase(runtime.state.getDirection()))
             && positionProjectionService.matchesExclusiveInventory(runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.strategy.getId(),
                 runtime.instance.getId(), runtime.state.getDirection(), runtime.position.getQuantity());
     }
