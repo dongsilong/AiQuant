@@ -2432,7 +2432,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                     state.setStatus("OPEN");
                     state.setPositionQty(runtime.position.getQuantity());
                     if (exit.markFirstTakeProfitTriggered()) {
-                        PositionProtectionState.confirmLocalFirstProfit(state, quantity);
+                        PositionProtectionState.confirmLocalFirstProfit(state, filledOrder.executedQuantity());
                     }
                     clearPending(state);
                     state.setRecoveryRequired(false);
