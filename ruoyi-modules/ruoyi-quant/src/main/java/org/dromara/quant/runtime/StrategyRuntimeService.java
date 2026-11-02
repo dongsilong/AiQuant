@@ -2523,6 +2523,11 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
             }
             return true;
         }
+        runtime.position = refreshed;
+        if (!hasExclusiveStrategyInventory(runtime)) {
+            blockUnownedAccountExposure(runtime, "exchange-protection-exit");
+            return true;
+        }
         if (refreshed == null) {
             blockCloseCandle(runtime, context.klineOpenTime());
             runtime.position = null;
