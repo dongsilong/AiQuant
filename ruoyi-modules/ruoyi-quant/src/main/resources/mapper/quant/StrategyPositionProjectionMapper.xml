@@ -15,6 +15,12 @@ FROM quant_strategy_position_inventory
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND strategy_instance_id=#{instanceId} AND position_side=#{side}
 FOR UPDATE]]></select>
+    <select id="ownershipSnapshot" resultType="map" timeout="3"><![CDATA[SELECT
+       COALESCE(SUM(open_quantity),0) AS aggregate_quantity,
+       COALESCE(SUM(CASE WHEN strategy_instance_id=#{instanceId} THEN open_quantity ELSE 0 END),0) AS instance_quantity,
+       MAX(CASE WHEN strategy_instance_id=#{instanceId} THEN strategy_id ELSE NULL END) AS instance_strategy_id
+FROM quant_strategy_position_inventory
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND position_side=#{side}]]></select>
     <select id="existing" resultType="map" timeout="3"><![CDATA[SELECT strategy_id,strategy_instance_id,exchange_order_id,position_side,
        fill_role,exchange_side,quantity,fill_price,commission,commission_asset,realized_pnl,trade_time
 FROM quant_strategy_position_fill_event
