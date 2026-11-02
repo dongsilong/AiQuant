@@ -41,13 +41,15 @@ class StrategyPositionRebuildContractTest {
         assertTrue(xml.contains("preserved_cycle_number"));
         assertTrue(xml.contains("ON DUPLICATE KEY UPDATE"));
         assertTrue(xml.contains("c.closed_at IS NOT NULL"));
+        assertTrue(xml.contains("c.opened_at<r.history_from"));
 
         String projection = resource("mapper/quant/StrategyPositionProjectionMapper.xml");
         assertTrue(projection.contains("id=\"cycleById\""));
-        String service = resource("org/dromara/quant/execution/StrategyPositionRebuildService.java");
+        String service = Files.readString(Path.of("src", "main", "java", "org", "dromara", "quant", "execution", "StrategyPositionRebuildService.java"), StandardCharsets.UTF_8);
         assertTrue(service.contains("resolveVerifiedAttribution"));
         assertTrue(service.contains("existingFee"));
         assertTrue(service.contains("verifyShadowMatchesExchange"));
+        assertTrue(service.contains("Math.addExact(oldCycleNumber, 1)"));
         assertTrue(service.contains("gateway.queryPositions"));
         assertTrue(service.contains("assertSourceStable"));
         assertTrue(service.contains("rebuilds.promoteInventory(runId)"));
