@@ -58,6 +58,9 @@ class ProtectionOrderServiceTest {
             return 1;
         }).when(mapper).insert(any(QuantProtectionOrder.class));
         when(mapper.updateById(any(QuantProtectionOrder.class))).thenReturn(1);
+        when(mapper.updateExchangeFactIfUnchanged(any(), any(), any(), any(),
+            org.mockito.ArgumentMatchers.nullable(Long.class), org.mockito.ArgumentMatchers.nullable(BigDecimal.class),
+            any(), any(), any())).thenReturn(1);
         when(mapper.update(any(QuantProtectionOrder.class), any())).thenReturn(1);
     }
 
@@ -849,6 +852,9 @@ class ProtectionOrderServiceTest {
         when(gateway.queryProtectionOrder(any(), eq(55L), eq(local.getClientOrderId()), eq("BTCUSDT")))
             .thenReturn(snapshot(55L, local.getClientOrderId(), BigDecimal.ONE, "CANCELED", BigDecimal.ZERO));
         when(mapper.updateById(local)).thenReturn(0);
+        when(mapper.updateExchangeFactIfUnchanged(any(), any(), any(), any(),
+            org.mockito.ArgumentMatchers.nullable(Long.class), org.mockito.ArgumentMatchers.nullable(BigDecimal.class),
+            any(), any(), any())).thenReturn(0);
 
         assertFalse(service.recoverDispatchBeforeStrategyStart(1L, "BTCUSDT"));
 
