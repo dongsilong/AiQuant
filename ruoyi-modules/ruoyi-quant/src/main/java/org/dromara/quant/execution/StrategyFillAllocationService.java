@@ -96,6 +96,10 @@ public class StrategyFillAllocationService {
             throw new IllegalStateException("缺少交易所成交或可证明的策略订单归属，不得分配成交");
         }
         String symbol = fill.symbol().toUpperCase(Locale.ROOT);
+        LocalDateTime when = fill.time() == null ? null : LocalDateTime.ofInstant(fill.time(), ZoneOffset.UTC);
+        if (when == null) {
+            throw new IllegalStateException("交易所成交缺少方向或成交时间");
+        }
         // A missing commission/PnL is UNKNOWN, not zero: silent coercion
         // corrupts the immutable per-strategy financial allocation.
         if (fill.commission() == null || fill.realizedPnl() == null || !java.util.Set.of("BUY", "SELL").contains(fill.side() == null ? "" : fill.side().toUpperCase(Locale.ROOT))) {
@@ -107,10 +111,6 @@ public class StrategyFillAllocationService {
         }
         BigDecimal fee = fill.commission();
         BigDecimal pnl = fill.realizedPnl();
-        LocalDateTime when = fill.time() == null ? null : LocalDateTime.ofInstant(fill.time(), ZoneOffset.UTC);
-        if (when == null || fill.side() == null || fill.side().isBlank()) {
-            throw new IllegalStateException("交易所成交缺少方向或成交时间");
-        }
         Map<String, Object> existing = mapper.getAllocation(credentialId, symbol, fill.tradeId());
         if (existing != null) {
             verifyImmutable(existing, fill, order, fee, feeAsset, pnl);
