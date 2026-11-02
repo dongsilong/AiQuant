@@ -65,6 +65,28 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void periodicRecoveryQueriesAndBindsExactTriggeredChildOrder() {
+        QuantProtectionOrder local = order();
+        local.setStatus("WORKING");
+        local.setExchangeOrderId(55L);
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        var actual = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "BOTH",
+            "STOP_MARKET", BigDecimal.ONE, new BigDecimal("90"), Instant.now(), BigDecimal.ONE, true, false, 91L, new BigDecimal("89"));
+        var child = new ExchangeGateway.OrderSnapshot("BTCUSDT", 91L, "child-client", "SELL", "MARKET", "FILLED", BigDecimal.ZERO,
+            BigDecimal.ONE, BigDecimal.ONE, Instant.now(), new BigDecimal("89"));
+        when(gateway.queryProtectionOrder(any(), eq(55L), eq(local.getClientOrderId()), eq("BTCUSDT"))).thenReturn(actual);
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(91L), isNull())).thenReturn(child);
+        var journal = mock(ProtectionOrderJournalService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "protectionJournal", journal);
+        when(journal.bindChild(any(), any(), any(), any())).thenReturn(true);
+
+        assertEquals(1, service.recoverTriggeredProtectionChildren(1L, "BTCUSDT", 5));
+
+        verify(gateway).queryOrder(any(), eq("BTCUSDT"), eq(91L), isNull());
+        verify(journal).bindChild(any(), eq(local), eq(actual), eq(child));
+    }
+
+    @Test
     void wrongBinanceAlgoIdMustNotConfirmOrReleaseAnUncertainProtection() {
         QuantProtectionOrder local = order();
         local.setStatus("UNKNOWN");
