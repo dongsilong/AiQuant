@@ -33,6 +33,12 @@ public interface StrategyPositionProjectionMapper {
 
     int closeCycle(@Param("cycleId") long cycleId, @Param("closedAt") LocalDateTime closedAt);
 
+    Map<String, Object> existingFee(@Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("tradeId") long tradeId);
+
+    int insertFee(@Param("id") long id, @Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("strategyId") long strategyId,
+                  @Param("instanceId") long instanceId, @Param("cycleId") long cycleId, @Param("tradeId") long tradeId, @Param("orderId") long orderId,
+                  @Param("side") String side, @Param("fee") BigDecimal fee, @Param("feeAsset") String feeAsset, @Param("tradeTime") LocalDateTime tradeTime);
+
     int insertFill(@Param("id") long id, @Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("strategyId") long strategyId,
                    @Param("instanceId") long instanceId, @Param("cycleId") long cycleId, @Param("tradeId") long tradeId, @Param("orderId") long orderId,
                    @Param("side") String side, @Param("role") String role, @Param("exchangeSide") String exchangeSide, @Param("quantity") BigDecimal quantity,
@@ -41,6 +47,6 @@ public interface StrategyPositionProjectionMapper {
 
     int update(@Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("instanceId") long instanceId, @Param("side") String side,
                @Param("strategyId") long strategyId, @Param("quantity") BigDecimal quantity, @Param("cost") BigDecimal cost, @Param("pnl") BigDecimal pnl,
-               @Param("fees") BigDecimal fees, @Param("feeAsset") String feeAsset, @Param("cycle") long cycle, @Param("cycleId") Long cycleId,
+               @Param("cycle") long cycle, @Param("cycleId") Long cycleId,
                @Param("tradeTime") LocalDateTime tradeTime, @Param("tradeId") long tradeId);
 }
