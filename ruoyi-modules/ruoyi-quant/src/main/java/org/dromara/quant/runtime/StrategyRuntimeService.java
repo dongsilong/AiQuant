@@ -2392,8 +2392,22 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                     stateService.save(state);
                     return;
                 }
-                blockCloseCandleForExecution(runtime, executionResult, klineOpenTime);
+                ExchangeGateway.OrderSnapshot filledOrder = blockCloseCandleForExecution(runtime, executionResult, klineOpenTime);
                 blockCloseCandle(runtime, klineOpenTime);
+                if (filledOrder == null || filledOrder.orderId() == null || !filledOrder.orderId().equals(executionResult.orderId())
+                    || filledOrder.clientOrderId() == null || !filledOrder.clientOrderId().equals(executionResult.clientOrderId())
+                    || filledOrder.symbol() == null || !filledOrder.symbol().equalsIgnoreCase(runtime.symbol.getSymbol())
+                    || filledOrder.side() == null || !filledOrder.side().equalsIgnoreCase(side)
+                    || !"FILLED".equalsIgnoreCase(filledOrder.status()) || filledOrder.originalQuantity() == null
+                    || filledOrder.originalQuantity().signum() <= 0 || filledOrder.executedQuantity() == null
+                    || filledOrder.executedQuantity().signum() <= 0 || filledOrder.executedQuantity().compareTo(filledOrder.originalQuantity()) > 0
+                    || !matchesRemainingPosition(runtime.position, previousQuantity, filledOrder.executedQuantity())) {
+                    state.setStatus("EXIT_PENDING");
+                    state.setRecoveryRequired(true);
+                    state.setUnsafeRecovery(true);
+                    stateService.save(state);
+                    return;
+                }
                 if (runtime.position == null) {
                     if (previousQuantity != null && previousQuantity.signum() > 0) {
                         BigDecimal profitRate = leveragedReturnRate(runtime, directionBeforeClose, context.currentPrice(), entryPriceBeforeClose);
@@ -2407,12 +2421,6 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                     stateService.markClosed(state);
                     runtime.position = null;
                     runtime.state = stateService.findByInstance(runtime.instance.getId());
-                } else if (executionResult == null || !"FILLED".equalsIgnoreCase(executionResult.status()) || previousQuantity == null || runtime.position.getQuantity().compareTo(previousQuantity.subtract(quantity).max(BigDecimal.ZERO)) > 0) {
-                    state.setStatus("EXIT_PENDING");
-                    state.setRecoveryRequired(true);
-                    state.setUnsafeRecovery(true);
-                    stateService.save(state);
-                    return;
                 } else {
                     BigDecimal closedQuantity = previousQuantity.subtract(runtime.position.getQuantity()).max(BigDecimal.ZERO);
                     if (closedQuantity.signum() > 0) {
