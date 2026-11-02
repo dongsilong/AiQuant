@@ -42,7 +42,7 @@ WHERE run_id=#{runId} AND strategy_instance_id=#{instanceId} AND position_side=#
 FOR UPDATE
 ]]></select>
     <select id="selectInventoryBaselineForUpdate" resultType="map" timeout="3"><![CDATA[
-SELECT s.strategy_instance_id,s.position_side,s.base_exists,s.base_updated_at,
+SELECT s.strategy_instance_id,s.position_side,CAST(s.base_exists AS UNSIGNED) AS base_exists,s.base_updated_at,
        i.id AS live_inventory_id,i.updated_at AS live_updated_at
 FROM quant_strategy_position_rebuild_inventory s
 LEFT JOIN quant_strategy_position_inventory i
