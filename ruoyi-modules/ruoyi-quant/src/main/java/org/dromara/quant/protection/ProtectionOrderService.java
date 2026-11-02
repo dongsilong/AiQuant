@@ -1133,12 +1133,9 @@ public class ProtectionOrderService {
                     local.getSymbol(), local.getProtectionType(), local.getClientOrderId(), credential.runMode(), actual.status());
                 throw new ProtectionExecutionPendingException();
             }
-            local.setStatus(actual.status());
-            if (actual.executedQuantity() != null) {
-                local.setExecutedQuantity(actual.executedQuantity().max(local.getExecutedQuantity() == null ? BigDecimal.ZERO : local.getExecutedQuantity()));
-            }
-            if (mapper.updateById(local) != 1) {
-                throw new IllegalStateException("保护单终态已确认但本地账本更新失败，保持派发占用");
+            if (!persistExchangeFactIfUnchanged(local, actual.algoId(), actual.status(),
+                actual.executedQuantity() == null ? BigDecimal.ZERO : actual.executedQuantity())) {
+                throw new IllegalStateException("保护单终态与并发更新的本地状态冲突，保持派发占用");
             }
             if (targetLease.get() != null) {
                 targetLease.get().terminal(local);
@@ -1156,9 +1153,9 @@ public class ProtectionOrderService {
             throw new IllegalStateException("Binance 保护单字段与持久化意图不一致");
         }
         boolean newlyConfirmed = !"WORKING".equals(local.getStatus());
-        local.setStatus("WORKING");
-        if (mapper.updateById(local) != 1) {
-            throw new IllegalStateException("保护单已生效但本地账本更新失败，保持调度占用");
+        if (!persistExchangeFactIfUnchanged(local, actual.algoId(), "WORKING",
+            actual.executedQuantity() == null ? BigDecimal.ZERO : actual.executedQuantity())) {
+            throw new IllegalStateException("保护单已生效但本地状态发生并发变化，保持调度占用");
         }
         // Restore a previously uncertain LIVE placement only after the exact
         // Binance algo ID, client algo ID, parameters and durable local status agree.
