@@ -47,6 +47,7 @@ public class ProtectionOrderService {
     private final TradeExecutionApplicationService executionApplicationService;
     private final ProtectionTargetCoordinator targets;
     private final ThreadLocal<ProtectionTargetCoordinator.Lease> targetLease = new ThreadLocal<>();
+    private final java.util.concurrent.ConcurrentHashMap<Long, Long> protectionChildRecoveryCursors = new java.util.concurrent.ConcurrentHashMap<>();
     @Autowired
     private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
     private volatile LiveOrderDispatcher liveOrderDispatcher;
@@ -1335,17 +1336,25 @@ public class ProtectionOrderService {
             return 0;
         }
         int limit = Math.max(1, Math.min(20, requestedLimit));
+        Long cursor = protectionChildRecoveryCursors.get(credentialId);
         var query = new LambdaQueryWrapper<QuantProtectionOrder>()
             .eq(QuantProtectionOrder::getCredentialId, credentialId)
             .eq(symbol != null && !symbol.isBlank(), QuantProtectionOrder::getSymbol, symbol)
+            .gt(cursor != null, QuantProtectionOrder::getId, cursor)
             .in(QuantProtectionOrder::getProtectionType, STRATEGY_PROTECTION_TYPES)
             .in(QuantProtectionOrder::getStatus, ACTIVE_STATUSES)
             .isNotNull(QuantProtectionOrder::getExchangeOrderId)
-            .orderByDesc(QuantProtectionOrder::getId)
+            .orderByAsc(QuantProtectionOrder::getId)
             .last("LIMIT " + limit);
+        List<QuantProtectionOrder> candidates = mapper.selectList(query);
+        if (candidates.isEmpty()) {
+            protectionChildRecoveryCursors.remove(credentialId);
+            return 0;
+        }
+        protectionChildRecoveryCursors.put(credentialId, candidates.getLast().getId());
         ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
         int recovered = 0;
-        for (QuantProtectionOrder local : mapper.selectList(query)) {
+        for (QuantProtectionOrder local : candidates) {
             try {
                 ExchangeGateway.ProtectionOrderSnapshot actual = readProtectionSnapshot(credential, local);
                 if (actual != null && "FINISHED".equalsIgnoreCase(actual.status()) && actual.actualOrderId() != null) {
