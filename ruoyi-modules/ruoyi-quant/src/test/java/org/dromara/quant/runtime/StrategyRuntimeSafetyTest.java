@@ -1138,6 +1138,34 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void filledOpenWithUndersizedPositionSnapshotRemainsBlockedForRecovery() throws Exception {
+        Fixture f = fixture();
+        try {
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("OPEN_PENDING");
+            state.setPendingAction("OPEN");
+            state.setPendingOrderId(55L);
+            state.setDirection("LONG");
+            var position = (QuantPosition) ReflectionTestUtils.getField(f.runtime, "position");
+            position.setQuantity(new BigDecimal("0.5"));
+            var mapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+            com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(new org.apache.ibatis.builder.MapperBuilderAssistant(
+                new org.apache.ibatis.session.Configuration(), "filled-open-recovery-test"), QuantPosition.class);
+            when(mapper.selectList(any())).thenReturn(List.of(position));
+            var filledOrder = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "open", "BUY", "MARKET", "FILLED",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, Instant.now());
+
+            assertDoesNotThrow(() -> ReflectionTestUtils.invokeMethod(f.service, "applyPendingExecution", f.runtime, null, filledOrder, List.of()));
+
+            assertTrue(Boolean.TRUE.equals(state.getRecoveryRequired()));
+            assertTrue(Boolean.TRUE.equals(state.getUnsafeRecovery()));
+            assertEquals(new BigDecimal("0.5"), state.getPositionQty());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void closingRuntimeCannotReleaseLeaseBeforeProtectionRestFinishes() throws Exception {
         Fixture f = fixture();
         var entered = new java.util.concurrent.CountDownLatch(1);
@@ -1248,6 +1276,9 @@ class StrategyRuntimeSafetyTest {
         Fixture f = fixture();
         try {
             var position = (QuantPosition) ReflectionTestUtils.getField(f.runtime, "position");
+            if ("FILLED".equals(status)) {
+                position.setQuantity(new BigDecimal("0.5"));
+            }
             ReflectionTestUtils.setField(f.runtime, "position", null);
             var credential = (QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential");
             credential.setRunMode(mode);
@@ -1286,6 +1317,11 @@ class StrategyRuntimeSafetyTest {
 
             verify(gateway).queryOrder(any(), eq("BTCUSDT"), eq(55L), eq("confirmed-open"));
             verify(logs).order(3L, order);
+            if ("FILLED".equals(status)) {
+                var recoveredState = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+                assertTrue(Boolean.TRUE.equals(recoveredState.getRecoveryRequired()));
+                assertTrue(Boolean.TRUE.equals(recoveredState.getUnsafeRecovery()));
+            }
         } finally {
             f.service.destroy();
         }
