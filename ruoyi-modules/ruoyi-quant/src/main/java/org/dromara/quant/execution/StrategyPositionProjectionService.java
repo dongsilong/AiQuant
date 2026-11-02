@@ -64,6 +64,22 @@ public class StrategyPositionProjectionService {
     }
 
     /**
+     * Require this strategy instance to own the complete exchange-side exposure before the
+     * legacy account-position runtime is allowed to manage it. Shared net exposure is quarantined.
+     */
+    public boolean matchesExclusiveInventory(long credentialId, String symbol, long strategyId, long instanceId, String side, BigDecimal accountQuantity) {
+        if (credentialId <= 0 || symbol == null || symbol.isBlank() || strategyId <= 0 || instanceId <= 0
+            || side == null || !(side.equalsIgnoreCase("LONG") || side.equalsIgnoreCase("SHORT"))
+            || accountQuantity == null || accountQuantity.signum() <= 0) {
+            return false;
+        }
+        Map<String, Object> snapshot = mapper.ownershipSnapshot(credentialId, symbol.trim().toUpperCase(Locale.ROOT), instanceId, side.toUpperCase(Locale.ROOT));
+        return snapshot != null && snapshot.get("instance_strategy_id") instanceof Number owner && owner.longValue() == strategyId
+            && decimal(snapshot, "instance_quantity").compareTo(accountQuantity) == 0
+            && decimal(snapshot, "aggregate_quantity").compareTo(accountQuantity) == 0;
+    }
+
+    /**
      * Verify strategy ownership before writing any downstream allocation ledger.
      */
     public void verifyAttribution(long credentialId, QuantOrder verifiedOrder, ExchangeGateway.TradeSnapshot trade) {
