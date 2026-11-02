@@ -134,34 +134,36 @@ public class StrategyPositionRebuildService {
      * Binance 已确认的策略平仓成交（包括保护单子订单）会使正在进行的影子重建失效。
      * 该事务与派单和最终提升共用账户交易对门禁及锁顺序。
      */
-    public Long invalidateForAttributedClose(long credentialId, String requestedSymbol) {
-        if (credentialId <= 0 || requestedSymbol == null || !requestedSymbol.matches("[A-Za-z0-9]{2,32}")) {
-            throw new IllegalArgumentException("有效的 credentialId 和 symbol 是必需的");
-        }
-        String symbol = requestedSymbol.toUpperCase(Locale.ROOT);
-        return tx.execute(status -> {
-            Map<String, Object> gate = dispatches.lockGuard(credentialId, symbol);
-            Long runId = gate == null ? null : nullableLong(gate, "rebuildRunId");
-            if (runId != null) {
-                dispatches.invalidateRebuildForClose(credentialId, symbol);
-            }
-            return runId;
-        });
-    }
-
-    /** 平仓成交投影成功后才释放已失效的重建门禁；投影失败时保持新开仓阻断。 */
-    public void releaseAfterAttributedClose(long credentialId, String requestedSymbol, Long runId) {
-        if (runId == null) {
-            return;
-        }
+    public void invalidateForAttributedClose(long credentialId, String requestedSymbol) {
         if (credentialId <= 0 || requestedSymbol == null || !requestedSymbol.matches("[A-Za-z0-9]{2,32}")) {
             throw new IllegalArgumentException("有效的 credentialId 和 symbol 是必需的");
         }
         String symbol = requestedSymbol.toUpperCase(Locale.ROOT);
         tx.executeWithoutResult(status -> {
             Map<String, Object> gate = dispatches.lockGuard(credentialId, symbol);
-            if (gate != null && Objects.equals(nullableLong(gate, "rebuildRunId"), runId)) {
-                dispatches.releaseRebuild(credentialId, symbol, runId);
+            if (gate != null && nullableLong(gate, "rebuildRunId") != null) {
+                dispatches.invalidateRebuildForClose(credentialId, symbol);
+            }
+        });
+    }
+
+    /** 成交投影和原始成交归属状态一并提交后，才释放重建门禁。 */
+    public void completeAttributedClose(long credentialId, String requestedSymbol, long journalRecordId) {
+        if (credentialId <= 0 || requestedSymbol == null || !requestedSymbol.matches("[A-Za-z0-9]{2,32}") || journalRecordId <= 0) {
+            throw new IllegalArgumentException("有效的 credentialId、symbol 和成交日志 ID 是必需的");
+        }
+        String symbol = requestedSymbol.toUpperCase(Locale.ROOT);
+        tx.executeWithoutResult(status -> {
+            Map<String, Object> gate = dispatches.lockGuard(credentialId, symbol);
+            Long runId = gate == null ? null : nullableLong(gate, "rebuildRunId");
+            if (runId != null) {
+                dispatches.invalidateRebuildForClose(credentialId, symbol);
+            }
+            if (journal.updateStatus(journalRecordId, "ATTRIBUTED", null) != 1) {
+                throw new IllegalStateException("平仓成交归属状态未能与重建门禁原子提交");
+            }
+            if (runId != null && dispatches.releaseRebuild(credentialId, symbol, runId) != 1) {
+                throw new IllegalStateException("平仓成交已投影，但重建门禁未能安全释放");
             }
         });
     }

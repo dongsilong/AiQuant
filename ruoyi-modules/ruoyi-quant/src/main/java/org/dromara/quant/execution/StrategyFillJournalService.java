@@ -60,12 +60,17 @@ public class StrategyFillJournalService {
         try {
             StrategyPositionProjectionService.VerifiedAttribution attribution =
                 projections.resolveVerifiedAttribution(credentialId, order, fill);
-            Long invalidatedRunId = attribution.role() == StrategyPositionAccounting.Role.CLOSE
-                ? rebuilds.invalidateForAttributedClose(credentialId, fill.symbol()) : null;
+            boolean closeFill = attribution.role() == StrategyPositionAccounting.Role.CLOSE;
+            if (closeFill) {
+                rebuilds.invalidateForAttributedClose(credentialId, fill.symbol());
+            }
             allocations.allocate(fill, order, credentialId);
             backfillTradeAttribution(record, order, credentialId);
             projections.projectAttributed(credentialId, order, fill, attribution);
-            rebuilds.releaseAfterAttributedClose(credentialId, fill.symbol(), invalidatedRunId);
+            if (closeFill) {
+                rebuilds.completeAttributedClose(credentialId, fill.symbol(), record.getId());
+                return ATTRIBUTED;
+            }
             return updateStatus(record, ATTRIBUTED, null);
         } catch (IllegalStateException incomplete) {
             String message = safeReason(incomplete.getMessage());

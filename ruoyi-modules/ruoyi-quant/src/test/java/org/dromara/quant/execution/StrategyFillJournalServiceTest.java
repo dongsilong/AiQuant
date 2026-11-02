@@ -207,14 +207,12 @@ class StrategyFillJournalServiceTest {
         var attribution = new StrategyPositionProjectionService.VerifiedAttribution(
             StrategyPositionAccounting.PositionSide.LONG, StrategyPositionAccounting.Role.CLOSE);
         when(projections.resolveVerifiedAttribution(1L, order, closeFill)).thenReturn(attribution);
-        when(rebuilds.invalidateForAttributedClose(1L, "BTCUSDT")).thenReturn(77L);
-
         assertEquals("ATTRIBUTED", service.attribute(closeFill, order, 1L));
 
         var orderOfCalls = inOrder(rebuilds, projections);
         orderOfCalls.verify(rebuilds).invalidateForAttributedClose(1L, "BTCUSDT");
         orderOfCalls.verify(projections).projectAttributed(1L, order, closeFill, attribution);
-        orderOfCalls.verify(rebuilds).releaseAfterAttributedClose(1L, "BTCUSDT", 77L);
+        orderOfCalls.verify(rebuilds).completeAttributedClose(1L, "BTCUSDT", 77L);
     }
 
     @Test
@@ -271,12 +269,11 @@ class StrategyFillJournalServiceTest {
         when(projections.resolveVerifiedAttribution(1L, order, fill())).thenReturn(
             new StrategyPositionProjectionService.VerifiedAttribution(
                 StrategyPositionAccounting.PositionSide.LONG, StrategyPositionAccounting.Role.CLOSE));
-        when(rebuilds.invalidateForAttributedClose(1L, "BTCUSDT")).thenReturn(77L);
 
         assertEquals("PENDING_FACTS", service.attribute(fill(), order, 1L));
 
         verify(rebuilds).invalidateForAttributedClose(1L, "BTCUSDT");
-        verify(rebuilds, never()).releaseAfterAttributedClose(anyLong(), anyString(), anyLong());
+        verify(rebuilds, never()).completeAttributedClose(anyLong(), anyString(), anyLong());
         verify(projections).projectAttributed(eq(1L), eq(order), eq(fill()), any(StrategyPositionProjectionService.VerifiedAttribution.class));
         verify(journal).updateStatus(anyLong(), eq("PENDING_FACTS"), contains("immutable"));
         verify(journal, never()).updateStatus(anyLong(), eq("ATTRIBUTED"), isNull());
