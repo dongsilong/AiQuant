@@ -22,8 +22,9 @@ class StrategyFillJournalServiceTest {
     private final StrategyFillJournalMapper journal = mock(StrategyFillJournalMapper.class);
     private final StrategyFillAllocationService allocations = mock(StrategyFillAllocationService.class);
     private final QuantOrderMapper orders = mock(QuantOrderMapper.class);
+    private final StrategyPositionProjectionService projections = mock(StrategyPositionProjectionService.class);
     private final QuantTradeMapper trades = mock(QuantTradeMapper.class);
-    private final StrategyFillJournalService service = new StrategyFillJournalService(journal, allocations, orders);
+    private final StrategyFillJournalService service = new StrategyFillJournalService(journal, allocations, projections, orders);
 
     @BeforeEach
     void setup() {
@@ -179,6 +180,7 @@ class StrategyFillJournalServiceTest {
 
         verify(allocations).allocate(fill, order, 1L);
         verify(trades).backfillStrategyAttribution(1L, "BTCUSDT", 101L, 202L, 3L, 4L);
+        verify(projections).projectAttributed(1L, order, fill);
         verify(journal).updateStatus(77L, "ATTRIBUTED", null);
     }
 
