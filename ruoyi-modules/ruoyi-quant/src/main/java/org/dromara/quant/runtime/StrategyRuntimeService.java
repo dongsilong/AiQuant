@@ -1985,15 +1985,16 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         blockCloseCandle(runtime, candleOpen);
     }
 
-    private void blockCloseCandleForExecution(ActiveRuntime runtime, ExecutionResult result, Instant fallbackKlineOpen) {
+    private ExchangeGateway.OrderSnapshot blockCloseCandleForExecution(ActiveRuntime runtime, ExecutionResult result, Instant fallbackKlineOpen) {
+        ExchangeGateway.OrderSnapshot order = null;
         if (result != null && (result.orderId() != null || result.clientOrderId() != null && !result.clientOrderId().isBlank())) {
             try {
-                ExchangeGateway.OrderSnapshot order = gateway.queryOrder(executionService.toCredential(runtime.credential), runtime.symbol.getSymbol(), result.orderId(),
+                order = gateway.queryOrder(executionService.toCredential(runtime.credential), runtime.symbol.getSymbol(), result.orderId(),
                     result.clientOrderId());
                 if (order != null && "FILLED".equalsIgnoreCase(order.status()) && order.executedQuantity() != null && order.executedQuantity().signum() > 0
                     && order.updateTime() != null) {
                     blockCloseCandleAtExchangeTime(runtime, order.updateTime());
-                    return;
+                    return order;
                 }
             } catch (RuntimeException ex) {
                 log.warn("平仓已确认但无法读取交易所成交时间，保留信号K线封锁并封锁最近已观察K线 instanceId={} symbol={} orderId={} errorType={}", runtime.instance.getId(),
@@ -2004,6 +2005,17 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (!Objects.equals(fallbackKlineOpen, runtime.lastEvaluatedKlineOpenTime)) {
             blockCloseCandle(runtime, runtime.lastEvaluatedKlineOpenTime);
         }
+        return order;
+    }
+
+    private static boolean matchesRemainingPosition(QuantPosition position, BigDecimal beforeQuantity, BigDecimal executedQuantity) {
+        if (beforeQuantity == null || beforeQuantity.signum() <= 0 || executedQuantity == null || executedQuantity.signum() <= 0
+            || executedQuantity.compareTo(beforeQuantity) > 0) {
+            return false;
+        }
+        BigDecimal expectedRemaining = beforeQuantity.subtract(executedQuantity);
+        BigDecimal actualRemaining = position == null ? BigDecimal.ZERO : position.getQuantity();
+        return actualRemaining != null && actualRemaining.compareTo(expectedRemaining) == 0;
     }
 
     private void logUnavailableEntry(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, String code, String reason) {
