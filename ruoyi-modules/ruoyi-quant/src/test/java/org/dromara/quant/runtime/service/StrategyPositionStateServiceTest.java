@@ -29,6 +29,18 @@ class StrategyPositionStateServiceTest {
     }
 
     @Test
+    void recoveryCandidatesIncludeClosedStatesWithPendingRecoveryFlags() {
+        when(mapper.selectList(any())).thenReturn(List.of());
+        service.findUnclosed();
+
+        var captor = org.mockito.ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
+        verify(mapper).selectList(captor.capture());
+        String sql = captor.getValue().getSqlSegment();
+        org.junit.jupiter.api.Assertions.assertTrue(sql.contains("recovery_required"));
+        org.junit.jupiter.api.Assertions.assertTrue(sql.contains("unsafe_recovery"));
+    }
+
+    @Test
     void flatSnapshotClosesOnlyCleanOpenState() {
         var cleanOpen = state("OPEN", null, false, false);
         var opening = state("OPEN_PENDING", "OPEN", false, false);
