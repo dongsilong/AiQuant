@@ -50,6 +50,9 @@ public class StrategyFillJournalService {
         if (record.getAttributionStatus() != null && CONFLICT.equals(record.getAttributionStatus())) {
             return CONFLICT;
         }
+        if (ATTRIBUTED.equals(record.getAttributionStatus())) {
+            return ATTRIBUTED;
+        }
         if (order == null || order.getStrategyId() == null || order.getStrategyInstanceId() == null) {
             // A capture-only pass must not regress a previously attributed raw fill.
             if (ATTRIBUTED.equals(record.getAttributionStatus())) {

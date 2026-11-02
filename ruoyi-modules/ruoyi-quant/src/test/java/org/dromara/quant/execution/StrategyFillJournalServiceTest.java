@@ -58,6 +58,33 @@ class StrategyFillJournalServiceTest {
     }
 
     @Test
+    void duplicateAlreadyAttributedCloseDoesNotInvalidateANewRebuild() {
+        var stored = new StrategyFillJournalRecord();
+        stored.setId(77L);
+        stored.setCredentialId(1L);
+        stored.setSymbol("BTCUSDT");
+        stored.setExchangeTradeId(101L);
+        stored.setExchangeOrderId(202L);
+        stored.setSide("BUY");
+        stored.setQuantity(BigDecimal.ONE);
+        stored.setPrice(BigDecimal.TEN);
+        stored.setTradeTime(java.time.LocalDateTime.ofInstant(fill().time(), java.time.ZoneOffset.UTC));
+        stored.setAttributionStatus("ATTRIBUTED");
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(stored);
+        when(journal.enrichMissingFacts(any())).thenReturn(0);
+        var order = new QuantOrder();
+        order.setCredentialId(1L);
+        order.setSymbol("BTCUSDT");
+        order.setExchangeOrderId(202L);
+        order.setStrategyId(3L);
+        order.setStrategyInstanceId(4L);
+
+        assertEquals("ATTRIBUTED", service.attribute(fill(), order, 1L));
+
+        verifyNoInteractions(rebuilds, projections, allocations);
+    }
+
+    @Test
     void keepsRawFactAndMarksMissingAllocationFieldsForRetry() {
         when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(null);
         when(journal.insertRaw(any())).thenReturn(1);
