@@ -6,7 +6,7 @@ INSERT INTO quant_strategy_position_rebuild_run
 (id,credential_id,symbol,active_run_key,status,history_from,history_to,source_max_journal_id,
  source_fill_count,processed_count,created_at,updated_at)
 VALUES
-(#{id},#{credentialId},#{symbol},#{activeKey},'BUILDING',#{historyFrom},#{historyTo},
+(#{id},#{credentialId},#{symbol},#{activeKey},'PREPARING',#{historyFrom},#{historyTo},
  #{sourceMaxJournalId},#{sourceFillCount},0,NOW(3),NOW(3))
 ]]></insert>
     <select id="selectRun" resultType="map" timeout="3"><![CDATA[
@@ -17,7 +17,7 @@ SELECT * FROM quant_strategy_position_rebuild_run WHERE id=#{runId} FOR UPDATE
 ]]></select>
     <update id="updateRunSource" timeout="3"><![CDATA[
 UPDATE quant_strategy_position_rebuild_run
-SET history_from=#{historyFrom},history_to=#{historyTo},
+SET status='BUILDING',history_from=#{historyFrom},history_to=#{historyTo},
     source_max_journal_id=#{sourceMaxJournalId},source_fill_count=#{sourceFillCount},updated_at=NOW(3)
 WHERE id=#{runId} AND status='BUILDING' AND processed_count=0
 ]]></update>
@@ -129,7 +129,7 @@ WHERE id=#{runId} AND status='BUILDING'
     <update id="markFailed" timeout="3"><![CDATA[
 UPDATE quant_strategy_position_rebuild_run
 SET status='FAILED',failure_reason=#{reason},active_run_key=NULL,updated_at=NOW(3)
-WHERE id=#{runId} AND status IN ('BUILDING','READY')
+WHERE id=#{runId} AND status IN ('PREPARING','BUILDING','READY')
 ]]></update>
     <insert id="promoteInventory" timeout="5"><![CDATA[
 INSERT INTO quant_strategy_position_inventory

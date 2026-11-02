@@ -552,7 +552,8 @@ public class StrategyPositionRebuildService {
         tx.executeWithoutResult(status -> {
             Map<String, Object> gate = dispatches.lockGuard(credentialId, symbol);
             Map<String, Object> run = rebuilds.lockRun(runId);
-            if (run != null && ("BUILDING".equals(text(run, "status")) || "READY".equals(text(run, "status")))) {
+            if (run != null && ("PREPARING".equals(text(run, "status")) || "BUILDING".equals(text(run, "status"))
+                || "READY".equals(text(run, "status")))) {
                 rebuilds.markFailed(runId, safeReason.substring(0, Math.min(500, safeReason.length())));
             }
             if (gate != null && Objects.equals(nullableLong(gate, "rebuildRunId"), runId)) {
