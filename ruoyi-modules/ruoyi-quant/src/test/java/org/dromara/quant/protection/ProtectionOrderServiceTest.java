@@ -69,9 +69,10 @@ class ProtectionOrderServiceTest {
         QuantProtectionOrder local = order();
         local.setStatus("WORKING");
         local.setExchangeOrderId(55L);
+        local.setPositionSide("LONG");
         when(mapper.selectList(any())).thenReturn(List.of(local));
-        var actual = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "BOTH",
-            "STOP_MARKET", BigDecimal.ONE, new BigDecimal("90"), Instant.now(), BigDecimal.ONE, true, false, 91L, new BigDecimal("89"));
+        var actual = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "LONG",
+            "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), BigDecimal.ONE, true, false, 91L, new BigDecimal("89"));
         var child = new ExchangeGateway.OrderSnapshot("BTCUSDT", 91L, "child-client", "SELL", "MARKET", "FILLED", BigDecimal.ZERO,
             BigDecimal.ONE, BigDecimal.ONE, Instant.now(), new BigDecimal("89"));
         when(gateway.queryProtectionOrder(any(), eq(55L), eq(local.getClientOrderId()), eq("BTCUSDT"))).thenReturn(actual);
