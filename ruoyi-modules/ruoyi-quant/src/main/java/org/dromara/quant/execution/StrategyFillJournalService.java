@@ -67,6 +67,11 @@ public class StrategyFillJournalService {
      * Persist a cross-ledger conflict without rewriting the first exchange fact.
      * Callers must not throw afterward if this quarantine is to commit.
      */
+    /** Persist a raw exchange fill without assigning it to a strategy. */
+    public String captureRaw(ExchangeGateway.TradeSnapshot fill, Long credentialId) {
+        return capture(fill, credentialId).getAttributionStatus();
+    }
+
     public void quarantineConflict(Long credentialId, String symbol, Long tradeId, String reason) {
         if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank() || tradeId == null || tradeId <= 0) {
             throw new IllegalArgumentException("Valid raw fill identity required for conflict quarantine");
