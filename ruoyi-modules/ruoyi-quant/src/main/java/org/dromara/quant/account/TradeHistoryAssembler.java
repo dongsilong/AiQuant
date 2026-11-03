@@ -83,7 +83,7 @@ public final class TradeHistoryAssembler {
                     active.remove(key);
                 }
             }
-            cycle.fee = addKnown(cycle.fee, fill.commission());
+            cycle.addFee(fill);
         }
         List<Map<String, Object>> rows =
             cycles.stream().sorted(Comparator.comparing((Cycle c) -> c.openedAt).thenComparing(c -> c.id).reversed()).map(c -> c.row(accountNames)).toList();
@@ -172,7 +172,7 @@ public final class TradeHistoryAssembler {
     private static Fill copyWithRole(Fill fill, String operationType, BigDecimal quantity, BigDecimal commission, BigDecimal realizedPnl) {
         return new Fill(fill.id(), fill.credentialId(), fill.symbol(), fill.side(), fill.positionSide(), operationType, fill.reduceOnly(), quantity, fill.price(),
             commission, realizedPnl, fill.tradeTime(), fill.leverage(), fill.priceTickSize(), fill.postFillWalletBalance(), fill.postFillBalanceAt(),
-            fill.currentPriceTickSize(), fill.exchangeTradeId(), fill.exchangeOrderId());
+            fill.currentPriceTickSize(), fill.exchangeTradeId(), fill.exchangeOrderId(), fill.commissionAsset());
     }
 
     private static BigDecimal proportionalFee(BigDecimal fee, BigDecimal partQuantity, BigDecimal totalQuantity) {
@@ -247,23 +247,30 @@ public final class TradeHistoryAssembler {
      */
     public record Fill(Long id, Long credentialId, String symbol, String side, String positionSide, String operationType, Boolean reduceOnly, BigDecimal quantity, BigDecimal price,
                        BigDecimal commission, BigDecimal realizedPnl, LocalDateTime tradeTime, Integer leverage, BigDecimal priceTickSize, BigDecimal postFillWalletBalance,
-                       LocalDateTime postFillBalanceAt, BigDecimal currentPriceTickSize, Long exchangeTradeId, Long exchangeOrderId) {
+                       LocalDateTime postFillBalanceAt, BigDecimal currentPriceTickSize, Long exchangeTradeId, Long exchangeOrderId, String commissionAsset) {
+        public Fill(Long id, Long credentialId, String symbol, String side, String positionSide, String operationType, Boolean reduceOnly, BigDecimal quantity, BigDecimal price,
+                    BigDecimal commission, BigDecimal realizedPnl, LocalDateTime tradeTime, Integer leverage, BigDecimal priceTickSize, BigDecimal postFillWalletBalance,
+                    LocalDateTime postFillBalanceAt, BigDecimal currentPriceTickSize, Long exchangeTradeId, Long exchangeOrderId) {
+            this(id, credentialId, symbol, side, positionSide, operationType, reduceOnly, quantity, price, commission, realizedPnl, tradeTime, leverage, priceTickSize,
+                postFillWalletBalance, postFillBalanceAt, currentPriceTickSize, exchangeTradeId, exchangeOrderId, null);
+        }
+
         public Fill(Long id, Long credentialId, String symbol, String side, String positionSide, String operationType, Boolean reduceOnly, BigDecimal quantity, BigDecimal price,
                     BigDecimal commission, BigDecimal realizedPnl, LocalDateTime tradeTime, Integer leverage, BigDecimal priceTickSize, BigDecimal postFillWalletBalance,
                     LocalDateTime postFillBalanceAt, BigDecimal currentPriceTickSize, Long exchangeTradeId) {
             this(id, credentialId, symbol, side, positionSide, operationType, reduceOnly, quantity, price, commission, realizedPnl, tradeTime, leverage, priceTickSize,
-                postFillWalletBalance, postFillBalanceAt, currentPriceTickSize, exchangeTradeId, null);
+                postFillWalletBalance, postFillBalanceAt, currentPriceTickSize, exchangeTradeId, null, null);
         }
         public Fill(Long id, Long credentialId, String symbol, String side, String positionSide, String operationType, Boolean reduceOnly, BigDecimal quantity, BigDecimal price,
                     BigDecimal commission, BigDecimal realizedPnl, LocalDateTime tradeTime, Integer leverage, BigDecimal priceTickSize, BigDecimal postFillWalletBalance,
                     LocalDateTime postFillBalanceAt, BigDecimal currentPriceTickSize) {
             this(id, credentialId, symbol, side, positionSide, operationType, reduceOnly, quantity, price, commission, realizedPnl, tradeTime, leverage, priceTickSize,
-                postFillWalletBalance, postFillBalanceAt, currentPriceTickSize, null);
+                postFillWalletBalance, postFillBalanceAt, currentPriceTickSize, null, null, null);
         }
 
         public Fill(Long id, Long credentialId, String symbol, String side, String positionSide, String operationType, Boolean reduceOnly, BigDecimal quantity, BigDecimal price,
                     BigDecimal commission, BigDecimal realizedPnl, LocalDateTime tradeTime) {
-            this(id, credentialId, symbol, side, positionSide, operationType, reduceOnly, quantity, price, commission, realizedPnl, tradeTime, null, null, null, null, null, null);
+            this(id, credentialId, symbol, side, positionSide, operationType, reduceOnly, quantity, price, commission, realizedPnl, tradeTime, null, null, null, null, null, null, null, null);
         }
     }
 
@@ -286,7 +293,9 @@ public final class TradeHistoryAssembler {
         private LocalDateTime closedAt;
         private BigDecimal openQty = BigDecimal.ZERO, openValue = BigDecimal.ZERO, remaining = BigDecimal.ZERO;
         private BigDecimal closeQty = BigDecimal.ZERO, closeValue = BigDecimal.ZERO;
-        private BigDecimal pnl = BigDecimal.ZERO, fee = BigDecimal.ZERO;
+        private BigDecimal pnl = BigDecimal.ZERO;
+        private final Map<String, BigDecimal> feesByAsset = new TreeMap<>();
+        private boolean feeFactsComplete = true;
         private int openingFillCount, closingFillCount;
         private final Set<String> openingOrderIds = new LinkedHashSet<>(), closingOrderIds = new LinkedHashSet<>();
         private final Set<String> openingTradeIds = new LinkedHashSet<>(), closingTradeIds = new LinkedHashSet<>();
@@ -294,6 +303,14 @@ public final class TradeHistoryAssembler {
         private Integer priceScale;
         private BigDecimal openingBalance, closingBalance;
         private LocalDateTime openingBalanceAt, closingBalanceAt;
+
+        private void addFee(Fill fill) {
+            if (fill.commission() == null || fill.commissionAsset() == null || fill.commissionAsset().isBlank()) {
+                feeFactsComplete = false;
+                return;
+            }
+            feesByAsset.merge(fill.commissionAsset().trim().toUpperCase(Locale.ROOT), fill.commission(), BigDecimal::add);
+        }
 
         private Cycle(Fill fill, String direction, String scope) {
             this.id = fill.id();
@@ -331,7 +348,13 @@ public final class TradeHistoryAssembler {
             row.put("closingBalance", fixedDecimal(closingBalance, 4));
             row.put("closingBalanceAt", timestamp(closingBalanceAt));
             row.put("realizedPnl", decimal(pnl));
-            row.put("commission", price(fee, displayScale));
+            Map<String, String> commissionByAsset = new LinkedHashMap<>();
+            feesByAsset.forEach((asset, amount) -> commissionByAsset.put(asset, decimal(amount)));
+            row.put("commissionByAsset", commissionByAsset);
+            row.put("commissionComplete", feeFactsComplete);
+            row.put("commissionAsset", feeFactsComplete && feesByAsset.size() == 1 ? feesByAsset.keySet().iterator().next() : null);
+            row.put("commission", feeFactsComplete && feesByAsset.size() == 1
+                ? price(feesByAsset.values().iterator().next(), displayScale) : null);
             row.put("closedAt", timestamp(closedAt));
             row.put("status", closedAt == null ? "OPEN" : "CLOSED");
             return row;
