@@ -159,6 +159,73 @@ class TradeHistoryAssemblerTest {
     }
 
     @Test
+    void reconstructsOneWayLongCycleFromFlatCurrentPosition() {
+        var fills = List.of(
+            fill(1, 10, "ETHUSDT", "BUY", "BOTH", null, "0.021", "100", "0.001", "0"),
+            fill(2, 10, "ETHUSDT", "SELL", "BOTH", null, "0.021", "110", "0.001", "0.21")
+        );
+
+        var reconstructed = TradeHistoryAssembler.reconstructOneWayFills(fills, BigDecimal.ZERO);
+        assertEquals(List.of("OPEN", "CLOSE"), reconstructed.stream().map(TradeHistoryAssembler.Fill::operationType).toList());
+
+        var result = TradeHistoryAssembler.assemble(reconstructed, Map.of());
+        assertEquals(1, result.rows().size());
+        assertEquals("LONG", result.rows().getFirst().get("direction"));
+        assertEquals("CLOSED", result.rows().getFirst().get("status"));
+        assertEquals("0.002", result.rows().getFirst().get("commission"));
+    }
+
+    @Test
+    void reconstructsOneWayShortCycleFromFlatCurrentPosition() {
+        var fills = List.of(
+            fill(1, 10, "ETHUSDT", "SELL", "BOTH", null, "1", "100", "0.1", "0"),
+            fill(2, 10, "ETHUSDT", "BUY", "BOTH", null, "1", "90", "0.1", "10")
+        );
+
+        var reconstructed = TradeHistoryAssembler.reconstructOneWayFills(fills, BigDecimal.ZERO);
+        var result = TradeHistoryAssembler.assemble(reconstructed, Map.of());
+
+        assertEquals(1, result.rows().size());
+        assertEquals("SHORT", result.rows().getFirst().get("direction"));
+        assertEquals("CLOSED", result.rows().getFirst().get("status"));
+        assertEquals("10", result.rows().getFirst().get("realizedPnl"));
+    }
+
+    @Test
+    void splitsOneWayZeroCrossingFillIntoCloseAndOpenQuantities() {
+        var fills = List.of(
+            fill(1, 10, "ETHUSDT", "SELL", "BOTH", null, "1", "100", "0.1", "0"),
+            fill(2, 10, "ETHUSDT", "BUY", "BOTH", null, "2", "90", "0.2", "10")
+        );
+
+        var reconstructed = TradeHistoryAssembler.reconstructOneWayFills(fills, BigDecimal.ONE);
+        assertEquals(3, reconstructed.size());
+        assertEquals(List.of("OPEN", "CLOSE", "OPEN"), reconstructed.stream().map(TradeHistoryAssembler.Fill::operationType).toList());
+        assertEquals(new BigDecimal("1"), reconstructed.get(1).quantity());
+        assertEquals(new BigDecimal("1"), reconstructed.get(2).quantity());
+        assertEquals(new BigDecimal("0.1"), reconstructed.get(1).commission());
+        assertEquals(new BigDecimal("0.1"), reconstructed.get(2).commission());
+
+        var result = TradeHistoryAssembler.assemble(reconstructed, Map.of());
+        var shortCycle = result.rows().stream().filter(row -> "SHORT".equals(row.get("direction"))).findFirst().orElseThrow();
+        var longCycle = result.rows().stream().filter(row -> "LONG".equals(row.get("direction"))).findFirst().orElseThrow();
+        assertEquals("CLOSED", shortCycle.get("status"));
+        assertEquals("OPEN", longCycle.get("status"));
+    }
+
+    @Test
+    void refusesOneWayReconstructionWhenRetainedHistoryStartsWithAnOpenPosition() {
+        var fills = List.of(fill(1, 10, "ETHUSDT", "SELL", "BOTH", null, "1", "100", "0", "0"));
+
+        var reconstructed = TradeHistoryAssembler.reconstructOneWayFills(fills, BigDecimal.ONE);
+
+        assertNull(reconstructed.getFirst().operationType());
+        var result = TradeHistoryAssembler.assemble(reconstructed, Map.of());
+        assertTrue(result.rows().isEmpty());
+        assertEquals(1, result.incompleteCount());
+    }
+
+    @Test
     void keepsCyclesBuiltFromConfirmedExchangeFacts() {
         var result = TradeHistoryAssembler.assemble(List.of(
             fill(1, 10, "BTCUSDT", "BUY", "LONG", "OPEN", "1", "100", "0", "0"),
