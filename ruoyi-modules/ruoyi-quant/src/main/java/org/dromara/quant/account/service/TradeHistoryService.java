@@ -14,6 +14,7 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.OrderLedgerService;
+import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
