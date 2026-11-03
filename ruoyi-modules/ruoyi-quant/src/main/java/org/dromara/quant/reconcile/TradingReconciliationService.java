@@ -847,27 +847,27 @@ public class TradingReconciliationService {
                 && s.realizedPnl() != null
                 && s.commissionAsset() != null && s.commissionAsset().matches("[A-Za-z0-9]{2,20}");
             if (!completeFacts) {
-                if (live) {
-                    String status = fillJournal.attribute(s, sourceOrder, credential.getId());
+                if (!"PAPER".equalsIgnoreCase(credential.getRunMode())) {
+                    String status = fillJournal.captureRaw(s, credential.getId());
                     if ("CONFLICT".equals(status)) {
-                        log.error("Incomplete LIVE fill conflicts with persisted raw fact credentialId={} symbol={} exchangeTradeId={}",
-                            credential.getId(), s.symbol(), s.tradeId());
+                        log.error("Incomplete Binance fill conflicts with persisted raw fact credentialId={} runMode={} symbol={} exchangeTradeId={}",
+                            credential.getId(), credential.getRunMode(), s.symbol(), s.tradeId());
                     } else {
-                        log.warn("LIVE Binance fill retained for attribution review; local numeric trade row was not fabricated credentialId={} symbol={} exchangeTradeId={} orderId={}",
-                            credential.getId(), s.symbol(), s.tradeId(), s.orderId());
+                        log.warn("Binance fill retained for raw-fact review; local numeric trade row was not fabricated credentialId={} runMode={} symbol={} exchangeTradeId={} orderId={}",
+                            credential.getId(), credential.getRunMode(), s.symbol(), s.tradeId(), s.orderId());
                     }
                     continue;
                 }
                 throw new IllegalStateException("Binance fill lacks valid immutable facts; refusing to persist partial trade");
             }
 
-            // First persist/check the raw exchange fact WITHOUT allocating it. Only after the local
-            // trade identity is verified may strategy attribution mutate the allocation ledger.
-            if (live) {
-                String rawStatus = fillJournal.attribute(s, null, credential.getId());
+            // Persist the immutable exchange fill, including commission asset, for LIVE and TESTNET.
+            // Strategy allocation remains a separate LIVE-only step after local trade identity is verified.
+            if (!"PAPER".equalsIgnoreCase(credential.getRunMode())) {
+                String rawStatus = fillJournal.captureRaw(s, credential.getId());
                 if ("CONFLICT".equals(rawStatus)) {
-                    log.error("LIVE fill journal quarantined conflicting raw fact; local trade ledger was not modified credentialId={} symbol={} exchangeTradeId={}",
-                        credential.getId(), s.symbol(), s.tradeId());
+                    log.error("Binance fill journal quarantined conflicting raw fact; local trade ledger was not modified credentialId={} runMode={} symbol={} exchangeTradeId={}",
+                        credential.getId(), credential.getRunMode(), s.symbol(), s.tradeId());
                     continue;
                 }
             }
