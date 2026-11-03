@@ -3,6 +3,7 @@ package org.dromara.quant.execution;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -12,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+@Tag("dev")
 class OrderLedgerServiceTest {
     @Test
     void historicalSnapshotEnrichesPositionSideWithoutOverwritingRequestReduceOnly() {
