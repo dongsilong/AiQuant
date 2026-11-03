@@ -18,7 +18,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -50,6 +52,7 @@ public class TradeHistoryService {
     private final TradeHistoryMapper historyMapper;
     private final ExchangeGateway exchangeGateway;
     private final OrderLedgerService orderLedgerService;
+    private final StrategyFillSyncCursorMapper fillSyncCursors;
 
     /**
      * 从 Binance 历史普通订单中补齐成交账本缺失的订单事实。
@@ -126,8 +129,8 @@ public class TradeHistoryService {
                         recoverOrderHistoryRange(credentialId, currentSymbol, exchangeCredential, targetOrderIds, recoveredOrderIds,
                             windowStart, windowEnd, 0, remainingRequests);
                     } catch (RuntimeException ex) {
-                        log.warn("开平仓记录历史订单补齐失败 credentialId={} symbol={} errorType={}",
-                            credentialId, currentSymbol, ex.getClass().getSimpleName());
+                        log.warn("开平仓记录历史订单补齐失败 credentialId={} symbol={} errorType={} reason={}",
+                            credentialId, currentSymbol, ex.getClass().getSimpleName(), safeErrorReason(ex));
                         break;
                     }
                     windowStart = windowEnd;
@@ -153,8 +156,8 @@ public class TradeHistoryService {
                             }
                         }
                     } catch (RuntimeException ex) {
-                        log.warn("Binance 精确历史订单补齐失败 credentialId={} symbol={} orderId={} errorType={}",
-                            credentialId, currentSymbol, orderId, ex.getClass().getSimpleName());
+                        log.warn("Binance 精确历史订单补齐失败 credentialId={} symbol={} orderId={} errorType={} reason={}",
+                            credentialId, currentSymbol, orderId, ex.getClass().getSimpleName(), safeErrorReason(ex));
                     }
                 }
                 if (remainingRequests[0] <= 0 && remainingExactRequests[0] <= 0) {
@@ -193,8 +196,8 @@ public class TradeHistoryService {
                     recoveredOrderIds.add(snapshot.orderId());
                 }
             } catch (RuntimeException ex) {
-                log.warn("历史订单事实写入冲突 credentialId={} symbol={} orderId={} errorType={}",
-                    credentialId, symbol, snapshot.orderId(), ex.getClass().getSimpleName());
+                log.warn("历史订单事实写入冲突 credentialId={} symbol={} orderId={} errorType={} reason={}",
+                    credentialId, symbol, snapshot.orderId(), ex.getClass().getSimpleName(), safeErrorReason(ex));
             }
         }
         if (snapshots.size() >= ORDER_HISTORY_LIMIT && depth < 8) {
@@ -207,6 +210,99 @@ public class TradeHistoryService {
             }
             log.warn("Binance 历史订单查询达到单次上限且时间窗口无法继续拆分 credentialId={} symbol={}", credentialId, symbol);
         }
+    }
+
+    /**
+     * Rebuilds One-way roles only when a recent complete fill cursor and a fresh
+     * signed Binance position snapshot are both available. Hedge Mode remains
+     * dependent on exchange-confirmed LONG/SHORT positionSide facts.
+     */
+    private List<TradeHistoryAssembler.Fill> reconstructOneWayFills(List<TradeHistoryAssembler.Fill> fills) {
+        Map<Long, Map<String, List<TradeHistoryAssembler.Fill>>> grouped = new java.util.LinkedHashMap<>();
+        for (TradeHistoryAssembler.Fill fill : fills) {
+            grouped.computeIfAbsent(fill.credentialId(), ignored -> new java.util.LinkedHashMap<>())
+                .computeIfAbsent(fill.symbol(), ignored -> new ArrayList<>()).add(fill);
+        }
+
+        List<TradeHistoryAssembler.Fill> result = new ArrayList<>(fills.size());
+        LocalDateTime nowUtc = LocalDateTime.now(ZoneOffset.UTC);
+        for (var credentialEntry : grouped.entrySet()) {
+            Long credentialId = credentialEntry.getKey();
+            Map<String, List<TradeHistoryAssembler.Fill>> scopes = credentialEntry.getValue();
+            boolean needsOneWayReconstruction = scopes.values().stream().anyMatch(scope ->
+                scope.stream().allMatch(fill -> "BOTH".equalsIgnoreCase(fill.positionSide()))
+                    && scope.stream().anyMatch(fill -> fill.operationType() == null || fill.operationType().isBlank()));
+            if (!needsOneWayReconstruction) {
+                scopes.values().forEach(result::addAll);
+                continue;
+            }
+
+            QuantCredential credential = credentialMapper.selectById(credentialId);
+            if (credential == null || "PAPER".equalsIgnoreCase(credential.getRunMode())
+                || credential.getApiKey() == null || credential.getApiKey().isBlank()
+                || credential.getSecretKey() == null || credential.getSecretKey().isBlank()) {
+                scopes.values().forEach(result::addAll);
+                continue;
+            }
+
+            try {
+                ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
+                    credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(), credential.getRunMode());
+                if (exchangeGateway.queryPositionMode(exchangeCredential).hedgeMode()) {
+                    scopes.values().forEach(result::addAll);
+                    continue;
+                }
+                List<ExchangeGateway.PositionSnapshot> positions = exchangeGateway.queryPositions(exchangeCredential, null);
+                Map<String, BigDecimal> currentPositions = new java.util.HashMap<>();
+                for (ExchangeGateway.PositionSnapshot position : positions) {
+                    if (position == null || position.symbol() == null || position.symbol().isBlank()) {
+                        throw new IllegalStateException("Binance 持仓快照缺少交易对");
+                    }
+                    if ("BOTH".equalsIgnoreCase(position.side())) {
+                        if (position.quantity() == null || currentPositions.putIfAbsent(position.symbol().toUpperCase(Locale.ROOT), position.quantity()) != null) {
+                            throw new IllegalStateException("Binance 单向持仓快照缺失数量或存在重复交易对");
+                        }
+                    }
+                }
+
+                for (var scopeEntry : scopes.entrySet()) {
+                    String currentSymbol = scopeEntry.getKey();
+                    List<TradeHistoryAssembler.Fill> scope = scopeEntry.getValue();
+                    boolean eligible = scope.stream().allMatch(fill -> "BOTH".equalsIgnoreCase(fill.positionSide()))
+                        && scope.stream().anyMatch(fill -> fill.operationType() == null || fill.operationType().isBlank());
+                    if (!eligible) {
+                        result.addAll(scope);
+                        continue;
+                    }
+                    LocalDateTime cursor = fillSyncCursors.selectLastCompleteTo(credentialId, currentSymbol);
+                    if (cursor == null || cursor.isBefore(nowUtc.minusMinutes(5)) || cursor.isAfter(nowUtc.plusMinutes(1))) {
+                        log.warn("单向持仓周期重建缺少近期完整成交游标 credentialId={} symbol={} cursor={}",
+                            credentialId, currentSymbol, cursor);
+                        result.addAll(scope);
+                        continue;
+                    }
+                    List<TradeHistoryAssembler.Fill> rebuilt = TradeHistoryAssembler.reconstructOneWayFills(
+                        scope, currentPositions.getOrDefault(currentSymbol.toUpperCase(Locale.ROOT), BigDecimal.ZERO));
+                    result.addAll(rebuilt);
+                }
+            } catch (RuntimeException ex) {
+                log.warn("单向持仓周期重建未执行 credentialId={} errorType={} reason={}",
+                    credentialId, ex.getClass().getSimpleName(), safeErrorReason(ex));
+                scopes.values().forEach(result::addAll);
+            }
+        }
+        result.sort(Comparator.comparing(TradeHistoryAssembler.Fill::tradeTime, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(TradeHistoryAssembler.Fill::exchangeTradeId, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(TradeHistoryAssembler.Fill::id, Comparator.nullsLast(Comparator.naturalOrder())));
+        return List.copyOf(result);
+    }
+
+    private static String safeErrorReason(RuntimeException ex) {
+        if (!(ex instanceof IllegalStateException) || ex.getMessage() == null || ex.getMessage().isBlank()) {
+            return null;
+        }
+        String message = ex.getMessage().replaceAll("[\\r\\n\\t]", " ").trim();
+        return message.length() <= 240 ? message : message.substring(0, 240);
     }
 
     private static Instant boundary(String date, boolean nextDay) {
@@ -259,10 +355,11 @@ public class TradeHistoryService {
         if (fills.stream().map(f -> f.getId()).distinct().count() != fills.size()) {
             throw new ServiceException("成交来源关联重复，暂不能可靠汇总开平仓记录");
         }
-        var result = TradeHistoryAssembler.assemble(fills.stream().map(f -> new TradeHistoryAssembler.Fill(f.getId(), f.getCredentialId(), f.getSymbol(), f.getSide(),
+        List<TradeHistoryAssembler.Fill> historyFills = fills.stream().map(f -> new TradeHistoryAssembler.Fill(f.getId(), f.getCredentialId(), f.getSymbol(), f.getSide(),
             f.getPositionSide(), f.getOperationType(), f.getReduceOnly(), f.getQuantity(), f.getPrice(), f.getCommission(), f.getRealizedPnl(), f.getTradeTime(),
             f.getLeverageSnapshot(), f.getPriceTickSizeSnapshot(), f.getPostFillWalletBalance(), f.getPostFillBalanceAt(), f.getCurrentPriceTickSize(), f.getExchangeTradeId(),
-            f.getExchangeOrderId())).toList(), names);
+            f.getExchangeOrderId())).toList();
+        var result = TradeHistoryAssembler.assemble(reconstructOneWayFills(historyFills), names);
         var assembledRows = result.rows();
         var rows = assembledRows.stream().filter(row -> {
             Instant opened = Instant.parse((String) row.get("openedAt"));
