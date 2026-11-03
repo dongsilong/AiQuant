@@ -2,6 +2,7 @@ package org.dromara.quant.execution;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
@@ -15,6 +16,7 @@ import java.time.LocalDateTime;
  * 统一写入本地订单账本。
  */
 @RequiredArgsConstructor
+@Slf4j
 @Service
 public class OrderLedgerService {
     /**
@@ -36,10 +38,15 @@ public class OrderLedgerService {
     }
 
     public QuantOrder syncHistoricalSnapshot(Long credentialId, String expectedSymbol, ExchangeGateway.OrderSnapshot snapshot) {
-        return syncSnapshot(credentialId, expectedSymbol, snapshot, false);
+        return syncSnapshot(credentialId, expectedSymbol, snapshot, false, true);
     }
 
     private QuantOrder syncSnapshot(Long credentialId, String expectedSymbol, ExchangeGateway.OrderSnapshot snapshot, boolean publishDecisionLog) {
+        return syncSnapshot(credentialId, expectedSymbol, snapshot, publishDecisionLog, false);
+    }
+
+    private QuantOrder syncSnapshot(Long credentialId, String expectedSymbol, ExchangeGateway.OrderSnapshot snapshot, boolean publishDecisionLog,
+                                    boolean historical) {
         if (snapshot == null) {
             return null;
         }
@@ -61,8 +68,16 @@ public class OrderLedgerService {
             && !entity.getPositionSide().equalsIgnoreCase(snapshot.positionSide())) {
             throw new IllegalStateException("订单持仓方向事实冲突，拒绝覆盖");
         }
-        if (entity != null && snapshot.reduceOnly() != null && entity.getReduceOnly() != null && !entity.getReduceOnly().equals(snapshot.reduceOnly())) {
-            throw new IllegalStateException("订单 reduceOnly 事实冲突，拒绝覆盖");
+        Boolean localReduceOnly = entity == null ? null : entity.getReduceOnly();
+        if (entity != null && snapshot.reduceOnly() != null && localReduceOnly != null && !localReduceOnly.equals(snapshot.reduceOnly())) {
+            if (!historical) {
+                throw new IllegalStateException("订单 reduceOnly 事实冲突，拒绝覆盖");
+            }
+            // Historical exchange metadata must still be allowed to fill positionSide.
+            // Keep the original request-side reduceOnly value; it is not interchangeable
+            // with the exchange-confirmed field when the two disagree.
+            log.warn("历史订单 reduceOnly 与本地订单事实不一致，保留本地值 credentialId={} symbol={} orderId={}",
+                credentialId, expectedSymbol, snapshot.orderId());
         }
         if (entity == null) {
             entity = new QuantOrder();
@@ -85,7 +100,7 @@ public class OrderLedgerService {
         entity.setPrice(snapshot.price());
         entity.setOriginalQuantity(snapshot.originalQuantity());
         entity.setExecutedQuantity(snapshot.executedQuantity());
-        entity.setReduceOnly(snapshot.reduceOnly());
+        entity.setReduceOnly(historical && localReduceOnly != null ? localReduceOnly : snapshot.reduceOnly());
         entity.setUpdatedAt(snapshot.updateTime() == null ? LocalDateTime.now() : LocalDateTime.ofInstant(snapshot.updateTime(), java.time.ZoneOffset.UTC));
         return persistMonotonic(entity);
     }
@@ -157,8 +172,13 @@ public class OrderLedgerService {
         if (current == null) {
             throw new IllegalStateException("订单对账期间本地订单消失，等待重试");
         }
-        if (entity.getExchangeOrderId() != null && current.getExchangeOrderId() != null && !entity.getExchangeOrderId().equals(current.getExchangeOrderId()) || entity.getStrategyInstanceId() != null && current.getStrategyInstanceId() != null && !entity.getStrategyInstanceId().equals(current.getStrategyInstanceId())) {
+        if (entity.getExchangeOrderId() != null && current.getExchangeOrderId() != null && !entity.getExchangeOrderId().equals(current.getExchangeOrderId())
+            || entity.getStrategyInstanceId() != null && current.getStrategyInstanceId() != null && !entity.getStrategyInstanceId().equals(current.getStrategyInstanceId())) {
             throw new IllegalStateException("交易所订单身份或策略归属冲突，禁止覆盖");
+        }
+        if (entity.getPositionSide() != null && (current.getPositionSide() == null
+            || !entity.getPositionSide().equalsIgnoreCase(current.getPositionSide()))) {
+            throw new IllegalStateException("Binance 已确认的 positionSide 未能补齐本地订单，保留未完成状态");
         }
         // Returning the freshest DB state (rather than the stale in-memory entity)
         // ensures downstream reconciliation never assumes a rejected snapshot won.
