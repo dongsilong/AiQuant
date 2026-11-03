@@ -15,7 +15,8 @@ class TradeHistoryAssemblerTest {
     private TradeHistoryAssembler.Fill fill(long id, long account, String symbol, String side, String position, String operation, String qty, String price, String fee,
                                             String pnl) {
         return new TradeHistoryAssembler.Fill(id, account, symbol, side, position, operation, null, new BigDecimal(qty), new BigDecimal(price), fee == null ? null :
-            new BigDecimal(fee), pnl == null ? null : new BigDecimal(pnl), LocalDateTime.of(2026, 10, 9, 1, 0).plusSeconds(id));
+            new BigDecimal(fee), pnl == null ? null : new BigDecimal(pnl), LocalDateTime.of(2026, 10, 9, 1, 0).plusSeconds(id),
+            null, null, null, null, null, null, null, fee == null ? null : "USDT");
     }
 
     @Test
@@ -43,10 +44,10 @@ class TradeHistoryAssemblerTest {
         var result = TradeHistoryAssembler.assemble(List.of(
             new TradeHistoryAssembler.Fill(opening.id(), opening.credentialId(), opening.symbol(), opening.side(), opening.positionSide(), opening.operationType(), false,
                 opening.quantity(), opening.price(), opening.commission(), opening.realizedPnl(), opening.tradeTime(), 5, new BigDecimal("0.001"), new BigDecimal("1000"),
-                LocalDateTime.of(2026, 10, 9, 1, 0).plusSeconds(1), null),
+                LocalDateTime.of(2026, 10, 9, 1, 0).plusSeconds(1), null, null, null, opening.commissionAsset()),
             new TradeHistoryAssembler.Fill(closing.id(), closing.credentialId(), closing.symbol(), closing.side(), closing.positionSide(), closing.operationType(), true,
                 closing.quantity(), closing.price(), closing.commission(), closing.realizedPnl(), closing.tradeTime(), null, null, new BigDecimal("125"),
-                LocalDateTime.of(2026, 10, 9, 1, 0).plusSeconds(2), null)
+                LocalDateTime.of(2026, 10, 9, 1, 0).plusSeconds(2), null, null, null, closing.commissionAsset())
         ), Map.of());
 
         var row = result.rows().getFirst();
@@ -63,9 +64,9 @@ class TradeHistoryAssemblerTest {
         var openedAt = LocalDateTime.of(2026, 10, 9, 1, 0);
         var result = TradeHistoryAssembler.assemble(List.of(
             new TradeHistoryAssembler.Fill(1L, 10L, "BTCUSDT", "BUY", "LONG", "OPEN", false, new BigDecimal("1"), new BigDecimal("100.123"),
-                BigDecimal.ZERO, BigDecimal.ZERO, openedAt, 5, new BigDecimal("0.001"), new BigDecimal("4811.63172"), openedAt, null),
+                BigDecimal.ZERO, BigDecimal.ZERO, openedAt, 5, new BigDecimal("0.001"), new BigDecimal("4811.63172"), openedAt, null, null, null, "USDT"),
             new TradeHistoryAssembler.Fill(2L, 10L, "BTCUSDT", "SELL", "LONG", "CLOSE", true, new BigDecimal("1"), new BigDecimal("101.123"),
-                new BigDecimal("0.12345"), BigDecimal.ONE, openedAt.plusMinutes(1), null, null, new BigDecimal("5561.00831248"), openedAt.plusMinutes(1), null)
+                new BigDecimal("0.12345"), BigDecimal.ONE, openedAt.plusMinutes(1), null, null, new BigDecimal("5561.00831248"), openedAt.plusMinutes(1), null, null, null, "USDT")
         ), Map.of());
 
         var row = result.rows().getFirst();
@@ -89,6 +90,22 @@ class TradeHistoryAssemblerTest {
         assertEquals("100.1235", row.get("entryPrice"));
         assertEquals("101.2346", row.get("closePrice"));
         assertNull(row.get("leverage"));
+    }
+
+    @Test
+    void doesNotAddCommissionsAcrossDifferentAssets() {
+        LocalDateTime time = LocalDateTime.of(2026, 10, 9, 1, 0);
+        var result = TradeHistoryAssembler.assemble(List.of(
+            new TradeHistoryAssembler.Fill(1L, 10L, "BTCUSDT", "BUY", "LONG", "OPEN", false, BigDecimal.ONE,
+                new BigDecimal("100"), new BigDecimal("0.1"), BigDecimal.ZERO, time, null, null, null, null, null, 101L, 201L, "USDT"),
+            new TradeHistoryAssembler.Fill(2L, 10L, "BTCUSDT", "SELL", "LONG", "CLOSE", true, BigDecimal.ONE,
+                new BigDecimal("110"), new BigDecimal("0.01"), BigDecimal.TEN, time.plusMinutes(1), null, null, null, null, null, 102L, 202L, "BNB")
+        ), Map.of());
+
+        var row = result.rows().getFirst();
+        assertNull(row.get("commission"));
+        assertNull(row.get("commissionAsset"));
+        assertEquals(Map.of("USDT", "0.1", "BNB", "0.01"), row.get("commissionByAsset"));
     }
 
     @Test
