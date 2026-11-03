@@ -52,9 +52,10 @@ public class TradeHistoryMapperTest {
     private Connection database() throws Exception {
         var connection = DriverManager.getConnection("jdbc:h2:mem:" + UUID.randomUUID() + ";MODE=MySQL");
         try (var statement = connection.createStatement()) {
-            statement.execute("CREATE TABLE quant_trade (id BIGINT PRIMARY KEY, credential_id BIGINT, symbol VARCHAR(32), exchange_order_id BIGINT, trade_time TIMESTAMP)");
+            statement.execute("CREATE TABLE quant_trade (id BIGINT PRIMARY KEY, credential_id BIGINT, symbol VARCHAR(32), exchange_order_id BIGINT, trade_time TIMESTAMP, exchange_trade_id BIGINT)");
             statement.execute("CREATE TABLE quant_order (id BIGINT PRIMARY KEY, credential_id BIGINT, symbol VARCHAR(32), exchange_order_id BIGINT, client_order_id VARCHAR(64), position_side VARCHAR(10), " +
                 "reduce_only BOOLEAN, leverage_snapshot INT, price_tick_size_snapshot DECIMAL(32,16), post_fill_wallet_balance DECIMAL(32,16), post_fill_balance_at TIMESTAMP)");
+            statement.execute("CREATE TABLE quant_strategy_fill_journal (credential_id BIGINT, symbol VARCHAR(32), exchange_trade_id BIGINT, commission_asset VARCHAR(20), PRIMARY KEY(credential_id,symbol,exchange_trade_id))");
             statement.execute("CREATE TABLE quant_symbol (symbol VARCHAR(32), price_tick_size DECIMAL(32,16))");
             statement.execute("CREATE TABLE quant_execution_record (id BIGINT PRIMARY KEY, credential_id BIGINT, symbol VARCHAR(32), exchange_order_id BIGINT, operation_type " +
                 "VARCHAR(20))");
@@ -69,9 +70,27 @@ public class TradeHistoryMapperTest {
 
 
     @Test
+    void selectsOriginalCommissionAssetFromRawFillJournal() throws Exception {
+        try (var connection = database(); var statement = connection.createStatement()) {
+            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00',501)");
+            statement.execute("INSERT INTO quant_strategy_fill_journal VALUES (10,'BTCUSDT',501,'BNB')");
+
+            try (var prepared = connection.prepareStatement(sql(List.of(10L), "BTCUSDT"))) {
+                prepared.setLong(1, 10L);
+                prepared.setString(2, "BTCUSDT");
+                try (var result = prepared.executeQuery()) {
+                    assertTrue(result.next());
+                    assertEquals("BNB", result.getString("commission_asset"));
+                    assertFalse(result.next());
+                }
+            }
+        }
+    }
+
+    @Test
     void restoresOneWayOrderRoleFromImmutableDispatchIntent() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
-            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00')");
+            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00',1001)");
             statement.execute("INSERT INTO quant_order (id,credential_id,symbol,exchange_order_id,client_order_id,position_side,reduce_only) " +
                 "VALUES (1,10,'BTCUSDT',101,'QCLIENT101','BOTH',FALSE)");
             statement.execute("INSERT INTO quant_order_dispatch_ticket (credential_id,symbol,exchange_order_id,operation_type,dispatch_status,idempotency_key,client_order_id) " +
@@ -94,7 +113,7 @@ public class TradeHistoryMapperTest {
     @Test
     void restoresOneWayRoleByExactClientOrderIdWhenDispatchTicketLacksExchangeOrderId() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
-            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00')");
+            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00',1001)");
             statement.execute("INSERT INTO quant_order (id,credential_id,symbol,exchange_order_id,client_order_id,position_side,reduce_only) " +
                 "VALUES (1,10,'BTCUSDT',101,'QCLIENT101','BOTH',FALSE)");
             statement.execute("INSERT INTO quant_order_dispatch_ticket (credential_id,symbol,exchange_order_id,operation_type,dispatch_status,idempotency_key,client_order_id) " +
@@ -117,7 +136,7 @@ public class TradeHistoryMapperTest {
     @Test
     void restoresHedgeRoleFromImmutableStrategyOrderIntent() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
-            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',102,'2026-10-10 00:00:00')");
+            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',102,'2026-10-10 00:00:00',1002)");
             statement.execute("INSERT INTO quant_order (id,credential_id,symbol,exchange_order_id,position_side,reduce_only) " +
                 "VALUES (1,10,'BTCUSDT',102,NULL,FALSE)");
             statement.execute("INSERT INTO quant_strategy_order_intent VALUES (10,'BTCUSDT',102,'SHORT','CLOSE')");
@@ -136,7 +155,7 @@ public class TradeHistoryMapperTest {
     @Test
     void requestsRecoveryWhenExchangeClientOrderIdIsOnlySyntheticPlaceholder() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
-            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00')");
+            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00',1001)");
             statement.execute("INSERT INTO quant_order (id,credential_id,symbol,exchange_order_id,client_order_id,position_side,reduce_only) " +
                 "VALUES (1,10,'BTCUSDT',101,'EXCHANGE:101','BOTH',FALSE)");
             try (var prepared = connection.prepareStatement(missingOrderSql(10L, "BTCUSDT", 100))) {
@@ -156,7 +175,7 @@ public class TradeHistoryMapperTest {
     void boundsOrderLookupsBeforeJoiningAnOversizedLedger() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
             statement.execute("CREATE ALIAS track_lookup FOR 'org.dromara.quant.account.mapper.TradeHistoryMapperTest.trackLookup'");
-            statement.execute("INSERT INTO quant_trade SELECT X, 10, 'BTCUSDT', X, DATEADD('SECOND', -X, TIMESTAMP '2026-10-10 00:00:00') FROM SYSTEM_RANGE(1, 25010)");
+            statement.execute("INSERT INTO quant_trade SELECT X, 10, 'BTCUSDT', X, DATEADD('SECOND', -X, TIMESTAMP '2026-10-10 00:00:00'), X FROM SYSTEM_RANGE(1, 25010)");
             statement.execute("INSERT INTO quant_order (id,credential_id,symbol,exchange_order_id,position_side,reduce_only) SELECT X, 10, 'BTCUSDT', X, 'LONG', FALSE FROM SYSTEM_RANGE(1, 25010)");
             // Count real join predicates, rather than assert a particular SQL spelling or elapsed time.
             String query = sql(List.of(10L), null).replace("AND o.symbol", "AND track_lookup(t.id) AND o.symbol");
@@ -181,8 +200,8 @@ public class TradeHistoryMapperTest {
     @Test
     void preservesScopeMissingSourcesAndDuplicateSourceDetection() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
-            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00'),(2,10,'BTCUSDT',102,'2026-10-10 00:00:01'),(3,11,'BTCUSDT',101," +
-                "'2026-10-10 00:00:02'),(4,10,'ETHUSDT',101,'2026-10-10 00:00:03')");
+            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00',1001),(2,10,'BTCUSDT',102,'2026-10-10 00:00:01'),(3,11,'BTCUSDT',101," +
+                "'2026-10-10 00:00:02',1003),(4,10,'ETHUSDT',101,'2026-10-10 00:00:03',1004)");
             statement.execute("INSERT INTO quant_order (id,credential_id,symbol,exchange_order_id,position_side,reduce_only) VALUES (1,10,'BTCUSDT',101,'LONG',FALSE),(2,10,'BTCUSDT',101,'LONG',FALSE),(3,11,'BTCUSDT',102,'SHORT',TRUE)");
             statement.execute("INSERT INTO quant_execution_record VALUES (1,10,'BTCUSDT',101,'OPEN'),(2,10,'BTCUSDT',102,'CANCEL'),(3,11,'BTCUSDT',102,'CLOSE')");
             try (var prepared = connection.prepareStatement(sql(List.of(10L), "BTCUSDT"))) {
@@ -215,8 +234,10 @@ public class TradeHistoryMapperTest {
             statement.execute("INSERT INTO quant_execution_record SELECT id,credential_id,symbol,exchange_order_id,CASE WHEN MOD(id,3)=0 THEN 'CANCEL' WHEN MOD(id,2)=0 THEN " +
                 "'OPEN' ELSE 'CLOSE' END FROM quant_trade");
             for (String symbol : new String[]{null, "BTCUSDT"}) {
-                String original = "SELECT t.*, o.position_side, o.reduce_only, e.operation_type, o.leverage_snapshot, o.price_tick_size_snapshot, o.post_fill_wallet_balance, o.post_fill_balance_at, qs.price_tick_size AS current_price_tick_size FROM quant_trade t " + "LEFT JOIN quant_order o ON o.credential_id=t" +
-                    ".credential_id AND o.symbol=t.symbol AND o.exchange_order_id=t.exchange_order_id " + "LEFT JOIN quant_execution_record e ON e.credential_id=t.credential_id " +
+                String original = "SELECT t.*, o.position_side, j.commission_asset AS commission_asset, o.reduce_only, e.operation_type, o.leverage_snapshot, o.price_tick_size_snapshot, o.post_fill_wallet_balance, o.post_fill_balance_at, qs.price_tick_size AS current_price_tick_size FROM quant_trade t " + "LEFT JOIN quant_order o ON o.credential_id=t" +
+                    ".credential_id AND o.symbol=t.symbol AND o.exchange_order_id=t.exchange_order_id " +
+                    "LEFT JOIN quant_strategy_fill_journal j ON j.credential_id=t.credential_id AND j.symbol=t.symbol AND j.exchange_trade_id=t.exchange_trade_id " +
+                    "LEFT JOIN quant_execution_record e ON e.credential_id=t.credential_id " +
                     "AND e.symbol=t.symbol AND e.exchange_order_id=t.exchange_order_id AND e.operation_type IN ('OPEN','CLOSE') LEFT JOIN quant_symbol qs ON qs.symbol=t.symbol " + "WHERE t.credential_id IN (?,?) " + (symbol == null ? "" : "AND t.symbol=? ") + "ORDER BY t.trade_time,t.id LIMIT 20001";
                 assertEquals(readRows(connection, original, symbol), readRows(connection, sql(List.of(10L, 11L), symbol), symbol));
             }
