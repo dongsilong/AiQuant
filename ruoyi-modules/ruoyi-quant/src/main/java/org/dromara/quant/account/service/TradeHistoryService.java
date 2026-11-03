@@ -230,10 +230,24 @@ public class TradeHistoryService {
         for (var credentialEntry : grouped.entrySet()) {
             Long credentialId = credentialEntry.getKey();
             Map<String, List<TradeHistoryAssembler.Fill>> scopes = credentialEntry.getValue();
-            boolean needsOneWayReconstruction = scopes.values().stream().anyMatch(scope ->
-                scope.stream().allMatch(fill -> "BOTH".equalsIgnoreCase(fill.positionSide()))
-                    && scope.stream().anyMatch(fill -> fill.operationType() == null || fill.operationType().isBlank()));
-            if (!needsOneWayReconstruction) {
+            Map<String, Boolean> eligibleScopes = new java.util.HashMap<>();
+            for (var scopeEntry : scopes.entrySet()) {
+                List<TradeHistoryAssembler.Fill> scope = scopeEntry.getValue();
+                boolean oneWay = scope.stream().allMatch(fill -> "BOTH".equalsIgnoreCase(fill.positionSide()))
+                    && scope.stream().anyMatch(fill -> fill.operationType() == null || fill.operationType().isBlank());
+                if (!oneWay) {
+                    eligibleScopes.put(scopeEntry.getKey(), false);
+                    continue;
+                }
+                LocalDateTime cursor = fillSyncCursors.selectLastCompleteTo(credentialId, scopeEntry.getKey());
+                boolean recent = cursor != null && !cursor.isBefore(nowUtc.minusMinutes(5)) && !cursor.isAfter(nowUtc.plusMinutes(1));
+                eligibleScopes.put(scopeEntry.getKey(), recent);
+                if (!recent) {
+                    log.warn("单向持仓周期重建缺少近期完整成交游标 credentialId={} symbol={} cursor={}",
+                        credentialId, scopeEntry.getKey(), cursor);
+                }
+            }
+            if (eligibleScopes.values().stream().noneMatch(Boolean.TRUE::equals)) {
                 scopes.values().forEach(result::addAll);
                 continue;
             }
@@ -269,16 +283,7 @@ public class TradeHistoryService {
                 for (var scopeEntry : scopes.entrySet()) {
                     String currentSymbol = scopeEntry.getKey();
                     List<TradeHistoryAssembler.Fill> scope = scopeEntry.getValue();
-                    boolean eligible = scope.stream().allMatch(fill -> "BOTH".equalsIgnoreCase(fill.positionSide()))
-                        && scope.stream().anyMatch(fill -> fill.operationType() == null || fill.operationType().isBlank());
-                    if (!eligible) {
-                        result.addAll(scope);
-                        continue;
-                    }
-                    LocalDateTime cursor = fillSyncCursors.selectLastCompleteTo(credentialId, currentSymbol);
-                    if (cursor == null || cursor.isBefore(nowUtc.minusMinutes(5)) || cursor.isAfter(nowUtc.plusMinutes(1))) {
-                        log.warn("单向持仓周期重建缺少近期完整成交游标 credentialId={} symbol={} cursor={}",
-                            credentialId, currentSymbol, cursor);
+                    if (!Boolean.TRUE.equals(eligibleScopes.get(currentSymbol))) {
                         result.addAll(scope);
                         continue;
                     }
