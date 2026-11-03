@@ -200,7 +200,7 @@ public class TradeHistoryMapperTest {
     @Test
     void preservesScopeMissingSourcesAndDuplicateSourceDetection() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
-            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00',1001),(2,10,'BTCUSDT',102,'2026-10-10 00:00:01'),(3,11,'BTCUSDT',101," +
+            statement.execute("INSERT INTO quant_trade VALUES (1,10,'BTCUSDT',101,'2026-10-10 00:00:00',1001),(2,10,'BTCUSDT',102,'2026-10-10 00:00:01',1002),(3,11,'BTCUSDT',101," +
                 "'2026-10-10 00:00:02',1003),(4,10,'ETHUSDT',101,'2026-10-10 00:00:03',1004)");
             statement.execute("INSERT INTO quant_order (id,credential_id,symbol,exchange_order_id,position_side,reduce_only) VALUES (1,10,'BTCUSDT',101,'LONG',FALSE),(2,10,'BTCUSDT',101,'LONG',FALSE),(3,11,'BTCUSDT',102,'SHORT',TRUE)");
             statement.execute("INSERT INTO quant_execution_record VALUES (1,10,'BTCUSDT',101,'OPEN'),(2,10,'BTCUSDT',102,'CANCEL'),(3,11,'BTCUSDT',102,'CLOSE')");
@@ -228,7 +228,7 @@ public class TradeHistoryMapperTest {
     void matchesOriginalQueryForMultipleAccountsWithAndWithoutSymbol() throws Exception {
         try (var connection = database(); var statement = connection.createStatement()) {
             statement.execute("INSERT INTO quant_trade SELECT X, CASE WHEN MOD(X,2)=0 THEN 10 ELSE 11 END, CASE WHEN MOD(X,3)=0 THEN 'ETHUSDT' ELSE 'BTCUSDT' END, X, DATEADD" +
-                "('SECOND', -FLOOR(X/2), TIMESTAMP '2026-10-10 00:00:00') FROM SYSTEM_RANGE(1,600)");
+                "('SECOND', -FLOOR(X/2), TIMESTAMP '2026-10-10 00:00:00'), X FROM SYSTEM_RANGE(1,600)");
             statement.execute("INSERT INTO quant_order (id,credential_id,symbol,exchange_order_id,position_side,reduce_only) SELECT id,credential_id,symbol,exchange_order_id,'BOTH',FALSE FROM quant_trade WHERE MOD(id,5)<>0");
             statement.execute("INSERT INTO quant_order (id,credential_id,symbol,exchange_order_id,position_side,reduce_only) SELECT id+1000,credential_id,symbol,exchange_order_id,'BOTH',FALSE FROM quant_trade WHERE MOD(id,10)=0");
             statement.execute("INSERT INTO quant_execution_record SELECT id,credential_id,symbol,exchange_order_id,CASE WHEN MOD(id,3)=0 THEN 'CANCEL' WHEN MOD(id,2)=0 THEN " +
