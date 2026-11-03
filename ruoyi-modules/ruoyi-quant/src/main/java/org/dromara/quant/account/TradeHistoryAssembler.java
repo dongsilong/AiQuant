@@ -90,6 +90,101 @@ public final class TradeHistoryAssembler {
         return new Result(rows, incomplete.size());
     }
 
+    /**
+     * Reconstructs One-way OPEN/CLOSE roles by reversing the complete fill sequence
+     * from Binance's current signed position. BUY/SELL alone is never used as a role.
+     * If the retained history starts with an already-open position, the boundary is
+     * not attributable and the original facts are returned for fail-closed assembly.
+     */
+    public static List<Fill> reconstructOneWayFills(List<Fill> fills, BigDecimal currentPosition) {
+        if (fills == null || fills.isEmpty() || currentPosition == null) {
+            return fills == null ? List.of() : List.copyOf(fills);
+        }
+        List<Fill> ordered = new ArrayList<>(fills);
+        ordered.sort(Comparator.comparing(Fill::tradeTime, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(Fill::exchangeTradeId, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(Fill::id, Comparator.nullsLast(Comparator.naturalOrder())));
+        if (ordered.stream().anyMatch(fill -> fill.positionSide() == null || !"BOTH".equalsIgnoreCase(fill.positionSide()))) {
+            return List.copyOf(ordered);
+        }
+
+        List<List<Fill>> reconstructed = new ArrayList<>(Collections.nCopies(ordered.size(), null));
+        BigDecimal positionAfter = currentPosition;
+        for (int index = ordered.size() - 1; index >= 0; index--) {
+            Fill fill = ordered.get(index);
+            String side = fill.side() == null ? "" : fill.side().toUpperCase(Locale.ROOT);
+            BigDecimal quantity = fill.quantity();
+            if ((!"BUY".equals(side) && !"SELL".equals(side)) || !positive(quantity) || !positive(fill.price()) || fill.tradeTime() == null) {
+                return withUnknownRole(ordered, index);
+            }
+
+            BigDecimal positionBefore = "BUY".equals(side) ? positionAfter.subtract(quantity) : positionAfter.add(quantity);
+            BigDecimal closeQuantity = BigDecimal.ZERO;
+            if ("BUY".equals(side) && positionBefore.signum() < 0) {
+                closeQuantity = quantity.min(positionBefore.abs());
+            } else if ("SELL".equals(side) && positionBefore.signum() > 0) {
+                closeQuantity = quantity.min(positionBefore);
+            }
+            BigDecimal openQuantity = quantity.subtract(closeQuantity);
+            boolean crossingZero = closeQuantity.signum() > 0 && openQuantity.signum() > 0;
+            String expectedOperation = closeQuantity.signum() > 0 ? "CLOSE" : "OPEN";
+            if (fill.operationType() != null && !fill.operationType().isBlank()) {
+                if (crossingZero || !expectedOperation.equalsIgnoreCase(fill.operationType())) {
+                    return withUnknownRole(ordered, index);
+                }
+                reconstructed.set(index, List.of(copyWithRole(fill, expectedOperation, quantity, fill.commission(), fill.realizedPnl())));
+            } else {
+                List<Fill> parts = new ArrayList<>(2);
+                BigDecimal closeFee = proportionalFee(fill.commission(), closeQuantity, quantity);
+                BigDecimal openFee = fill.commission() == null ? null : fill.commission().subtract(closeFee);
+                if (closeQuantity.signum() > 0) {
+                    parts.add(copyWithRole(fill, "CLOSE", closeQuantity, closeFee, fill.realizedPnl()));
+                }
+                if (openQuantity.signum() > 0) {
+                    BigDecimal openPnl = fill.realizedPnl() == null ? null : BigDecimal.ZERO;
+                    if (closeQuantity.signum() == 0 && openPnl != null && openPnl.signum() != 0) {
+                        return withUnknownRole(ordered, index);
+                    }
+                    parts.add(copyWithRole(fill, "OPEN", openQuantity, openFee, openPnl));
+                }
+                reconstructed.set(index, List.copyOf(parts));
+            }
+            positionAfter = positionBefore;
+        }
+
+        // A non-flat starting position means the retained history begins mid-cycle.
+        // Do not manufacture an opening price or pair those boundary closes with later opens.
+        if (positionAfter.signum() != 0) {
+            return List.copyOf(ordered);
+        }
+        List<Fill> result = new ArrayList<>();
+        reconstructed.forEach(result::addAll);
+        return List.copyOf(result);
+    }
+
+    private static List<Fill> withUnknownRole(List<Fill> fills, int invalidIndex) {
+        List<Fill> result = new ArrayList<>(fills);
+        Fill fill = result.get(invalidIndex);
+        result.set(invalidIndex, copyWithRole(fill, "UNKNOWN", fill.quantity(), fill.commission(), fill.realizedPnl()));
+        return List.copyOf(result);
+    }
+
+    private static Fill copyWithRole(Fill fill, String operationType, BigDecimal quantity, BigDecimal commission, BigDecimal realizedPnl) {
+        return new Fill(fill.id(), fill.credentialId(), fill.symbol(), fill.side(), fill.positionSide(), operationType, fill.reduceOnly(), quantity, fill.price(),
+            commission, realizedPnl, fill.tradeTime(), fill.leverage(), fill.priceTickSize(), fill.postFillWalletBalance(), fill.postFillBalanceAt(),
+            fill.currentPriceTickSize(), fill.exchangeTradeId(), fill.exchangeOrderId());
+    }
+
+    private static BigDecimal proportionalFee(BigDecimal fee, BigDecimal partQuantity, BigDecimal totalQuantity) {
+        if (fee == null || partQuantity == null || partQuantity.signum() == 0) {
+            return fee == null ? null : BigDecimal.ZERO;
+        }
+        if (partQuantity.compareTo(totalQuantity) == 0) {
+            return fee;
+        }
+        return fee.multiply(partQuantity).divide(totalQuantity, 18, RoundingMode.HALF_UP);
+    }
+
     private static void markIncomplete(String scope, Map<String, Cycle> active, List<Cycle> cycles, Set<String> incomplete) {
         if (!incomplete.add(scope)) {
             return;
