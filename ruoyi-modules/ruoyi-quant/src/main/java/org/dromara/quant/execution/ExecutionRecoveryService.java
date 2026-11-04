@@ -77,7 +77,7 @@ public class ExecutionRecoveryService {
             pending = recordMapper.selectList(new LambdaQueryWrapper<QuantExecutionRecord>().in(QuantExecutionRecord::getExecutionStatus, "PENDING",
                     "UNKNOWN", "CONFIRMED")
                 // Avoid querying the same unresolved order every scheduler tick, while never expiring it.
-                .and(q -> q.isNull(QuantExecutionRecord::getLastRecoveryAt).or().le(QuantExecutionRecord::getLastRecoveryAt, LocalDateTime.now().minusMinutes(1)))
+                .and(q -> q.isNull(QuantExecutionRecord::getLastRecoveryAt).or().le(QuantExecutionRecord::getLastRecoveryAt, LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(1)))
                 // Do not drop unresolved orders after 24h; oldest never-retried records are examined first.
                 .orderByAsc(QuantExecutionRecord::getLastRecoveryAt).orderByAsc(QuantExecutionRecord::getCreatedAt).last("LIMIT 100"));
         } catch (RuntimeException ex) {
@@ -132,7 +132,7 @@ public class ExecutionRecoveryService {
                             // The annotation must be guarded by the exact recovered order and status.
                             // A stale recovery worker must never overwrite a newer execution fact.
                             if (record.getId() != null && exact.orderId() != null) {
-                                recordMapper.annotateRecoveredCancelFill(record.getId(), exact.orderId(), status, "取消请求到达时订单已经成交: " + status, LocalDateTime.now());
+                                recordMapper.annotateRecoveredCancelFill(record.getId(), exact.orderId(), status, "取消请求到达时订单已经成交: " + status, LocalDateTime.now(java.time.ZoneOffset.UTC));
                             }
                         } else if ("PARTIALLY_FILLED".equalsIgnoreCase(status)) {
                             // PARTIALLY_FILLED can still have live remaining quantity.
@@ -156,7 +156,7 @@ public class ExecutionRecoveryService {
                     orderLedgerService.syncSnapshot(record.getCredentialId(), matched);
                     recordService.markRecovered(record, matched.orderId(), matched.status());
                     releaseRecoveredTicket(credential, record, matched);
-                } else if (record.getCreatedAt() != null && Duration.between(record.getCreatedAt(), LocalDateTime.now()).getSeconds() >= 90) {
+                } else if (record.getCreatedAt() != null && Duration.between(record.getCreatedAt(), LocalDateTime.now(java.time.ZoneOffset.UTC)).getSeconds() >= 90) {
                     recordService.markUnknown(record, "超过 90 秒仍无法确认交易所订单状态，保持 UNKNOWN 并等待后续对账");
                 }
             } catch (RuntimeException ex) {
