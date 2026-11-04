@@ -72,13 +72,21 @@ public class TradeCycleQueryService {
             : cycleMapper.selectCycles(credentialIds, normalizedSymbol, start, end, offset, pageSize);
         if (rows != null) {
             for (Map<String, Object> row : rows) {
-                Object openedAt = row.get("openedAt");
-                if (openedAt instanceof LocalDateTime time) row.put("openedAt", BeijingTime.formatUtc(time));
-                Object closedAt = row.get("closedAt");
-                if (closedAt instanceof LocalDateTime time) row.put("closedAt", BeijingTime.formatUtc(time));
+                row.put("openedAt", formatUtcTime(row.get("openedAt")));
+                row.put("closedAt", formatUtcTime(row.get("closedAt")));
             }
         }
         return new TradeCyclePageVo(rows == null ? List.of() : rows, total, incompleteCount, inferredCount);
+    }
+
+    private static Object formatUtcTime(Object value) {
+        if (value instanceof LocalDateTime time) {
+            return BeijingTime.formatUtc(time);
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return BeijingTime.formatUtc(timestamp.toLocalDateTime());
+        }
+        return value;
     }
 
     private static LocalDateTime boundary(String date, boolean nextDay) {
