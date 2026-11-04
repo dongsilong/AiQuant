@@ -150,7 +150,7 @@ public class RiskDecisionService {
             }
         }
         if (risk.getMaxOrdersPerMinute() != null && risk.getMaxOrdersPerMinute() > 0) {
-            LocalDateTime since = LocalDateTime.now().minusMinutes(1);
+            LocalDateTime since = LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(1);
             Long count =
                 executionRecordMapper.selectCount(new LambdaQueryWrapper<QuantExecutionRecord>().eq(QuantExecutionRecord::getCredentialId, credentialId).ge(QuantExecutionRecord::getCreatedAt, since).ne(QuantExecutionRecord::getExecutionStatus, "FAILED").ne(currentKey != null, QuantExecutionRecord::getIdempotencyKey, currentKey));
             if (count >= risk.getMaxOrdersPerMinute()) {
@@ -160,7 +160,9 @@ public class RiskDecisionService {
             }
         }
         if (risk.getDailyLossLimit() != null && risk.getDailyLossLimit().signum() > 0) {
-            LocalDateTime startOfDay = LocalDateTime.now().toLocalDate().atStartOfDay();
+            LocalDate todayBeijing = LocalDate.now(java.time.ZoneId.of("Asia/Shanghai"));
+            LocalDateTime startOfDay = todayBeijing.atStartOfDay(java.time.ZoneId.of("Asia/Shanghai")).toInstant()
+                .atOffset(java.time.ZoneOffset.UTC).toLocalDateTime();
             List<QuantFinancialEvent> events = financialEventMapper.selectList(new LambdaQueryWrapper<QuantFinancialEvent>().select(QuantFinancialEvent::getAmount,
                 QuantFinancialEvent::getEventType).eq(QuantFinancialEvent::getCredentialId, credentialId).ge(QuantFinancialEvent::getEventTime, startOfDay).in(QuantFinancialEvent::getEventType, "REALIZED_PNL", "COMMISSION", "FUNDING_FEE"));
             BigDecimal realized = BigDecimal.ZERO;
