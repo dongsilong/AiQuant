@@ -113,7 +113,7 @@ public class QuantTradeNotificationService {
             blockedNoticeTimes.entrySet().removeIf(entry -> now - entry.getValue() > 60_000L);
         }
         String content =
-            "实盘开仓已阻止\n账户: " + safe(credential == null ? null : credential.getAccountName()) + "\n交易对: " + safe(symbol) + "\n原因: " + safe(reason) + "\n时间: " + LocalDateTime.now();
+            "实盘开仓已阻止\n账户: " + safe(credential == null ? null : credential.getAccountName()) + "\n交易对: " + safe(symbol) + "\n原因: " + safe(reason) + "\n时间: " + LocalDateTime.now(java.time.ZoneOffset.UTC);
         try {
             List<Long> adminIds = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur" +
                 ".user_id " + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
@@ -133,7 +133,7 @@ public class QuantTradeNotificationService {
                            BigDecimal openRatio, String reason) {
         String subject = "量化开仓通知 - " + symbol + " " + cnDirection(direction);
         String content = "【量化开仓通知】\n" + "策略名称: " + safe(strategy == null ? null : strategy.getStrategyName()) + "\n" + "账户: " + safe(credential == null ? null :
-            credential.getAccountName()) + "\n" + "交易对: " + symbol + "\n" + "方向: " + cnDirection(direction) + "\n" + "开仓数量: " + plain(quantity) + "\n" + "开仓价格: " + plain(price) + "\n" + "杠杆倍数: " + leverage + "倍\n" + "开仓比例: " + plain(openRatio) + "\n" + "触发原因: " + safe(reason) + "\n" + "时间: " + LocalDateTime.now();
+            credential.getAccountName()) + "\n" + "交易对: " + symbol + "\n" + "方向: " + cnDirection(direction) + "\n" + "开仓数量: " + plain(quantity) + "\n" + "开仓价格: " + plain(price) + "\n" + "杠杆倍数: " + leverage + "倍\n" + "开仓比例: " + plain(openRatio) + "\n" + "触发原因: " + safe(reason) + "\n" + "时间: " + LocalDateTime.now(java.time.ZoneOffset.UTC);
         send(credential == null ? null : credential.getId(), subject, content);
     }
 
@@ -144,7 +144,7 @@ public class QuantTradeNotificationService {
                             BigDecimal closePrice, BigDecimal profitAmount, BigDecimal profitRate, String closeType, String reason) {
         String subject = "量化平仓通知 - " + symbol + " " + cnDirection(direction);
         String content = "【量化平仓通知】\n" + "策略名称: " + safe(strategy == null ? null : strategy.getStrategyName()) + "\n" + "账户: " + safe(credential == null ? null :
-            credential.getAccountName()) + "\n" + "交易对: " + symbol + "\n" + "方向: " + cnDirection(direction) + "\n" + "平仓类型: " + safe(closeType) + "\n" + "触发条件: " + safe(reason) + "\n" + "平仓数量: " + plain(quantity) + "\n" + "开仓价格: " + plain(entryPrice) + "\n" + "平仓价格: " + plain(closePrice) + "\n" + "收益金额: " + (profitAmount == null ? "N/A" : profitAmount.setScale(2, RoundingMode.HALF_UP).toPlainString()) + " USDT\n" + "收益率: " + (profitRate == null ? "N/A" : profitRate.multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP) + "%") + "\n" + "时间: " + LocalDateTime.now();
+            credential.getAccountName()) + "\n" + "交易对: " + symbol + "\n" + "方向: " + cnDirection(direction) + "\n" + "平仓类型: " + safe(closeType) + "\n" + "触发条件: " + safe(reason) + "\n" + "平仓数量: " + plain(quantity) + "\n" + "开仓价格: " + plain(entryPrice) + "\n" + "平仓价格: " + plain(closePrice) + "\n" + "收益金额: " + (profitAmount == null ? "N/A" : profitAmount.setScale(2, RoundingMode.HALF_UP).toPlainString()) + " USDT\n" + "收益率: " + (profitRate == null ? "N/A" : profitRate.multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP) + "%") + "\n" + "时间: " + LocalDateTime.now(java.time.ZoneOffset.UTC);
         send(credential == null ? null : credential.getId(), subject, content);
     }
 
@@ -161,8 +161,8 @@ public class QuantTradeNotificationService {
         systemNotification.setContent(content);
         systemNotification.setStatus("PENDING");
         systemNotification.setRetryCount(0);
-        systemNotification.setNextRetryAt(LocalDateTime.now());
-        systemNotification.setCreatedAt(LocalDateTime.now());
+        systemNotification.setNextRetryAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
+        systemNotification.setCreatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         try {
             notificationMapper.insert(systemNotification);
             if (systemNotification.getId() != null) {
@@ -192,8 +192,8 @@ public class QuantTradeNotificationService {
             notification.setContent(content);
             notification.setStatus("PENDING");
             notification.setRetryCount(0);
-            notification.setNextRetryAt(LocalDateTime.now());
-            notification.setCreatedAt(LocalDateTime.now());
+            notification.setNextRetryAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
+            notification.setCreatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             try {
                 notificationMapper.insert(notification);
                 // 邮件网络等待不能阻塞行情消费；现有调度器负责抢占、发送和失败重试。
@@ -254,21 +254,21 @@ public class QuantTradeNotificationService {
      */
     @Scheduled(fixedDelay = 30000L, initialDelay = 30000L)
     public void retryPendingNotifications() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
         List<QuantNotification> pending = notificationMapper.selectList(new LambdaQueryWrapper<QuantNotification>()
             .in(QuantNotification::getChannel, "EMAIL", "SYSTEM")
             .and(query -> query.in(QuantNotification::getStatus, "PENDING", "RETRY").le(QuantNotification::getNextRetryAt, now)
                 .or().eq(QuantNotification::getStatus, "SENDING").lt(QuantNotification::getLeaseUntil, now))
             .orderByAsc(QuantNotification::getCreatedAt).last("LIMIT 50"));
         String ownerToken = UUID.randomUUID().toString();
-        LocalDateTime leaseUntil = LocalDateTime.now().plusMinutes(2);
+        LocalDateTime leaseUntil = LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(2);
         for (QuantNotification notification : pending) {
             claimAndDeliver(notification, ownerToken, leaseUntil);
         }
     }
 
     private boolean claimAndDeliver(QuantNotification notification) {
-        return claimAndDeliver(notification, UUID.randomUUID().toString(), LocalDateTime.now().plusMinutes(2));
+        return claimAndDeliver(notification, UUID.randomUUID().toString(), LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(2));
     }
 
     private boolean claimAndDeliver(QuantNotification notification, String ownerToken, LocalDateTime leaseUntil) {
@@ -297,7 +297,7 @@ public class QuantTradeNotificationService {
             notification.setOwnerToken(null);
             notification.setLeaseUntil(null);
             notification.setLastError(null);
-            notification.setSentAt(LocalDateTime.now());
+            notification.setSentAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             notificationMapper.updateById(notification);
         } catch (RuntimeException ex) {
             int retry = (notification.getRetryCount() == null ? 0 : notification.getRetryCount()) + 1;
@@ -307,7 +307,7 @@ public class QuantTradeNotificationService {
             notification.setLeaseUntil(null);
             notification.setLastError(ex.getMessage());
             long delaySeconds = Math.min(1800L, 30L * (1L << Math.min(retry - 1, 6)));
-            notification.setNextRetryAt(LocalDateTime.now().plusSeconds(delaySeconds));
+            notification.setNextRetryAt(LocalDateTime.now(java.time.ZoneOffset.UTC).plusSeconds(delaySeconds));
             try {
                 notificationMapper.updateById(notification);
             } catch (RuntimeException dbEx) {
