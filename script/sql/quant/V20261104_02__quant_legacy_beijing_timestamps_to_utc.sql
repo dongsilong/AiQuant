@@ -70,11 +70,6 @@ BEGIN
         UNION ALL SELECT 'quant_live_recovery_approval', 'reviewed_at'
         UNION ALL SELECT 'quant_live_recovery_approval', 'completed_at'
         UNION ALL SELECT 'quant_live_recovery_audit', 'created_at'
-        UNION ALL SELECT 'quant_trade_cycle_scope', 'updated_at'
-        UNION ALL SELECT 'quant_trade_cycle_scope', 'last_projected_at'
-        UNION ALL SELECT 'quant_trade_cycle', 'created_at'
-        UNION ALL SELECT 'quant_trade_cycle', 'updated_at'
-        UNION ALL SELECT 'quant_trade_cycle_fill', 'created_at'
         UNION ALL SELECT 'quant_paper_account', 'updated_at';
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET finished = TRUE;
