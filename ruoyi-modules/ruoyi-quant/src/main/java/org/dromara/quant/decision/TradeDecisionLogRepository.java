@@ -1,6 +1,7 @@
 package org.dromara.quant.decision;
 
 import org.dromara.common.core.domain.PageResult;
+import org.dromara.quant.config.BeijingTime;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -11,7 +12,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.*;
 
 /**
@@ -109,7 +110,7 @@ public class TradeDecisionLogRepository {
     }
 
     private static Timestamp timestamp(Instant instant) {
-        return instant == null ? null : Timestamp.valueOf(LocalDateTime.ofInstant(instant, ZoneId.systemDefault()));
+        return instant == null ? null : Timestamp.valueOf(LocalDateTime.ofInstant(instant, ZoneOffset.UTC));
     }
 
     private static String percent(BigDecimal rate) {
@@ -518,8 +519,8 @@ public class TradeDecisionLogRepository {
         add(where, args, "operation", q.getOperation(), false);
         add(where, args, "status", q.getStatus(), false);
         add(where, args, "reason", q.getReason(), true);
-        LocalDateTime to = q.getTo() == null ? LocalDateTime.now() : q.getTo();
-        LocalDateTime from = q.getFrom() == null ? to.minusHours(24) : q.getFrom();
+        LocalDateTime to = q.getTo() == null ? LocalDateTime.now(ZoneOffset.UTC) : BeijingTime.utcFromBeijing(q.getTo());
+        LocalDateTime from = q.getFrom() == null ? to.minusHours(24) : BeijingTime.utcFromBeijing(q.getFrom());
         if (from.isAfter(to)) {
             throw new org.dromara.common.core.exception.ServiceException("开始时间不能晚于结束时间");
         }
@@ -543,6 +544,10 @@ public class TradeDecisionLogRepository {
         return rows.isEmpty() ? null : display(rows.getFirst());
     }
 
+    private static boolean isEventTimeColumn(String column) {
+        return Set.of("event_time", "trade_time", "kline_time", "last_time").contains(column);
+    }
+
     private Map<String, Object> display(Map<String, Object> row) {
         Map<String, Object> result = new LinkedHashMap<>();
         row.forEach((column, value) -> {
@@ -558,10 +563,11 @@ public class TradeDecisionLogRepository {
                 value = value.toString();
             }
             if (value instanceof Timestamp t) {
-                value = t.toLocalDateTime().toString().replace('T', ' ');
+                LocalDateTime utc = t.toLocalDateTime();
+                value = isEventTimeColumn(column) ? BeijingTime.formatUtc(utc) : utc.toString().replace('T', ' ');
             }
             if (value instanceof LocalDateTime t) {
-                value = t.toString().replace('T', ' ');
+                value = isEventTimeColumn(column) ? BeijingTime.formatUtc(t) : t.toString().replace('T', ' ');
             }
             result.put(name.toString(), value);
         });
