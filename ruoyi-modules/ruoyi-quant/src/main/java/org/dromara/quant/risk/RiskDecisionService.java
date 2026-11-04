@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
+import org.dromara.quant.config.BeijingTime;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.dromara.quant.finance.domain.QuantFinancialEvent;
@@ -20,6 +21,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -160,9 +162,8 @@ public class RiskDecisionService {
             }
         }
         if (risk.getDailyLossLimit() != null && risk.getDailyLossLimit().signum() > 0) {
-            java.time.LocalDate todayBeijing = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai"));
-            LocalDateTime startOfDay = todayBeijing.atStartOfDay(java.time.ZoneId.of("Asia/Shanghai")).toInstant()
-                .atOffset(java.time.ZoneOffset.UTC).toLocalDateTime();
+            LocalDate todayBeijing = LocalDate.now(BeijingTime.ZONE);
+            LocalDateTime startOfDay = BeijingTime.utcStartOfBeijingDate(todayBeijing);
             List<QuantFinancialEvent> events = financialEventMapper.selectList(new LambdaQueryWrapper<QuantFinancialEvent>().select(QuantFinancialEvent::getAmount,
                 QuantFinancialEvent::getEventType).eq(QuantFinancialEvent::getCredentialId, credentialId).ge(QuantFinancialEvent::getEventTime, startOfDay).in(QuantFinancialEvent::getEventType, "REALIZED_PNL", "COMMISSION", "FUNDING_FEE"));
             BigDecimal realized = BigDecimal.ZERO;
