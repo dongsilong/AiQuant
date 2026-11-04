@@ -69,6 +69,7 @@ BEGIN
         UNION ALL SELECT 'quant_strategy_fill_allocation', 'created_at'
         UNION ALL SELECT 'quant_strategy_position_projection', 'created_at'
         UNION ALL SELECT 'quant_strategy_position_projection', 'updated_at'
+        UNION ALL SELECT 'quant_position_sync_fence', 'snapshot_started_at'
         UNION ALL SELECT 'quant_position_sync_fence', 'updated_at'
         UNION ALL SELECT 'quant_live_recovery_approval', 'created_at'
         UNION ALL SELECT 'quant_live_recovery_approval', 'reviewed_at'
