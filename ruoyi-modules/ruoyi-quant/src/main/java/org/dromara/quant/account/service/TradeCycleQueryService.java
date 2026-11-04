@@ -7,6 +7,7 @@ import org.dromara.common.mybatis.core.page.PageQuery;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.account.domain.vo.TradeCyclePageVo;
 import org.dromara.quant.account.mapper.TradeCycleMapper;
+import org.dromara.quant.config.BeijingTime;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.springframework.stereotype.Service;
@@ -69,6 +70,14 @@ public class TradeCycleQueryService {
         long offset = (long) (pageNum - 1) * pageSize;
         List<Map<String, Object>> rows = total == 0 ? List.of()
             : cycleMapper.selectCycles(credentialIds, normalizedSymbol, start, end, offset, pageSize);
+        if (rows != null) {
+            for (Map<String, Object> row : rows) {
+                Object openedAt = row.get("openedAt");
+                if (openedAt instanceof LocalDateTime time) row.put("openedAt", BeijingTime.formatUtc(time));
+                Object closedAt = row.get("closedAt");
+                if (closedAt instanceof LocalDateTime time) row.put("closedAt", BeijingTime.formatUtc(time));
+            }
+        }
         return new TradeCyclePageVo(rows == null ? List.of() : rows, total, incompleteCount, inferredCount);
     }
 
