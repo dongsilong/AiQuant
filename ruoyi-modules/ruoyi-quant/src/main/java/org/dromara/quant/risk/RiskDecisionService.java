@@ -160,7 +160,7 @@ public class RiskDecisionService {
             }
         }
         if (risk.getDailyLossLimit() != null && risk.getDailyLossLimit().signum() > 0) {
-            LocalDate todayBeijing = LocalDate.now(java.time.ZoneId.of("Asia/Shanghai"));
+            java.time.LocalDate todayBeijing = LocalDate.now(java.time.ZoneId.of("Asia/Shanghai"));
             LocalDateTime startOfDay = todayBeijing.atStartOfDay(java.time.ZoneId.of("Asia/Shanghai")).toInstant()
                 .atOffset(java.time.ZoneOffset.UTC).toLocalDateTime();
             List<QuantFinancialEvent> events = financialEventMapper.selectList(new LambdaQueryWrapper<QuantFinancialEvent>().select(QuantFinancialEvent::getAmount,
