@@ -1,5 +1,5 @@
 -- V20261104_02: normalize legacy Beijing-local DATETIME fields to UTC.
--- Apply once after a database backup and after V20261104_01 (when that migration is needed).
+-- Apply once after a database backup, against the intended quant database, before deploying this code.
 --
 -- The listed fields were written by code paths that used Asia/Shanghai, JVM-local time
 -- under the deployed Asia/Shanghai container TZ, or MySQL NOW() while MySQL SYSTEM was UTC+8.
@@ -90,6 +90,14 @@ BEGIN
     ) THEN
         SIGNAL SQLSTATE '45000'
             SET MESSAGE_TEXT = 'V20261104_02 already applied; refusing to subtract eight hours twice';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name = 'quant_trade'
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'V20261104_02 must run in the quant database containing quant_trade';
     END IF;
 
     START TRANSACTION;
