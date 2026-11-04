@@ -1,6 +1,5 @@
 package org.dromara.quant.account.domain.vo;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.linpeilie.annotations.AutoMapper;
@@ -8,13 +7,12 @@ import lombok.Data;
 import org.dromara.common.translation.annotation.Translation;
 import org.dromara.common.translation.constant.TransConstant;
 import org.dromara.quant.account.domain.QuantTrade;
+import org.dromara.quant.config.BeijingTime;
 
 import java.io.Serial;
 import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 
 /**
  * 成交记录展示对象。
@@ -93,11 +91,7 @@ public class QuantTradeVo implements Serializable {
      * 返回给前端的成交时间（北京时间）。
      */
     @JsonProperty("tradeTime")
-    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-    public LocalDateTime getTradeTimeBeijing() {
-        if (tradeTime == null) {
-            return null;
-        }
-        return tradeTime.atZone(ZoneOffset.UTC).withZoneSameInstant(ZoneId.of("Asia/Shanghai")).toLocalDateTime();
+    public String getTradeTimeBeijing() {
+        return BeijingTime.formatUtc(tradeTime);
     }
 }
