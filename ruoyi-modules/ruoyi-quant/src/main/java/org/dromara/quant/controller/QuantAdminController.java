@@ -238,7 +238,7 @@ public class QuantAdminController {
                                                         @RequestParam(required = false) String executionStatus, @RequestParam(required = false) String symbol,
                                                         @RequestParam(required = false) String exchangeOrderStatus,
                                                         @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime startTime, @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime endTime) {
-        var until = endTime == null ? java.time.LocalDateTime.now() : endTime;
+        var until = endTime == null ? java.time.LocalDateTime.now(java.time.ZoneOffset.UTC) : endTime;
         var from = startTime == null ? until.minusHours(24) : startTime;
         if (from.isAfter(until)) {
             throw new ServiceException("开始时间不能晚于结束时间");
