@@ -107,7 +107,7 @@ BEGIN
             WHERE table_schema = DATABASE()
               AND table_name = target_table
               AND column_name = target_column
-              AND data_type IN ('datetime', 'timestamp')
+              AND data_type = 'datetime'
         ) THEN
             SET @quant_time_sql = CONCAT(
                 'UPDATE `', target_table, '` ',
