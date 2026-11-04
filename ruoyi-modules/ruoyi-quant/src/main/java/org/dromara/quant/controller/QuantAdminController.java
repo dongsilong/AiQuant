@@ -11,6 +11,7 @@ import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.mybatis.core.page.PageQuery;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
+import org.dromara.quant.config.BeijingTime;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
@@ -238,8 +239,8 @@ public class QuantAdminController {
                                                         @RequestParam(required = false) String executionStatus, @RequestParam(required = false) String symbol,
                                                         @RequestParam(required = false) String exchangeOrderStatus,
                                                         @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime startTime, @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime endTime) {
-        var until = endTime == null ? java.time.LocalDateTime.now(java.time.ZoneOffset.UTC) : endTime;
-        var from = startTime == null ? until.minusHours(24) : startTime;
+        var until = endTime == null ? java.time.LocalDateTime.now(java.time.ZoneOffset.UTC) : BeijingTime.utcFromBeijing(endTime);
+        var from = startTime == null ? until.minusHours(24) : BeijingTime.utcFromBeijing(startTime);
         if (from.isAfter(until)) {
             throw new ServiceException("开始时间不能晚于结束时间");
         }
