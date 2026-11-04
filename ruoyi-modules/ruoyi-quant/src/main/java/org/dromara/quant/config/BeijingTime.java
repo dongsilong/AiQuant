@@ -30,6 +30,11 @@ public final class BeijingTime {
         return utc == null ? null : DISPLAY_ISO.format(utc.toInstant(ZoneOffset.UTC));
     }
 
+    /** Convert a Beijing wall-clock date/time to the UTC LocalDateTime used by database queries. */
+    public static LocalDateTime utcFromBeijing(LocalDateTime beijing) {
+        return beijing == null ? null : LocalDateTime.ofInstant(beijing.atZone(ZONE).toInstant(), ZoneOffset.UTC);
+    }
+
     /** Convert the start of a Beijing calendar day to the UTC LocalDateTime used by database queries. */
     public static LocalDateTime utcStartOfBeijingDate(LocalDate date) {
         return LocalDateTime.ofInstant(date.atStartOfDay(ZONE).toInstant(), ZoneOffset.UTC);
