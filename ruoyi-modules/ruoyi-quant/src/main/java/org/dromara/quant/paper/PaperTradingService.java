@@ -73,7 +73,7 @@ public class PaperTradingService {
         entity.setAvailableBalance(initial);
         entity.setRealizedPnl(BigDecimal.ZERO);
         entity.setUnrealizedPnl(BigDecimal.ZERO);
-        entity.setUpdatedAt(LocalDateTime.now());
+        entity.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         try {
             accountMapper.insert(entity);
             return entity;
@@ -155,7 +155,7 @@ public class PaperTradingService {
             }
         }
         record.setRecoveryAttempts((record.getRecoveryAttempts() == null ? 0 : record.getRecoveryAttempts()) + 1);
-        record.setLastRecoveryAt(LocalDateTime.now());
+        record.setLastRecoveryAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         record.setExecutionStatus("FAILED");
         record.setErrorMessage(message == null ? "PAPER 执行未确认" : message);
         record.setUpdatedAt(record.getLastRecoveryAt());
@@ -187,13 +187,13 @@ public class PaperTradingService {
             position.setMargin(margin);
             position.setLeverage(leverage);
             position.setUnrealizedPnl(BigDecimal.ZERO);
-            position.setUpdatedAt(LocalDateTime.now());
+            position.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             positionMapper.insert(position);
         }
         record.setPaperSettled(true);
         record.setExecutionStatus("CONFIRMED");
         record.setExchangeOrderStatus("FILLED");
-        record.setUpdatedAt(LocalDateTime.now());
+        record.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         executionRecordMapper.updateById(record);
         return position;
     }
@@ -241,7 +241,7 @@ public class PaperTradingService {
             position.setMargin((position.getMargin() == null ? BigDecimal.ZERO : position.getMargin()).subtract(releasedMargin).max(BigDecimal.ZERO));
             position.setMarkPrice(fillPrice);
             position.setUnrealizedPnl(BigDecimal.ZERO);
-            position.setUpdatedAt(LocalDateTime.now());
+            position.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             positionMapper.updateById(position);
         }
         if (atomicMapper.settleClose(lockedAccount.getId(), realized, releasedMargin, oldUnrealizedPnl) != 1) {
@@ -250,7 +250,7 @@ public class PaperTradingService {
         record.setPaperSettled(true);
         record.setExecutionStatus("CONFIRMED");
         record.setExchangeOrderStatus("FILLED");
-        record.setUpdatedAt(LocalDateTime.now());
+        record.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         executionRecordMapper.updateById(record);
         QuantPosition current = remain.signum() == 0 ? null : positionMapper.selectById(positionId);
         return new PaperCloseSettlement(current, releasedMargin, realized);
@@ -272,7 +272,7 @@ public class PaperTradingService {
                 pnl = pnl.negate();
             }
             p.setUnrealizedPnl(pnl);
-            p.setUpdatedAt(LocalDateTime.now());
+            p.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             positionMapper.updateById(p);
             total = total.add(pnl);
         }
@@ -296,7 +296,7 @@ public class PaperTradingService {
         }
         position.setMarkPrice(markPrice);
         position.setUnrealizedPnl(pnl);
-        position.setUpdatedAt(LocalDateTime.now());
+        position.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         positionMapper.updateById(position);
         if (atomicMapper.adjustUnrealized(position.getCredentialId(), pnl, oldPnl) != 1) {
             throw new IllegalStateException("PAPER 标记盈亏更新失败");
