@@ -1170,7 +1170,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 // 成交补偿仅恢复开仓后的峰值，不产生回溯下单。
                 Instant localEventTime = event.eventTime() == null ? null : event.eventTime().minusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
                 if (!runtime.exitCoordinating.get() && event.price() != null && runtime.state != null && runtime.state.getOpenedAt() != null && localEventTime != null &&
-                    !localEventTime.isBefore(runtime.state.getOpenedAt().atZone(java.time.ZoneId.systemDefault()).toInstant())) {
+                    !localEventTime.isBefore(runtime.state.getOpenedAt().atZone(java.time.ZoneOffset.UTC).toInstant())) {
                     updateRuntimeExtrema(runtime, event.price());
                 }
                 return;
@@ -1803,7 +1803,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             state.setPendingOrderId(executionResult.orderId());
             state.setPendingClientOrderId(executionResult.clientOrderId());
             runtime.state = state;
-            runtime.instance.setLastSignalAt(LocalDateTime.now());
+            runtime.instance.setLastSignalAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             instanceMapper.updateById(runtime.instance);
             if (paper) {
                 runtime.position = paperTradingService.recordOpenFill(runtime.credential.getId(), idempotencyKey, runtime.symbol.getSymbol(), direction, quantity,
@@ -1844,7 +1844,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             freezeOrderEntryPrice(state, filledOpen);
             state.setStatus("OPEN");
             if (state.getOpenedAt() == null) {
-                state.setOpenedAt(LocalDateTime.now());
+                state.setOpenedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             }
             clearPending(state);
             stateService.save(state);
@@ -3359,7 +3359,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         position.setMargin(entryPrice.multiply(quantity).divide(BigDecimal.valueOf(Math.max(1, leverage)), 16, RoundingMode.HALF_UP));
         position.setLeverage(leverage);
         position.setUnrealizedPnl(BigDecimal.ZERO);
-        position.setUpdatedAt(LocalDateTime.now());
+        position.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         positionMapper.insert(position);
         return position;
     }
