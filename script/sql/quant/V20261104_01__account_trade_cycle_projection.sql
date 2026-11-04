@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS quant_trade_cycle_scope (
     inferred_count int NOT NULL DEFAULT 0,
     last_error varchar(1000) NULL DEFAULT NULL,
     last_projected_at datetime(3) NULL DEFAULT NULL,
-    updated_at datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at datetime(3) NOT NULL DEFAULT (UTC_TIMESTAMP(3)),
     PRIMARY KEY (credential_id,symbol),
     INDEX idx_quant_trade_cycle_pending (projection_status,updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
@@ -120,10 +120,10 @@ COMMENT='原始成交在交易周期中的数量、角色及财务分配';
 -- local fill chain before the page starts reading this ledger.
 INSERT INTO quant_trade_cycle_scope
     (credential_id,symbol,dirty_version,projected_version,projection_status,updated_at)
-SELECT credential_id,symbol,1,0,'PENDING',NOW(3)
+SELECT credential_id,symbol,1,0,'PENDING',UTC_TIMESTAMP(3)
 FROM quant_trade
 GROUP BY credential_id,symbol
 ON DUPLICATE KEY UPDATE
     dirty_version=GREATEST(dirty_version,projected_version+1),
     projection_status='PENDING',
-    updated_at=NOW(3);
+    updated_at=UTC_TIMESTAMP(3);
