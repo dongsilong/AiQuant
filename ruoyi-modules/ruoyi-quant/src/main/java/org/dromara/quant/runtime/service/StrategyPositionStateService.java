@@ -81,7 +81,7 @@ public class StrategyPositionStateService {
         Object lock = locks.computeIfAbsent(state.getInstanceId(), ignored -> new Object());
         synchronized (lock) {
             // updated_at 在数据库中是 NOT NULL 且没有默认值，插入和更新都由服务统一维护。
-            state.setUpdatedAt(LocalDateTime.now());
+            state.setUpdatedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             if (state.getVersion() == null) {
                 state.setVersion(0);
             }
