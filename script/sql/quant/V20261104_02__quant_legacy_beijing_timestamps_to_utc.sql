@@ -35,6 +35,10 @@ BEGIN
     DECLARE targets CURSOR FOR
         SELECT 'quant_account_snapshot', 'observed_at'
         UNION ALL SELECT 'quant_financial_event', 'created_at'
+        UNION ALL SELECT 'quant_trade_decision_log', 'event_time'
+        UNION ALL SELECT 'quant_trade_decision_log', 'trade_time'
+        UNION ALL SELECT 'quant_trade_decision_log', 'kline_time'
+        UNION ALL SELECT 'quant_trade_decision_log', 'last_time'
         UNION ALL SELECT 'quant_execution_record', 'created_at'
         UNION ALL SELECT 'quant_execution_record', 'updated_at'
         UNION ALL SELECT 'quant_execution_record', 'last_recovery_at'
