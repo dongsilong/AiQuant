@@ -41,7 +41,8 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
             t.exchange_trade_id AS exchangeTradeId,
             t.exchange_order_id AS exchangeOrderId,
             UPPER(t.side) AS side,
-            COALESCE(soi.position_side,pre.position_side,NULLIF(o.position_side,'BOTH')) AS positionSide,
+            t.exchange_position_side AS tradePositionSide,
+            COALESCE(NULLIF(t.exchange_position_side,'BOTH'),NULLIF(o.position_side,'BOTH'),soi.position_side,pre.position_side) AS positionSide,
             o.position_side AS exchangePositionSide,
             COALESCE(soi.fill_role,pre.operation_type,execution.operation_type) AS fillRole,
             COALESCE(soi.position_cycle_key,pre.position_cycle_key) AS positionCycleKey,
@@ -70,6 +71,12 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
                     AND soi.position_cycle_key<>pre.position_cycle_key)
                 OR (o.position_side IN ('LONG','SHORT') AND soi.position_side IS NOT NULL
                     AND o.position_side<>soi.position_side)
+                OR (t.exchange_position_side IN ('LONG','SHORT') AND o.position_side IN ('LONG','SHORT')
+                    AND t.exchange_position_side<>o.position_side)
+                OR (t.exchange_position_side IN ('LONG','SHORT') AND soi.position_side IS NOT NULL
+                    AND t.exchange_position_side<>soi.position_side)
+                OR (t.exchange_position_side IN ('LONG','SHORT') AND pre.position_side IS NOT NULL
+                    AND t.exchange_position_side<>pre.position_side)
                 THEN 1 ELSE 0 END AS sourceConflict,
             COALESCE(t.strategy_instance_id,soi.strategy_instance_id,pre.strategy_instance_id,o.strategy_instance_id) AS strategyInstanceId
         FROM quant_trade t
