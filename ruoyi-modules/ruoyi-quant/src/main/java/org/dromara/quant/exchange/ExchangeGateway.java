@@ -202,13 +202,22 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
     record TradeSnapshot(String symbol,
                          @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long tradeId,
                          @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long orderId,
-                         String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl, Instant time, String commissionAsset) {
+                         String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl, Instant time, String commissionAsset,
+                         String positionSide) {
         /**
-         * Legacy callers have unknown fee asset and MUST NOT project as settled PnL.
+         * Compatibility constructor for callers that do not have exchange position-side evidence.
+         */
+        public TradeSnapshot(String symbol, Long tradeId, Long orderId, String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl,
+                             Instant time, String commissionAsset) {
+            this(symbol, tradeId, orderId, side, quantity, price, commission, realizedPnl, time, commissionAsset, null);
+        }
+
+        /**
+         * Legacy callers have unknown fee asset and position-side evidence.
          */
         public TradeSnapshot(String symbol, Long tradeId, Long orderId, String side, BigDecimal quantity, BigDecimal price, BigDecimal commission, BigDecimal realizedPnl,
                              Instant time) {
-            this(symbol, tradeId, orderId, side, quantity, price, commission, realizedPnl, time, null);
+            this(symbol, tradeId, orderId, side, quantity, price, commission, realizedPnl, time, null, null);
         }
     }
 
