@@ -23,7 +23,7 @@ class StrategyFillJournalServiceTest {
     private final StrategyFillJournalService service = new StrategyFillJournalService(journal, allocations, orders);
 
     private ExchangeGateway.TradeSnapshot fill() {
-        return new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN, null, null, Instant.parse("2026-10-17T00:00:00.123Z"), null);
+        return new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN, null, null, Instant.parse("2026-10-17T00:00:00.123Z"), null, "LONG");
     }
 
     @Test
@@ -39,6 +39,7 @@ class StrategyFillJournalServiceTest {
         assertNull(raw.getValue().getCommission());
         assertNull(raw.getValue().getRealizedPnl());
         assertNull(raw.getValue().getCommissionAsset());
+        assertEquals("LONG", raw.getValue().getExchangePositionSide());
         assertEquals("WAITING_ORDER", status);
         verify(journal).updateStatus(anyLong(), eq("WAITING_ORDER"), anyString());
         verifyNoInteractions(allocations);
@@ -66,7 +67,7 @@ class StrategyFillJournalServiceTest {
     @Test
     void laterCompleteReplayEnrichesPreviouslyUnknownMoneyFactsWithoutConflict() {
         var incoming = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
-            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00.123Z"), "USDT");
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00.123Z"), "USDT", "LONG");
         var stored = new StrategyFillJournalRecord();
         stored.setId(77L);
         stored.setCredentialId(1L);
@@ -91,6 +92,7 @@ class StrategyFillJournalServiceTest {
         assertEquals(new BigDecimal("0.01"), enriched.getValue().getCommission());
         assertEquals(BigDecimal.ZERO, enriched.getValue().getRealizedPnl());
         assertEquals("USDT", enriched.getValue().getCommissionAsset());
+        assertEquals("LONG", enriched.getValue().getExchangePositionSide());
         verify(journal, never()).insertRaw(any());
         verify(journal, never()).updateStatus(eq(77L), eq("CONFLICT"), anyString());
     }
@@ -148,6 +150,7 @@ class StrategyFillJournalServiceTest {
         stored.setExchangeTradeId(fill.tradeId());
         stored.setExchangeOrderId(fill.orderId());
         stored.setSide(fill.side());
+        stored.setExchangePositionSide(fill.positionSide());
         stored.setQuantity(fill.quantity());
         stored.setPrice(fill.price());
         stored.setCommission(fill.commission());
