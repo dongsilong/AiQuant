@@ -50,6 +50,7 @@ class TradeHistoryAssemblerTest {
         assertEquals(0, result.incompleteCount());
         assertEquals(1, result.cycles().size());
         assertEquals("LONG", result.cycles().getFirst().getPositionSide());
+        assertTrue(result.cycles().getFirst().getReconciliationReason().contains("positionSide"));
         assertEquals("VERIFIED", result.cycles().getFirst().getReconciliationStatus());
     }
 
@@ -58,12 +59,13 @@ class TradeHistoryAssemblerTest {
         TradeCycleSourceFill opening = fill(1, "BUY", "LONG", "LONG", "OPEN", null,
             "1", "100", "0.1", "0", false, true);
         opening.setTradePositionSide("SHORT");
+        opening.setPositionSideConflict(true);
 
         var result = TradeCycleAssembler.assemble(List.of(opening));
 
         assertEquals(1, result.incompleteCount());
         assertEquals("RECONCILE_REQUIRED", result.cycles().getFirst().getReconciliationStatus());
-        assertEquals("UNKNOWN", result.cycles().getFirst().getPositionSide());
+        assertEquals("LONG", result.cycles().getFirst().getPositionSide());
     }
 
     @Test
