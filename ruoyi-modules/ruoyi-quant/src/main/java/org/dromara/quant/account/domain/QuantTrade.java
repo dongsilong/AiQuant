@@ -49,6 +49,10 @@ public class QuantTrade {
      */
     private String side;
     /**
+     * Binance 成交接口返回的原始持仓方向：LONG/SHORT/BOTH；历史未知时为空。
+     */
+    private String exchangePositionSide;
+    /**
      * 数量。
      */
     private BigDecimal quantity;
