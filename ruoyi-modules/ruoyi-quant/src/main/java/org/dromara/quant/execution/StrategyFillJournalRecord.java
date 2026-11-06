@@ -16,6 +16,7 @@ public class StrategyFillJournalRecord {
     private Long exchangeTradeId;
     private Long exchangeOrderId;
     private String side;
+    private String exchangePositionSide;
     private BigDecimal quantity;
     private BigDecimal price;
     private BigDecimal commission;
