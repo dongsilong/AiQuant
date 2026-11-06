@@ -1260,6 +1260,7 @@ public class TradingReconciliationService {
                 entity.setExchangeTradeId(s.tradeId());
                 entity.setExchangeOrderId(s.orderId());
                 entity.setSide(s.side());
+                entity.setExchangePositionSide(normalizePositionSide(s.positionSide()));
                 entity.setQuantity(s.quantity());
                 entity.setPrice(s.price());
                 entity.setCommission(s.commission());
@@ -1285,10 +1286,12 @@ public class TradingReconciliationService {
                     }
                     boolean attributionChanged;
                     boolean commissionAssetChanged;
+                    boolean positionSideChanged;
                     try {
                         assertImmutableTradeFacts(raced, s);
                         attributionChanged = mergeStrategyAttribution(raced, sourceOrder);
                         commissionAssetChanged = mergeCommissionAsset(raced, s);
+                        positionSideChanged = mergeExchangePositionSide(raced, s);
                     } catch (IllegalStateException conflict) {
                         if (!live) {
                             throw conflict;
@@ -1298,20 +1301,22 @@ public class TradingReconciliationService {
                             credential.getId(), s.symbol(), s.tradeId());
                         continue;
                     }
-                    if ((attributionChanged || commissionAssetChanged) && tradeMapper.updateById(raced) != 1) {
+                    if ((attributionChanged || commissionAssetChanged || positionSideChanged) && tradeMapper.updateById(raced) != 1) {
                         throw new IllegalStateException("Concurrent Binance fill attribution could not be enriched safely", concurrentInsert);
                     }
-                    projectionDirty |= attributionChanged || commissionAssetChanged;
+                    projectionDirty |= attributionChanged || commissionAssetChanged || positionSideChanged;
                     log.debug("并发对账已写入相同成交事实，跳过重复插入 credentialId={} symbol={} exchangeTradeId={}",
                         credential.getId(), s.symbol(), s.tradeId());
                 }
             } else {
                 boolean attributionChanged;
                 boolean commissionAssetChanged;
+                boolean positionSideChanged;
                 try {
                     assertImmutableTradeFacts(entity, s);
                     attributionChanged = mergeStrategyAttribution(entity, sourceOrder);
                     commissionAssetChanged = mergeCommissionAsset(entity, s);
+                    positionSideChanged = mergeExchangePositionSide(entity, s);
                 } catch (IllegalStateException conflict) {
                     if (!live) {
                         throw conflict;
@@ -1321,11 +1326,11 @@ public class TradingReconciliationService {
                         credential.getId(), s.symbol(), s.tradeId());
                     continue;
                 }
-                if ((attributionChanged || commissionAssetChanged) && tradeMapper.updateById(entity) != 1) {
+                if ((attributionChanged || commissionAssetChanged || positionSideChanged) && tradeMapper.updateById(entity) != 1) {
                     throw new IllegalStateException("Binance fill attribution could not be enriched safely: credentialId="
                         + credential.getId() + ", symbol=" + s.symbol() + ", exchangeTradeId=" + s.tradeId());
                 }
-                projectionDirty |= attributionChanged || commissionAssetChanged;
+                projectionDirty |= attributionChanged || commissionAssetChanged || positionSideChanged;
             }
 
             if (live && sourceOrder != null && sourceOrder.getStrategyId() != null && sourceOrder.getStrategyInstanceId() != null) {
@@ -1349,6 +1354,8 @@ public class TradingReconciliationService {
         List<String> conflictingFields = new ArrayList<>();
         if (!Objects.equals(stored.getExchangeOrderId(), incoming.orderId())) conflictingFields.add("exchangeOrderId");
         if (!sameText(stored.getSymbol(), incoming.symbol())) conflictingFields.add("symbol");
+        if (stored.getExchangePositionSide() != null && incoming.positionSide() != null
+            && !sameText(stored.getExchangePositionSide(), normalizePositionSide(incoming.positionSide()))) conflictingFields.add("exchangePositionSide");
         if (!sameText(stored.getSide(), incoming.side())) conflictingFields.add("side");
         if (!sameDecimal(stored.getQuantity(), incoming.quantity())) conflictingFields.add("quantity");
         if (!sameDecimal(stored.getPrice(), incoming.price())) conflictingFields.add("price");
@@ -1396,6 +1403,25 @@ public class TradingReconciliationService {
             changed = true;
         }
         return changed;
+    }
+
+    private static boolean mergeExchangePositionSide(QuantTrade trade, ExchangeGateway.TradeSnapshot incoming) {
+        String positionSide = normalizePositionSide(incoming.positionSide());
+        if (positionSide == null) {
+            return false;
+        }
+        if (trade.getExchangePositionSide() != null && !sameText(trade.getExchangePositionSide(), positionSide)) {
+            throw new IllegalStateException("Binance 成交持仓方向与本地不可变事实冲突: exchangeTradeId=" + incoming.tradeId());
+        }
+        if (trade.getExchangePositionSide() == null) {
+            trade.setExchangePositionSide(positionSide);
+            return true;
+        }
+        return false;
+    }
+
+    private static String normalizePositionSide(String positionSide) {
+        return positionSide == null || positionSide.isBlank() ? null : positionSide.trim().toUpperCase(Locale.ROOT);
     }
 
     private static boolean mergeCommissionAsset(QuantTrade trade, ExchangeGateway.TradeSnapshot incoming) {
