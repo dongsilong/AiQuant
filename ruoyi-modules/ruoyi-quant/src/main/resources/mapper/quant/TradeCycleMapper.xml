@@ -42,6 +42,15 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
             t.exchange_order_id AS exchangeOrderId,
             UPPER(t.side) AS side,
             t.exchange_position_side AS tradePositionSide,
+            CASE WHEN
+                (NULLIF(UPPER(TRIM(t.exchange_position_side)),'') IS NOT NULL
+                    AND NULLIF(UPPER(TRIM(o.position_side)),'') IS NOT NULL
+                    AND UPPER(TRIM(t.exchange_position_side))<>UPPER(TRIM(o.position_side)))
+                OR (t.exchange_position_side IN ('LONG','SHORT') AND soi.position_side IS NOT NULL
+                    AND t.exchange_position_side<>soi.position_side)
+                OR (t.exchange_position_side IN ('LONG','SHORT') AND pre.position_side IS NOT NULL
+                    AND t.exchange_position_side<>pre.position_side)
+                THEN 1 ELSE 0 END AS positionSideConflict,
             COALESCE(NULLIF(t.exchange_position_side,'BOTH'),NULLIF(o.position_side,'BOTH'),soi.position_side,pre.position_side) AS positionSide,
             o.position_side AS exchangePositionSide,
             COALESCE(soi.fill_role,pre.operation_type,execution.operation_type) AS fillRole,
