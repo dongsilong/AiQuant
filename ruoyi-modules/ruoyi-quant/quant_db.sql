@@ -392,6 +392,7 @@ CREATE TABLE `quant_trade`
     `exchange_trade_id`    bigint                                                       NOT NULL COMMENT '交易所成交ID',
     `exchange_order_id`    bigint                                                       NOT NULL COMMENT '交易所订单ID',
     `side`                 varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '买卖方向',
+    `exchange_position_side` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '交易所成交返回的原始持仓方向',
     `quantity`             decimal(32, 16)                                              NOT NULL COMMENT '成交数量',
     `price`                decimal(32, 16)                                              NOT NULL COMMENT '成交价格',
     `commission`           decimal(32, 16)                                              NOT NULL DEFAULT 0.0000000000000000 COMMENT '手续费',
