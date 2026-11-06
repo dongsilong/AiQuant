@@ -50,7 +50,6 @@ class TradeHistoryAssemblerTest {
         assertEquals(0, result.incompleteCount());
         assertEquals(1, result.cycles().size());
         assertEquals("LONG", result.cycles().getFirst().getPositionSide());
-        assertTrue(result.cycles().getFirst().getReconciliationReason().contains("positionSide"));
         assertEquals("VERIFIED", result.cycles().getFirst().getReconciliationStatus());
     }
 
@@ -66,6 +65,7 @@ class TradeHistoryAssemblerTest {
         assertEquals(1, result.incompleteCount());
         assertEquals("RECONCILE_REQUIRED", result.cycles().getFirst().getReconciliationStatus());
         assertEquals("LONG", result.cycles().getFirst().getPositionSide());
+        assertTrue(result.cycles().getFirst().getReconciliationReason().contains("positionSide"));
     }
 
     @Test
