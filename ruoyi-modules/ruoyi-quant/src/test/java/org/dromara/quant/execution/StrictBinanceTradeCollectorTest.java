@@ -25,7 +25,7 @@ class StrictBinanceTradeCollectorTest {
     private final Instant end = Instant.parse("2026-10-02T00:00:00Z");
 
     private ExchangeGateway.TradeSnapshot trade(long id) {
-        return new ExchangeGateway.TradeSnapshot("BTCUSDT", id, 11L, "BUY", BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, start.plusSeconds(id), "USDT");
+        return new ExchangeGateway.TradeSnapshot("BTCUSDT", id, 11L, "BUY", BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.ZERO, start.plusSeconds(id), "USDT", "LONG");
     }
 
     @Test
@@ -39,6 +39,7 @@ class StrictBinanceTradeCollectorTest {
             });
         var result = collector.collect(credential, "BTCUSDT", start, end);
         assertEquals(List.of(1L, 3L), result.stream().map(ExchangeGateway.TradeSnapshot::tradeId).toList());
+        assertEquals(List.of("LONG", "LONG"), result.stream().map(ExchangeGateway.TradeSnapshot::positionSide).toList());
     }
 
     @Test
