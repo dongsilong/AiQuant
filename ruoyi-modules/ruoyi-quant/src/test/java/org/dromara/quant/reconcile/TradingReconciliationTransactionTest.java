@@ -744,6 +744,7 @@ class TradingReconciliationTransactionTest {
         local.setTradeTime(java.time.LocalDateTime.ofInstant(time, java.time.ZoneOffset.UTC));
         when(trades.selectOne(any())).thenReturn(local);
         when(orders.selectOne(any())).thenReturn(null);
+        when(trades.updateById(any(org.dromara.quant.account.domain.QuantTrade.class))).thenReturn(1);
 
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", credential(), List.of(fill));
 
