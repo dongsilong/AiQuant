@@ -122,6 +122,32 @@ class StrategyFillJournalServiceTest {
     }
 
     @Test
+    void conflictingPositionSideReplayIsQuarantinedWithoutReplacingRawFact() {
+        var stored = new StrategyFillJournalRecord();
+        stored.setId(77L);
+        stored.setCredentialId(1L);
+        stored.setSymbol("BTCUSDT");
+        stored.setExchangeTradeId(101L);
+        stored.setExchangeOrderId(202L);
+        stored.setSide("BUY");
+        stored.setExchangePositionSide("LONG");
+        stored.setQuantity(BigDecimal.ONE);
+        stored.setPrice(BigDecimal.TEN);
+        stored.setTradeTime(java.time.LocalDateTime.ofInstant(fill().time(), java.time.ZoneOffset.UTC));
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(stored);
+        when(journal.updateStatus(anyLong(), anyString(), any())).thenReturn(1);
+        var conflict = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            null, null, fill().time(), null, "SHORT");
+
+        String status = service.attribute(conflict, null, 1L);
+
+        assertEquals("CONFLICT", status);
+        verify(journal).updateStatus(eq(77L), eq("CONFLICT"), contains("exchangePositionSide"));
+        verify(journal, never()).enrichMissingFacts(any());
+        verifyNoInteractions(allocations);
+    }
+
+    @Test
     void crossLedgerConflictIsPersistedWithoutRewritingRawExchangeFact() {
         var stored = new StrategyFillJournalRecord();
         stored.setId(77L);
@@ -192,6 +218,8 @@ class StrategyFillJournalServiceTest {
             int pendingTo = xml.indexOf("</select>", pendingFrom);
             org.junit.jupiter.api.Assertions.assertTrue(pendingFrom >= 0 && pendingTo > pendingFrom, "selectPending SQL must exist");
             org.junit.jupiter.api.Assertions.assertTrue(xml.substring(pendingFrom, pendingTo).contains("'PENDING_FACTS'"), "recoverable incomplete facts must be retried");
+            org.junit.jupiter.api.Assertions.assertTrue(xml.contains("exchange_position_side"), "raw position-side evidence must be persisted");
+            org.junit.jupiter.api.Assertions.assertTrue(xml.contains("#{exchangePositionSide}"), "raw position-side evidence must be enriched without overwrite");
         }
     }
 }
