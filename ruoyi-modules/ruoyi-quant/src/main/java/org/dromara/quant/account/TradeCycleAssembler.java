@@ -49,11 +49,14 @@ public final class TradeCycleAssembler {
             try {
                 validate(fill);
                 String side = upper(fill.getSide());
+                String tradePositionSide = logicalSide(fill.getTradePositionSide());
                 String positionSide = logicalSide(fill.getPositionSide());
-                String exchangePositionSide = upper(fill.getExchangePositionSide());
-                boolean hedgeMode = "LONG".equals(exchangePositionSide) || "SHORT".equals(exchangePositionSide);
+                String exchangePositionSide = logicalSide(fill.getExchangePositionSide());
+                boolean hedgeMode = tradePositionSide != null || exchangePositionSide != null;
                 if (hedgeMode) {
-                    processHedge(fill, side, positionSide == null ? exchangePositionSide : positionSide, cycles, allocations, explicitCycles);
+                    String direction = tradePositionSide != null ? tradePositionSide
+                        : positionSide != null ? positionSide : exchangePositionSide;
+                    processHedge(fill, side, direction, cycles, allocations, explicitCycles);
                 } else {
                     processOneWay(fill, side, positionSide, cycles, allocations, explicitCycles);
                 }
