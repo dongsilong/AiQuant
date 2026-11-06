@@ -176,6 +176,8 @@ public class StrategyFillJournalService {
         if (!Objects.equals(record.getExchangeTradeId(), fill.tradeId())) conflicts.add("exchangeTradeId");
         if (bothKnown(record.getExchangeOrderId(), fill.orderId()) && !Objects.equals(record.getExchangeOrderId(), fill.orderId())) conflicts.add("exchangeOrderId");
         if (bothKnown(record.getSide(), fill.side()) && !equalText(record.getSide(), fill.side(), true)) conflicts.add("side");
+        if (bothKnown(record.getExchangePositionSide(), fill.positionSide())
+            && !equalText(record.getExchangePositionSide(), fill.positionSide(), true)) conflicts.add("exchangePositionSide");
         if (bothKnown(record.getQuantity(), fill.quantity()) && !equalDecimal(record.getQuantity(), fill.quantity())) conflicts.add("quantity");
         if (bothKnown(record.getPrice(), fill.price()) && !equalDecimal(record.getPrice(), fill.price())) conflicts.add("price");
         if (bothKnown(record.getCommission(), fill.commission()) && !equalDecimal(record.getCommission(), fill.commission())) conflicts.add("commission");
@@ -211,6 +213,8 @@ public class StrategyFillJournalService {
         record.setExchangeTradeId(fill.tradeId());
         record.setExchangeOrderId(fill.orderId());
         record.setSide(fill.side() == null ? null : fill.side().toUpperCase(Locale.ROOT));
+        record.setExchangePositionSide(fill.positionSide() == null || fill.positionSide().isBlank()
+            ? null : fill.positionSide().trim().toUpperCase(Locale.ROOT));
         record.setQuantity(fill.quantity());
         record.setPrice(fill.price());
         record.setCommission(fill.commission());
@@ -223,7 +227,7 @@ public class StrategyFillJournalService {
     private static ExchangeGateway.TradeSnapshot toSnapshot(StrategyFillJournalRecord record) {
         Instant time = record.getTradeTime() == null ? null : record.getTradeTime().toInstant(ZoneOffset.UTC);
         return new ExchangeGateway.TradeSnapshot(record.getSymbol(), record.getExchangeTradeId(), record.getExchangeOrderId(), record.getSide(), record.getQuantity(),
-            record.getPrice(), record.getCommission(), record.getRealizedPnl(), time, record.getCommissionAsset());
+            record.getPrice(), record.getCommission(), record.getRealizedPnl(), time, record.getCommissionAsset(), record.getExchangePositionSide());
     }
 
     private static UnresolvedFill toUnresolved(StrategyFillJournalRecord record) {
