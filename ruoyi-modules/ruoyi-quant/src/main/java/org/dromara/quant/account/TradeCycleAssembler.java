@@ -307,6 +307,9 @@ public final class TradeCycleAssembler {
             || !List.of("BUY", "SELL").contains(upper(fill.getSide()))) {
             throw new IllegalStateException("成交事实缺少账户、订单、方向、数量、价格或成交时间");
         }
+        if (Boolean.TRUE.equals(fill.getPositionSideConflict())) {
+            throw new IllegalStateException("Binance 成交接口与订单或策略订单意图的 positionSide 不一致，无法确认开仓方向");
+        }
         if (Boolean.TRUE.equals(fill.getSourceConflict())) {
             throw new IllegalStateException("成交来源、订单累计成交数量或订单归因事实互相冲突");
         }
