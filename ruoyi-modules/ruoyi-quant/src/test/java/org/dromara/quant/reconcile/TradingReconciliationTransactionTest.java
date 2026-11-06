@@ -726,6 +726,64 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void replayEnrichesLegacyTradeWithBinancePositionSideAndReprojectsCycle() {
+        Instant time = Instant.parse("2026-10-16T11:55:32Z");
+        var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 730L, 830L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, time, "USDT", "LONG");
+        var local = new org.dromara.quant.account.domain.QuantTrade();
+        local.setId(80L);
+        local.setCredentialId(1L);
+        local.setSymbol("BTCUSDT");
+        local.setExchangeTradeId(730L);
+        local.setExchangeOrderId(830L);
+        local.setSide("BUY");
+        local.setQuantity(BigDecimal.ONE);
+        local.setPrice(BigDecimal.TEN);
+        local.setCommission(new BigDecimal("0.01"));
+        local.setRealizedPnl(BigDecimal.ZERO);
+        local.setTradeTime(java.time.LocalDateTime.ofInstant(time, java.time.ZoneOffset.UTC));
+        when(trades.selectOne(any())).thenReturn(local);
+        when(orders.selectOne(any())).thenReturn(null);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", credential(), List.of(fill));
+
+        var updated = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.account.domain.QuantTrade.class);
+        verify(trades).updateById(updated.capture());
+        assertEquals("LONG", updated.getValue().getExchangePositionSide());
+        verify(tradeCycleProjection).markDirty(1L, "BTCUSDT");
+    }
+
+    @Test
+    void conflictingBinanceTradePositionSideCannotOverwritePersistedEvidence() {
+        Instant time = Instant.parse("2026-10-16T11:55:32Z");
+        var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 731L, 831L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, time, "USDT", "LONG");
+        var local = new org.dromara.quant.account.domain.QuantTrade();
+        local.setId(81L);
+        local.setCredentialId(1L);
+        local.setSymbol("BTCUSDT");
+        local.setExchangeTradeId(731L);
+        local.setExchangeOrderId(831L);
+        local.setSide("BUY");
+        local.setExchangePositionSide("SHORT");
+        local.setQuantity(BigDecimal.ONE);
+        local.setPrice(BigDecimal.TEN);
+        local.setCommission(new BigDecimal("0.01"));
+        local.setRealizedPnl(BigDecimal.ZERO);
+        local.setTradeTime(java.time.LocalDateTime.ofInstant(time, java.time.ZoneOffset.UTC));
+        when(trades.selectOne(any())).thenReturn(local);
+        when(orders.selectOne(any())).thenReturn(null);
+
+        var testnetCredential = credential();
+        testnetCredential.setRunMode("TESTNET");
+        IllegalStateException conflict = assertThrows(IllegalStateException.class,
+            () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", testnetCredential, List.of(fill)));
+
+        assertTrue(conflict.getMessage().contains("conflictingFields=exchangePositionSide"));
+        verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
+    }
+
+    @Test
     void tradeTimeWithFractionalSecondsMatchesMysqlDatetimeRounding() {
         Instant incomingTime = Instant.parse("2026-10-16T11:55:32.794Z");
         var fill = new ExchangeGateway.TradeSnapshot("BATUSDT", 72167948L, 366327650L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
