@@ -14,6 +14,7 @@ public class TradeCycleSourceFill {
     private Long exchangeTradeId;
     private Long exchangeOrderId;
     private String side;
+    private String tradePositionSide;
     private String positionSide;
     private String exchangePositionSide;
     private String fillRole;
