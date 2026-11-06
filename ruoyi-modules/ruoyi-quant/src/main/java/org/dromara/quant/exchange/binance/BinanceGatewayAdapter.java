@@ -1053,7 +1053,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 throw new IllegalStateException("Binance 历史成交响应缺少数据载荷，无法确认查询完整性");
             }
             return response.getData().stream().map(item -> new TradeSnapshot(item.getSymbol(), item.getId(), item.getOrderId(), item.getSide(), decimal(item.getQty()),
-                decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()), instant(item.getTime()), string(item, "getCommissionAsset"))).toList();
+                decimal(item.getPrice()), decimal(item.getCommission()), decimal(item.getRealizedPnl()), instant(item.getTime()), string(item, "getCommissionAsset"),
+                string(item, "getPositionSide"))).toList();
         });
     }
 
