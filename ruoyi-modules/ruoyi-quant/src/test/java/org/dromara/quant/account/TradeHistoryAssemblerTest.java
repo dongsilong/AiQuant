@@ -40,6 +40,33 @@ class TradeHistoryAssemblerTest {
     }
 
     @Test
+    void usesBinanceTradePositionSideWhenOrderPositionSideIsUnavailable() {
+        TradeCycleSourceFill opening = fill(1, "BUY", null, null, null, null,
+            "1", "100", "0.1", "0", false, false);
+        opening.setTradePositionSide("LONG");
+
+        var result = TradeCycleAssembler.assemble(List.of(opening));
+
+        assertEquals(0, result.incompleteCount());
+        assertEquals(1, result.cycles().size());
+        assertEquals("LONG", result.cycles().getFirst().getPositionSide());
+        assertEquals("VERIFIED", result.cycles().getFirst().getReconciliationStatus());
+    }
+
+    @Test
+    void quarantinesConflictingTradeAndOrderPositionSideEvidence() {
+        TradeCycleSourceFill opening = fill(1, "BUY", "LONG", "LONG", "OPEN", null,
+            "1", "100", "0.1", "0", false, true);
+        opening.setTradePositionSide("SHORT");
+
+        var result = TradeCycleAssembler.assemble(List.of(opening));
+
+        assertEquals(1, result.incompleteCount());
+        assertEquals("RECONCILE_REQUIRED", result.cycles().getFirst().getReconciliationStatus());
+        assertEquals("UNKNOWN", result.cycles().getFirst().getPositionSide());
+    }
+
+    @Test
     void combinesMultipleOpenAndPartialCloseFillsIntoOneWeightedCycle() {
         var result = TradeCycleAssembler.assemble(List.of(
             fill(1, "BUY", "LONG", "LONG", "OPEN", "cycle-1", "1", "100", "0.1", "0", false, false),
