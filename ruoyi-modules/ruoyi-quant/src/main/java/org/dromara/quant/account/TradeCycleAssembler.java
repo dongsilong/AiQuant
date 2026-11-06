@@ -460,7 +460,7 @@ public final class TradeCycleAssembler {
             this.credentialId = fill.getCredentialId();
             this.symbol = fill.getSymbol() == null ? "" : fill.getSymbol().toUpperCase(Locale.ROOT);
             String side = logicalSide(fill.getPositionSide());
-            this.positionSide = side == null ? "UNKNOWN" : side;
+            this.positionSide = Boolean.TRUE.equals(fill.getPositionSideConflict()) || side == null ? "UNKNOWN" : side;
             this.oneWay = false;
             this.positionCycleKey = null;
             this.openedAt = fill.getTradeTime();
