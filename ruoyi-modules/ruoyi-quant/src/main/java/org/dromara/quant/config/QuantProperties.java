@@ -18,10 +18,6 @@ public class QuantProperties {
      */
     private Proxy proxy = new Proxy();
     /**
-     * 凭证与敏感信息安全配置。
-     */
-    private Security security = new Security();
-    /**
      * LIVE 实盘全局配置。
      */
     private Live live = new Live();
@@ -112,17 +108,6 @@ public class QuantProperties {
          * 网络代理端口。
          */
         private Integer port;
-    }
-
-    /**
-     * 凭证与敏感信息安全配置。
-     */
-    @Data
-    public static class Security {
-        /**
-         * 交易所 Secret Key；应按系统安全策略加密或保护。
-         */
-        private String secretKey;
     }
 
     /**
