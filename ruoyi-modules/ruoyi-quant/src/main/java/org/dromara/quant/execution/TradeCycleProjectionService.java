@@ -38,7 +38,7 @@ public class TradeCycleProjectionService {
     public void markDirty(Long credentialId, String symbol) {
         String normalizedSymbol = symbol == null ? null : symbol.trim().toUpperCase(Locale.ROOT);
         if (credentialId == null || credentialId <= 0 || normalizedSymbol == null || !normalizedSymbol.matches("[A-Z0-9_]{2,32}")) {
-            throw new IllegalArgumentException("有效的账户和交易对是交易周期投影的必需条件");
+            throw new IllegalArgumentException("有效的账户和交易对是交易周期投影的必需条件: credentialId=" + credentialId + ", symbol=" + symbol);
         }
         mapper.markDirty(credentialId, normalizedSymbol);
     }
