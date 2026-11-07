@@ -1010,6 +1010,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         runtime.position = loadPosition(credential, symbol.getSymbol(), executionService.toCredential(credential), startupPositionSnapshot);
         runtime.positionFactsReady = true;
         runtime.positionFactsVerifiedAt = System.currentTimeMillis();
+        schedulePositionFactsRefresh(runtime, runtime.positionFactsVerifiedAt);
         if (runtime.position == null && runtime.state != null && !runtime.hasPendingAction()
             && (Boolean.TRUE.equals(runtime.state.getRecoveryRequired()) || Boolean.TRUE.equals(runtime.state.getUnsafeRecovery())
                 || "PROTECTION_CLEANUP".equals(runtime.state.getStatus()))) {
