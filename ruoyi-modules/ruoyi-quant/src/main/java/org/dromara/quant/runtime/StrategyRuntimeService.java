@@ -228,6 +228,35 @@ public class StrategyRuntimeService {
     /**
      * 持仓减仓或平仓事实已确认后再入队通知；通知设施异常不能回滚或阻断交易状态恢复。
      */
+    private Instant resolveOpenTradeTime(ActiveRuntime runtime, Long orderId, BigDecimal expectedQuantity, Instant fallback) {
+        if ("PAPER".equalsIgnoreCase(runtime.credential.getRunMode()) || orderId == null || expectedQuantity == null || expectedQuantity.signum() <= 0) {
+            return fallback;
+        }
+        Instant to = Instant.now().plusSeconds(1);
+        try {
+            List<ExchangeGateway.TradeSnapshot> fills = gateway.queryTradesByOrder(executionService.toCredential(runtime.credential),
+                runtime.symbol.getSymbol(), orderId, new ExchangeGateway.TimeRange(to.minusSeconds(6L * 24 * 60 * 60), to), 1000L);
+            if (fills == null || fills.isEmpty() || fills.size() >= 1000) {
+                return fallback;
+            }
+            BigDecimal filledQuantity = BigDecimal.ZERO;
+            Instant firstFillTime = null;
+            for (ExchangeGateway.TradeSnapshot fill : fills) {
+                if (fill == null || !runtime.symbol.getSymbol().equalsIgnoreCase(fill.symbol()) || !orderId.equals(fill.orderId())
+                    || fill.quantity() == null || fill.quantity().signum() <= 0 || fill.time() == null) {
+                    return fallback;
+                }
+                filledQuantity = filledQuantity.add(fill.quantity());
+                firstFillTime = firstFillTime == null || fill.time().isBefore(firstFillTime) ? fill.time() : firstFillTime;
+            }
+            return filledQuantity.compareTo(expectedQuantity) == 0 ? firstFillTime : fallback;
+        } catch (RuntimeException ex) {
+            log.warn("开仓成交时间查询失败，回退到交易所订单更新时间 instanceId={} symbol={} orderId={}",
+                runtime.instance.getId(), runtime.symbol.getSymbol(), orderId, ex);
+            return fallback;
+        }
+    }
+
     private void notifyCloseSafely(ActiveRuntime runtime, String direction, BigDecimal quantity, BigDecimal entryPrice, BigDecimal closePrice,
                                    BigDecimal profitAmount, BigDecimal profitRate, String closeType, String reason) {
         try {
@@ -1951,8 +1980,14 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             StrategyContext openedContext = buildContext(runtime, context.currentPrice(), new ExchangeGateway.MarketEvent("TRADE", runtime.symbol.getSymbol(),
             runtime.strategySymbol.getIntervalCode(), context.currentPrice(), null, context.eventTime()));
             syncPluginProtections(runtime, openedContext);   // 内部会 requestProtectionSync(runtime, true)
+            Instant actualOpenTime = resolveOpenTradeTime(runtime, filledOpen == null ? null : filledOpen.orderId(),
+                filledOpen == null ? runtime.position.getQuantity() : filledOpen.executedQuantity(), openTime);
+            if (!Objects.equals(actualOpenTime, openTime)) {
+                state.setOpenedAt(actualOpenTime == null ? null : LocalDateTime.ofInstant(actualOpenTime, ZoneId.systemDefault()));
+                stateService.save(state);
+            }
             notificationService.notifyOpen(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), direction, runtime.position.getQuantity(),
-             runtime.position.getEntryPrice(), leverage, openRatio, openTime, signal.get().reason());
+             runtime.position.getEntryPrice(), leverage, openRatio, actualOpenTime, signal.get().reason());
             log.info("实时策略开仓 instanceId={} symbol={} direction={} price={} quantity={} reason={}", runtime.instance.getId(), runtime.symbol.getSymbol(), direction,
              context.currentPrice(), quantity, signal.get().reason());
         } catch (RuntimeException ex) {
@@ -3139,10 +3174,15 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                         syncPluginProtections(runtime, buildContext(runtime, current, new ExchangeGateway.MarketEvent("RECOVERY", runtime.symbol.getSymbol(),
                          runtime.strategySymbol.getIntervalCode(), current, null, Instant.now())));
                     }
+                    Instant actualOpenTime = resolveOpenTradeTime(runtime, order.orderId(), order.executedQuantity(), order.updateTime());
+                    if (!Objects.equals(actualOpenTime, order.updateTime())) {
+                        runtime.state.setOpenedAt(actualOpenTime == null ? null : LocalDateTime.ofInstant(actualOpenTime, ZoneId.systemDefault()));
+                        stateService.save(runtime.state);
+                    }
                     BigDecimal openRatio = runtime.strategySymbol.getOpenRatio() == null ? runtime.strategy.getDefaultOpenRatio() : runtime.strategySymbol.getOpenRatio();
                     int leverage = runtime.strategySymbol.getLeverage() == null ? runtime.strategy.getDefaultLeverage() : runtime.strategySymbol.getLeverage();
                     notificationService.notifyOpen(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), runtime.position.getPositionSide(),
-                runtime.position.getQuantity(), runtime.position.getEntryPrice(), leverage, openRatio, order.updateTime(), "未知执行恢复后确认开仓成交");
+                runtime.position.getQuantity(), runtime.position.getEntryPrice(), leverage, openRatio, actualOpenTime, "未知执行恢复后确认开仓成交");
                 } else {
                     BigDecimal beforeQty = runtime.state.getPositionQty();
                     BigDecimal executedQty = order.executedQuantity();
