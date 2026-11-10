@@ -1942,7 +1942,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             state.setInitialMargin(runtime.position.getMargin());
             freezeFilledProtection(runtime);
             freezeOrderEntryPrice(state, filledOpen);
-            Instant openTime = filledOpen != null && filledOpen.updateTime() != null ? filledOpen.updateTime() : context.eventTime();
+            Instant openTime = paper ? Instant.now() : filledOpen == null ? null : filledOpen.updateTime();
             state.setOpenedAt(openTime == null ? null : LocalDateTime.ofInstant(openTime, ZoneId.systemDefault()));
             state.setStatus("OPEN");
             clearPending(state);
