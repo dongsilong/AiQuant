@@ -45,7 +45,7 @@ class QuantTradeNotificationServiceTest {
         var mail = rows.getAllValues().stream().filter(row -> "EMAIL".equals(row.getChannel())).findFirst().orElseThrow();
         assertEquals("PENDING", mail.getStatus());
         assertTrue(mail.getContent().contains("开仓时间: 2026-11-09 09:00:00"));
-        assertFalse(mail.getContent().contains("时间: "));
+        assertFalse(mail.getContent().contains("\n时间: "));
         assertNotNull(mail.getNextRetryAt());
         verify(mapper).claim(eq((long) "SYSTEM".hashCode()), any(), any());
 
@@ -129,7 +129,7 @@ class QuantTradeNotificationServiceTest {
         assertTrue(content.contains("实际平仓均价: 102"));
         assertTrue(content.contains("开仓时间: 2026-11-09 08:59:00"));
         assertTrue(content.contains("平仓时间: 2026-11-09 09:02:05"));
-        assertFalse(content.contains("时间: "));
+        assertFalse(content.contains("\n时间: "));
         assertTrue(content.contains("最大回报率: 5.86351456%"));
         assertTrue(content.contains("交易所已实现盈亏（未扣手续费）: 3 USDT"));
         assertTrue(content.contains("手续费: 0.03 USDT"));
@@ -198,12 +198,13 @@ class QuantTradeNotificationServiceTest {
                 BigDecimal.ZERO, BigDecimal.valueOf(2), BigDecimal.ONE, Instant.now(), BigDecimal.valueOf(102)));
 
         service.notifyCloseByOrder(null, credential, "BTCUSDT", "LONG", BigDecimal.valueOf(2), BigDecimal.valueOf(100),
-            101L, "USDT", "STOP", "pending close");
+            101L, "USDT", new BigDecimal("4.5"), Instant.parse("2026-11-09T00:58:00Z"), "STOP", "pending close");
 
         var rows = ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper).insert(rows.capture());
         assertEquals("FACT_PENDING", rows.getValue().getChannel());
         assertTrue(rows.getValue().getContent().contains("\"orderId\":\"101\""));
+        assertTrue(rows.getValue().getContent().contains("\"openTime\":\"2026-11-09T00:58:00Z\""));
         assertFalse(rows.getValue().getContent().contains("test-secret"));
     }
 
