@@ -37,12 +37,15 @@ class QuantTradeNotificationServiceTest {
             return 1;
         });
 
-        service.notifyOpen(null, null, "BTCUSDT", "LONG", BigDecimal.ONE, BigDecimal.TEN, 5, BigDecimal.ONE, "test");
+        service.notifyOpen(null, null, "BTCUSDT", "LONG", BigDecimal.ONE, BigDecimal.TEN, 5, BigDecimal.ONE,
+            Instant.parse("2026-11-09T01:00:00Z"), "test");
 
         var rows = ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper, times(2)).insert(rows.capture());
         var mail = rows.getAllValues().stream().filter(row -> "EMAIL".equals(row.getChannel())).findFirst().orElseThrow();
         assertEquals("PENDING", mail.getStatus());
+        assertTrue(mail.getContent().contains("开仓时间: 2026-11-09 09:00:00"));
+        assertFalse(mail.getContent().contains("时间: "));
         assertNotNull(mail.getNextRetryAt());
         verify(mapper).claim(eq((long) "SYSTEM".hashCode()), any(), any());
 
@@ -111,19 +114,22 @@ class QuantTradeNotificationServiceTest {
                 BigDecimal.ZERO, BigDecimal.valueOf(2), BigDecimal.valueOf(2), Instant.now(), BigDecimal.valueOf(102)));
         when(gateway.queryTradesByOrder(any(), eq("BTCUSDT"), eq(99L), any(), eq(1000L))).thenReturn(List.of(
             new ExchangeGateway.TradeSnapshot("BTCUSDT", 1L, 99L, "SELL", BigDecimal.ONE, BigDecimal.valueOf(101),
-                new BigDecimal("0.01"), BigDecimal.ONE, Instant.now(), "USDT", "LONG"),
+                new BigDecimal("0.01"), BigDecimal.ONE, Instant.parse("2026-11-09T01:02:03Z"), "USDT", "LONG"),
             new ExchangeGateway.TradeSnapshot("BTCUSDT", 2L, 99L, "SELL", BigDecimal.ONE, BigDecimal.valueOf(103),
-                new BigDecimal("0.02"), BigDecimal.valueOf(2), Instant.now(), "USDT", "LONG")));
+                new BigDecimal("0.02"), BigDecimal.valueOf(2), Instant.parse("2026-11-09T01:02:05Z"), "USDT", "LONG")));
         when(gateway.queryAccountFresh(any())).thenReturn(
             new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"), new BigDecimal("1003"), new BigDecimal("3")));
 
         service.notifyCloseByOrder(null, credential, "BTCUSDT", "LONG", BigDecimal.valueOf(2), BigDecimal.valueOf(100),
-            99L, "USDT", new BigDecimal("5.86351456"), "MANUAL", "test close");
+            99L, "USDT", new BigDecimal("5.86351456"), Instant.parse("2026-11-09T00:59:00Z"), "MANUAL", "test close");
 
         var rows = ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper).insert(rows.capture());
         String content = rows.getValue().getContent();
         assertTrue(content.contains("实际平仓均价: 102"));
+        assertTrue(content.contains("开仓时间: 2026-11-09 08:59:00"));
+        assertTrue(content.contains("平仓时间: 2026-11-09 09:02:05"));
+        assertFalse(content.contains("时间: "));
         assertTrue(content.contains("最大回报率: 5.86351456%"));
         assertTrue(content.contains("交易所已实现盈亏（未扣手续费）: 3 USDT"));
         assertTrue(content.contains("手续费: 0.03 USDT"));
