@@ -52,6 +52,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -231,20 +232,23 @@ public class StrategyRuntimeService {
                                    BigDecimal profitAmount, BigDecimal profitRate, String closeType, String reason) {
         try {
             BigDecimal maximumReturnRate = runtime.state == null ? null : runtime.state.getMaximumReturnRate();
+            Instant openTime = runtime.state == null || runtime.state.getOpenedAt() == null ? null
+                : runtime.state.getOpenedAt().atZone(ZoneId.systemDefault()).toInstant();
             if ("PAPER".equalsIgnoreCase(runtime.credential.getRunMode())) {
                 var account = paperTradingService.find(runtime.credential.getId());
                 notificationService.notifyClosePaper(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), direction, quantity, entryPrice,
                     closePrice, profitAmount, runtime.symbol.getQuoteAsset(), account == null ? null : account.getBalance(),
-                    account == null ? null : account.getAvailableBalance(), account == null ? null : account.getUnrealizedPnl(), maximumReturnRate, closeType, reason);
+                    account == null ? null : account.getAvailableBalance(), account == null ? null : account.getUnrealizedPnl(), maximumReturnRate,
+                    openTime, Instant.now(), closeType, reason);
             } else {
                 Long orderId = runtime.state == null ? null : runtime.state.getPendingOrderId();
                 if (orderId != null) {
                     notificationService.notifyCloseByOrder(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), direction, quantity,
-                        entryPrice, orderId, runtime.symbol.getQuoteAsset(), maximumReturnRate, closeType, reason);
+                        entryPrice, orderId, runtime.symbol.getQuoteAsset(), maximumReturnRate, openTime, closeType, reason);
                 } else {
                     notificationService.notifyCloseByStrategyOrder(runtime.strategy, runtime.credential, runtime.instance.getId(),
                         runtime.state == null ? null : runtime.state.getPositionCycleKey(), runtime.symbol.getSymbol(), direction, quantity,
-                        entryPrice, runtime.symbol.getQuoteAsset(), maximumReturnRate, closeType, reason);
+                        entryPrice, runtime.symbol.getQuoteAsset(), maximumReturnRate, openTime, closeType, reason);
                 }
             }
         } catch (RuntimeException ex) {
@@ -1938,10 +1942,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             state.setInitialMargin(runtime.position.getMargin());
             freezeFilledProtection(runtime);
             freezeOrderEntryPrice(state, filledOpen);
+            Instant openTime = filledOpen != null && filledOpen.updateTime() != null ? filledOpen.updateTime() : context.eventTime();
+            state.setOpenedAt(openTime == null ? null : LocalDateTime.ofInstant(openTime, ZoneId.systemDefault()));
             state.setStatus("OPEN");
-            if (state.getOpenedAt() == null) {
-                state.setOpenedAt(LocalDateTime.now());
-            }
             clearPending(state);
             stateService.save(state);
             runtime.state = state;
@@ -1949,7 +1952,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             runtime.strategySymbol.getIntervalCode(), context.currentPrice(), null, context.eventTime()));
             syncPluginProtections(runtime, openedContext);   // 内部会 requestProtectionSync(runtime, true)
             notificationService.notifyOpen(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), direction, runtime.position.getQuantity(),
-             runtime.position.getEntryPrice(), leverage, openRatio, signal.get().reason());
+             runtime.position.getEntryPrice(), leverage, openRatio, openTime, signal.get().reason());
             log.info("实时策略开仓 instanceId={} symbol={} direction={} price={} quantity={} reason={}", runtime.instance.getId(), runtime.symbol.getSymbol(), direction,
              context.currentPrice(), quantity, signal.get().reason());
         } catch (RuntimeException ex) {
@@ -3121,6 +3124,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                     }
                     runtime.state.setInitialPositionQty(order.executedQuantity());
                     runtime.state.setInitialMargin(runtime.position.getMargin());
+                    runtime.state.setOpenedAt(order.updateTime() == null ? null : LocalDateTime.ofInstant(order.updateTime(), ZoneId.systemDefault()));
                     freezeFilledProtection(runtime);
                     freezeOrderEntryPrice(runtime.state, order, runtime.partialOpenProtectionVerified);
                     runtime.state.setStatus("OPEN");
@@ -3138,7 +3142,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                     BigDecimal openRatio = runtime.strategySymbol.getOpenRatio() == null ? runtime.strategy.getDefaultOpenRatio() : runtime.strategySymbol.getOpenRatio();
                     int leverage = runtime.strategySymbol.getLeverage() == null ? runtime.strategy.getDefaultLeverage() : runtime.strategySymbol.getLeverage();
                     notificationService.notifyOpen(runtime.strategy, runtime.credential, runtime.symbol.getSymbol(), runtime.position.getPositionSide(),
-                runtime.position.getQuantity(), runtime.position.getEntryPrice(), leverage, openRatio, "未知执行恢复后确认开仓成交");
+                runtime.position.getQuantity(), runtime.position.getEntryPrice(), leverage, openRatio, order.updateTime(), "未知执行恢复后确认开仓成交");
                 } else {
                     BigDecimal beforeQty = runtime.state.getPositionQty();
                     BigDecimal executedQty = order.executedQuantity();
