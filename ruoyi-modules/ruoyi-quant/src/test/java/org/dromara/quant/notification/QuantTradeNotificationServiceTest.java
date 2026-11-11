@@ -180,18 +180,21 @@ class QuantTradeNotificationServiceTest {
         assertNotNull(updated.getValue().getNextRetryAt());
     }
     @Test
-    void closeNotificationUsesConfirmedExchangeFillsAndPostCloseAccountSnapshot() {
+    void closeNotificationUsesConfirmedExchangeFillsAndPersistsPostCloseAccountSnapshot() {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-fill-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
         var properties = new QuantProperties();
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, properties,
-            mock(MessageService.class), mock(JdbcTemplate.class), gateway, mock(TaskExecutor.class));
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
             ((QuantNotification) invocation.getArgument(0)).setId(42L);
             return 1;
         });
+        when(mapper.claim(eq(42L), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1);
         var credential = new QuantCredential();
         credential.setId(10L);
         credential.setAccountName("test-account");
@@ -214,12 +217,22 @@ class QuantTradeNotificationServiceTest {
             99L, "USDT", new BigDecimal("5.86351456"), "MANUAL", "test close");
 
         var rows = ArgumentCaptor.forClass(QuantNotification.class);
-        verify(mapper, times(2)).insert(rows.capture());
+        verify(mapper, times(3)).insert(rows.capture());
         var notifications = rows.getAllValues();
         var content = notifications.stream().filter(row -> "SYSTEM".equals(row.getChannel())).findFirst().orElseThrow().getContent();
-        var factTask = notifications.stream().filter(row -> "FACT_PENDING".equals(row.getChannel())).findFirst().orElseThrow();
+        var factTask = notifications.stream().filter(row -> "FACT_PENDING".equals(row.getChannel())
+            && "99".equals(row.getRecipient())).findFirst().orElseThrow();
+        var snapshotTask = notifications.stream().filter(row -> "FACT_PENDING".equals(row.getChannel())
+            && "SNAPSHOT:BTCUSDT:99".equals(row.getRecipient())).findFirst().orElseThrow();
         assertEquals("SENT", factTask.getStatus());
-        verify(mapper).updateById(argThat(updated -> "SENT".equals(updated.getStatus()) && "FACT_PENDING".equals(updated.getChannel())));
+        assertEquals("SENT", snapshotTask.getStatus());
+        verify(mapper, atLeastOnce()).updateById(argThat(updated -> "SENT".equals(updated.getStatus())
+            && "FACT_PENDING".equals(updated.getChannel())));
+        var snapshotWrite = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc).update(contains("UPDATE quant_trade_close_equity"), snapshotWrite.capture());
+        assertEquals("REST_FALLBACK", snapshotWrite.getValue()[3]);
+        assertTrue(snapshotWrite.getValue()[8] instanceof java.time.LocalDateTime);
+        assertTrue(snapshotWrite.getValue()[9] instanceof java.time.LocalDateTime);
         assertTrue(content.contains("实际平仓均价: 102"));
         assertTrue(content.contains("最大回报率: 5.86351456%"));
         assertTrue(content.contains("交易所已实现盈亏（未扣手续费）: 3 USDT"));
