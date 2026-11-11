@@ -1632,10 +1632,12 @@ public class ProtectionOrderService {
      * 本地兜底前停止本周期本系统所有条件单，精确终态确认后才允许刷新持仓并补平。
      */
     public boolean quiesceCycleProtections(Long credentialId, QuantPosition position) {
+        List<String> statuses = new java.util.ArrayList<>(ACTIVE_STATUSES);
+        statuses.addAll(List.of("FINISHED", "MISSING", "TRIGGERING", "TRIGGERED", "PARTIALLY_FILLED", "FILLED"));
         List<QuantProtectionOrder> orders =
             mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>().eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getPositionId,
                 position.getId()).eq(QuantProtectionOrder::getPositionCycleKey, position.getProtectionCycleKey()).in(QuantProtectionOrder::getProtectionType, "HARD_STOP",
-                "LOCAL_STOP", "SYMBOL_STOP", "FIRST_TP", "STEP_TP").in(QuantProtectionOrder::getStatus, ACTIVE_STATUSES));
+                "LOCAL_STOP", "SYMBOL_STOP", "FIRST_TP", "STEP_TP").in(QuantProtectionOrder::getStatus, statuses));
         for (QuantProtectionOrder order : orders) {
             if (!cancelProtected(credentialId, order, true, Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED"), false)) {
                 return false;
