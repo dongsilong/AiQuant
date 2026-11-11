@@ -2716,9 +2716,14 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
             return false;
         }
         runtime.position.setProtectionCycleKey(runtime.state.getPositionCycleKey());
-        if (!protectionOrderService.prepareLocalExit(runtime.credential.getId(), runtime.position, exit.exchangeProtectionType())) {
+        boolean fullRemainingClose = exit.quantityBase() == ExitSignal.QuantityBase.CURRENT
+            && (exit.quantityRate() == null || exit.quantityRate().compareTo(BigDecimal.ONE) >= 0);
+        boolean protectionsQuiesced = fullRemainingClose
+            ? protectionOrderService.quiesceCycleProtections(runtime.credential.getId(), runtime.position)
+            : protectionOrderService.prepareLocalExit(runtime.credential.getId(), runtime.position, exit.exchangeProtectionType());
+        if (!protectionsQuiesced) {
             runtime.state.setRecoveryRequired(true);
-            // 仍未确认停单时绝不发补平，但保护未知不等于原持仓归属发生变化。
+            // 全平前必须精确核实本周期所有条件单；任何触发中或未知状态都禁止重复提交减仓。
             stateService.save(runtime.state);
             return true;
         }
@@ -4104,6 +4109,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                         runtime.state.setConfirmedProtectionStep(Math.max(previousStep, confirmedStep));
                                         runtime.state.setHighestStep(Math.max(highestStep, confirmedStep));
                                         stateService.save(runtime.state);
+                                        publishPositionPerformance(runtime);
                                     }
                                     if (work.dynamic() && runtime.protectionDegraded && !runtime.hasPendingAction()) {
                                         // 保护恢复只能解除自身降级；未知成交/持仓归属必须由事实恢复链路核实。
@@ -4594,7 +4600,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         QuantStrategyPositionState state = runtime.state;
         positionPerformanceHub.publish(new StrategyPositionPerformanceEvent(runtime.credential.getId(), runtime.instance.getId(), state.getPositionId(), state.getPositionCycleKey(),
             runtime.symbol.getSymbol(), state.getDirection(), state.getEntryPrice(), state.getInitialPositionQty(), state.getInitialMargin(), state.getHighestPriceSinceEntry(),
-            state.getLowestPriceSinceEntry(), state.getMaximumReturnRate(), state.getUpdatedAt()));
+            state.getLowestPriceSinceEntry(), state.getMaximumReturnRate(), state.getHighestStep(), state.getConfirmedProtectionStep(), state.getFrozenLeverage(),
+            state.getUpdatedAt()));
     }
 
     /**
