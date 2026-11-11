@@ -430,7 +430,7 @@ class QuantTradeNotificationServiceTest {
         when(mapper.claim(anyLong(), any(), any())).thenReturn(1);
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
 
-        for (String[] order : List.of(
+        for (String[] order : List.<String[]>of(
             new String[]{"BTCUSDT", "99", "close-btc"},
             new String[]{"ETHUSDT", "100", "close-eth"})) {
             String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (transactionMillis + 2)
@@ -451,7 +451,7 @@ class QuantTradeNotificationServiceTest {
     }
 
     @Test
-    void partialRestAccountSnapshotIsPersistedWithoutMixingDifferentSamplingTimes() throws Exception {
+    void partialRestAccountSnapshotIsPersistedAndRetriedUntilComplete() throws Exception {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-partial-close-snapshot-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
