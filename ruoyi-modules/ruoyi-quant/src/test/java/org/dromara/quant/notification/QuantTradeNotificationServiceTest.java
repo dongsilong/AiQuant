@@ -523,6 +523,67 @@ class QuantTradeNotificationServiceTest {
     }
 
     @Test
+    void persistedCloseSnapshotRetriesAfterRestartWithoutAccountUpdateMetadata() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-close-snapshot-restart-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var credentials = mock(org.dromara.quant.credential.mapper.QuantCredentialMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var field = QuantTradeNotificationService.class.getDeclaredField("credentialMapper");
+        field.setAccessible(true);
+        field.set(service, credentials);
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        credential.setApiKey("test-key");
+        credential.setSecretKey("test-secret");
+        credential.setSignatureType("HMAC");
+        credential.setRunMode("LIVE");
+        when(credentials.selectById(10L)).thenReturn(credential);
+
+        Instant closeTime = Instant.now();
+        var taskData = new java.util.LinkedHashMap<String, Object>();
+        taskData.put("taskType", "SNAPSHOT");
+        taskData.put("credentialId", "10");
+        taskData.put("symbol", "BTCUSDT");
+        taskData.put("orderId", "99");
+        taskData.put("clientOrderId", "close-99");
+        taskData.put("closeTime", closeTime.toString());
+        taskData.put("orderTransactionTime", null);
+        taskData.put("accountUpdateTransactionTime", null);
+        taskData.put("exchangeEventTime", null);
+        taskData.put("streamReceivedAt", null);
+        var task = new QuantNotification();
+        task.setId(940L);
+        task.setCredentialId(10L);
+        task.setChannel("FACT_PENDING");
+        task.setRecipient("SNAPSHOT:BTCUSDT:99");
+        task.setContent(org.dromara.quant.util.QuantJsonMapper.writeMap(taskData));
+        task.setStatus("RETRY");
+        task.setRetryCount(1);
+        task.setCreatedAt(java.time.LocalDateTime.now().minusSeconds(1));
+        task.setNextRetryAt(java.time.LocalDateTime.now().minusSeconds(1));
+        when(mapper.selectList(any())).thenReturn(List.of(task));
+        when(mapper.claim(eq(940L), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any()))
+            .thenReturn(1, 0, 1);
+        when(jdbc.update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(gateway.queryAccountFresh(any())).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
+        service.retryPendingCloseFacts();
+
+        verify(gateway).queryAccountFresh(any());
+        verify(jdbc).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+        assertEquals("SENT", task.getStatus());
+        assertNull(task.getNextRetryAt());
+        verify(mapper).updateById(task);
+    }
+
+    @Test
     void strategyCloseResolverUsesExactCycleIntentInsteadOfMatchingQuantityAcrossTheInstance() throws Exception {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-cycle-close-resolver-test"), QuantNotification.class);
