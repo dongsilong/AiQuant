@@ -371,7 +371,7 @@ class QuantTradeNotificationServiceTest {
 
         long accountUpdateMillis = eventMillis + 10;
         String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + accountUpdateMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+            + ",\"T\":" + eventMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
 
@@ -402,7 +402,7 @@ class QuantTradeNotificationServiceTest {
         long eventMillis = System.currentTimeMillis();
         long accountUpdateMillis = eventMillis + 10;
         String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + accountUpdateMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+            + ",\"T\":" + eventMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
         String orderPayload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
             + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}}";
@@ -443,7 +443,7 @@ class QuantTradeNotificationServiceTest {
 
         long accountUpdateMillis = eventMillis + 10;
         String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + accountUpdateMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+            + ",\"T\":" + eventMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
 
@@ -469,7 +469,7 @@ class QuantTradeNotificationServiceTest {
             new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload));
         long accountUpdateMillis = eventMillis + 10;
         String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + accountUpdateMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+            + ",\"T\":" + eventMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
 
