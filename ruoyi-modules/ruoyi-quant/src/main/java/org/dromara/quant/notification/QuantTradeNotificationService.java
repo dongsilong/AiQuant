@@ -577,7 +577,7 @@ public class QuantTradeNotificationService {
         Instant closeEventTime = instantMillis(order.get("T"));
         Instant orderTransactionTime = instantMillis(payload.get("T"));
         if (symbol.isBlank() || orderId == null
-            || !java.util.Set.of("FILLED", "CANCELED", "EXPIRED").contains(orderStatus.toUpperCase(java.util.Locale.ROOT))
+            || !java.util.Set.of("FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH").contains(orderStatus.toUpperCase(java.util.Locale.ROOT))
             || executedQuantity == null || executedQuantity.signum() <= 0
             || closeEventTime == null || !withinCloseSnapshotWindow(closeEventTime)) {
             return;
