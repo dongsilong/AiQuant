@@ -625,6 +625,15 @@ public class QuantTradeNotificationService {
                     pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
                     return;
                 }
+                matchingOrderCount = pendingStreamCloseSnapshots.values().stream()
+                    .filter(candidate -> candidate.credentialId().equals(pending.credentialId())
+                        && candidate.orderTransactionTime().equals(pending.orderTransactionTime()))
+                    .count();
+                if (matchingOrderCount != 1) {
+                    log.warn("平仓资金快照查询期间出现同撮合时间的其他订单，拒绝写入 credentialId={} transactionTime={} matchingOrders={}",
+                        pending.credentialId(), pending.orderTransactionTime(), matchingOrderCount);
+                    return;
+                }
                 if (persistCloseEquitySnapshot(pending.credentialId(), pending.symbol(), pending.orderId(), account,
                     "ACCOUNT_UPDATE_TRIGGERED_REST", pending.closeEventTime(), observation.transactionTime(),
                     observation.eventTime(), observation.receivedAt())) {
@@ -975,6 +984,10 @@ public class QuantTradeNotificationService {
     @Scheduled(fixedDelay = 30000L, initialDelay = 30000L)
     public void retryPendingCloseFacts() {
         LocalDateTime now = LocalDateTime.now();
+        Instant streamStateCutoff = Instant.now().minus(CLOSE_SNAPSHOT_RETRY_WINDOW);
+        pendingOrderAccountUpdates.entrySet().removeIf(entry -> entry.getValue().receivedAt().isBefore(streamStateCutoff));
+        pendingStreamCloseSnapshots.entrySet().removeIf(entry ->
+            entry.getValue().closeEventTime().isBefore(streamStateCutoff));
         List<QuantNotification> pending = notificationMapper.selectList(new LambdaQueryWrapper<QuantNotification>()
             .eq(QuantNotification::getChannel, "FACT_PENDING")
             .and(query -> query.in(QuantNotification::getStatus, "PENDING", "RETRY").le(QuantNotification::getNextRetryAt, now)
