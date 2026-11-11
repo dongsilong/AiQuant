@@ -325,7 +325,7 @@ public class UserDataStreamHub {
             lastEventAt = Instant.now();
             positionCache.onEvent(credential.getId(), event);
             balanceCache.onEvent(credential.getId(), event);
-            if (event != null && "ORDER_TRADE_UPDATE".equals(event.eventType()) && tradeNotifications != null) {
+            if (event != null && tradeNotifications != null) {
                 tradeNotifications.captureCloseSnapshotFromUserDataEvent(
                     credential.getId(), executionService.toCredential(credential), event);
             }
