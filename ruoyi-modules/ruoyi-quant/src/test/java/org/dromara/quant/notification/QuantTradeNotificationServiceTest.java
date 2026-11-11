@@ -383,12 +383,14 @@ class QuantTradeNotificationServiceTest {
         assertEquals("ACCOUNT_UPDATE_TRIGGERED_REST", values.getValue()[3]);
         assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(eventMillis), java.time.ZoneOffset.UTC),
             values.getValue()[4]);
-        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(accountUpdateMillis), java.time.ZoneOffset.UTC),
+        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(eventMillis), java.time.ZoneOffset.UTC),
             values.getValue()[5]);
-        assertTrue(values.getValue()[6] instanceof java.time.LocalDateTime);
-        assertEquals(10L, values.getValue()[7]);
-        assertEquals("BTCUSDT", values.getValue()[8]);
-        assertEquals(99L, values.getValue()[9]);
+        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(accountUpdateMillis), java.time.ZoneOffset.UTC),
+            values.getValue()[6]);
+        assertTrue(values.getValue()[7] instanceof java.time.LocalDateTime);
+        assertEquals(10L, values.getValue()[8]);
+        assertEquals("BTCUSDT", values.getValue()[9]);
+        assertEquals(99L, values.getValue()[10]);
     }
 
     @Test
