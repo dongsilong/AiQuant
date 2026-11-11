@@ -751,10 +751,10 @@ public class QuantTradeNotificationService {
                 credential.getId(), symbol, orderId, ex);
             return false;
         }
+        Instant restResponseReceivedAt = Instant.now();
         if (!withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
-        Instant restResponseReceivedAt = Instant.now();
         return persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
             "ACCOUNT_UPDATE_TRIGGERED_REST", closeEventTime, accountUpdateTransactionTime,
             accountUpdateEventTime, accountUpdateReceivedAt, restRequestStartedAt, restResponseReceivedAt);
