@@ -611,7 +611,7 @@ public class QuantTradeNotificationService {
                 task.setStatus("SENDING");
                 task.setOwnerToken(ownerToken);
                 task.setLeaseUntil(leaseUntil);
-                if (captureCloseEquitySnapshot(credential, symbol, orderId,
+                if (captureCloseEquitySnapshot(credentialId, credential, symbol, orderId,
                     Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime,
                     null, event.eventTime(), streamReceivedAt)) {
                     task.setStatus("SENT");
@@ -691,41 +691,41 @@ public class QuantTradeNotificationService {
         return millis == null || millis <= 0 ? null : Instant.ofEpochMilli(millis);
     }
 
-    private boolean captureCloseEquitySnapshot(QuantCredential credential, String symbol, Long orderId,
-                                                String clientOrderId, Instant closeEventTime, Instant orderTransactionTime,
+    private boolean captureCloseEquitySnapshot(Long credentialId, ExchangeGateway.Credential credential,
+                                                String symbol, Long orderId, String clientOrderId,
+                                                Instant closeEventTime, Instant orderTransactionTime,
                                                 Instant accountUpdateTransactionTime, Instant accountUpdateEventTime,
                                                 Instant accountUpdateReceivedAt) {
-        if (credential == null || credential.getId() == null || symbol == null || orderId == null
+        if (credentialId == null || credential == null || symbol == null || orderId == null
             || closeEventTime == null
             || accountUpdateTransactionTime != null && (orderTransactionTime == null
                 || !orderTransactionTime.equals(accountUpdateTransactionTime))
             || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
-        if (!isVerifiedCloseOrder(credential.getId(), symbol, orderId, clientOrderId)) {
+        if (!isVerifiedCloseOrder(credentialId, symbol, orderId, clientOrderId)) {
             return false;
         }
-        if (hasCompleteCloseEquitySnapshot(credential.getId(), symbol, orderId)) {
+        if (hasCompleteCloseEquitySnapshot(credentialId, symbol, orderId)) {
             return true;
         }
         Instant restRequestStartedAt = Instant.now();
         ExchangeGateway.AccountSnapshot account;
         try {
-            account = gateway.queryAccountFresh(new ExchangeGateway.Credential(
-                credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(), credential.getRunMode()));
+            account = gateway.queryAccountFresh(credential);
         } catch (RuntimeException ex) {
             log.warn("平仓资金快照独立重试失败 credentialId={} symbol={} orderId={}",
-                credential.getId(), symbol, orderId, ex);
+                credentialId, symbol, orderId, ex);
             return false;
         }
         Instant restResponseReceivedAt = Instant.now();
         if (!withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
-        boolean persisted = persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
+        boolean persisted = persistCloseEquitySnapshot(credentialId, symbol, orderId, account,
             "REST_FALLBACK", closeEventTime, accountUpdateTransactionTime,
             accountUpdateEventTime, accountUpdateReceivedAt, restRequestStartedAt, restResponseReceivedAt);
-        return persisted && hasCompleteCloseEquitySnapshot(credential.getId(), symbol, orderId);
+        return persisted && hasCompleteCloseEquitySnapshot(credentialId, symbol, orderId);
     }
 
     private QuantNotification enqueuePendingCloseSnapshot(Long credentialId, String symbol, Long orderId,
@@ -1043,8 +1043,10 @@ public class QuantTradeNotificationService {
                             task.setStatus("FAILED");
                             task.setNextRetryAt(null);
                             task.setLastError("超过平仓后即时资金快照窗口，不使用当前账户余额冒充历史平仓余额");
-                        } else if (captureCloseEquitySnapshot(credential, symbol, orderId,
-                            data.get("clientOrderId") == null ? null : String.valueOf(data.get("clientOrderId")),
+                        } else if (captureCloseEquitySnapshot(credentialId,
+                            new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
+                                credential.getSignatureType(), credential.getRunMode()),
+                            symbol, orderId, data.get("clientOrderId") == null ? null : String.valueOf(data.get("clientOrderId")),
                             closeTime, orderTransactionTime, accountUpdateTransactionTime, exchangeEventTime, streamReceivedAt)) {
                             task.setStatus("SENT");
                             task.setSentAt(LocalDateTime.now());
