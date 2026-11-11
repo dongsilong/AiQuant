@@ -74,6 +74,8 @@ public class QuantTradeNotificationService {
     private StrategyOrderIntentMapper strategyOrderIntentMapper;
     private final java.util.concurrent.ConcurrentHashMap<String, Long> blockedNoticeTimes = new java.util.concurrent.ConcurrentHashMap<>();
     private final Set<String> activeStreamCloseCaptures = ConcurrentHashMap.newKeySet();
+    private final Map<String, PendingCloseStreamSnapshot> pendingStreamCloseSnapshots = new ConcurrentHashMap<>();
+    private final Map<Long, Instant> lastOrderAccountUpdateEventTimes = new ConcurrentHashMap<>();
 
     /**
      * 创建 QuantTradeNotificationService 实例并初始化其依赖。
@@ -448,39 +450,41 @@ public class QuantTradeNotificationService {
 
     private boolean persistCloseEquitySnapshot(Long credentialId, String symbol, Long orderId,
                                                ExchangeGateway.AccountSnapshot account) {
-        return persistCloseEquitySnapshot(credentialId, symbol, orderId, account, "REST_FALLBACK", null, null);
+        return persistCloseEquitySnapshot(credentialId, symbol, orderId, account,
+            "REST_FALLBACK", null, null, null);
     }
 
     private boolean persistCloseEquitySnapshot(Long credentialId, String symbol, Long orderId,
                                                ExchangeGateway.AccountSnapshot account, String captureSource,
-                                               Instant exchangeEventTime, Instant streamReceivedAt) {
+                                               Instant closeEventTime, Instant exchangeEventTime, Instant streamReceivedAt) {
         if (account == null || account.marginBalance() == null || account.walletBalance() == null) {
             return false;
         }
+        LocalDateTime closeTime = closeEventTime == null ? null : LocalDateTime.ofInstant(closeEventTime, ZoneOffset.UTC);
         LocalDateTime exchangeTime = exchangeEventTime == null ? null : LocalDateTime.ofInstant(exchangeEventTime, ZoneOffset.UTC);
         LocalDateTime receivedTime = streamReceivedAt == null ? null : LocalDateTime.ofInstant(streamReceivedAt, ZoneOffset.UTC);
         try {
             int upgraded = jdbcTemplate.update("""
                 UPDATE quant_trade_close_equity
                 SET closing_equity=?, wallet_balance=?, unrealized_pnl=?,
-                    capture_source=?, exchange_event_time=?, stream_received_at=?,
+                    capture_source=?, close_event_time=?, exchange_event_time=?, stream_received_at=?,
                     captured_at=UTC_TIMESTAMP(3)
                 WHERE credential_id=? AND symbol=? AND exchange_order_id=?
                   AND (closing_equity IS NULL OR wallet_balance IS NULL)
                 """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
-                captureSource, exchangeTime, receivedTime, credentialId, symbol, orderId);
+                captureSource, closeTime, exchangeTime, receivedTime, credentialId, symbol, orderId);
             if (upgraded == 1) {
                 return true;
             }
             jdbcTemplate.update("""
                 INSERT INTO quant_trade_close_equity
                     (credential_id, symbol, exchange_order_id, closing_equity,
-                     wallet_balance, unrealized_pnl, capture_source, exchange_event_time,
-                     stream_received_at, captured_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
+                     wallet_balance, unrealized_pnl, capture_source, close_event_time,
+                     exchange_event_time, stream_received_at, captured_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
                 ON DUPLICATE KEY UPDATE id=id
                 """, credentialId, symbol, orderId, account.marginBalance(),
-                account.walletBalance(), account.unrealizedPnl(), captureSource, exchangeTime, receivedTime);
+                account.walletBalance(), account.unrealizedPnl(), captureSource, closeTime, exchangeTime, receivedTime);
             return true;
         } catch (RuntimeException ex) {
             log.warn("平仓账户资金快照持久化失败 credentialId={} symbol={} orderId={}",
@@ -1292,4 +1296,9 @@ public class QuantTradeNotificationService {
         }
         return Arrays.stream(raw.split("[,;\\s]+")).map(String::trim).filter(v -> !v.isBlank()).distinct().toList();
     }
+    private record PendingCloseStreamSnapshot(Long credentialId, ExchangeGateway.Credential credential,
+                                               String symbol, Long orderId, String clientOrderId,
+                                               Instant closeEventTime, Instant orderEventTime) {
+    }
+
 }
