@@ -420,9 +420,12 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
             result.add(new ProtectionSignal(PROTECTION_STEP_TP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
                 context.direction(), locked, leverage), "Binance 阶梯追踪止盈，第" + stepIndex + "阶，最高回报率=" + percent(maxReturn) + "，锁定回报率=" + percent(locked), stepIndex));
         }
-        if (unifiedProtection(params)) {
-            result.sort(java.util.Comparator.comparingInt(signal -> "STEP_TP".equals(signal.type()) ? 0 : 1));
-        }
+        result.sort(java.util.Comparator.comparingInt(signal -> switch (signal.type()) {
+            case PROTECTION_LOCAL_STOP -> 0;
+            case PROTECTION_STEP_TP -> 1;
+            case PROTECTION_FIRST_TP -> 2;
+            default -> 3;
+        }));
         return result;
     }
 
