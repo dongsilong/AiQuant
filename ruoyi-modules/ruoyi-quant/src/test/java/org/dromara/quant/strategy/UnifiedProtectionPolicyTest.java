@@ -26,18 +26,28 @@ class UnifiedProtectionPolicyTest {
             new BigDecimal(peak), new BigDecimal("100"), firstFilled, highest);
     }
     @ParameterizedTest
-    @CsvSource({"0.10,0.20,101", "0.10,0.10,101", "0.30,0.10,103"})
-    void keepsOnlyFirstTpUntilItsFullTargetIsConfirmed(String first, String ratio, String price) {
+    @CsvSource({"0.10,0.20,101,0", "0.10,0.10,101,1", "0.30,0.10,103,3"})
+    void stepProtectionFollowsReachedStepBeforeFirstProfitFill(String first, String ratio, String price, int expectedStep) {
         var signals = strategy.evaluateProtection(context(price, price, false, 0), params(first, ratio));
-        assertEquals(java.util.List.of("FIRST_TP"), signals.stream().map(ProtectionSignal::type).toList());
-        assertEquals(ProtectionSignal.QuantityBase.INITIAL, signals.getFirst().quantityBase());
+        assertTrue(signals.stream().anyMatch(signal -> "FIRST_TP".equals(signal.type())));
+        var step = signals.stream().filter(signal -> "STEP_TP".equals(signal.type())).findFirst();
+        if (expectedStep == 0) {
+            assertTrue(step.isEmpty());
+        } else {
+            var protection = step.orElseThrow();
+            assertEquals(expectedStep, protection.stepIndex());
+            assertEquals(ProtectionSignal.QuantityBase.CURRENT, protection.quantityBase());
+            assertEquals(0, BigDecimal.ONE.compareTo(protection.quantityRate()));
+        }
     }
     @Test
-    void activatesHighestConfirmedStepAfterFirstProfitFill() {
-        var signals = strategy.evaluateProtection(context("100.5", "102.5", true, 2), params("0.10", "0.10"));
-        assertEquals(java.util.List.of("STEP_TP"), signals.stream().map(ProtectionSignal::type).toList());
-        assertEquals(2, signals.getFirst().stepIndex());
-        assertEquals(0, new BigDecimal("101").compareTo(signals.getFirst().triggerPrice()));
+    void activatesHighestReachedStepEvenBeforeFirstProfitFill() {
+        var signals = strategy.evaluateProtection(context("100.5", "102.5", false, 2), params("0.10", "0.10"));
+        var step = signals.stream().filter(signal -> "STEP_TP".equals(signal.type())).findFirst().orElseThrow();
+        assertEquals(2, step.stepIndex());
+        assertEquals(ProtectionSignal.QuantityBase.CURRENT, step.quantityBase());
+        assertEquals(0, new BigDecimal("101").compareTo(step.triggerPrice()));
+        assertTrue(signals.stream().anyMatch(signal -> "FIRST_TP".equals(signal.type())));
     }
     @Test
     void legacySnapshotKeepsLocalStopAndOldStepActivation() {
