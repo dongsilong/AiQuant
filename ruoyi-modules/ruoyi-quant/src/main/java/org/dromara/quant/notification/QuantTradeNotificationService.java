@@ -42,7 +42,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.LockSupport;
 /**
  * 开仓/平仓统一通知；投递失败进入 Outbox 重试，不回滚已完成的交易事实。
  */
@@ -75,8 +74,6 @@ public class QuantTradeNotificationService {
     private StrategyOrderIntentMapper strategyOrderIntentMapper;
     private final java.util.concurrent.ConcurrentHashMap<String, Long> blockedNoticeTimes = new java.util.concurrent.ConcurrentHashMap<>();
     private final Set<String> activeStreamCloseCaptures = ConcurrentHashMap.newKeySet();
-    private final Map<String, PendingCloseStreamSnapshot> pendingStreamCloseSnapshots = new ConcurrentHashMap<>();
-    private final Map<String, AccountUpdateObservation> pendingOrderAccountUpdates = new ConcurrentHashMap<>();
 
     /**
      * 创建 QuantTradeNotificationService 实例并初始化其依赖。
@@ -400,13 +397,16 @@ public class QuantTradeNotificationService {
             commissions.entrySet().stream().map(entry -> fee4(entry.getValue()) + " " + entry.getKey()).collect(java.util.stream.Collectors.joining(", "));
         ExchangeGateway.AccountSnapshot account = null;
         if (withinCloseSnapshotWindow(closeTime)) {
+            Instant restRequestStartedAt = Instant.now();
             try {
                 account = gateway.queryAccountFresh(new ExchangeGateway.Credential(
                     credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(), credential.getRunMode()));
+                Instant restResponseReceivedAt = Instant.now();
+                persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
+                    "REST_FALLBACK", closeTime, null, null, null, restRequestStartedAt, restResponseReceivedAt);
             } catch (RuntimeException ex) {
-                log.warn("平仓后账户资金快照获取失败 credentialId={} orderId={}", credential.getId(), orderId, ex);
+                log.warn("平仓后账户资金快照获取或持久化失败 credentialId={} orderId={}", credential.getId(), orderId, ex);
             }
-            // 该 REST 查询用于通知内容；持久化交易记录资金快照必须等待对应的 ACCOUNT_UPDATE 事件确认。
         } else {
             log.warn("平仓时间已超出即时账户快照窗口，不使用当前余额冒充平仓时余额 credentialId={} symbol={} orderId={} closeTime={}",
                 credential.getId(), symbol, orderId, closeTime);
@@ -449,7 +449,7 @@ public class QuantTradeNotificationService {
                                                Instant closeEventTime, Instant accountUpdateTransactionTime,
                                                Instant exchangeEventTime, Instant streamReceivedAt,
                                                Instant restRequestStartedAt, Instant restResponseReceivedAt) {
-        if (account == null || account.marginBalance() == null || account.walletBalance() == null
+        if (account == null || (account.marginBalance() == null && account.walletBalance() == null)
             || restRequestStartedAt == null || restResponseReceivedAt == null) {
             return false;
         }
@@ -463,13 +463,14 @@ public class QuantTradeNotificationService {
         try {
             int upgraded = jdbcTemplate.update("""
                 UPDATE quant_trade_close_equity
-                SET closing_equity=?, wallet_balance=?, unrealized_pnl=?,
+                SET closing_equity=COALESCE(?, closing_equity),
+                    wallet_balance=COALESCE(?, wallet_balance),
+                    unrealized_pnl=COALESCE(?, unrealized_pnl),
                     capture_source=?, close_event_time=?, account_update_transaction_time=?,
                     exchange_event_time=?, stream_received_at=?, rest_query_started_at=?,
                     rest_response_received_at=?, captured_at=UTC_TIMESTAMP(3)
                 WHERE credential_id=? AND symbol=? AND exchange_order_id=?
-                  AND (closing_equity IS NULL OR wallet_balance IS NULL
-                       OR capture_source<>'ACCOUNT_UPDATE_TRIGGERED_REST')
+                  AND (closing_equity IS NULL OR wallet_balance IS NULL)
                 """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
                 captureSource, closeTime, accountTransactionTime, exchangeTime, receivedTime,
                 restRequestTime, restResponseTime, credentialId, symbol, orderId);
@@ -499,18 +500,16 @@ public class QuantTradeNotificationService {
      * 平仓订单事件只登记订单事实；同一撮合事务的 ORDER 类 ACCOUNT_UPDATE 到达后，
      * 才查询完整账户 REST 快照。通过撮合事务时间一对一关联，避免跨订单套用资金快照。
      */
+    /**
+     * 仅凭已终态且有实际成交量的平仓订单事件触发账户采样。
+     * 不再等待 ACCOUNT_UPDATE 与订单事件按毫秒时间戳一对一匹配；
+     * 事件先持久化为快照任务，再立即 REST 采样，进程重启后仍可在有效窗口内重试。
+     */
     public void captureCloseSnapshotFromUserDataEvent(Long credentialId, ExchangeGateway.Credential credential,
                                                        ExchangeGateway.UserDataEvent event) {
-        if (credentialId == null || credential == null || event == null) {
-            return;
-        }
-        if ("DISCONNECTED".equalsIgnoreCase(event.eventType()) || "listenKeyExpired".equalsIgnoreCase(event.eventType())) {
-            String credentialPrefix = credentialId + ":";
-            pendingOrderAccountUpdates.keySet().removeIf(key -> key.startsWith(credentialPrefix));
-            pendingStreamCloseSnapshots.entrySet().removeIf(entry -> entry.getValue().credentialId().equals(credentialId));
-            return;
-        }
-        if (event.rawJson() == null || event.rawJson().isBlank()) {
+        if (credentialId == null || credential == null || event == null
+            || !"ORDER_TRADE_UPDATE".equalsIgnoreCase(event.eventType())
+            || event.rawJson() == null || event.rawJson().isBlank()) {
             return;
         }
         Map<String, Object> payload;
@@ -521,160 +520,77 @@ public class QuantTradeNotificationService {
                 credentialId, event.eventType(), ex);
             return;
         }
-        Instant now = Instant.now();
-        pendingOrderAccountUpdates.entrySet().removeIf(entry ->
-            entry.getValue().receivedAt().isBefore(now.minus(CLOSE_SNAPSHOT_RETRY_WINDOW)));
-        pendingStreamCloseSnapshots.entrySet().removeIf(entry ->
-            entry.getValue().credentialId().equals(credentialId)
-                && !withinCloseSnapshotWindow(entry.getValue().closeEventTime()));
-
-        if ("ACCOUNT_UPDATE".equalsIgnoreCase(event.eventType())) {
-            if (!(payload.get("a") instanceof Map<?, ?> accountUpdate)
-                || !"ORDER".equalsIgnoreCase(Objects.toString(accountUpdate.get("m"), ""))) {
-                return;
-            }
-            // ACCOUNT_UPDATE 根级 T 是撮合引擎事务时间；根级 E 是事件生成时间。
-            Instant accountUpdateTransactionTime = instantMillis(payload.get("T"));
-            Instant accountUpdateEventTime = event.eventTime();
-            if (accountUpdateTransactionTime == null || accountUpdateEventTime == null) {
-                return;
-            }
-            Instant accountUpdateReceivedAt = now;
-            String accountUpdateKey = credentialId + ":" + accountUpdateTransactionTime.toEpochMilli();
-            AccountUpdateObservation observation = new AccountUpdateObservation(
-                accountUpdateTransactionTime, accountUpdateEventTime, accountUpdateReceivedAt);
-            pendingOrderAccountUpdates.putIfAbsent(accountUpdateKey, observation);
-            List<Map.Entry<String, PendingCloseStreamSnapshot>> matches = pendingStreamCloseSnapshots.entrySet().stream()
-                .filter(entry -> entry.getValue().credentialId().equals(credentialId)
-                    && entry.getValue().orderTransactionTime().equals(accountUpdateTransactionTime))
-                .toList();
-            if (matches.size() == 1) {
-                capturePendingCloseEquitySnapshot(matches.getFirst().getKey(), matches.getFirst().getValue(),
-                    accountUpdateKey, observation);
-            } else if (matches.size() > 1) {
-                log.warn("平仓资金快照关联存在撮合时间歧义，拒绝写入 credentialId={} transactionTime={} matchingOrders={}",
-                    credentialId, accountUpdateTransactionTime, matches.size());
-            }
-            return;
-        }
-        if (!"ORDER_TRADE_UPDATE".equalsIgnoreCase(event.eventType())
-            || !(payload.get("o") instanceof Map<?, ?> order)) {
+        if (!(payload.get("o") instanceof Map<?, ?> order)) {
             return;
         }
         String symbol = Objects.toString(order.get("s"), "").trim().toUpperCase(java.util.Locale.ROOT);
         Long orderId = longValue(order.get("i"));
-        String executionType = Objects.toString(order.get("x"), "");
         String orderStatus = Objects.toString(order.get("X"), "");
         BigDecimal executedQuantity = decimal(order.get("z"));
-        Instant closeEventTime = instantMillis(order.get("T")); // o.T：订单成交时间
-        Instant orderTransactionTime = instantMillis(payload.get("T")); // 根级 T：与 ACCOUNT_UPDATE 根级 T 对应
-        if (symbol.isBlank() || orderId == null || !"TRADE".equalsIgnoreCase(executionType)
-            || !"FILLED".equalsIgnoreCase(orderStatus) || executedQuantity == null || executedQuantity.signum() <= 0
-            || closeEventTime == null || orderTransactionTime == null || !withinCloseSnapshotWindow(closeEventTime)) {
+        Instant closeEventTime = instantMillis(order.get("T"));
+        Instant orderTransactionTime = instantMillis(payload.get("T"));
+        if (symbol.isBlank() || orderId == null
+            || !java.util.Set.of("FILLED", "CANCELED", "EXPIRED").contains(orderStatus.toUpperCase(java.util.Locale.ROOT))
+            || executedQuantity == null || executedQuantity.signum() <= 0
+            || closeEventTime == null || orderTransactionTime == null
+            || !withinCloseSnapshotWindow(closeEventTime)) {
             return;
         }
-        String captureKey = credentialId + ":" + symbol + ":" + orderId;
-        PendingCloseStreamSnapshot pending = new PendingCloseStreamSnapshot(credentialId, credential, symbol, orderId,
-            Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime);
-        PendingCloseStreamSnapshot existing = pendingStreamCloseSnapshots.putIfAbsent(captureKey, pending);
-        if (existing != null) {
-            pending = existing;
-        }
-        String accountUpdateKey = credentialId + ":" + orderTransactionTime.toEpochMilli();
-        AccountUpdateObservation observation = pendingOrderAccountUpdates.get(accountUpdateKey);
-        if (observation != null) {
-            capturePendingCloseEquitySnapshot(captureKey, pending, accountUpdateKey, observation);
-        }
-    }
 
-    private void capturePendingCloseEquitySnapshot(String captureKey, PendingCloseStreamSnapshot pending,
-                                                   String accountUpdateKey, AccountUpdateObservation observation) {
-        if (!withinCloseSnapshotWindow(pending.closeEventTime())
-            || !pending.orderTransactionTime().equals(observation.transactionTime())
-            || !activeStreamCloseCaptures.add(captureKey)) {
+        String captureKey = credentialId + ":" + symbol + ":" + orderId;
+        if (!activeStreamCloseCaptures.add(captureKey)) {
             return;
         }
+        Instant streamReceivedAt = Instant.now();
+        QuantNotification task = enqueuePendingCloseSnapshot(credentialId, symbol, orderId,
+            Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime,
+            null, event.eventTime(), streamReceivedAt);
+        if (task == null) {
+            activeStreamCloseCaptures.remove(captureKey);
+            log.error("平仓账户资金快照无法建立持久化任务 credentialId={} symbol={} orderId={}",
+                credentialId, symbol, orderId);
+            return;
+        }
+
         Thread.ofVirtual().name("quant-close-equity-stream").start(() -> {
+            boolean claimed = false;
+            String ownerToken = UUID.randomUUID().toString();
             try {
-                LockSupport.parkNanos(Duration.ofMillis(100).toNanos());
-                if (Thread.currentThread().isInterrupted()) {
+                LocalDateTime leaseUntil = LocalDateTime.now().plusSeconds(30);
+                claimed = task.getId() != null
+                    && notificationMapper.claim(task.getId(), ownerToken, leaseUntil) == 1;
+                if (!claimed) {
                     return;
                 }
-                long matchingOrderCount = pendingStreamCloseSnapshots.values().stream()
-                    .filter(candidate -> candidate.credentialId().equals(pending.credentialId())
-                        && candidate.orderTransactionTime().equals(pending.orderTransactionTime()))
-                    .count();
-                if (matchingOrderCount != 1) {
-                    log.warn("平仓资金快照撮合事务时间存在多个候选订单，拒绝关联 credentialId={} transactionTime={} matchingOrders={}",
-                        pending.credentialId(), pending.orderTransactionTime(), matchingOrderCount);
-                    return;
-                }
-                if (!withinCloseSnapshotWindow(pending.closeEventTime())) {
-                    pendingStreamCloseSnapshots.remove(captureKey, pending);
-                    pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
-                    return;
-                }
-                if (!isVerifiedCloseOrder(pending.credentialId(), pending.symbol(), pending.orderId(), pending.clientOrderId())) {
-                    if (enqueuePendingCloseSnapshot(pending.credentialId(), pending.symbol(), pending.orderId(),
-                        pending.clientOrderId(), pending.closeEventTime(), pending.orderTransactionTime(),
-                        observation.transactionTime(), observation.eventTime(), observation.receivedAt())) {
-                        pendingStreamCloseSnapshots.remove(captureKey, pending);
-                        pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
-                    } else {
-                        log.warn("平仓账户资金快照等待订单关闭身份确认，且持久化重试任务未建立 credentialId={} symbol={} orderId={}",
-                            pending.credentialId(), pending.symbol(), pending.orderId());
-                    }
-                    return;
-                }
-                if (hasCompleteCloseEquitySnapshot(pending.credentialId(), pending.symbol(), pending.orderId())) {
-                    pendingStreamCloseSnapshots.remove(captureKey, pending);
-                    pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
-                    return;
-                }
-                Instant restRequestStartedAt = Instant.now();
-                ExchangeGateway.AccountSnapshot account = gateway.queryAccountFresh(pending.credential());
-                Instant restResponseReceivedAt = Instant.now();
-                if (!withinCloseSnapshotWindow(pending.closeEventTime())) {
-                    pendingStreamCloseSnapshots.remove(captureKey, pending);
-                    pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
-                    return;
-                }
-                matchingOrderCount = pendingStreamCloseSnapshots.values().stream()
-                    .filter(candidate -> candidate.credentialId().equals(pending.credentialId())
-                        && candidate.orderTransactionTime().equals(pending.orderTransactionTime()))
-                    .count();
-                if (matchingOrderCount != 1) {
-                    log.warn("平仓资金快照查询期间出现同撮合时间的其他订单，拒绝写入 credentialId={} transactionTime={} matchingOrders={}",
-                        pending.credentialId(), pending.orderTransactionTime(), matchingOrderCount);
-                    return;
-                }
-                if (persistCloseEquitySnapshot(pending.credentialId(), pending.symbol(), pending.orderId(), account,
-                    "ACCOUNT_UPDATE_TRIGGERED_REST", pending.closeEventTime(), observation.transactionTime(),
-                    observation.eventTime(), observation.receivedAt(), restRequestStartedAt, restResponseReceivedAt)) {
-                    pendingStreamCloseSnapshots.remove(captureKey, pending);
-                    pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
-                    log.info("平仓账户资金快照由匹配的账户更新事件触发并保存 credentialId={} symbol={} orderId={} transactionTime={}",
-                        pending.credentialId(), pending.symbol(), pending.orderId(), observation.transactionTime());
-                } else if (enqueuePendingCloseSnapshot(pending.credentialId(), pending.symbol(), pending.orderId(),
-                    pending.clientOrderId(), pending.closeEventTime(), pending.orderTransactionTime(),
-                    observation.transactionTime(), observation.eventTime(), observation.receivedAt())) {
-                    pendingStreamCloseSnapshots.remove(captureKey, pending);
-                    pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
+                task.setStatus("SENDING");
+                task.setOwnerToken(ownerToken);
+                task.setLeaseUntil(leaseUntil);
+                if (captureCloseEquitySnapshot(credential, symbol, orderId,
+                    Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime,
+                    null, event.eventTime(), streamReceivedAt)) {
+                    task.setStatus("SENT");
+                    task.setSentAt(LocalDateTime.now());
+                    task.setNextRetryAt(null);
+                    task.setLastError(null);
                 } else {
-                    log.error("平仓账户资金快照失败且无法建立重试任务 credentialId={} symbol={} orderId={}",
-                        pending.credentialId(), pending.symbol(), pending.orderId());
+                    retryCloseFactTask(task, "平仓后 REST 资金采样尚未完整，或平仓订单身份尚未核实");
                 }
             } catch (RuntimeException ex) {
-                if (enqueuePendingCloseSnapshot(pending.credentialId(), pending.symbol(), pending.orderId(),
-                    pending.clientOrderId(), pending.closeEventTime(), pending.orderTransactionTime(),
-                    observation.transactionTime(), observation.eventTime(), observation.receivedAt())) {
-                    pendingStreamCloseSnapshots.remove(captureKey, pending);
-                    pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
-                } else {
-                    log.warn("平仓账户资金快照失败 credentialId={} symbol={} orderId={}",
-                        pending.credentialId(), pending.symbol(), pending.orderId(), ex);
+                if (claimed) {
+                    retryCloseFactTask(task, ex.getClass().getSimpleName() + ": " + ex.getMessage());
                 }
+                log.warn("平仓后账户资金采样失败 credentialId={} symbol={} orderId={}",
+                    credentialId, symbol, orderId, ex);
             } finally {
+                if (claimed) {
+                    task.setOwnerToken(null);
+                    task.setLeaseUntil(null);
+                    try {
+                        notificationMapper.updateById(task);
+                    } catch (RuntimeException ex) {
+                        log.error("更新平仓账户资金快照任务状态失败 notificationId={}", task.getId(), ex);
+                    }
+                }
                 activeStreamCloseCaptures.remove(captureKey);
             }
         });
@@ -707,7 +623,6 @@ public class QuantTradeNotificationService {
                 FROM quant_trade_close_equity
                 WHERE credential_id=? AND symbol=? AND exchange_order_id=?
                   AND closing_equity IS NOT NULL AND wallet_balance IS NOT NULL
-                  AND capture_source='ACCOUNT_UPDATE_TRIGGERED_REST'
             )
             """, Integer.class, credentialId, symbol, orderId);
         return complete != null && complete == 1;
@@ -730,9 +645,9 @@ public class QuantTradeNotificationService {
                                                 Instant accountUpdateTransactionTime, Instant accountUpdateEventTime,
                                                 Instant accountUpdateReceivedAt) {
         if (credential == null || credential.getId() == null || symbol == null || orderId == null
-            || closeEventTime == null || orderTransactionTime == null || accountUpdateTransactionTime == null
-            || accountUpdateEventTime == null || accountUpdateReceivedAt == null
-            || !orderTransactionTime.equals(accountUpdateTransactionTime) || !withinCloseSnapshotWindow(closeEventTime)) {
+            || closeEventTime == null || orderTransactionTime == null
+            || accountUpdateTransactionTime != null && !orderTransactionTime.equals(accountUpdateTransactionTime)
+            || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
         if (!isVerifiedCloseOrder(credential.getId(), symbol, orderId, clientOrderId)) {
@@ -755,21 +670,23 @@ public class QuantTradeNotificationService {
         if (!withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
-        return persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
-            "ACCOUNT_UPDATE_TRIGGERED_REST", closeEventTime, accountUpdateTransactionTime,
+        boolean persisted = persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
+            "REST_FALLBACK", closeEventTime, accountUpdateTransactionTime,
             accountUpdateEventTime, accountUpdateReceivedAt, restRequestStartedAt, restResponseReceivedAt);
+        return persisted && hasCompleteCloseEquitySnapshot(credential.getId(), symbol, orderId);
     }
 
-    private boolean enqueuePendingCloseSnapshot(Long credentialId, String symbol, Long orderId, String clientOrderId,
-                                                 Instant closeEventTime, Instant orderTransactionTime,
-                                                 Instant accountUpdateTransactionTime, Instant accountUpdateEventTime,
-                                                 Instant accountUpdateReceivedAt) {
+    private QuantNotification enqueuePendingCloseSnapshot(Long credentialId, String symbol, Long orderId,
+                                                            String clientOrderId, Instant closeEventTime,
+                                                            Instant orderTransactionTime,
+                                                            Instant accountUpdateTransactionTime,
+                                                            Instant exchangeEventTime, Instant streamReceivedAt) {
         if (credentialId == null || symbol == null || orderId == null || closeEventTime == null
-            || orderTransactionTime == null || accountUpdateTransactionTime == null || accountUpdateEventTime == null
-            || accountUpdateReceivedAt == null || !orderTransactionTime.equals(accountUpdateTransactionTime)) {
-            return false;
+            || orderTransactionTime == null
+            || accountUpdateTransactionTime != null && !orderTransactionTime.equals(accountUpdateTransactionTime)) {
+            return null;
         }
-        String taskKey = SNAPSHOT_TASK_PREFIX + symbol + ":" + orderId + ":" + accountUpdateTransactionTime.toEpochMilli();
+        String taskKey = SNAPSHOT_TASK_PREFIX + symbol + ":" + orderId + ":" + orderTransactionTime.toEpochMilli();
         try {
             QuantNotification existing = notificationMapper.selectOne(new LambdaQueryWrapper<QuantNotification>()
                 .eq(QuantNotification::getCredentialId, credentialId)
@@ -777,7 +694,7 @@ public class QuantTradeNotificationService {
                 .eq(QuantNotification::getRecipient, taskKey)
                 .last("LIMIT 1"));
             if (existing != null) {
-                return true;
+                return existing;
             }
             Map<String, Object> task = new LinkedHashMap<>();
             task.put("taskType", "SNAPSHOT");
@@ -787,9 +704,10 @@ public class QuantTradeNotificationService {
             task.put("clientOrderId", clientOrderId);
             task.put("closeTime", closeEventTime.toString());
             task.put("orderTransactionTime", orderTransactionTime.toString());
-            task.put("accountUpdateTransactionTime", accountUpdateTransactionTime.toString());
-            task.put("accountUpdateEventTime", accountUpdateEventTime.toString());
-            task.put("accountUpdateReceivedAt", accountUpdateReceivedAt.toString());
+            task.put("accountUpdateTransactionTime", accountUpdateTransactionTime == null
+                ? null : accountUpdateTransactionTime.toString());
+            task.put("exchangeEventTime", exchangeEventTime == null ? null : exchangeEventTime.toString());
+            task.put("streamReceivedAt", streamReceivedAt == null ? null : streamReceivedAt.toString());
             QuantNotification pending = new QuantNotification();
             pending.setCredentialId(credentialId);
             pending.setChannel("FACT_PENDING");
@@ -798,18 +716,18 @@ public class QuantTradeNotificationService {
             pending.setContent(QuantJsonMapper.writeMap(task));
             pending.setStatus("PENDING");
             pending.setRetryCount(0);
-            pending.setNextRetryAt(LocalDateTime.now().plusSeconds(5));
+            pending.setNextRetryAt(LocalDateTime.now().plusSeconds(30));
             pending.setCreatedAt(LocalDateTime.now());
             if (notificationMapper.insert(pending) != 1) {
-                return false;
+                return null;
             }
-            log.warn("平仓账户资金快照已进入独立重试队列 credentialId={} symbol={} orderId={} accountUpdateEventTime={}",
-                credentialId, symbol, orderId, accountUpdateEventTime);
-            return true;
+            log.warn("平仓账户资金快照已进入独立重试队列 credentialId={} symbol={} orderId={} exchangeEventTime={}",
+                credentialId, symbol, orderId, exchangeEventTime);
+            return pending;
         } catch (RuntimeException ex) {
             log.error("平仓账户资金快照重试任务持久化失败 credentialId={} symbol={} orderId={}",
                 credentialId, symbol, orderId, ex);
-            return false;
+            return null;
         }
     }
 
@@ -1005,17 +923,6 @@ public class QuantTradeNotificationService {
     @Scheduled(fixedDelay = 30000L, initialDelay = 30000L)
     public void retryPendingCloseFacts() {
         LocalDateTime now = LocalDateTime.now();
-        Instant streamStateCutoff = Instant.now().minus(CLOSE_SNAPSHOT_RETRY_WINDOW);
-        pendingOrderAccountUpdates.entrySet().removeIf(entry -> entry.getValue().receivedAt().isBefore(streamStateCutoff));
-        pendingStreamCloseSnapshots.entrySet().removeIf(entry ->
-            entry.getValue().closeEventTime().isBefore(streamStateCutoff));
-        pendingStreamCloseSnapshots.forEach((captureKey, snapshot) -> {
-            String accountUpdateKey = snapshot.credentialId() + ":" + snapshot.orderTransactionTime().toEpochMilli();
-            AccountUpdateObservation observation = pendingOrderAccountUpdates.get(accountUpdateKey);
-            if (observation != null) {
-                capturePendingCloseEquitySnapshot(captureKey, snapshot, accountUpdateKey, observation);
-            }
-        });
         List<QuantNotification> pending = notificationMapper.selectList(new LambdaQueryWrapper<QuantNotification>()
             .eq(QuantNotification::getChannel, "FACT_PENDING")
             .and(query -> query.in(QuantNotification::getStatus, "PENDING", "RETRY").le(QuantNotification::getNextRetryAt, now)
@@ -1062,25 +969,30 @@ public class QuantTradeNotificationService {
                 if ("SNAPSHOT".equalsIgnoreCase(String.valueOf(data.get("taskType")))) {
                     String symbol = String.valueOf(data.get("symbol"));
                     Long orderId = Long.valueOf(String.valueOf(data.get("orderId")));
-                    if (data.get("clientOrderId") == null || data.get("orderTransactionTime") == null
-                        || data.get("accountUpdateTransactionTime") == null || data.get("accountUpdateEventTime") == null
-                        || data.get("accountUpdateReceivedAt") == null) {
+                    if (data.get("closeTime") == null || data.get("orderTransactionTime") == null) {
                         task.setStatus("FAILED");
                         task.setNextRetryAt(null);
                         task.setLastError("资金快照重试任务缺少匹配的账户更新撮合时间，不使用未确认的账户余额");
                     } else {
                         Instant closeTime = Instant.parse(String.valueOf(data.get("closeTime")));
                         Instant orderTransactionTime = Instant.parse(String.valueOf(data.get("orderTransactionTime")));
-                        Instant accountUpdateTransactionTime = Instant.parse(String.valueOf(data.get("accountUpdateTransactionTime")));
-                        Instant accountUpdateEventTime = Instant.parse(String.valueOf(data.get("accountUpdateEventTime")));
-                        Instant accountUpdateReceivedAt = Instant.parse(String.valueOf(data.get("accountUpdateReceivedAt")));
+                        Instant accountUpdateTransactionTime = data.get("accountUpdateTransactionTime") == null
+                            ? null : Instant.parse(String.valueOf(data.get("accountUpdateTransactionTime")));
+                        Instant exchangeEventTime = data.get("exchangeEventTime") != null
+                            ? Instant.parse(String.valueOf(data.get("exchangeEventTime")))
+                            : data.get("accountUpdateEventTime") == null ? null
+                                : Instant.parse(String.valueOf(data.get("accountUpdateEventTime")));
+                        Instant streamReceivedAt = data.get("streamReceivedAt") != null
+                            ? Instant.parse(String.valueOf(data.get("streamReceivedAt")))
+                            : data.get("accountUpdateReceivedAt") == null ? null
+                                : Instant.parse(String.valueOf(data.get("accountUpdateReceivedAt")));
                         if (!withinCloseSnapshotWindow(closeTime)) {
                             task.setStatus("FAILED");
                             task.setNextRetryAt(null);
                             task.setLastError("超过平仓后即时资金快照窗口，不使用当前账户余额冒充历史平仓余额");
                         } else if (captureCloseEquitySnapshot(credential, symbol, orderId,
-                            String.valueOf(data.get("clientOrderId")), closeTime, orderTransactionTime,
-                            accountUpdateTransactionTime, accountUpdateEventTime, accountUpdateReceivedAt)) {
+                            data.get("clientOrderId") == null ? null : String.valueOf(data.get("clientOrderId")),
+                            closeTime, orderTransactionTime, accountUpdateTransactionTime, exchangeEventTime, streamReceivedAt)) {
                             task.setStatus("SENT");
                             task.setSentAt(LocalDateTime.now());
                             task.setNextRetryAt(null);
@@ -1468,13 +1380,6 @@ public class QuantTradeNotificationService {
             return List.of();
         }
         return Arrays.stream(raw.split("[,;\\s]+")).map(String::trim).filter(v -> !v.isBlank()).distinct().toList();
-    }
-    private record PendingCloseStreamSnapshot(Long credentialId, ExchangeGateway.Credential credential,
-                                               String symbol, Long orderId, String clientOrderId,
-                                               Instant closeEventTime, Instant orderTransactionTime) {
-    }
-
-    private record AccountUpdateObservation(Instant transactionTime, Instant eventTime, Instant receivedAt) {
     }
 
 }
