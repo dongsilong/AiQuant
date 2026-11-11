@@ -459,7 +459,8 @@ public class QuantTradeNotificationService {
                     capture_source=?, close_event_time=?, exchange_event_time=?, stream_received_at=?,
                     captured_at=UTC_TIMESTAMP(3)
                 WHERE credential_id=? AND symbol=? AND exchange_order_id=?
-                  AND (closing_equity IS NULL OR wallet_balance IS NULL)
+                  AND (closing_equity IS NULL OR wallet_balance IS NULL
+                       OR capture_source<>'ACCOUNT_UPDATE_TRIGGERED_REST')
                 """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
                 captureSource, closeTime, exchangeTime, receivedTime, credentialId, symbol, orderId);
             if (upgraded == 1) {
@@ -586,6 +587,10 @@ public class QuantTradeNotificationService {
                     return;
                 }
                 ExchangeGateway.AccountSnapshot account = gateway.queryAccountFresh(pending.credential());
+                if (!withinCloseSnapshotWindow(pending.closeEventTime())) {
+                    pendingStreamCloseSnapshots.remove(captureKey, pending);
+                    return;
+                }
                 if (persistCloseEquitySnapshot(pending.credentialId(), pending.symbol(), pending.orderId(), account,
                     "ACCOUNT_UPDATE_TRIGGERED_REST", pending.closeEventTime(), accountUpdateEventTime, accountUpdateReceivedAt)) {
                     pendingStreamCloseSnapshots.remove(captureKey, pending);
@@ -639,6 +644,7 @@ public class QuantTradeNotificationService {
                 FROM quant_trade_close_equity
                 WHERE credential_id=? AND symbol=? AND exchange_order_id=?
                   AND closing_equity IS NOT NULL AND wallet_balance IS NOT NULL
+                  AND capture_source='ACCOUNT_UPDATE_TRIGGERED_REST'
             )
             """, Integer.class, credentialId, symbol, orderId);
         return complete != null && complete == 1;
@@ -672,6 +678,9 @@ public class QuantTradeNotificationService {
         } catch (RuntimeException ex) {
             log.warn("平仓资金快照独立重试失败 credentialId={} symbol={} orderId={}",
                 credential.getId(), symbol, orderId, ex);
+            return false;
+        }
+        if (!withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
         return persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
