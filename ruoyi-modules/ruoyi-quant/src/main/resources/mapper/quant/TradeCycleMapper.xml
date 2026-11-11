@@ -226,26 +226,62 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
             c.remaining_quantity AS remainingQuantity,
             c.realized_pnl AS realizedPnl,
             c.commission_display AS commission,
-            ce.closing_equity AS closingEquity,
-            ce.wallet_balance AS walletBalance,
-            ce.unrealized_pnl AS unrealizedPnl,
-            DATE_FORMAT(ce.captured_at, '%Y-%m-%dT%H:%i:%sZ') AS closingEquityAt,
+            (
+                SELECT snapshot.closing_equity
+                FROM quant_trade_cycle_fill close_fill
+                INNER JOIN quant_trade_close_equity snapshot
+                    ON snapshot.credential_id=close_fill.credential_id
+                    AND snapshot.symbol=close_fill.symbol
+                    AND snapshot.exchange_order_id=close_fill.exchange_order_id
+                WHERE close_fill.cycle_id=c.id
+                  AND close_fill.fill_role='CLOSE'
+                  AND snapshot.closing_equity IS NOT NULL
+                ORDER BY snapshot.captured_at DESC,close_fill.trade_time DESC,close_fill.id DESC
+                LIMIT 1
+            ) AS closingEquity,
+            (
+                SELECT snapshot.wallet_balance
+                FROM quant_trade_cycle_fill close_fill
+                INNER JOIN quant_trade_close_equity snapshot
+                    ON snapshot.credential_id=close_fill.credential_id
+                    AND snapshot.symbol=close_fill.symbol
+                    AND snapshot.exchange_order_id=close_fill.exchange_order_id
+                WHERE close_fill.cycle_id=c.id
+                  AND close_fill.fill_role='CLOSE'
+                  AND snapshot.wallet_balance IS NOT NULL
+                ORDER BY snapshot.captured_at DESC,close_fill.trade_time DESC,close_fill.id DESC
+                LIMIT 1
+            ) AS walletBalance,
+            (
+                SELECT snapshot.unrealized_pnl
+                FROM quant_trade_cycle_fill close_fill
+                INNER JOIN quant_trade_close_equity snapshot
+                    ON snapshot.credential_id=close_fill.credential_id
+                    AND snapshot.symbol=close_fill.symbol
+                    AND snapshot.exchange_order_id=close_fill.exchange_order_id
+                WHERE close_fill.cycle_id=c.id
+                  AND close_fill.fill_role='CLOSE'
+                  AND snapshot.unrealized_pnl IS NOT NULL
+                ORDER BY snapshot.captured_at DESC,close_fill.trade_time DESC,close_fill.id DESC
+                LIMIT 1
+            ) AS unrealizedPnl,
+            (
+                SELECT DATE_FORMAT(snapshot.captured_at, '%Y-%m-%dT%H:%i:%sZ')
+                FROM quant_trade_cycle_fill close_fill
+                INNER JOIN quant_trade_close_equity snapshot
+                    ON snapshot.credential_id=close_fill.credential_id
+                    AND snapshot.symbol=close_fill.symbol
+                    AND snapshot.exchange_order_id=close_fill.exchange_order_id
+                WHERE close_fill.cycle_id=c.id
+                  AND close_fill.fill_role='CLOSE'
+                  AND snapshot.closing_equity IS NOT NULL
+                ORDER BY snapshot.captured_at DESC,close_fill.trade_time DESC,close_fill.id DESC
+                LIMIT 1
+            ) AS closingEquityAt,
             DATE_FORMAT(c.closed_at, '%Y-%m-%dT%H:%i:%sZ') AS closedAt,
             c.fill_count AS fillCount
         FROM quant_trade_cycle c
         INNER JOIN quant_credential q ON q.id=c.credential_id
-        LEFT JOIN quant_trade_cycle_fill last_close_fill
-            ON last_close_fill.id=(
-                SELECT f.id
-                FROM quant_trade_cycle_fill f
-                WHERE f.cycle_id=c.id AND f.fill_role='CLOSE'
-                ORDER BY f.trade_time DESC,f.id DESC
-                LIMIT 1
-            )
-        LEFT JOIN quant_trade_close_equity ce
-            ON ce.credential_id=c.credential_id
-            AND ce.symbol=c.symbol
-            AND ce.exchange_order_id=last_close_fill.exchange_order_id
         WHERE c.credential_id IN
         <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
         <if test="symbol != null">AND c.symbol=#{symbol}</if>
