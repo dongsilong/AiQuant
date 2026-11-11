@@ -444,12 +444,6 @@ public class QuantTradeNotificationService {
     }
 
     private boolean persistCloseEquitySnapshot(Long credentialId, String symbol, Long orderId,
-                                               ExchangeGateway.AccountSnapshot account) {
-        return persistCloseEquitySnapshot(credentialId, symbol, orderId, account,
-            "REST_FALLBACK", null, null, null);
-    }
-
-    private boolean persistCloseEquitySnapshot(Long credentialId, String symbol, Long orderId,
                                                ExchangeGateway.AccountSnapshot account, String captureSource,
                                                Instant closeEventTime, Instant exchangeEventTime, Instant streamReceivedAt) {
         if (account == null || account.marginBalance() == null || account.walletBalance() == null) {
