@@ -147,7 +147,7 @@ class UserDataStreamHubTest {
                     forwarded.countDown();
                 }
             });
-            var fill = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.now(), "{\\\"e\\\":\\\"ORDER_TRADE_UPDATE\\\",\\\"o\\\":{\\\"X\\\":\\\"FILLED\\\"}}");
+            var fill = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.now(), "{\"e\":\"ORDER_TRADE_UPDATE\",\"o\":{\"X\":\"FILLED\"}}");
             receiver.get().accept(fill);
             verify(positionCache).onEvent(72L, fill);
             verify(balanceCache).onEvent(72L, fill);
