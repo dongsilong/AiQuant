@@ -461,11 +461,10 @@ public class QuantTradeNotificationService {
         LocalDateTime restRequestTime = LocalDateTime.ofInstant(restRequestStartedAt, ZoneOffset.UTC);
         LocalDateTime restResponseTime = LocalDateTime.ofInstant(restResponseReceivedAt, ZoneOffset.UTC);
         try {
+            boolean complete = account.marginBalance() != null && account.walletBalance() != null;
             int upgraded = jdbcTemplate.update("""
                 UPDATE quant_trade_close_equity
-                SET closing_equity=COALESCE(?, closing_equity),
-                    wallet_balance=COALESCE(?, wallet_balance),
-                    unrealized_pnl=COALESCE(?, unrealized_pnl),
+                SET closing_equity=?, wallet_balance=?, unrealized_pnl=?,
                     capture_source=?, close_event_time=?, account_update_transaction_time=?,
                     exchange_event_time=?, stream_received_at=?, rest_query_started_at=?,
                     rest_response_received_at=?, captured_at=UTC_TIMESTAMP(3)
@@ -475,6 +474,21 @@ public class QuantTradeNotificationService {
                 captureSource, closeTime, accountTransactionTime, exchangeTime, receivedTime,
                 restRequestTime, restResponseTime, credentialId, symbol, orderId);
             if (upgraded == 1) {
+                return true;
+            }
+            if (!complete) {
+                // 不把不同 REST 请求时刻的 partial values 合并成一条快照，否则单一 captured_at 会失去真实含义。
+                jdbcTemplate.update("""
+                    INSERT INTO quant_trade_close_equity
+                        (credential_id, symbol, exchange_order_id, closing_equity,
+                         wallet_balance, unrealized_pnl, capture_source, close_event_time,
+                         account_update_transaction_time, exchange_event_time, stream_received_at,
+                         rest_query_started_at, rest_response_received_at, captured_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
+                    ON DUPLICATE KEY UPDATE id=id
+                    """, credentialId, symbol, orderId, account.marginBalance(),
+                    account.walletBalance(), account.unrealizedPnl(), captureSource, closeTime,
+                    accountTransactionTime, exchangeTime, receivedTime, restRequestTime, restResponseTime);
                 return true;
             }
             jdbcTemplate.update("""
@@ -497,11 +511,7 @@ public class QuantTradeNotificationService {
     }
 
     /**
-     * 平仓订单事件只登记订单事实；同一撮合事务的 ORDER 类 ACCOUNT_UPDATE 到达后，
-     * 才查询完整账户 REST 快照。通过撮合事务时间一对一关联，避免跨订单套用资金快照。
-     */
-    /**
-     * 仅凭已终态且有实际成交量的平仓订单事件触发账户采样。
+     * 仅凭已终态且有实际成交量的订单事件建立待采集任务。
      * 不再等待 ACCOUNT_UPDATE 与订单事件按毫秒时间戳一对一匹配；
      * 事件先持久化为快照任务，再立即 REST 采样，进程重启后仍可在有效窗口内重试。
      */
@@ -610,9 +620,14 @@ public class QuantTradeNotificationService {
                 SELECT 1
                 FROM quant_strategy_pre_dispatch_intent
                 WHERE credential_id=? AND symbol=? AND client_order_id=? AND operation_type='CLOSE'
+                UNION ALL
+                SELECT 1
+                FROM quant_trade_cycle_fill
+                WHERE credential_id=? AND symbol=? AND exchange_order_id=? AND fill_role='CLOSE'
             )
             """, Integer.class, credentialId, symbol, orderId,
-            credentialId, symbol, orderId, credentialId, symbol, clientOrderId);
+            credentialId, symbol, orderId, credentialId, symbol, clientOrderId,
+            credentialId, symbol, orderId);
         return matched != null && matched == 1;
     }
 
@@ -972,7 +987,7 @@ public class QuantTradeNotificationService {
                     if (data.get("closeTime") == null || data.get("orderTransactionTime") == null) {
                         task.setStatus("FAILED");
                         task.setNextRetryAt(null);
-                        task.setLastError("资金快照重试任务缺少匹配的账户更新撮合时间，不使用未确认的账户余额");
+                        task.setLastError("资金快照重试任务缺少平仓事件时间，无法确认采样时点");
                     } else {
                         Instant closeTime = Instant.parse(String.valueOf(data.get("closeTime")));
                         Instant orderTransactionTime = Instant.parse(String.valueOf(data.get("orderTransactionTime")));
