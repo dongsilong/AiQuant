@@ -391,9 +391,13 @@ class QuantTradeNotificationServiceTest {
         assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(accountUpdateMillis), java.time.ZoneOffset.UTC),
             values.getValue()[6]);
         assertTrue(values.getValue()[7] instanceof java.time.LocalDateTime);
-        assertEquals(10L, values.getValue()[8]);
-        assertEquals("BTCUSDT", values.getValue()[9]);
-        assertEquals(99L, values.getValue()[10]);
+        assertTrue(values.getValue()[8] instanceof java.time.LocalDateTime);
+        assertTrue(values.getValue()[9] instanceof java.time.LocalDateTime);
+        assertTrue(!((java.time.LocalDateTime) values.getValue()[9])
+            .isBefore((java.time.LocalDateTime) values.getValue()[8]));
+        assertEquals(10L, values.getValue()[10]);
+        assertEquals("BTCUSDT", values.getValue()[11]);
+        assertEquals(99L, values.getValue()[12]);
     }
 
     @Test
