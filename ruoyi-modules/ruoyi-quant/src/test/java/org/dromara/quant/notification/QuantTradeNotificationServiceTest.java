@@ -394,6 +394,36 @@ class QuantTradeNotificationServiceTest {
     }
 
     @Test
+    void multipleCloseOrdersWithSameTransactionTimestampDoNotShareAccountSnapshot() {
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+        long transactionMillis = System.currentTimeMillis();
+        String firstOrder = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + transactionMillis
+            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"close-99\\","
+            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"1\\",\\"T\\":" + transactionMillis + "}}";
+        String secondOrder = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + transactionMillis
+            + ",\\"o\\":{\\"s\\":\\"ETHUSDT\\",\\"i\\":100,\\"c\\":\\"close-100\\","
+            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"1\\",\\"T\\":" + transactionMillis + "}}";
+        String accountUpdate = "{\\"e\\":\\"ACCOUNT_UPDATE\\",\\"E\\":" + (transactionMillis + 10)
+            + ",\\"T\\":" + transactionMillis + ",\\"a\\":{\\"m\\":\\"ORDER\\",\\"B\\":[],\\"P\\":[]}}";
+
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(transactionMillis), firstOrder));
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(transactionMillis), secondOrder));
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(transactionMillis + 10), accountUpdate));
+
+        verify(gateway, never()).queryAccountFresh(any());
+        verify(jdbc, never()).queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any());
+        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+    }
+
+    @Test
     void accountUpdateReceivedBeforeFinalOrderEventStillTriggersMatchedSnapshot() {
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
