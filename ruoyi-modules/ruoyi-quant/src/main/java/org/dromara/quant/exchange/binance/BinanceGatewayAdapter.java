@@ -156,6 +156,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return value == null || value.isBlank() ? BigDecimal.ZERO : new BigDecimal(value);
     }
 
+    private static BigDecimal decimalNullable(String value) {
+        return value == null || value.isBlank() ? null : new BigDecimal(value);
+    }
+
     /**
      * 把交易所时间戳转换为 Instant。
      */
@@ -829,8 +833,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         try {
             AccountInformationV3Response data = signedRead(credential, kind,
                 client -> client.accountInformationV3(RECV_WINDOW_MILLIS).getData());
-            return new AccountSnapshot(decimal(data.getTotalWalletBalance()), decimal(data.getAvailableBalance()), decimal(data.getTotalMarginBalance()),
-                decimal(data.getTotalUnrealizedProfit()));
+            return new AccountSnapshot(decimalNullable(data.getTotalWalletBalance()), decimalNullable(data.getAvailableBalance()),
+                decimalNullable(data.getTotalMarginBalance()), decimalNullable(data.getTotalUnrealizedProfit()));
         } catch (RuntimeException ex) {
             throw requestFailure("QUERY_ACCOUNT", ex);
         }
