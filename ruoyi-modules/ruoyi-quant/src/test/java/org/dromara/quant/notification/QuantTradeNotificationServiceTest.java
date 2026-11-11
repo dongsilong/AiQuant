@@ -367,19 +367,28 @@ class QuantTradeNotificationServiceTest {
                 new BigDecimal("1003"), new BigDecimal("3")));
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential, event);
+        verify(gateway, never()).queryAccountFresh(any());
+
+        long accountUpdateMillis = eventMillis + 10;
+        String accountPayload = "{\\"e\\":\\"ACCOUNT_UPDATE\\",\\"E\\":" + accountUpdateMillis
+            + ",\\"T\\":" + accountUpdateMillis + ",\\"a\\":{\\"m\\":\\"ORDER\\",\\"B\\":[],\\"P\\":[]}}";
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
 
         var values = ArgumentCaptor.forClass(Object[].class);
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
         verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), values.capture());
         assertEquals(new BigDecimal("1003"), values.getValue()[0]);
         assertEquals(new BigDecimal("1000"), values.getValue()[1]);
-        assertEquals("USER_STREAM_TRIGGERED_REST", values.getValue()[3]);
+        assertEquals("ACCOUNT_UPDATE_TRIGGERED_REST", values.getValue()[3]);
         assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(eventMillis), java.time.ZoneOffset.UTC),
             values.getValue()[4]);
-        assertTrue(values.getValue()[5] instanceof java.time.LocalDateTime);
-        assertEquals(10L, values.getValue()[6]);
-        assertEquals("BTCUSDT", values.getValue()[7]);
-        assertEquals(99L, values.getValue()[8]);
+        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(accountUpdateMillis), java.time.ZoneOffset.UTC),
+            values.getValue()[5]);
+        assertTrue(values.getValue()[6] instanceof java.time.LocalDateTime);
+        assertEquals(10L, values.getValue()[7]);
+        assertEquals("BTCUSDT", values.getValue()[8]);
+        assertEquals(99L, values.getValue()[9]);
     }
 
     @Test
@@ -400,6 +409,13 @@ class QuantTradeNotificationServiceTest {
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload));
+        verify(gateway, never()).queryAccountFresh(any());
+
+        long accountUpdateMillis = eventMillis + 10;
+        String accountPayload = "{\\"e\\":\\"ACCOUNT_UPDATE\\",\\"E\\":" + accountUpdateMillis
+            + ",\\"T\\":" + accountUpdateMillis + ",\\"a\\":{\\"m\\":\\"ORDER\\",\\"B\\":[],\\"P\\":[]}}";
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
 
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
         verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
@@ -421,6 +437,11 @@ class QuantTradeNotificationServiceTest {
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload));
+        long accountUpdateMillis = eventMillis + 10;
+        String accountPayload = "{\\"e\\":\\"ACCOUNT_UPDATE\\",\\"E\\":" + accountUpdateMillis
+            + ",\\"T\\":" + accountUpdateMillis + ",\\"a\\":{\\"m\\":\\"ORDER\\",\\"B\\":[],\\"P\\":[]}}";
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
 
         verify(jdbc, timeout(3000)).queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any());
         verify(gateway, never()).queryAccountFresh(any());
