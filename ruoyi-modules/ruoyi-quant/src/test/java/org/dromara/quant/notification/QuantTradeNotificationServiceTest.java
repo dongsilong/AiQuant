@@ -391,9 +391,9 @@ class QuantTradeNotificationServiceTest {
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
         long eventMillis = System.currentTimeMillis();
-        String payload = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + eventMillis
-            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"close-99\\","
-            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"2\\",\\"T\\":" + eventMillis + "}}";
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
+            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}}";
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
             new ExchangeGateway.AccountSnapshot(null, new BigDecimal("900"), new BigDecimal("1003"), new BigDecimal("3")));
