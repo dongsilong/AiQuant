@@ -112,23 +112,28 @@ class KlineSlopeRateStrategyTest {
     }
 
     @Test
-    void stepProtectionWaitsForFirstTpFillConfirmation() {
+    void stepProtectionActivatesBeforeFirstTpFillConfirmation() {
         StrategyContext pending = context("LONG", new BigDecimal("100"), null, new BigDecimal("101"), false, new BigDecimal("101"), null);
         var pendingSignals = strategy.evaluateProtection(pending, Map.of("firstProfitTakingRate", "0.10", "stepRatio", "0.10"));
         assertTrue(pendingSignals.stream().anyMatch(p -> p.type().equals("FIRST_TP")));
-        assertTrue(pendingSignals.stream().noneMatch(p -> p.type().equals("STEP_TP")));
+        var pendingStep = pendingSignals.stream().filter(p -> p.type().equals("STEP_TP")).findFirst().orElseThrow();
+        assertEquals(1, pendingStep.stepIndex());
+        assertEquals(0, new BigDecimal("100").compareTo(pendingStep.triggerPrice()));
 
         StrategyContext confirmed = context("LONG", new BigDecimal("100"), null, new BigDecimal("101"), true, new BigDecimal("101"), null);
         var confirmedSignals = strategy.evaluateProtection(confirmed, Map.of("firstProfitTakingRate", "0.10", "stepRatio", "0.10"));
-        var step = confirmedSignals.stream().filter(p -> p.type().equals("STEP_TP")).findFirst().orElseThrow();
-        assertEquals(1, step.stepIndex());
-        assertEquals(0, new BigDecimal("100").compareTo(step.triggerPrice()));
+        var confirmedStep = confirmedSignals.stream().filter(p -> p.type().equals("STEP_TP")).findFirst().orElseThrow();
+        assertEquals(1, confirmedStep.stepIndex());
+        assertEquals(0, new BigDecimal("100").compareTo(confirmedStep.triggerPrice()));
     }
 
     @Test
-    void stepExitWaitsForFirstTpFillConfirmation() {
+    void stepExitDoesNotWaitForFirstTpFillConfirmation() {
         StrategyContext c = context("LONG", new BigDecimal("100"), null, new BigDecimal("100"), false, new BigDecimal("101"), null);
-        assertTrue(strategy.evaluateExit(c, Map.of("firstProfitTakingRate", "0.10", "stepRatio", "0.10")).isEmpty());
+        var exit = strategy.evaluateExit(c, Map.of("firstProfitTakingRate", "0.10", "stepRatio", "0.10")).getFirst();
+        assertEquals(KlineSlopeRateStrategy.EXIT_STEP_TP, exit.type());
+        assertEquals(ExitSignal.QuantityBase.CURRENT, exit.quantityBase());
+        assertEquals(0, BigDecimal.ONE.compareTo(exit.quantityRate()));
     }
 
     @Test
