@@ -32,12 +32,15 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 /**
  * 开仓/平仓统一通知；投递失败进入 Outbox 重试，不回滚已完成的交易事实。
  */
@@ -69,6 +72,7 @@ public class QuantTradeNotificationService {
     @Autowired
     private StrategyOrderIntentMapper strategyOrderIntentMapper;
     private final java.util.concurrent.ConcurrentHashMap<String, Long> blockedNoticeTimes = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Set<String> activeStreamCloseCaptures = ConcurrentHashMap.newKeySet();
 
     /**
      * 创建 QuantTradeNotificationService 实例并初始化其依赖。
@@ -443,29 +447,160 @@ public class QuantTradeNotificationService {
 
     private boolean persistCloseEquitySnapshot(Long credentialId, String symbol, Long orderId,
                                                ExchangeGateway.AccountSnapshot account) {
+        return persistCloseEquitySnapshot(credentialId, symbol, orderId, account, "REST_FALLBACK", null, null);
+    }
+
+    private boolean persistCloseEquitySnapshot(Long credentialId, String symbol, Long orderId,
+                                               ExchangeGateway.AccountSnapshot account, String captureSource,
+                                               Instant exchangeEventTime, Instant streamReceivedAt) {
         if (account == null || account.marginBalance() == null && account.walletBalance() == null) {
             return false;
         }
+        LocalDateTime exchangeTime = exchangeEventTime == null ? null : LocalDateTime.ofInstant(exchangeEventTime, ZoneOffset.UTC);
+        LocalDateTime receivedTime = streamReceivedAt == null ? null : LocalDateTime.ofInstant(streamReceivedAt, ZoneOffset.UTC);
         try {
+            if (account.marginBalance() != null && account.walletBalance() != null) {
+                int upgraded = jdbcTemplate.update("""
+                    UPDATE quant_trade_close_equity
+                    SET closing_equity=?, wallet_balance=?, unrealized_pnl=?,
+                        capture_source=?, exchange_event_time=?, stream_received_at=?,
+                        captured_at=UTC_TIMESTAMP(3)
+                    WHERE credential_id=? AND symbol=? AND exchange_order_id=?
+                      AND (closing_equity IS NULL OR wallet_balance IS NULL)
+                    """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
+                    captureSource, exchangeTime, receivedTime, credentialId, symbol, orderId);
+                if (upgraded == 1) {
+                    return true;
+                }
+            }
             jdbcTemplate.update("""
                 INSERT INTO quant_trade_close_equity
                     (credential_id, symbol, exchange_order_id, closing_equity,
-                     wallet_balance, unrealized_pnl, captured_at)
-                VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
-                ON DUPLICATE KEY UPDATE
-                    captured_at = IF(closing_equity IS NULL OR wallet_balance IS NULL,
-                                     VALUES(captured_at), captured_at),
-                    closing_equity = COALESCE(closing_equity, VALUES(closing_equity)),
-                    wallet_balance = COALESCE(wallet_balance, VALUES(wallet_balance)),
-                    unrealized_pnl = COALESCE(unrealized_pnl, VALUES(unrealized_pnl))
+                     wallet_balance, unrealized_pnl, capture_source, exchange_event_time,
+                     stream_received_at, captured_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
+                ON DUPLICATE KEY UPDATE id=id
                 """, credentialId, symbol, orderId, account.marginBalance(),
-                account.walletBalance(), account.unrealizedPnl());
+                account.walletBalance(), account.unrealizedPnl(), captureSource, exchangeTime, receivedTime);
             return account.marginBalance() != null && account.walletBalance() != null;
         } catch (RuntimeException ex) {
             log.warn("平仓账户资金快照持久化失败 credentialId={} symbol={} orderId={}",
                 credentialId, symbol, orderId, ex);
             return false;
         }
+    }
+
+    /**
+     * 私有订单流确认平仓订单完全成交后，立即查询并保存该订单对应的账户资金。
+     * WebSocket 事件只用于精确定位订单和事件时间，资金数值仍以 Binance REST 完整账户响应为准。
+     */
+    public void captureCloseSnapshotFromUserDataEvent(Long credentialId, ExchangeGateway.Credential credential,
+                                                       ExchangeGateway.UserDataEvent event) {
+        if (credentialId == null || credential == null || event == null
+            || !"ORDER_TRADE_UPDATE".equalsIgnoreCase(event.eventType())
+            || event.rawJson() == null || event.rawJson().isBlank()) {
+            return;
+        }
+        Map<String, Object> payload;
+        Map<?, ?> order;
+        try {
+            payload = QuantJsonMapper.readMap(event.rawJson());
+            if (!(payload.get("o") instanceof Map<?, ?> orderPayload)) {
+                return;
+            }
+            order = orderPayload;
+        } catch (RuntimeException ex) {
+            log.warn("平仓账户快照忽略无法解析的 Binance 订单事件 credentialId={}", credentialId, ex);
+            return;
+        }
+        String symbol = Objects.toString(order.get("s"), "").trim().toUpperCase(java.util.Locale.ROOT);
+        Long orderId = longValue(order.get("i"));
+        String executionType = Objects.toString(order.get("x"), "");
+        String orderStatus = Objects.toString(order.get("X"), "");
+        BigDecimal executedQuantity = decimal(order.get("z"));
+        Instant exchangeEventTime = instantMillis(order.get("T"));
+        if (exchangeEventTime == null) {
+            exchangeEventTime = event.eventTime();
+        }
+        Instant streamReceivedAt = Instant.now();
+        if (symbol.isBlank() || orderId == null || !"TRADE".equalsIgnoreCase(executionType)
+            || !"FILLED".equalsIgnoreCase(orderStatus) || executedQuantity == null || executedQuantity.signum() <= 0
+            || !withinCloseSnapshotWindow(exchangeEventTime)) {
+            return;
+        }
+        String clientOrderId = Objects.toString(order.get("c"), "");
+        String captureKey = credentialId + ":" + symbol + ":" + orderId;
+        if (!activeStreamCloseCaptures.add(captureKey)) {
+            return;
+        }
+        Instant finalEventTime = exchangeEventTime;
+        Thread.ofVirtual().name("quant-close-equity-stream").start(() -> {
+            try {
+                if (!withinCloseSnapshotWindow(finalEventTime)
+                    || !isVerifiedCloseOrder(credentialId, symbol, orderId, clientOrderId)
+                    || hasCompleteCloseEquitySnapshot(credentialId, symbol, orderId)) {
+                    return;
+                }
+                ExchangeGateway.AccountSnapshot account = gateway.queryAccountFresh(credential);
+                if (persistCloseEquitySnapshot(credentialId, symbol, orderId, account,
+                    "USER_STREAM_TRIGGERED_REST", finalEventTime, streamReceivedAt)) {
+                    log.info("平仓账户资金快照由用户数据流触发并保存 credentialId={} symbol={} orderId={} exchangeEventTime={}",
+                        credentialId, symbol, orderId, finalEventTime);
+                } else {
+                    log.warn("用户数据流触发的平仓账户资金查询字段不完整 credentialId={} symbol={} orderId={}",
+                        credentialId, symbol, orderId);
+                }
+            } catch (RuntimeException ex) {
+                log.warn("用户数据流触发的平仓账户资金快照失败 credentialId={} symbol={} orderId={}",
+                    credentialId, symbol, orderId, ex);
+            } finally {
+                activeStreamCloseCaptures.remove(captureKey);
+            }
+        });
+    }
+
+    private boolean isVerifiedCloseOrder(Long credentialId, String symbol, Long orderId, String clientOrderId) {
+        Integer matched = jdbcTemplate.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM quant_strategy_order_intent
+                WHERE credential_id=? AND symbol=? AND exchange_order_id=? AND fill_role='CLOSE'
+                UNION ALL
+                SELECT 1
+                FROM quant_execution_record
+                WHERE credential_id=? AND symbol=? AND exchange_order_id=? AND operation_type='CLOSE'
+                UNION ALL
+                SELECT 1
+                FROM quant_strategy_pre_dispatch_intent
+                WHERE credential_id=? AND symbol=? AND client_order_id=? AND operation_type='CLOSE'
+            )
+            """, Integer.class, credentialId, symbol, orderId,
+            credentialId, symbol, orderId, credentialId, symbol, clientOrderId);
+        return matched != null && matched == 1;
+    }
+
+    private boolean hasCompleteCloseEquitySnapshot(Long credentialId, String symbol, Long orderId) {
+        Integer complete = jdbcTemplate.queryForObject("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM quant_trade_close_equity
+                WHERE credential_id=? AND symbol=? AND exchange_order_id=?
+                  AND closing_equity IS NOT NULL AND wallet_balance IS NOT NULL
+            )
+            """, Integer.class, credentialId, symbol, orderId);
+        return complete != null && complete == 1;
+    }
+
+    private static Long longValue(Object value) {
+        if (value == null || String.valueOf(value).isBlank()) {
+            return null;
+        }
+        return value instanceof Number number ? number.longValue() : Long.valueOf(String.valueOf(value));
+    }
+
+    private static Instant instantMillis(Object value) {
+        Long millis = longValue(value);
+        return millis == null || millis <= 0 ? null : Instant.ofEpochMilli(millis);
     }
 
     private boolean captureCloseEquitySnapshot(QuantCredential credential, String symbol, Long orderId) {
