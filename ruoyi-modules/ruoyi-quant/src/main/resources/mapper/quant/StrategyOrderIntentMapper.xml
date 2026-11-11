@@ -115,7 +115,7 @@ FROM (
     INNER JOIN quant_order q
         ON q.credential_id=p.credential_id
        AND q.symbol=p.symbol
-       AND q.client_order_id=p.client_order_id
+       AND q.idempotency_key=CONCAT('PROTECTION_CHILD:',p.id,':',q.exchange_order_id)
     WHERE p.credential_id=#{credentialId}
       AND p.symbol=#{symbol}
       AND p.strategy_instance_id=#{instanceId}
