@@ -154,7 +154,7 @@ class UserDataStreamHubTest {
             verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, fill);
             verify(preparation).onEvent(72L, fill);
             var accountUpdate = new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.now(),
-                "{\\"e\\":\\"ACCOUNT_UPDATE\\",\\"a\\":{\\"m\\":\\"ORDER\\"}}");
+                "{\"e\":\"ACCOUNT_UPDATE\",\"a\":{\"m\":\"ORDER\"}}");
             receiver.get().accept(accountUpdate);
             verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, accountUpdate);
             assertTrue(forwarded.await(2, java.util.concurrent.TimeUnit.SECONDS), "TESTNET order fill must reach the strategy reconciliation listener");
