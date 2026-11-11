@@ -128,6 +128,18 @@ class KlineSlopeRateStrategyTest {
     }
 
     @Test
+    void ladderSignalPrecedesFirstTpWhenTheirTriggerPricesOverlap() {
+        StrategyContext c = context("LONG", new BigDecimal("100"), null, new BigDecimal("101"), false, new BigDecimal("102"), null);
+        var signals = strategy.evaluateProtection(c, Map.of("firstProfitTakingRate", "0.10", "stepRatio", "0.10"));
+        int stepIndex = java.util.stream.IntStream.range(0, signals.size())
+            .filter(index -> "STEP_TP".equals(signals.get(index).type())).findFirst().orElseThrow();
+        int firstIndex = java.util.stream.IntStream.range(0, signals.size())
+            .filter(index -> "FIRST_TP".equals(signals.get(index).type())).findFirst().orElseThrow();
+        assertTrue(stepIndex < firstIndex);
+        assertEquals(0, new BigDecimal("101").compareTo(signals.get(stepIndex).triggerPrice()));
+    }
+
+    @Test
     void stepExitDoesNotWaitForFirstTpFillConfirmation() {
         StrategyContext c = context("LONG", new BigDecimal("100"), null, new BigDecimal("100"), false, new BigDecimal("101"), null);
         var exit = strategy.evaluateExit(c, Map.of("firstProfitTakingRate", "0.10", "stepRatio", "0.10")).getFirst();
