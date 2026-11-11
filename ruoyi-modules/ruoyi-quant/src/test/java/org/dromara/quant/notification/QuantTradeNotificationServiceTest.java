@@ -534,6 +534,57 @@ class QuantTradeNotificationServiceTest {
     }
 
     @Test
+    void closeSnapshotRetryRechecksOrderIdentityBeforeQueryingAccount() throws Exception {
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var credentials = mock(org.dromara.quant.credential.mapper.QuantCredentialMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var field = QuantTradeNotificationService.class.getDeclaredField("credentialMapper");
+        field.setAccessible(true);
+        field.set(service, credentials);
+
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        when(credentials.selectById(10L)).thenReturn(credential);
+        long closeMillis = System.currentTimeMillis();
+        long transactionMillis = closeMillis + 1;
+        var taskData = new java.util.LinkedHashMap<String, Object>();
+        taskData.put("taskType", "SNAPSHOT");
+        taskData.put("credentialId", "10");
+        taskData.put("symbol", "BTCUSDT");
+        taskData.put("orderId", "99");
+        taskData.put("clientOrderId", "close-99");
+        taskData.put("closeTime", Instant.ofEpochMilli(closeMillis).toString());
+        taskData.put("orderTransactionTime", Instant.ofEpochMilli(transactionMillis).toString());
+        taskData.put("accountUpdateTransactionTime", Instant.ofEpochMilli(transactionMillis).toString());
+        taskData.put("accountUpdateEventTime", Instant.ofEpochMilli(transactionMillis + 10).toString());
+        taskData.put("accountUpdateReceivedAt", Instant.ofEpochMilli(transactionMillis + 11).toString());
+
+        var task = new QuantNotification();
+        task.setId(902L);
+        task.setCredentialId(10L);
+        task.setChannel("FACT_PENDING");
+        task.setRecipient("SNAPSHOT:BTCUSDT:99:" + transactionMillis);
+        task.setContent(org.dromara.quant.util.QuantJsonMapper.writeMap(taskData));
+        task.setStatus("PENDING");
+        task.setRetryCount(0);
+        task.setCreatedAt(java.time.LocalDateTime.now());
+        task.setNextRetryAt(java.time.LocalDateTime.now().minusSeconds(1));
+        when(mapper.selectList(any())).thenReturn(List.of(task));
+        when(mapper.claim(eq(902L), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
+
+        service.retryPendingCloseFacts();
+
+        verify(jdbc).queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any());
+        verify(gateway, never()).queryAccountFresh(any());
+        assertEquals("RETRY", task.getStatus());
+        verify(mapper).updateById(task);
+    }
+
+    @Test
     void streamEventForUnverifiedCloseOrderDoesNotQueryAccountOrPersistSnapshot() {
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
