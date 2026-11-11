@@ -9,6 +9,7 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.TradingPreparationService;
+import org.dromara.quant.notification.QuantTradeNotificationService;
 import org.dromara.quant.reconcile.LiveUserStreamLeaseService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -57,6 +58,8 @@ public class UserDataStreamHub {
     private LiveUserStreamLeaseService streamLease;
     @Autowired(required = false)
     private org.dromara.quant.reconcile.LivePositionEventCoordinator positionEvents;
+    @Autowired(required = false)
+    private QuantTradeNotificationService tradeNotifications;
 
     /**
      * Called only after the resident subscriber acquired the DB lease.
@@ -322,6 +325,10 @@ public class UserDataStreamHub {
             lastEventAt = Instant.now();
             positionCache.onEvent(credential.getId(), event);
             balanceCache.onEvent(credential.getId(), event);
+            if (event != null && "ORDER_TRADE_UPDATE".equals(event.eventType()) && tradeNotifications != null) {
+                tradeNotifications.captureCloseSnapshotFromUserDataEvent(
+                    credential.getId(), executionService.toCredential(credential), event);
+            }
             preparationService.onEvent(credential.getId(), event);
             listeners.forEach(listener -> {
                 try {
