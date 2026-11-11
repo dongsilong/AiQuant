@@ -401,11 +401,11 @@ class QuantTradeNotificationServiceTest {
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
         long eventMillis = System.currentTimeMillis();
         long accountUpdateMillis = eventMillis + 10;
-        String accountPayload = "{\\"e\\":\\"ACCOUNT_UPDATE\\",\\"E\\":" + accountUpdateMillis
-            + ",\\"T\\":" + accountUpdateMillis + ",\\"a\\":{\\"m\\":\\"ORDER\\",\\"B\\":[],\\"P\\":[]}}";
-        String orderPayload = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + eventMillis
-            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"close-99\\","
-            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"2\\",\\"T\\":" + eventMillis + "}}";
+        String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
+            + ",\"T\":" + accountUpdateMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+        String orderPayload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
+            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}}";
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
         when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(1);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
