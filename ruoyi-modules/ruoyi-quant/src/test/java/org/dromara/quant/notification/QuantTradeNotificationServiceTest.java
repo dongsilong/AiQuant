@@ -358,7 +358,7 @@ class QuantTradeNotificationServiceTest {
         long eventMillis = System.currentTimeMillis();
         String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}};
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}}";
         var event = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload);
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
         when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(1);
@@ -393,7 +393,7 @@ class QuantTradeNotificationServiceTest {
         long eventMillis = System.currentTimeMillis();
         String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"unknown-order\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}};
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}}";
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
