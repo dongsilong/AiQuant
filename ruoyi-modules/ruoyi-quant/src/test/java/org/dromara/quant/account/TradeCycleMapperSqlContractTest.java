@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TradeCycleMapperSqlContractTest {
 
     @Test
-    void closeAccountBalancesAreResolvedFromAllCloseFillsInTheCycle() throws IOException {
+    void closeAccountBalancesUseOnlySnapshotForFinalCloseOrder() throws IOException {
         String mapperXml;
         try (InputStream input = getClass().getResourceAsStream("/mapper/quant/TradeCycleMapper.xml")) {
             if (input == null) {
@@ -27,11 +27,22 @@ class TradeCycleMapperSqlContractTest {
         assertTrue(selectStart >= 0 && selectEnd > selectStart, "selectCycles SQL must exist");
         String sql = mapperXml.substring(selectStart, selectEnd);
 
-        assertTrue(sql.contains("close_fill.cycle_id=c.id"));
-        assertTrue(sql.contains("close_fill.fill_role='CLOSE'"));
-        assertTrue(sql.contains("snapshot.closing_equity IS NOT NULL"));
-        assertTrue(sql.contains("snapshot.wallet_balance IS NOT NULL"));
-        assertTrue(sql.contains("ORDER BY snapshot.captured_at DESC"));
-        assertFalse(sql.contains("last_close_fill"), "a missing snapshot on the final fill must not hide earlier cycle snapshots");
+        assertTrue(sql.contains("LEFT JOIN quant_trade_cycle_fill last_close_fill"));
+        assertTrue(sql.contains("last_close_fill.id=("));
+        assertTrue(sql.contains("WHERE f.cycle_id=c.id"));
+        assertTrue(sql.contains("AND f.fill_role='CLOSE'"));
+        assertTrue(sql.contains("ORDER BY f.trade_time DESC,f.id DESC"));
+        assertTrue(sql.contains("LEFT JOIN quant_trade_close_equity ce"));
+        assertTrue(sql.contains("ce.exchange_order_id=last_close_fill.exchange_order_id"));
+
+        assertTrue(sql.contains("ce.closing_equity AS closingEquity"));
+        assertTrue(sql.contains("ce.wallet_balance AS walletBalance"));
+        assertTrue(sql.contains("ce.unrealized_pnl AS unrealizedPnl"));
+        assertTrue(sql.contains("DATE_FORMAT(ce.captured_at"));
+
+        assertFalse(sql.contains("close_fill.cycle_id=c.id"),
+            "balance fields must not fall back to snapshots from earlier close orders");
+        assertFalse(sql.contains("ORDER BY snapshot.captured_at DESC"),
+            "balance fields must come from one final-order snapshot, not independently selected snapshots");
     }
 }
