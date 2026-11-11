@@ -405,12 +405,7 @@ public class QuantTradeNotificationService {
             } catch (RuntimeException ex) {
                 log.warn("平仓后账户资金快照获取失败 credentialId={} orderId={}", credential.getId(), orderId, ex);
             }
-            if (!persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account)
-                && !enqueuePendingCloseSnapshot(credential, symbol, orderId, closeTime)) {
-                log.error("平仓资金快照未能保存或建立独立重试任务 credentialId={} symbol={} orderId={}",
-                    credential.getId(), symbol, orderId);
-                return false;
-            }
+            // 该 REST 查询用于通知内容；持久化交易记录资金快照必须等待对应的 ACCOUNT_UPDATE 事件确认。
         } else {
             log.warn("平仓时间已超出即时账户快照窗口，不使用当前余额冒充平仓时余额 credentialId={} symbol={} orderId={} closeTime={}",
                 credential.getId(), symbol, orderId, closeTime);
