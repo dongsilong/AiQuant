@@ -233,6 +233,13 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
                 THEN DATE_FORMAT(ce.captured_at, '%Y-%m-%dT%H:%i:%sZ')
                 ELSE NULL
             END AS closingEquityAt,
+            CASE WHEN ce.closing_equity IS NOT NULL
+                THEN DATE_FORMAT(ce.captured_at, '%Y-%m-%dT%H:%i:%sZ')
+                ELSE NULL
+            END AS closingEquityCapturedAt,
+            ce.capture_source AS closingEquityCaptureSource,
+            DATE_FORMAT(ce.close_event_time, '%Y-%m-%dT%H:%i:%sZ') AS closeEventTime,
+            DATE_FORMAT(ce.account_update_transaction_time, '%Y-%m-%dT%H:%i:%sZ') AS accountUpdateTransactionTime,
             DATE_FORMAT(c.closed_at, '%Y-%m-%dT%H:%i:%sZ') AS closedAt,
             c.fill_count AS fillCount
         FROM quant_trade_cycle c
