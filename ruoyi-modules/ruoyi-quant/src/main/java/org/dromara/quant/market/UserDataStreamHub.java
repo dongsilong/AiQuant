@@ -326,7 +326,8 @@ public class UserDataStreamHub {
             positionCache.onEvent(credential.getId(), event);
             balanceCache.onEvent(credential.getId(), event);
             if (event != null && tradeNotifications != null
-                && ("ORDER_TRADE_UPDATE".equals(event.eventType()) || "ACCOUNT_UPDATE".equals(event.eventType()))) {
+                && ("ORDER_TRADE_UPDATE".equals(event.eventType()) || "ACCOUNT_UPDATE".equals(event.eventType())
+                    || "DISCONNECTED".equals(event.eventType()) || "listenKeyExpired".equalsIgnoreCase(event.eventType()))) {
                 tradeNotifications.captureCloseSnapshotFromUserDataEvent(
                     credential.getId(), executionService.toCredential(credential), event);
             }
