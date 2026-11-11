@@ -599,7 +599,7 @@ public class QuantTradeNotificationService {
                     .count();
                 if (matchingOrderCount != 1) {
                     log.warn("平仓资金快照撮合事务时间存在多个候选订单，拒绝关联 credentialId={} transactionTime={} matchingOrders={}",
-                        pending.credentialId(), pending.closeEventTime(), matchingOrderCount);
+                        pending.credentialId(), pending.orderTransactionTime(), matchingOrderCount);
                     return;
                 }
                 if (!withinCloseSnapshotWindow(pending.closeEventTime())) {
