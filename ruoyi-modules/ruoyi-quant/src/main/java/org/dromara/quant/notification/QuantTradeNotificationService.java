@@ -539,7 +539,7 @@ public class QuantTradeNotificationService {
             pendingOrderAccountUpdates.putIfAbsent(accountUpdateKey, observation);
             List<Map.Entry<String, PendingCloseStreamSnapshot>> matches = pendingStreamCloseSnapshots.entrySet().stream()
                 .filter(entry -> entry.getValue().credentialId().equals(credentialId)
-                    && entry.getValue().closeEventTime().equals(accountUpdateTransactionTime))
+                    && entry.getValue().orderTransactionTime().equals(accountUpdateTransactionTime))
                 .toList();
             if (matches.size() == 1) {
                 capturePendingCloseEquitySnapshot(matches.getFirst().getKey(), matches.getFirst().getValue(),
@@ -560,20 +560,22 @@ public class QuantTradeNotificationService {
         String orderStatus = Objects.toString(order.get("X"), "");
         BigDecimal executedQuantity = decimal(order.get("z"));
         Instant closeEventTime = instantMillis(order.get("T"));
+        Instant orderTransactionTime = instantMillis(payload.get("T"));
         Instant orderEventTime = event.eventTime();
         if (symbol.isBlank() || orderId == null || !"TRADE".equalsIgnoreCase(executionType)
             || !"FILLED".equalsIgnoreCase(orderStatus) || executedQuantity == null || executedQuantity.signum() <= 0
-            || closeEventTime == null || orderEventTime == null || !withinCloseSnapshotWindow(closeEventTime)) {
+            || closeEventTime == null || orderTransactionTime == null || orderEventTime == null
+            || !withinCloseSnapshotWindow(closeEventTime)) {
             return;
         }
         String captureKey = credentialId + ":" + symbol + ":" + orderId;
         PendingCloseStreamSnapshot pending = new PendingCloseStreamSnapshot(credentialId, credential, symbol, orderId,
-            Objects.toString(order.get("c"), ""), closeEventTime, orderEventTime);
+            Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime, orderEventTime);
         PendingCloseStreamSnapshot existing = pendingStreamCloseSnapshots.putIfAbsent(captureKey, pending);
         if (existing != null) {
             pending = existing;
         }
-        String accountUpdateKey = credentialId + ":" + closeEventTime.toEpochMilli();
+        String accountUpdateKey = credentialId + ":" + orderTransactionTime.toEpochMilli();
         AccountUpdateObservation observation = pendingOrderAccountUpdates.get(accountUpdateKey);
         if (observation != null) {
             capturePendingCloseEquitySnapshot(captureKey, pending, accountUpdateKey, observation);
@@ -583,7 +585,7 @@ public class QuantTradeNotificationService {
     private void capturePendingCloseEquitySnapshot(String captureKey, PendingCloseStreamSnapshot pending,
                                                    String accountUpdateKey, AccountUpdateObservation observation) {
         if (!withinCloseSnapshotWindow(pending.closeEventTime())
-            || !pending.closeEventTime().equals(observation.transactionTime())
+            || !pending.orderTransactionTime().equals(observation.transactionTime())
             || !activeStreamCloseCaptures.add(captureKey)) {
             return;
         }
@@ -595,7 +597,7 @@ public class QuantTradeNotificationService {
                 }
                 long matchingOrderCount = pendingStreamCloseSnapshots.values().stream()
                     .filter(candidate -> candidate.credentialId().equals(pending.credentialId())
-                        && candidate.closeEventTime().equals(pending.closeEventTime()))
+                        && candidate.orderTransactionTime().equals(pending.orderTransactionTime()))
                     .count();
                 if (matchingOrderCount != 1) {
                     log.warn("平仓资金快照撮合事务时间存在多个候选订单，拒绝关联 credentialId={} transactionTime={} matchingOrders={}",
@@ -631,8 +633,8 @@ public class QuantTradeNotificationService {
                     log.info("平仓账户资金快照由匹配的账户更新事件触发并保存 credentialId={} symbol={} orderId={} transactionTime={}",
                         pending.credentialId(), pending.symbol(), pending.orderId(), observation.transactionTime());
                 } else if (enqueuePendingCloseSnapshot(pending.credentialId(), pending.symbol(), pending.orderId(),
-                    pending.closeEventTime(), pending.orderEventTime(), observation.transactionTime(),
-                    observation.eventTime(), observation.receivedAt())) {
+                    pending.closeEventTime(), pending.orderEventTime(), pending.orderTransactionTime(),
+                    observation.transactionTime(), observation.eventTime(), observation.receivedAt())) {
                     pendingStreamCloseSnapshots.remove(captureKey, pending);
                     pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
                 } else {
@@ -641,8 +643,8 @@ public class QuantTradeNotificationService {
                 }
             } catch (RuntimeException ex) {
                 if (enqueuePendingCloseSnapshot(pending.credentialId(), pending.symbol(), pending.orderId(),
-                    pending.closeEventTime(), pending.orderEventTime(), observation.transactionTime(),
-                    observation.eventTime(), observation.receivedAt())) {
+                    pending.closeEventTime(), pending.orderEventTime(), pending.orderTransactionTime(),
+                    observation.transactionTime(), observation.eventTime(), observation.receivedAt())) {
                     pendingStreamCloseSnapshots.remove(captureKey, pending);
                     pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
                 } else {
@@ -701,13 +703,13 @@ public class QuantTradeNotificationService {
     }
 
     private boolean captureCloseEquitySnapshot(QuantCredential credential, String symbol, Long orderId,
-                                                Instant closeEventTime, Instant orderEventTime,
+                                                Instant closeEventTime, Instant orderEventTime, Instant orderTransactionTime,
                                                 Instant accountUpdateTransactionTime, Instant accountUpdateEventTime,
                                                 Instant accountUpdateReceivedAt) {
         if (credential == null || credential.getId() == null || symbol == null || orderId == null
-            || closeEventTime == null || orderEventTime == null || accountUpdateTransactionTime == null
-            || accountUpdateEventTime == null || accountUpdateReceivedAt == null
-            || !closeEventTime.equals(accountUpdateTransactionTime) || !withinCloseSnapshotWindow(closeEventTime)) {
+            || closeEventTime == null || orderEventTime == null || orderTransactionTime == null
+            || accountUpdateTransactionTime == null || accountUpdateEventTime == null || accountUpdateReceivedAt == null
+            || !orderTransactionTime.equals(accountUpdateTransactionTime) || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
         ExchangeGateway.AccountSnapshot account;
@@ -728,11 +730,13 @@ public class QuantTradeNotificationService {
     }
 
     private boolean enqueuePendingCloseSnapshot(Long credentialId, String symbol, Long orderId, Instant closeEventTime,
-                                                 Instant orderEventTime, Instant accountUpdateTransactionTime,
-                                                 Instant accountUpdateEventTime, Instant accountUpdateReceivedAt) {
+                                                 Instant orderEventTime, Instant orderTransactionTime,
+                                                 Instant accountUpdateTransactionTime, Instant accountUpdateEventTime,
+                                                 Instant accountUpdateReceivedAt) {
         if (credentialId == null || symbol == null || orderId == null || closeEventTime == null
-            || orderEventTime == null || accountUpdateTransactionTime == null || accountUpdateEventTime == null
-            || accountUpdateReceivedAt == null || !closeEventTime.equals(accountUpdateTransactionTime)) {
+            || orderEventTime == null || orderTransactionTime == null || accountUpdateTransactionTime == null
+            || accountUpdateEventTime == null || accountUpdateReceivedAt == null
+            || !orderTransactionTime.equals(accountUpdateTransactionTime)) {
             return false;
         }
         String taskKey = SNAPSHOT_TASK_PREFIX + symbol + ":" + orderId + ":" + accountUpdateTransactionTime.toEpochMilli();
@@ -752,6 +756,7 @@ public class QuantTradeNotificationService {
             task.put("orderId", String.valueOf(orderId));
             task.put("closeTime", closeEventTime.toString());
             task.put("orderEventTime", orderEventTime.toString());
+            task.put("orderTransactionTime", orderTransactionTime.toString());
             task.put("accountUpdateTransactionTime", accountUpdateTransactionTime.toString());
             task.put("accountUpdateEventTime", accountUpdateEventTime.toString());
             task.put("accountUpdateReceivedAt", accountUpdateReceivedAt.toString());
@@ -1016,14 +1021,16 @@ public class QuantTradeNotificationService {
                 if ("SNAPSHOT".equalsIgnoreCase(String.valueOf(data.get("taskType")))) {
                     String symbol = String.valueOf(data.get("symbol"));
                     Long orderId = Long.valueOf(String.valueOf(data.get("orderId")));
-                    if (data.get("orderEventTime") == null || data.get("accountUpdateTransactionTime") == null
-                        || data.get("accountUpdateEventTime") == null || data.get("accountUpdateReceivedAt") == null) {
+                    if (data.get("orderEventTime") == null || data.get("orderTransactionTime") == null
+                        || data.get("accountUpdateTransactionTime") == null || data.get("accountUpdateEventTime") == null
+                        || data.get("accountUpdateReceivedAt") == null) {
                         task.setStatus("FAILED");
                         task.setNextRetryAt(null);
                         task.setLastError("资金快照重试任务缺少匹配的账户更新撮合时间，不使用未确认的账户余额");
                     } else {
                         Instant closeTime = Instant.parse(String.valueOf(data.get("closeTime")));
                         Instant orderEventTime = Instant.parse(String.valueOf(data.get("orderEventTime")));
+                        Instant orderTransactionTime = Instant.parse(String.valueOf(data.get("orderTransactionTime")));
                         Instant accountUpdateTransactionTime = Instant.parse(String.valueOf(data.get("accountUpdateTransactionTime")));
                         Instant accountUpdateEventTime = Instant.parse(String.valueOf(data.get("accountUpdateEventTime")));
                         Instant accountUpdateReceivedAt = Instant.parse(String.valueOf(data.get("accountUpdateReceivedAt")));
@@ -1032,7 +1039,7 @@ public class QuantTradeNotificationService {
                             task.setNextRetryAt(null);
                             task.setLastError("超过平仓后即时资金快照窗口，不使用当前账户余额冒充历史平仓余额");
                         } else if (captureCloseEquitySnapshot(credential, symbol, orderId, closeTime, orderEventTime,
-                            accountUpdateTransactionTime, accountUpdateEventTime, accountUpdateReceivedAt)) {
+                            orderTransactionTime, accountUpdateTransactionTime, accountUpdateEventTime, accountUpdateReceivedAt)) {
                             task.setStatus("SENT");
                             task.setSentAt(LocalDateTime.now());
                             task.setNextRetryAt(null);
@@ -1423,7 +1430,7 @@ public class QuantTradeNotificationService {
     }
     private record PendingCloseStreamSnapshot(Long credentialId, ExchangeGateway.Credential credential,
                                                String symbol, Long orderId, String clientOrderId,
-                                               Instant closeEventTime, Instant orderEventTime) {
+                                               Instant closeEventTime, Instant orderTransactionTime, Instant orderEventTime) {
     }
 
     private record AccountUpdateObservation(Instant transactionTime, Instant eventTime, Instant receivedAt) {
