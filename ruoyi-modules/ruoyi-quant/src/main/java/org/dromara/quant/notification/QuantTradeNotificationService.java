@@ -716,9 +716,6 @@ public class QuantTradeNotificationService {
         if (!withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
-        if (!withinCloseSnapshotWindow(closeEventTime)) {
-            return false;
-        }
         return persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
             "ACCOUNT_UPDATE_TRIGGERED_REST", closeEventTime, accountUpdateTransactionTime,
             accountUpdateEventTime, accountUpdateReceivedAt);
@@ -1013,14 +1010,15 @@ public class QuantTradeNotificationService {
                 if ("SNAPSHOT".equalsIgnoreCase(String.valueOf(data.get("taskType")))) {
                     String symbol = String.valueOf(data.get("symbol"));
                     Long orderId = Long.valueOf(String.valueOf(data.get("orderId")));
-                    if (data.get("orderEventTime") == null || data.get("accountUpdateEventTime") == null
-                        || data.get("accountUpdateReceivedAt") == null) {
+                    if (data.get("orderEventTime") == null || data.get("accountUpdateTransactionTime") == null
+                        || data.get("accountUpdateEventTime") == null || data.get("accountUpdateReceivedAt") == null) {
                         task.setStatus("FAILED");
                         task.setNextRetryAt(null);
-                        task.setLastError("资金快照重试任务缺少已确认的账户更新事件，不使用未确认的账户余额");
+                        task.setLastError("资金快照重试任务缺少匹配的账户更新撮合时间，不使用未确认的账户余额");
                     } else {
                         Instant closeTime = Instant.parse(String.valueOf(data.get("closeTime")));
                         Instant orderEventTime = Instant.parse(String.valueOf(data.get("orderEventTime")));
+                        Instant accountUpdateTransactionTime = Instant.parse(String.valueOf(data.get("accountUpdateTransactionTime")));
                         Instant accountUpdateEventTime = Instant.parse(String.valueOf(data.get("accountUpdateEventTime")));
                         Instant accountUpdateReceivedAt = Instant.parse(String.valueOf(data.get("accountUpdateReceivedAt")));
                         if (!withinCloseSnapshotWindow(closeTime)) {
@@ -1028,7 +1026,7 @@ public class QuantTradeNotificationService {
                             task.setNextRetryAt(null);
                             task.setLastError("超过平仓后即时资金快照窗口，不使用当前账户余额冒充历史平仓余额");
                         } else if (captureCloseEquitySnapshot(credential, symbol, orderId, closeTime, orderEventTime,
-                            accountUpdateEventTime, accountUpdateReceivedAt)) {
+                            accountUpdateTransactionTime, accountUpdateEventTime, accountUpdateReceivedAt)) {
                             task.setStatus("SENT");
                             task.setSentAt(LocalDateTime.now());
                             task.setNextRetryAt(null);
@@ -1422,7 +1420,7 @@ public class QuantTradeNotificationService {
                                                Instant closeEventTime, Instant orderEventTime) {
     }
 
-    private record AccountUpdateObservation(Instant eventTime, Instant receivedAt) {
+    private record AccountUpdateObservation(Instant transactionTime, Instant eventTime, Instant receivedAt) {
     }
 
 }
