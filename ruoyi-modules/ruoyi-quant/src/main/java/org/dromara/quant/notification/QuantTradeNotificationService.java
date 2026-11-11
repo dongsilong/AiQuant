@@ -75,7 +75,7 @@ public class QuantTradeNotificationService {
     private final java.util.concurrent.ConcurrentHashMap<String, Long> blockedNoticeTimes = new java.util.concurrent.ConcurrentHashMap<>();
     private final Set<String> activeStreamCloseCaptures = ConcurrentHashMap.newKeySet();
     private final Map<String, PendingCloseStreamSnapshot> pendingStreamCloseSnapshots = new ConcurrentHashMap<>();
-    private final Map<Long, Instant> lastOrderAccountUpdateEventTimes = new ConcurrentHashMap<>();
+    private final Map<Long, AccountUpdateObservation> lastOrderAccountUpdates = new ConcurrentHashMap<>();
 
     /**
      * 创建 QuantTradeNotificationService 实例并初始化其依赖。
@@ -497,7 +497,7 @@ public class QuantTradeNotificationService {
             return;
         }
         if ("DISCONNECTED".equalsIgnoreCase(event.eventType()) || "listenKeyExpired".equalsIgnoreCase(event.eventType())) {
-            lastOrderAccountUpdateEventTimes.remove(credentialId);
+            lastOrderAccountUpdates.remove(credentialId);
             pendingStreamCloseSnapshots.entrySet().removeIf(entry -> entry.getValue().credentialId().equals(credentialId));
             return;
         }
@@ -522,15 +522,18 @@ public class QuantTradeNotificationService {
                 return;
             }
             Instant accountUpdateReceivedAt = Instant.now();
-            lastOrderAccountUpdateEventTimes.merge(credentialId, accountUpdateEventTime,
-                (previous, current) -> previous.isAfter(current) ? previous : current);
+            AccountUpdateObservation accountUpdateObservation =
+                new AccountUpdateObservation(accountUpdateEventTime, accountUpdateReceivedAt);
+            lastOrderAccountUpdates.merge(credentialId, accountUpdateObservation,
+                (previous, current) -> previous.eventTime().isAfter(current.eventTime()) ? previous : current);
             pendingStreamCloseSnapshots.entrySet().removeIf(entry ->
                 entry.getValue().credentialId().equals(credentialId)
                     && !withinCloseSnapshotWindow(entry.getValue().closeEventTime()));
             pendingStreamCloseSnapshots.forEach((captureKey, pending) -> {
                 if (pending.credentialId().equals(credentialId)
                     && !accountUpdateEventTime.isBefore(pending.orderEventTime())) {
-                    capturePendingCloseEquitySnapshot(captureKey, pending, accountUpdateEventTime, accountUpdateReceivedAt);
+                    capturePendingCloseEquitySnapshot(captureKey, pending,
+                        accountUpdateEventTime, accountUpdateReceivedAt);
                 }
             });
             return;
@@ -558,9 +561,10 @@ public class QuantTradeNotificationService {
         if (existing != null) {
             pending = existing;
         }
-        Instant latestAccountUpdate = lastOrderAccountUpdateEventTimes.get(credentialId);
-        if (latestAccountUpdate != null && !latestAccountUpdate.isBefore(pending.orderEventTime())) {
-            capturePendingCloseEquitySnapshot(captureKey, pending, latestAccountUpdate, Instant.now());
+        AccountUpdateObservation latestAccountUpdate = lastOrderAccountUpdates.get(credentialId);
+        if (latestAccountUpdate != null && !latestAccountUpdate.eventTime().isBefore(pending.orderEventTime())) {
+            capturePendingCloseEquitySnapshot(captureKey, pending,
+                latestAccountUpdate.eventTime(), latestAccountUpdate.receivedAt());
         }
     }
 
@@ -1382,6 +1386,9 @@ public class QuantTradeNotificationService {
     private record PendingCloseStreamSnapshot(Long credentialId, ExchangeGateway.Credential credential,
                                                String symbol, Long orderId, String clientOrderId,
                                                Instant closeEventTime, Instant orderEventTime) {
+    }
+
+    private record AccountUpdateObservation(Instant eventTime, Instant receivedAt) {
     }
 
 }
