@@ -597,14 +597,18 @@ public class QuantTradeNotificationService {
                     pendingStreamCloseSnapshots.remove(captureKey, pending);
                     log.info("平仓账户资金快照由后续账户更新事件触发并保存 credentialId={} symbol={} orderId={} accountUpdateEventTime={}",
                         pending.credentialId(), pending.symbol(), pending.orderId(), accountUpdateEventTime);
-                } else if (!enqueuePendingCloseSnapshot(pending.credentialId(), pending.symbol(), pending.orderId(),
+                } else if (enqueuePendingCloseSnapshot(pending.credentialId(), pending.symbol(), pending.orderId(),
                     pending.closeEventTime(), pending.orderEventTime(), accountUpdateEventTime, accountUpdateReceivedAt)) {
+                    pendingStreamCloseSnapshots.remove(captureKey, pending);
+                } else {
                     log.error("平仓账户资金快照失败且无法建立重试任务 credentialId={} symbol={} orderId={}",
                         pending.credentialId(), pending.symbol(), pending.orderId());
                 }
             } catch (RuntimeException ex) {
-                if (!enqueuePendingCloseSnapshot(pending.credentialId(), pending.symbol(), pending.orderId(),
+                if (enqueuePendingCloseSnapshot(pending.credentialId(), pending.symbol(), pending.orderId(),
                     pending.closeEventTime(), pending.orderEventTime(), accountUpdateEventTime, accountUpdateReceivedAt)) {
+                    pendingStreamCloseSnapshots.remove(captureKey, pending);
+                } else {
                     log.warn("平仓账户资金快照失败 credentialId={} symbol={} orderId={}",
                         pending.credentialId(), pending.symbol(), pending.orderId(), ex);
                 }
