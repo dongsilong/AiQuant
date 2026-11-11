@@ -472,7 +472,7 @@ public class ProtectionOrderService {
     }
 
     /**
-     * 同步策略保护单：首次止盈目标全部成交确认后才设置 STEP_TP；未完成首平时安全清理旧版本提前建立的阶梯单。
+     * 同步策略保护单：STEP_TP 由已达到的最高阶梯独立驱动，不依赖首次止盈成交状态。
      * 只有目标发生变化才撤旧挂新，高频实时价不会持续打 REST。
      */
     public void syncStrategyProtections(Long credentialId, QuantPosition position, BigDecimal initialPositionQuantity, List<ProtectionSignal> desiredSignals, boolean live) {
@@ -494,29 +494,10 @@ public class ProtectionOrderService {
             return;
         }
         List<ProtectionSignal> desired = desiredSignals == null ? List.of() : desiredSignals;
-        boolean firstProfitPending = desired.stream().anyMatch(signal -> signal != null && "FIRST_TP".equals(signal.type()))
-            && desired.stream().noneMatch(signal -> signal != null && "STEP_TP".equals(signal.type()));
-        if (firstProfitPending && live) {
-            List<QuantProtectionOrder> previousSteps = mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
-                .eq(QuantProtectionOrder::getCredentialId, credentialId)
-                .eq(QuantProtectionOrder::getPositionId, position.getId())
-                .eq(QuantProtectionOrder::getPositionCycleKey, position.getProtectionCycleKey())
-                .eq(QuantProtectionOrder::getProtectionType, "STEP_TP"));
-            for (QuantProtectionOrder previousStep : previousSteps) {
-                String status = Objects.toString(previousStep.getStatus(), "");
-                if (previousStep.getExecutedQuantity() != null && previousStep.getExecutedQuantity().signum() > 0
-                    || Set.of("TRIGGERING", "TRIGGERED", "FINISHED", "PARTIALLY_FILLED", "FILLED").contains(status)) {
-                    throw new ProtectionExecutionPendingException();
-                }
-                if (!Set.of("CANCELED", "EXPIRED", "REJECTED", "NOT_SENT").contains(status)
-                    && !cancelOne(credentialId, previousStep, true, true)) {
-                    throw new ProtectionExecutionPendingException();
-                }
-            }
-        }
-        if (targets != null && desired.stream().anyMatch(signal -> signal != null && "FIRST_TP".equals(signal.type())) && desired.stream().noneMatch(signal -> signal != null &&
-            "STEP_TP".equals(signal.type())) && !firstProfitPending && confirmedStep(credentialId, position) > 0) {
-            throw new IllegalStateException("已确认阶梯保护不能回退为首次止盈，先核实首平事实");
+        if (targets != null && desired.stream().anyMatch(signal -> signal != null && "FIRST_TP".equals(signal.type()))
+            && desired.stream().noneMatch(signal -> signal != null && "STEP_TP".equals(signal.type()))
+            && confirmedStep(credentialId, position) > 0) {
+            throw new IllegalStateException("已确认阶梯保护不能回退为首次止盈，先核实阶梯状态事实");
         }
         Set<String> desiredTypes = new HashSet<>();
         RuntimeException syncFailure = null;
@@ -564,8 +545,7 @@ public class ProtectionOrderService {
                         normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), true), order.getStopPrice()) == null) {
                     throw new IllegalStateException("缺少已确认的替代保护，保留已有止损: " + order.getProtectionType());
                 }
-                boolean requireUnfilled = firstProfitPending && "STEP_TP".equals(order.getProtectionType());
-                if (!cancelOne(credentialId, order, live, requireUnfilled)) {
+                if (!cancelOne(credentialId, order, live)) {
                     throw new IllegalStateException("过期策略保护单撤销失败: " + order.getProtectionType());
                 }
             }
