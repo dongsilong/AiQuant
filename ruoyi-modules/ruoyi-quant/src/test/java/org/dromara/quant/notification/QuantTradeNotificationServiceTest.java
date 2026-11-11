@@ -475,7 +475,7 @@ class QuantTradeNotificationServiceTest {
             .thenReturn(1, 0, 0);
         when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(0);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
-            new ExchangeGateway.AccountSnapshot(null, new BigDecimal("900"), new BigDecimal("1003"), new BigDecimal("3")));
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("900"), new BigDecimal("900"), null, new BigDecimal("3")));
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
