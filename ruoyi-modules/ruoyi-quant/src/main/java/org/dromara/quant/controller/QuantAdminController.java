@@ -204,6 +204,7 @@ public class QuantAdminController {
             row.put("positionId", item.getPositionId());
             row.put("positionCycleKey", item.getPositionCycleKey());
             row.put("instanceName", (strategy == null ? "策略" : strategy.getStrategyName()) + (symbol == null ? "" : " / " + symbol.getSymbol()));
+            row.put("pluginCode", strategy == null ? null : strategy.getPluginCode());
             row.put("credentialId", instance == null ? null : instance.getCredentialId());
             row.put("symbol", symbol == null ? null : symbol.getSymbol());
             row.put("status", item.getStatus());
