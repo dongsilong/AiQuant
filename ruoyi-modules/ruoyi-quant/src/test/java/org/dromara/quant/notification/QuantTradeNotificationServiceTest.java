@@ -348,7 +348,9 @@ class QuantTradeNotificationServiceTest {
 
 
     @Test
-    void terminalVerifiedCloseStreamEventCapturesRestAccountSnapshotWithSeparateTimestamps() throws Exception {
+    void closeOrderStreamEventAloneCapturesRestSnapshotWithoutAccountUpdatePairing() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-close-stream-snapshot-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
         var jdbc = mock(JdbcTemplate.class);
@@ -357,51 +359,49 @@ class QuantTradeNotificationServiceTest {
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
         long closeMillis = System.currentTimeMillis();
         long transactionMillis = closeMillis + 1;
-        long orderEventMillis = closeMillis + 2;
-        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
+        long eventMillis = closeMillis + 2;
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
             + ",\"T\":" + transactionMillis
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
             + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
-        var event = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), payload);
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
-        when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(901L);
+            return 1;
+        });
+        when(mapper.claim(eq(901L), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any()))
+            .thenReturn(1, 0, 1);
+        when(jdbc.update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any())).thenReturn(1);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
             new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
                 new BigDecimal("1003"), new BigDecimal("3")));
 
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential, event);
-        verify(gateway, never()).queryAccountFresh(any());
-
-        long accountUpdateMillis = closeMillis + 10;
-        String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload));
 
-        var values = ArgumentCaptor.forClass(Object[].class);
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
+        var values = ArgumentCaptor.forClass(Object[].class);
         verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), values.capture());
         assertEquals(new BigDecimal("1003"), values.getValue()[0]);
         assertEquals(new BigDecimal("1000"), values.getValue()[1]);
-        assertEquals("ACCOUNT_UPDATE_TRIGGERED_REST", values.getValue()[3]);
+        assertEquals("REST_FALLBACK", values.getValue()[3]);
         assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(closeMillis), java.time.ZoneOffset.UTC),
             values.getValue()[4]);
-        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(transactionMillis), java.time.ZoneOffset.UTC),
-            values.getValue()[5]);
-        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(accountUpdateMillis), java.time.ZoneOffset.UTC),
+        assertNull(values.getValue()[5]);
+        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(eventMillis), java.time.ZoneOffset.UTC),
             values.getValue()[6]);
         assertTrue(values.getValue()[7] instanceof java.time.LocalDateTime);
         assertTrue(values.getValue()[8] instanceof java.time.LocalDateTime);
         assertTrue(values.getValue()[9] instanceof java.time.LocalDateTime);
-        assertTrue(!((java.time.LocalDateTime) values.getValue()[9])
-            .isBefore((java.time.LocalDateTime) values.getValue()[8]));
-        assertEquals(10L, values.getValue()[10]);
-        assertEquals("BTCUSDT", values.getValue()[11]);
-        assertEquals(99L, values.getValue()[12]);
+        var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
+        assertEquals("SENT", taskUpdate.getValue().getStatus());
     }
 
     @Test
-    void multipleCloseOrdersWithSameTransactionTimestampDoNotShareAccountSnapshot() {
+    void sameTransactionCloseOrdersCreateIndependentDurableSnapshotTasks() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-close-batch-snapshot-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
         var jdbc = mock(JdbcTemplate.class);
@@ -409,31 +409,38 @@ class QuantTradeNotificationServiceTest {
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
         long transactionMillis = System.currentTimeMillis();
-        String firstOrder = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (transactionMillis + 1)
-            + ",\"T\":" + transactionMillis
-            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"1\",\"T\":" + (transactionMillis - 1) + "}}";
-        String secondOrder = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (transactionMillis + 2)
-            + ",\"T\":" + transactionMillis
-            + ",\"o\":{\"s\":\"ETHUSDT\",\"i\":100,\"c\":\"close-100\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"1\",\"T\":" + transactionMillis + "}}";
-        String accountUpdate = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + (transactionMillis + 10)
-            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+        java.util.concurrent.atomic.AtomicLong ids = new java.util.concurrent.atomic.AtomicLong(910L);
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(ids.getAndIncrement());
+            return 1;
+        });
+        when(mapper.claim(anyLong(), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
 
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(transactionMillis + 1), firstOrder));
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(transactionMillis + 2), secondOrder));
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(transactionMillis + 10), accountUpdate));
+        for (String[] order : List.of(
+            new String[]{"BTCUSDT", "99", "close-btc"},
+            new String[]{"ETHUSDT", "100", "close-eth"})) {
+            String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (transactionMillis + 2)
+                + ",\"T\":" + transactionMillis + ",\"o\":{\"s\":\"" + order[0]
+                + "\",\"i\":" + order[1] + ",\"c\":\"" + order[2]
+                + "\",\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"1\",\"T\":"
+                + transactionMillis + "}}";
+            service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+                new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(transactionMillis + 2), payload));
+        }
 
+        var inserted = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, timeout(3000).times(2)).insert(inserted.capture());
+        assertEquals(2, inserted.getAllValues().stream()
+            .filter(task -> task.getRecipient().startsWith("SNAPSHOT:")).count());
         verify(gateway, never()).queryAccountFresh(any());
-        verify(jdbc, never()).queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any());
         verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
     }
 
     @Test
-    void accountUpdateReceivedBeforeFinalOrderEventStillTriggersMatchedSnapshot() {
+    void partialRestAccountSnapshotIsPersistedWithoutMixingDifferentSamplingTimes() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-partial-close-snapshot-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
         var jdbc = mock(JdbcTemplate.class);
@@ -442,64 +449,38 @@ class QuantTradeNotificationServiceTest {
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
         long closeMillis = System.currentTimeMillis();
         long transactionMillis = closeMillis + 1;
-        long accountUpdateMillis = closeMillis + 10;
-        long orderEventMillis = closeMillis + 5;
-        String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
-        String orderPayload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (closeMillis + 2)
             + ",\"T\":" + transactionMillis
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
             + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
-        when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(1);
-        when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
-            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
-                new BigDecimal("1003"), new BigDecimal("3")));
-
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), orderPayload));
-
-        verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
-        verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
-    }
-
-    @Test
-    void incompleteRestAccountResponseIsNotPersistedAsCloseSnapshot() {
-        var mapper = mock(QuantNotificationMapper.class);
-        var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
-        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
-            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
-        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
-        long closeMillis = System.currentTimeMillis();
-        long transactionMillis = closeMillis + 1;
-        long orderEventMillis = closeMillis + 2;
-        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
-            + ",\"T\":" + transactionMillis
-            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(920L);
+            return 1;
+        });
+        when(mapper.claim(eq(920L), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any()))
+            .thenReturn(1, 0, 0);
+        when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(0);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
             new ExchangeGateway.AccountSnapshot(null, new BigDecimal("900"), new BigDecimal("1003"), new BigDecimal("3")));
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), payload));
-        verify(gateway, never()).queryAccountFresh(any());
-
-        long accountUpdateMillis = closeMillis + 10;
-        String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
 
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
-        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+        var insertValues = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbc, timeout(3000)).update(contains("INSERT INTO quant_trade_close_equity"), insertValues.capture());
+        assertNull(insertValues.getValue()[3]);
+        assertEquals(new BigDecimal("900"), insertValues.getValue()[4]);
+        var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
+        assertEquals("RETRY", taskUpdate.getValue().getStatus());
     }
 
     @Test
-    void closeSnapshotUsesDurableRetryWhenCloseOrderIdentityIsNotReady() {
+    void unverifiedOrderDoesNotWriteAccountSnapshotButKeepsDurableRetry() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-unverified-close-snapshot-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
         var jdbc = mock(JdbcTemplate.class);
@@ -507,113 +488,23 @@ class QuantTradeNotificationServiceTest {
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
         long closeMillis = System.currentTimeMillis();
-        long transactionMillis = closeMillis + 1;
-        long orderEventMillis = closeMillis + 2;
-        String orderPayload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
-            + ",\"T\":" + transactionMillis
-            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
-        long accountUpdateMillis = closeMillis + 10;
-        String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
-        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
-            ((QuantNotification) invocation.getArgument(0)).setId(901L);
-            return 1;
-        });
-
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), orderPayload));
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
-
-        var task = ArgumentCaptor.forClass(QuantNotification.class);
-        verify(mapper, timeout(3000)).insert(task.capture());
-        assertEquals("FACT_PENDING", task.getValue().getChannel());
-        assertEquals("SNAPSHOT:BTCUSDT:99:" + transactionMillis, task.getValue().getRecipient());
-        assertTrue(task.getValue().getContent().contains("\"clientOrderId\":\"close-99\""));
-        assertTrue(task.getValue().getContent().contains("\"orderTransactionTime\":\"" + Instant.ofEpochMilli(transactionMillis) + "\""));
-        verify(gateway, never()).queryAccountFresh(any());
-        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
-    }
-
-    @Test
-    void closeSnapshotRetryRechecksOrderIdentityBeforeQueryingAccount() throws Exception {
-        var mapper = mock(QuantNotificationMapper.class);
-        var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
-        var credentials = mock(org.dromara.quant.credential.mapper.QuantCredentialMapper.class);
-        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
-            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
-        var field = QuantTradeNotificationService.class.getDeclaredField("credentialMapper");
-        field.setAccessible(true);
-        field.set(service, credentials);
-
-        var credential = new QuantCredential();
-        credential.setId(10L);
-        when(credentials.selectById(10L)).thenReturn(credential);
-        long closeMillis = System.currentTimeMillis();
-        long transactionMillis = closeMillis + 1;
-        var taskData = new java.util.LinkedHashMap<String, Object>();
-        taskData.put("taskType", "SNAPSHOT");
-        taskData.put("credentialId", "10");
-        taskData.put("symbol", "BTCUSDT");
-        taskData.put("orderId", "99");
-        taskData.put("clientOrderId", "close-99");
-        taskData.put("closeTime", Instant.ofEpochMilli(closeMillis).toString());
-        taskData.put("orderTransactionTime", Instant.ofEpochMilli(transactionMillis).toString());
-        taskData.put("accountUpdateTransactionTime", Instant.ofEpochMilli(transactionMillis).toString());
-        taskData.put("accountUpdateEventTime", Instant.ofEpochMilli(transactionMillis + 10).toString());
-        taskData.put("accountUpdateReceivedAt", Instant.ofEpochMilli(transactionMillis + 11).toString());
-
-        var task = new QuantNotification();
-        task.setId(902L);
-        task.setCredentialId(10L);
-        task.setChannel("FACT_PENDING");
-        task.setRecipient("SNAPSHOT:BTCUSDT:99:" + transactionMillis);
-        task.setContent(org.dromara.quant.util.QuantJsonMapper.writeMap(taskData));
-        task.setStatus("PENDING");
-        task.setRetryCount(0);
-        task.setCreatedAt(java.time.LocalDateTime.now());
-        task.setNextRetryAt(java.time.LocalDateTime.now().minusSeconds(1));
-        when(mapper.selectList(any())).thenReturn(List.of(task));
-        when(mapper.claim(eq(902L), any(), any())).thenReturn(1);
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
-
-        service.retryPendingCloseFacts();
-
-        verify(jdbc).queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any());
-        verify(gateway, never()).queryAccountFresh(any());
-        assertEquals("RETRY", task.getStatus());
-        verify(mapper).updateById(task);
-    }
-
-    @Test
-    void streamEventForUnverifiedCloseOrderDoesNotQueryAccountOrPersistSnapshot() {
-        var mapper = mock(QuantNotificationMapper.class);
-        var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
-        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
-            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
-        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
-        long closeMillis = System.currentTimeMillis();
-        long transactionMillis = closeMillis + 1;
-        long orderEventMillis = closeMillis + 2;
-        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
-            + ",\"T\":" + transactionMillis
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (closeMillis + 2)
+            + ",\"T\":" + (closeMillis + 1)
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"unknown-order\","
             + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(930L);
+            return 1;
+        });
+        when(mapper.claim(eq(930L), any(), any())).thenReturn(1);
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), payload));
-        long accountUpdateMillis = closeMillis + 10;
-        String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
-        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
 
-        verify(jdbc, timeout(3000)).queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any());
+        var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
+        assertEquals("RETRY", taskUpdate.getValue().getStatus());
         verify(gateway, never()).queryAccountFresh(any());
         verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
     }
