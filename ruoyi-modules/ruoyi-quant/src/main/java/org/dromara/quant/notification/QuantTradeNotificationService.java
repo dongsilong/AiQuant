@@ -447,8 +447,10 @@ public class QuantTradeNotificationService {
     private boolean persistCloseEquitySnapshot(Long credentialId, String symbol, Long orderId,
                                                ExchangeGateway.AccountSnapshot account, String captureSource,
                                                Instant closeEventTime, Instant accountUpdateTransactionTime,
-                                               Instant exchangeEventTime, Instant streamReceivedAt) {
-        if (account == null || account.marginBalance() == null || account.walletBalance() == null) {
+                                               Instant exchangeEventTime, Instant streamReceivedAt,
+                                               Instant restRequestStartedAt, Instant restResponseReceivedAt) {
+        if (account == null || account.marginBalance() == null || account.walletBalance() == null
+            || restRequestStartedAt == null || restResponseReceivedAt == null) {
             return false;
         }
         LocalDateTime closeTime = closeEventTime == null ? null : LocalDateTime.ofInstant(closeEventTime, ZoneOffset.UTC);
@@ -456,18 +458,21 @@ public class QuantTradeNotificationService {
             : LocalDateTime.ofInstant(accountUpdateTransactionTime, ZoneOffset.UTC);
         LocalDateTime exchangeTime = exchangeEventTime == null ? null : LocalDateTime.ofInstant(exchangeEventTime, ZoneOffset.UTC);
         LocalDateTime receivedTime = streamReceivedAt == null ? null : LocalDateTime.ofInstant(streamReceivedAt, ZoneOffset.UTC);
+        LocalDateTime restRequestTime = LocalDateTime.ofInstant(restRequestStartedAt, ZoneOffset.UTC);
+        LocalDateTime restResponseTime = LocalDateTime.ofInstant(restResponseReceivedAt, ZoneOffset.UTC);
         try {
             int upgraded = jdbcTemplate.update("""
                 UPDATE quant_trade_close_equity
                 SET closing_equity=?, wallet_balance=?, unrealized_pnl=?,
                     capture_source=?, close_event_time=?, account_update_transaction_time=?,
-                    exchange_event_time=?, stream_received_at=?, captured_at=UTC_TIMESTAMP(3)
+                    exchange_event_time=?, stream_received_at=?, rest_query_started_at=?,
+                    rest_response_received_at=?, captured_at=UTC_TIMESTAMP(3)
                 WHERE credential_id=? AND symbol=? AND exchange_order_id=?
                   AND (closing_equity IS NULL OR wallet_balance IS NULL
                        OR capture_source<>'ACCOUNT_UPDATE_TRIGGERED_REST')
                 """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
                 captureSource, closeTime, accountTransactionTime, exchangeTime, receivedTime,
-                credentialId, symbol, orderId);
+                restRequestTime, restResponseTime, credentialId, symbol, orderId);
             if (upgraded == 1) {
                 return true;
             }
@@ -475,12 +480,13 @@ public class QuantTradeNotificationService {
                 INSERT INTO quant_trade_close_equity
                     (credential_id, symbol, exchange_order_id, closing_equity,
                      wallet_balance, unrealized_pnl, capture_source, close_event_time,
-                     account_update_transaction_time, exchange_event_time, stream_received_at, captured_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
+                     account_update_transaction_time, exchange_event_time, stream_received_at,
+                     rest_query_started_at, rest_response_received_at, captured_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
                 ON DUPLICATE KEY UPDATE id=id
                 """, credentialId, symbol, orderId, account.marginBalance(),
                 account.walletBalance(), account.unrealizedPnl(), captureSource, closeTime,
-                accountTransactionTime, exchangeTime, receivedTime);
+                accountTransactionTime, exchangeTime, receivedTime, restRequestTime, restResponseTime);
             return true;
         } catch (RuntimeException ex) {
             log.warn("平仓账户资金快照持久化失败 credentialId={} symbol={} orderId={}",
@@ -625,7 +631,9 @@ public class QuantTradeNotificationService {
                     pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
                     return;
                 }
+                Instant restRequestStartedAt = Instant.now();
                 ExchangeGateway.AccountSnapshot account = gateway.queryAccountFresh(pending.credential());
+                Instant restResponseReceivedAt = Instant.now();
                 if (!withinCloseSnapshotWindow(pending.closeEventTime())) {
                     pendingStreamCloseSnapshots.remove(captureKey, pending);
                     pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
@@ -642,7 +650,7 @@ public class QuantTradeNotificationService {
                 }
                 if (persistCloseEquitySnapshot(pending.credentialId(), pending.symbol(), pending.orderId(), account,
                     "ACCOUNT_UPDATE_TRIGGERED_REST", pending.closeEventTime(), observation.transactionTime(),
-                    observation.eventTime(), observation.receivedAt())) {
+                    observation.eventTime(), observation.receivedAt(), restRequestStartedAt, restResponseReceivedAt)) {
                     pendingStreamCloseSnapshots.remove(captureKey, pending);
                     pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
                     log.info("平仓账户资金快照由匹配的账户更新事件触发并保存 credentialId={} symbol={} orderId={} transactionTime={}",
@@ -733,6 +741,7 @@ public class QuantTradeNotificationService {
         if (hasCompleteCloseEquitySnapshot(credential.getId(), symbol, orderId)) {
             return true;
         }
+        Instant restRequestStartedAt = Instant.now();
         ExchangeGateway.AccountSnapshot account;
         try {
             account = gateway.queryAccountFresh(new ExchangeGateway.Credential(
@@ -745,9 +754,10 @@ public class QuantTradeNotificationService {
         if (!withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
+        Instant restResponseReceivedAt = Instant.now();
         return persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
             "ACCOUNT_UPDATE_TRIGGERED_REST", closeEventTime, accountUpdateTransactionTime,
-            accountUpdateEventTime, accountUpdateReceivedAt);
+            accountUpdateEventTime, accountUpdateReceivedAt, restRequestStartedAt, restResponseReceivedAt);
     }
 
     private boolean enqueuePendingCloseSnapshot(Long credentialId, String symbol, Long orderId, String clientOrderId,
