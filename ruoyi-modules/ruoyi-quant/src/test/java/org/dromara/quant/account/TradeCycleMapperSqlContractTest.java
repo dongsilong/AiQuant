@@ -39,7 +39,8 @@ class TradeCycleMapperSqlContractTest {
         assertTrue(sql.contains("ce.wallet_balance AS walletBalance"));
         assertTrue(sql.contains("ce.unrealized_pnl AS unrealizedPnl"));
         assertTrue(sql.contains("DATE_FORMAT(ce.captured_at"));
-        assertTrue(sql.contains("END AS closingEquityCapturedAt"));
+        assertTrue(sql.contains("COALESCE(ce.rest_response_received_at, ce.captured_at)"));
+        assertTrue(sql.contains("AS closingEquityResponseReceivedAt"));
         assertTrue(sql.contains("ce.capture_source AS closingEquityCaptureSource"));
         assertTrue(sql.contains("DATE_FORMAT(ce.close_event_time"));
         assertTrue(sql.contains("DATE_FORMAT(ce.account_update_transaction_time"));
