@@ -75,7 +75,7 @@ public class QuantTradeNotificationService {
     private final java.util.concurrent.ConcurrentHashMap<String, Long> blockedNoticeTimes = new java.util.concurrent.ConcurrentHashMap<>();
     private final Set<String> activeStreamCloseCaptures = ConcurrentHashMap.newKeySet();
     private final Map<String, PendingCloseStreamSnapshot> pendingStreamCloseSnapshots = new ConcurrentHashMap<>();
-    private final Map<Long, AccountUpdateObservation> lastOrderAccountUpdates = new ConcurrentHashMap<>();
+    private final Map<String, AccountUpdateObservation> pendingOrderAccountUpdates = new ConcurrentHashMap<>();
 
     /**
      * 创建 QuantTradeNotificationService 实例并初始化其依赖。
