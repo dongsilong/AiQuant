@@ -348,6 +348,63 @@ class QuantTradeNotificationServiceTest {
 
 
     @Test
+    void terminalVerifiedCloseStreamEventCapturesRestAccountSnapshotWithSeparateTimestamps() throws Exception {
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+        long eventMillis = System.currentTimeMillis();
+        String payload = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + eventMillis
+            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"close-99\\","
+            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"2\\",\\"T\\":" + eventMillis + "}}";
+        var event = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
+        when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential, event);
+
+        var values = ArgumentCaptor.forClass(Object[].class);
+        verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
+        verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), values.capture());
+        assertEquals(new BigDecimal("1003"), values.getValue()[0]);
+        assertEquals(new BigDecimal("1000"), values.getValue()[1]);
+        assertEquals("USER_STREAM_TRIGGERED_REST", values.getValue()[3]);
+        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(eventMillis), java.time.ZoneOffset.UTC),
+            values.getValue()[4]);
+        assertTrue(values.getValue()[5] instanceof java.time.LocalDateTime);
+        assertEquals(10L, values.getValue()[6]);
+        assertEquals("BTCUSDT", values.getValue()[7]);
+        assertEquals(99L, values.getValue()[8]);
+    }
+
+    @Test
+    void streamEventForUnverifiedCloseOrderDoesNotQueryAccountOrPersistSnapshot() {
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+        long eventMillis = System.currentTimeMillis();
+        String payload = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + eventMillis
+            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"unknown-order\\","
+            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"2\\",\\"T\\":" + eventMillis + "}}";
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
+
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload));
+
+        verify(jdbc, timeout(3000)).queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any());
+        verify(gateway, never()).queryAccountFresh(any());
+        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+    }
+
+    @Test
     void strategyCloseResolverUsesExactCycleIntentInsteadOfMatchingQuantityAcrossTheInstance() throws Exception {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-cycle-close-resolver-test"), QuantNotification.class);
