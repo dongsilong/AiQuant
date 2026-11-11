@@ -494,10 +494,9 @@ public class ProtectionOrderService {
             return;
         }
         List<ProtectionSignal> desired = desiredSignals == null ? List.of() : desiredSignals;
-        if (targets != null && desired.stream().anyMatch(signal -> signal != null && "FIRST_TP".equals(signal.type()))
-            && desired.stream().noneMatch(signal -> signal != null && "STEP_TP".equals(signal.type()))
-            && confirmedStep(credentialId, position) > 0) {
-            throw new IllegalStateException("已确认阶梯保护不能回退为首次止盈，先核实阶梯状态事实");
+        if (targets != null && confirmedStep(credentialId, position) > 0
+            && desired.stream().noneMatch(signal -> signal != null && "STEP_TP".equals(signal.type()))) {
+            throw new IllegalStateException("已确认阶梯保护不能被移除，先核实阶梯状态事实");
         }
         Set<String> desiredTypes = new HashSet<>();
         RuntimeException syncFailure = null;
