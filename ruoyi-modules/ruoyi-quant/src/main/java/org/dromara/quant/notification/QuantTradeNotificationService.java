@@ -433,7 +433,11 @@ public class QuantTradeNotificationService {
                 if (snapshotClaimed) {
                     snapshotTask.setOwnerToken(null);
                     snapshotTask.setLeaseUntil(null);
-                    notificationMapper.updateById(snapshotTask);
+                    try {
+                        notificationMapper.updateById(snapshotTask);
+                    } catch (RuntimeException ex) {
+                        log.error("更新平仓账户资金快照任务状态失败 notificationId={}", snapshotTask.getId(), ex);
+                    }
                 }
             }
             if (snapshotTask == null) {
