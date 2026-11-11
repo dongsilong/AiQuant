@@ -527,6 +527,7 @@ public class QuantTradeNotificationService {
                 || !"ORDER".equalsIgnoreCase(Objects.toString(accountUpdate.get("m"), ""))) {
                 return;
             }
+            // ACCOUNT_UPDATE 根级 T 是撮合引擎事务时间；根级 E 是事件生成时间。
             Instant accountUpdateTransactionTime = instantMillis(payload.get("T"));
             Instant accountUpdateEventTime = event.eventTime();
             if (accountUpdateTransactionTime == null || accountUpdateEventTime == null) {
@@ -559,8 +560,8 @@ public class QuantTradeNotificationService {
         String executionType = Objects.toString(order.get("x"), "");
         String orderStatus = Objects.toString(order.get("X"), "");
         BigDecimal executedQuantity = decimal(order.get("z"));
-        Instant closeEventTime = instantMillis(order.get("T"));
-        Instant orderTransactionTime = instantMillis(payload.get("T"));
+        Instant closeEventTime = instantMillis(order.get("T")); // o.T：订单成交时间
+        Instant orderTransactionTime = instantMillis(payload.get("T")); // 根级 T：与 ACCOUNT_UPDATE 根级 T 对应
         if (symbol.isBlank() || orderId == null || !"TRADE".equalsIgnoreCase(executionType)
             || !"FILLED".equalsIgnoreCase(orderStatus) || executedQuantity == null || executedQuantity.signum() <= 0
             || closeEventTime == null || orderTransactionTime == null || !withinCloseSnapshotWindow(closeEventTime)) {
