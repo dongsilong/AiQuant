@@ -657,8 +657,13 @@ public class QuantTradeNotificationService {
         return millis == null || millis <= 0 ? null : Instant.ofEpochMilli(millis);
     }
 
-    private boolean captureCloseEquitySnapshot(QuantCredential credential, String symbol, Long orderId) {
-        if (credential == null || credential.getId() == null || symbol == null || orderId == null) {
+    private boolean captureCloseEquitySnapshot(QuantCredential credential, String symbol, Long orderId,
+                                                Instant closeEventTime, Instant orderEventTime,
+                                                Instant accountUpdateEventTime, Instant accountUpdateReceivedAt) {
+        if (credential == null || credential.getId() == null || symbol == null || orderId == null
+            || closeEventTime == null || orderEventTime == null || accountUpdateEventTime == null
+            || accountUpdateReceivedAt == null || accountUpdateEventTime.isBefore(orderEventTime)
+            || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
         ExchangeGateway.AccountSnapshot account;
@@ -670,17 +675,22 @@ public class QuantTradeNotificationService {
                 credential.getId(), symbol, orderId, ex);
             return false;
         }
-        return persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account);
+        return persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
+            "ACCOUNT_UPDATE_TRIGGERED_REST", closeEventTime, accountUpdateEventTime, accountUpdateReceivedAt);
     }
 
-    private boolean enqueuePendingCloseSnapshot(QuantCredential credential, String symbol, Long orderId, Instant closeTime) {
-        if (credential == null || credential.getId() == null || symbol == null || orderId == null || closeTime == null) {
+    private boolean enqueuePendingCloseSnapshot(Long credentialId, String symbol, Long orderId, Instant closeEventTime,
+                                                 Instant orderEventTime, Instant accountUpdateEventTime,
+                                                 Instant accountUpdateReceivedAt) {
+        if (credentialId == null || symbol == null || orderId == null || closeEventTime == null
+            || orderEventTime == null || accountUpdateEventTime == null || accountUpdateReceivedAt == null
+            || accountUpdateEventTime.isBefore(orderEventTime)) {
             return false;
         }
-        String taskKey = SNAPSHOT_TASK_PREFIX + symbol + ":" + orderId;
+        String taskKey = SNAPSHOT_TASK_PREFIX + symbol + ":" + orderId + ":" + accountUpdateEventTime.toEpochMilli();
         try {
             QuantNotification existing = notificationMapper.selectOne(new LambdaQueryWrapper<QuantNotification>()
-                .eq(QuantNotification::getCredentialId, credential.getId())
+                .eq(QuantNotification::getCredentialId, credentialId)
                 .eq(QuantNotification::getChannel, "FACT_PENDING")
                 .eq(QuantNotification::getRecipient, taskKey)
                 .last("LIMIT 1"));
@@ -689,29 +699,32 @@ public class QuantTradeNotificationService {
             }
             Map<String, Object> task = new LinkedHashMap<>();
             task.put("taskType", "SNAPSHOT");
-            task.put("credentialId", String.valueOf(credential.getId()));
+            task.put("credentialId", String.valueOf(credentialId));
             task.put("symbol", symbol);
             task.put("orderId", String.valueOf(orderId));
-            task.put("closeTime", closeTime.toString());
+            task.put("closeTime", closeEventTime.toString());
+            task.put("orderEventTime", orderEventTime.toString());
+            task.put("accountUpdateEventTime", accountUpdateEventTime.toString());
+            task.put("accountUpdateReceivedAt", accountUpdateReceivedAt.toString());
             QuantNotification pending = new QuantNotification();
-            pending.setCredentialId(credential.getId());
+            pending.setCredentialId(credentialId);
             pending.setChannel("FACT_PENDING");
             pending.setRecipient(taskKey);
             pending.setSubject("平仓账户资金快照待采集");
             pending.setContent(QuantJsonMapper.writeMap(task));
             pending.setStatus("PENDING");
             pending.setRetryCount(0);
-            pending.setNextRetryAt(LocalDateTime.now().plusSeconds(30));
+            pending.setNextRetryAt(LocalDateTime.now().plusSeconds(5));
             pending.setCreatedAt(LocalDateTime.now());
             if (notificationMapper.insert(pending) != 1) {
                 return false;
             }
-            log.warn("平仓账户资金快照已进入独立重试队列 credentialId={} symbol={} orderId={}",
-                credential.getId(), symbol, orderId);
+            log.warn("平仓账户资金快照已进入独立重试队列 credentialId={} symbol={} orderId={} accountUpdateEventTime={}",
+                credentialId, symbol, orderId, accountUpdateEventTime);
             return true;
         } catch (RuntimeException ex) {
             log.error("平仓账户资金快照重试任务持久化失败 credentialId={} symbol={} orderId={}",
-                credential.getId(), symbol, orderId, ex);
+                credentialId, symbol, orderId, ex);
             return false;
         }
     }
