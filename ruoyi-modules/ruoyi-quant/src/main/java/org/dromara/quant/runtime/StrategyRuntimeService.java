@@ -4604,7 +4604,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         }
         QuantStrategyPositionState state = runtime.state;
         positionPerformanceHub.publish(new StrategyPositionPerformanceEvent(runtime.credential.getId(), runtime.instance.getId(), state.getPositionId(), state.getPositionCycleKey(),
-            runtime.symbol.getSymbol(), state.getDirection(), state.getEntryPrice(), state.getInitialPositionQty(), state.getInitialMargin(), state.getHighestPriceSinceEntry(),
+            runtime.symbol.getSymbol(), runtime.strategy.getPluginCode(), state.getDirection(), state.getEntryPrice(), state.getInitialPositionQty(), state.getInitialMargin(), state.getHighestPriceSinceEntry(),
             state.getLowestPriceSinceEntry(), state.getMaximumReturnRate(), state.getHighestStep(), state.getConfirmedProtectionStep(), state.getFrozenLeverage(),
             state.getUpdatedAt()));
     }
