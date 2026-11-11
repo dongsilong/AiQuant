@@ -999,6 +999,13 @@ public class QuantTradeNotificationService {
         pendingOrderAccountUpdates.entrySet().removeIf(entry -> entry.getValue().receivedAt().isBefore(streamStateCutoff));
         pendingStreamCloseSnapshots.entrySet().removeIf(entry ->
             entry.getValue().closeEventTime().isBefore(streamStateCutoff));
+        pendingStreamCloseSnapshots.forEach((captureKey, snapshot) -> {
+            String accountUpdateKey = snapshot.credentialId() + ":" + snapshot.orderTransactionTime().toEpochMilli();
+            AccountUpdateObservation observation = pendingOrderAccountUpdates.get(accountUpdateKey);
+            if (observation != null) {
+                capturePendingCloseEquitySnapshot(captureKey, snapshot, accountUpdateKey, observation);
+            }
+        });
         List<QuantNotification> pending = notificationMapper.selectList(new LambdaQueryWrapper<QuantNotification>()
             .eq(QuantNotification::getChannel, "FACT_PENDING")
             .and(query -> query.in(QuantNotification::getStatus, "PENDING", "RETRY").le(QuantNotification::getNextRetryAt, now)
