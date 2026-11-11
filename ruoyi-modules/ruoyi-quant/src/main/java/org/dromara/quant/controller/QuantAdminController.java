@@ -214,10 +214,12 @@ public class QuantAdminController {
             row.put("positionQty", item.getPositionQty());
             row.put("initialPositionQty", item.getInitialPositionQty());
             row.put("initialMargin", item.getInitialMargin());
+            row.put("frozenLeverage", item.getFrozenLeverage());
             row.put("highestPriceSinceEntry", item.getHighestPriceSinceEntry());
             row.put("lowestPriceSinceEntry", item.getLowestPriceSinceEntry());
             row.put("maximumReturnRate", item.getMaximumReturnRate());
             row.put("highestStep", item.getHighestStep());
+            row.put("confirmedProtectionStep", item.getConfirmedProtectionStep());
             row.put("firstTakeProfitTriggered", item.getFirstTakeProfitTriggered());
             row.put("pendingAction", item.getPendingAction());
             row.put("recoveryRequired", item.getRecoveryRequired());
