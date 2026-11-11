@@ -42,6 +42,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.LockSupport;
 /**
  * 开仓/平仓统一通知；投递失败进入 Outbox 重试，不回滚已完成的交易事实。
  */
@@ -489,14 +490,6 @@ public class QuantTradeNotificationService {
     }
 
     /**
-     * 私有订单流确认平仓订单完全成交后，立即查询并保存该订单对应的账户资金。
-     * WebSocket 事件只用于精确定位订单和事件时间，资金数值仍以 Binance REST 完整账户响应为准。
-     */
-    /**
-     * 平仓订单事件只登记订单事实；收到同账户后续 ORDER 类 ACCOUNT_UPDATE 后，
-     * 才查询完整账户 REST 快照，避免在交易所账户记账更新前采到旧余额。
-     */
-    /**
      * 平仓订单事件只登记订单事实；同一撮合事务的 ORDER 类 ACCOUNT_UPDATE 到达后，
      * 才查询完整账户 REST 快照。通过撮合事务时间一对一关联，避免跨订单套用资金快照。
      */
@@ -596,6 +589,19 @@ public class QuantTradeNotificationService {
         }
         Thread.ofVirtual().name("quant-close-equity-stream").start(() -> {
             try {
+                LockSupport.parkNanos(Duration.ofMillis(100).toNanos());
+                if (Thread.currentThread().isInterrupted()) {
+                    return;
+                }
+                long matchingOrderCount = pendingStreamCloseSnapshots.values().stream()
+                    .filter(candidate -> candidate.credentialId().equals(pending.credentialId())
+                        && candidate.closeEventTime().equals(pending.closeEventTime()))
+                    .count();
+                if (matchingOrderCount != 1) {
+                    log.warn("平仓资金快照撮合事务时间存在多个候选订单，拒绝关联 credentialId={} transactionTime={} matchingOrders={}",
+                        pending.credentialId(), pending.closeEventTime(), matchingOrderCount);
+                    return;
+                }
                 if (!withinCloseSnapshotWindow(pending.closeEventTime())) {
                     pendingStreamCloseSnapshots.remove(captureKey, pending);
                     pendingOrderAccountUpdates.remove(accountUpdateKey, observation);
