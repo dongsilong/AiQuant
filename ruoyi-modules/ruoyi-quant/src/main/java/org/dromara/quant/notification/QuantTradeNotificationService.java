@@ -454,25 +454,23 @@ public class QuantTradeNotificationService {
     private boolean persistCloseEquitySnapshot(Long credentialId, String symbol, Long orderId,
                                                ExchangeGateway.AccountSnapshot account, String captureSource,
                                                Instant exchangeEventTime, Instant streamReceivedAt) {
-        if (account == null || account.marginBalance() == null && account.walletBalance() == null) {
+        if (account == null || account.marginBalance() == null || account.walletBalance() == null) {
             return false;
         }
         LocalDateTime exchangeTime = exchangeEventTime == null ? null : LocalDateTime.ofInstant(exchangeEventTime, ZoneOffset.UTC);
         LocalDateTime receivedTime = streamReceivedAt == null ? null : LocalDateTime.ofInstant(streamReceivedAt, ZoneOffset.UTC);
         try {
-            if (account.marginBalance() != null && account.walletBalance() != null) {
-                int upgraded = jdbcTemplate.update("""
-                    UPDATE quant_trade_close_equity
-                    SET closing_equity=?, wallet_balance=?, unrealized_pnl=?,
-                        capture_source=?, exchange_event_time=?, stream_received_at=?,
-                        captured_at=UTC_TIMESTAMP(3)
-                    WHERE credential_id=? AND symbol=? AND exchange_order_id=?
-                      AND (closing_equity IS NULL OR wallet_balance IS NULL)
-                    """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
-                    captureSource, exchangeTime, receivedTime, credentialId, symbol, orderId);
-                if (upgraded == 1) {
-                    return true;
-                }
+            int upgraded = jdbcTemplate.update("""
+                UPDATE quant_trade_close_equity
+                SET closing_equity=?, wallet_balance=?, unrealized_pnl=?,
+                    capture_source=?, exchange_event_time=?, stream_received_at=?,
+                    captured_at=UTC_TIMESTAMP(3)
+                WHERE credential_id=? AND symbol=? AND exchange_order_id=?
+                  AND (closing_equity IS NULL OR wallet_balance IS NULL)
+                """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
+                captureSource, exchangeTime, receivedTime, credentialId, symbol, orderId);
+            if (upgraded == 1) {
+                return true;
             }
             jdbcTemplate.update("""
                 INSERT INTO quant_trade_close_equity
@@ -483,7 +481,7 @@ public class QuantTradeNotificationService {
                 ON DUPLICATE KEY UPDATE id=id
                 """, credentialId, symbol, orderId, account.marginBalance(),
                 account.walletBalance(), account.unrealizedPnl(), captureSource, exchangeTime, receivedTime);
-            return account.marginBalance() != null && account.walletBalance() != null;
+            return true;
         } catch (RuntimeException ex) {
             log.warn("平仓账户资金快照持久化失败 credentialId={} symbol={} orderId={}",
                 credentialId, symbol, orderId, ex);
