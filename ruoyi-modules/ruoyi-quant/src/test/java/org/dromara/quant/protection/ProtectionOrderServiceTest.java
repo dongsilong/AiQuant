@@ -819,6 +819,7 @@ class ProtectionOrderServiceTest {
     void terminalPartialFillIsPreservedBeforeLocalSupplement() {
         position.setProtectionCycleKey("cycle");
         QuantProtectionOrder one = order();
+        one.setStatus("FINISHED");
         when(mapper.selectList(any())).thenReturn(List.of(one));
         when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(snapshot(55L, "QFTP_test", BigDecimal.ONE, "CANCELED", new BigDecimal("0.2")));
         assertTrue(service.quiesceCycleProtections(1L, position));
@@ -828,7 +829,9 @@ class ProtectionOrderServiceTest {
     @Test
     void finishedAlgoWithActiveChildOrderMustNotAuthorizeLocalFallback() {
         position.setProtectionCycleKey("cycle");
-        when(mapper.selectList(any())).thenReturn(List.of(order()));
+        QuantProtectionOrder triggered = order();
+        triggered.setStatus("TRIGGERED");
+        when(mapper.selectList(any())).thenReturn(List.of(triggered));
         when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, "one", "FINISHED", "SELL", "BOTH",
             "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), BigDecimal.ZERO, true, false, 99L, null));
         when(gateway.queryOrder(any(), any(), eq(99L), any())).thenReturn(new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "child", "SELL", "MARKET", "NEW", BigDecimal.ZERO,
