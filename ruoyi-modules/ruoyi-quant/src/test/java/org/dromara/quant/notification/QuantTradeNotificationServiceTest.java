@@ -355,11 +355,14 @@ class QuantTradeNotificationServiceTest {
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
-        long eventMillis = System.currentTimeMillis();
-        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
+        long closeMillis = System.currentTimeMillis();
+        long transactionMillis = closeMillis + 1;
+        long orderEventMillis = closeMillis + 2;
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
+            + ",\"T\":" + transactionMillis
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}}";
-        var event = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload);
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
+        var event = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), payload);
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
         when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(1);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
@@ -369,9 +372,9 @@ class QuantTradeNotificationServiceTest {
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential, event);
         verify(gateway, never()).queryAccountFresh(any());
 
-        long accountUpdateMillis = eventMillis + 10;
+        long accountUpdateMillis = closeMillis + 10;
         String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + eventMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
 
@@ -381,9 +384,9 @@ class QuantTradeNotificationServiceTest {
         assertEquals(new BigDecimal("1003"), values.getValue()[0]);
         assertEquals(new BigDecimal("1000"), values.getValue()[1]);
         assertEquals("ACCOUNT_UPDATE_TRIGGERED_REST", values.getValue()[3]);
-        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(eventMillis), java.time.ZoneOffset.UTC),
+        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(closeMillis), java.time.ZoneOffset.UTC),
             values.getValue()[4]);
-        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(eventMillis), java.time.ZoneOffset.UTC),
+        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(transactionMillis), java.time.ZoneOffset.UTC),
             values.getValue()[5]);
         assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(accountUpdateMillis), java.time.ZoneOffset.UTC),
             values.getValue()[6]);
@@ -402,19 +405,21 @@ class QuantTradeNotificationServiceTest {
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
         long transactionMillis = System.currentTimeMillis();
-        String firstOrder = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + transactionMillis
-            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"close-99\\","
-            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"1\\",\\"T\\":" + transactionMillis + "}}";
-        String secondOrder = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + transactionMillis
-            + ",\\"o\\":{\\"s\\":\\"ETHUSDT\\",\\"i\\":100,\\"c\\":\\"close-100\\","
-            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"1\\",\\"T\\":" + transactionMillis + "}}";
-        String accountUpdate = "{\\"e\\":\\"ACCOUNT_UPDATE\\",\\"E\\":" + (transactionMillis + 10)
-            + ",\\"T\\":" + transactionMillis + ",\\"a\\":{\\"m\\":\\"ORDER\\",\\"B\\":[],\\"P\\":[]}}";
+        String firstOrder = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (transactionMillis + 1)
+            + ",\"T\":" + transactionMillis
+            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"1\",\"T\":" + (transactionMillis - 1) + "}}";
+        String secondOrder = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (transactionMillis + 2)
+            + ",\"T\":" + transactionMillis
+            + ",\"o\":{\"s\":\"ETHUSDT\",\"i\":100,\"c\":\"close-100\","
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"1\",\"T\":" + transactionMillis + "}}";
+        String accountUpdate = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + (transactionMillis + 10)
+            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(transactionMillis), firstOrder));
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(transactionMillis + 1), firstOrder));
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(transactionMillis), secondOrder));
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(transactionMillis + 2), secondOrder));
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(transactionMillis + 10), accountUpdate));
 
@@ -431,13 +436,16 @@ class QuantTradeNotificationServiceTest {
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
-        long eventMillis = System.currentTimeMillis();
-        long accountUpdateMillis = eventMillis + 10;
+        long closeMillis = System.currentTimeMillis();
+        long transactionMillis = closeMillis + 1;
+        long accountUpdateMillis = closeMillis + 10;
+        long orderEventMillis = closeMillis + 5;
         String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + eventMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
-        String orderPayload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
+            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+        String orderPayload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
+            + ",\"T\":" + transactionMillis
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}}";
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
         when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(1);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
@@ -447,7 +455,7 @@ class QuantTradeNotificationServiceTest {
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), orderPayload));
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), orderPayload));
 
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
         verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
@@ -461,21 +469,24 @@ class QuantTradeNotificationServiceTest {
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
-        long eventMillis = System.currentTimeMillis();
-        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
+        long closeMillis = System.currentTimeMillis();
+        long transactionMillis = closeMillis + 1;
+        long orderEventMillis = closeMillis + 2;
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
+            + ",\"T\":" + transactionMillis
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}}";
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
             new ExchangeGateway.AccountSnapshot(null, new BigDecimal("900"), new BigDecimal("1003"), new BigDecimal("3")));
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload));
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), payload));
         verify(gateway, never()).queryAccountFresh(any());
 
-        long accountUpdateMillis = eventMillis + 10;
+        long accountUpdateMillis = closeMillis + 10;
         String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + eventMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
 
@@ -491,17 +502,20 @@ class QuantTradeNotificationServiceTest {
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
-        long eventMillis = System.currentTimeMillis();
-        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + eventMillis
+        long closeMillis = System.currentTimeMillis();
+        long transactionMillis = closeMillis + 1;
+        long orderEventMillis = closeMillis + 2;
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
+            + ",\"T\":" + transactionMillis
             + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"unknown-order\","
-            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + eventMillis + "}}";
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
         when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
-            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload));
-        long accountUpdateMillis = eventMillis + 10;
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), payload));
+        long accountUpdateMillis = closeMillis + 10;
         String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
-            + ",\"T\":" + eventMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
 
