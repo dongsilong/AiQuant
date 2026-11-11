@@ -579,8 +579,7 @@ public class QuantTradeNotificationService {
         if (symbol.isBlank() || orderId == null
             || !java.util.Set.of("FILLED", "CANCELED", "EXPIRED").contains(orderStatus.toUpperCase(java.util.Locale.ROOT))
             || executedQuantity == null || executedQuantity.signum() <= 0
-            || closeEventTime == null || orderTransactionTime == null
-            || !withinCloseSnapshotWindow(closeEventTime)) {
+            || closeEventTime == null || !withinCloseSnapshotWindow(closeEventTime)) {
             return;
         }
 
