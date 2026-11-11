@@ -4076,9 +4076,16 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                       PositionProtectionState.remainingFirstProfit(work.state()),
                                         work.state() == null ? null : work.state().getFirstTakeProfitLocalExecutedQty(), work.live());
                                 }
+                            } catch (RuntimeException ex) {
                                 if (failure == null) {
-                                    confirmedStep = protectionOrderService.confirmedStep(work.credentialId(), work.position());
+                                    failure = ex;
+                                } else if (failure != ex) {
+                                    failure.addSuppressed(ex);
                                 }
+                            }
+                            // 阶梯保护单逐类型同步；首次止盈失败不能阻止核实已独立生效的 STEP_TP。
+                            try {
+                                confirmedStep = protectionOrderService.confirmedStep(work.credentialId(), work.position());
                             } catch (RuntimeException ex) {
                                 if (failure == null) {
                                     failure = ex;
@@ -4100,26 +4107,24 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                              !runtime.closed && !obsolete && runtime.state == work.state() && runtime.position.getQuantity().compareTo(work.position().getQuantity()) == 0;
                             if (current) {
                                 runtime.hardStopConfirmed = hardStopConfirmed;
+                                int previousStep = runtime.state.getConfirmedProtectionStep() == null ? 0 : runtime.state.getConfirmedProtectionStep();
+                                int highestStep = runtime.state.getHighestStep() == null ? 0 : runtime.state.getHighestStep();
+                                if (confirmedStep > previousStep || confirmedStep > highestStep) {
+                                    runtime.state.setConfirmedProtectionStep(Math.max(previousStep, confirmedStep));
+                                    runtime.state.setHighestStep(Math.max(highestStep, confirmedStep));
+                                    stateService.save(runtime.state);
+                                    publishPositionPerformance(runtime);
+                                }
                                 if (failure != null) {
                                     markProtectionDegraded(runtime, "交易所保护创建/同步失败", failure);
-                                } else {
-                                    int previousStep = runtime.state.getConfirmedProtectionStep() == null ? 0 : runtime.state.getConfirmedProtectionStep();
-                                    int highestStep = runtime.state.getHighestStep() == null ? 0 : runtime.state.getHighestStep();
-                                    if (confirmedStep > previousStep || confirmedStep > highestStep) {
-                                        runtime.state.setConfirmedProtectionStep(Math.max(previousStep, confirmedStep));
-                                        runtime.state.setHighestStep(Math.max(highestStep, confirmedStep));
-                                        stateService.save(runtime.state);
-                                        publishPositionPerformance(runtime);
+                                } else if (work.dynamic() && runtime.protectionDegraded && !runtime.hasPendingAction()) {
+                                    // 保护恢复只能解除自身降级；未知成交/持仓归属必须由事实恢复链路核实。
+                                    if (!Boolean.TRUE.equals(runtime.state.getUnsafeRecovery())) {
+                                        runtime.state.setRecoveryRequired(false);
                                     }
-                                    if (work.dynamic() && runtime.protectionDegraded && !runtime.hasPendingAction()) {
-                                        // 保护恢复只能解除自身降级；未知成交/持仓归属必须由事实恢复链路核实。
-                                        if (!Boolean.TRUE.equals(runtime.state.getUnsafeRecovery())) {
-                                            runtime.state.setRecoveryRequired(false);
-                                        }
-                                        stateService.save(runtime.state);
-                                        runtime.protectionDegraded = false;
-                                        clearProtectionErrorAfterConfirmedSync(runtime);
-                                    }
+                                    stateService.save(runtime.state);
+                                    runtime.protectionDegraded = false;
+                                    clearProtectionErrorAfterConfirmedSync(runtime);
                                 }
                             } else if (!runtime.closed && !obsolete) {
                                 // 同一持仓数量改变：下一轮先挂正确保护再撤旧，不能清空全部保护。
