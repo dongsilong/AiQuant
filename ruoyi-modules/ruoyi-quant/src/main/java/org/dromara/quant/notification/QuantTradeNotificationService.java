@@ -503,6 +503,7 @@ public class QuantTradeNotificationService {
         }
         if ("DISCONNECTED".equalsIgnoreCase(event.eventType()) || "listenKeyExpired".equalsIgnoreCase(event.eventType())) {
             lastOrderAccountUpdateEventTimes.remove(credentialId);
+            pendingStreamCloseSnapshots.entrySet().removeIf(entry -> entry.getValue().credentialId().equals(credentialId));
             return;
         }
         if (event.rawJson() == null || event.rawJson().isBlank()) {
