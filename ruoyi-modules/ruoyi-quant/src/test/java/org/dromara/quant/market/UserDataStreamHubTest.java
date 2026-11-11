@@ -137,7 +137,9 @@ class UserDataStreamHubTest {
             }, () -> {
             }, () -> true);
         });
+        var tradeNotifications = mock(org.dromara.quant.notification.QuantTradeNotificationService.class);
         var hub = new UserDataStreamHub(gateway, execution, positionCache, balanceCache, preparation);
+        org.springframework.test.util.ReflectionTestUtils.setField(hub, "tradeNotifications", tradeNotifications);
         var forwarded = new java.util.concurrent.CountDownLatch(1);
         try {
             var subscription = hub.subscribe(credential, event -> {
@@ -149,6 +151,7 @@ class UserDataStreamHubTest {
             receiver.get().accept(fill);
             verify(positionCache).onEvent(72L, fill);
             verify(balanceCache).onEvent(72L, fill);
+            verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, fill);
             verify(preparation).onEvent(72L, fill);
             assertTrue(forwarded.await(2, java.util.concurrent.TimeUnit.SECONDS), "TESTNET order fill must reach the strategy reconciliation listener");
             verify(gateway, times(1)).subscribeUserData(eq(exchange), any());
