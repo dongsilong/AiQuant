@@ -18,7 +18,7 @@ import java.util.Optional;
  * <p>开仓：按 SLOPE_LOOKBACK_BARS 选择历史 K 线 Open，与当前实时价格计算角度，绝对角度达到 entryAngleDegrees 时顺势开仓。</p>
  * <p>本地止损：杠杆后回报率 &lt;= -localStopLossRate 时市价全平；同一保护同时可挂 Binance STOP_MARKET。</p>
  * <p>首次止盈：杠杆后回报率达到 firstProfitTakingRate 时，平初始总仓位的 firstClosePositionRate。</p>
- * <p>阶梯止盈：首次止盈后，最高回报率处于第 n 个 stepRatio 阶梯时，回撤到第 n-1 阶梯平剩余仓位。</p>
+ * <p>阶梯止盈：持仓后最高回报率达到第 n 个 stepRatio 阶梯时立即启用，回撤到第 n-1 阶梯平掉全部剩余仓位；不依赖首次止盈成交。</p>
  * <p>默认止损和交易对绑定止损不属于 params，由 Runtime 冻结并交给 ProtectionOrderService，各层同时生效。</p>
  * <p>默认参数：首次平仓 50%、首次止盈回报率 10%、本地兜底止损 5%、阶梯间隔 10%；均可通过 params 覆盖。</p>
  * <p>本地持续判断相同条件；触发后由 Runtime 在确认窗口后精确撤单、对账并补平，避免双重减仓。</p>
@@ -147,9 +147,7 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         }
         BigDecimal step = rate(params, "stepRatio", "StepRatio", DEFAULT_STEP_RATIO);
         BigDecimal favorable = maxFavorableReturn(context).max(leveragedReturn(context.direction(), context.currentPrice(), context.entryPrice(), leverage(context)));
-        int reached = Math.max(Math.max(0, context.highestStep()), rateStep(favorable, step));
-        return unifiedProtection(params) && stepProtectionStarted(context)
-            ? Math.max(1, reached) : reached;
+        return Math.max(Math.max(0, context.highestStep()), rateStep(favorable, step));
     }
 
     /**
@@ -236,13 +234,6 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
      */
     public static BigDecimal firstClosePositionRate(Map<String, Object> params) {
         return rate(params, "firstClosePositionRate", "FirstClosePositionRate", DEFAULT_FIRST_CLOSE_POSITION_RATE);
-    }
-
-    /**
-     * 阶梯保护仅在首次分批止盈目标全部成交确认后启用。
-     */
-    private static boolean stepProtectionStarted(StrategyContext context) {
-        return context.firstTakeProfitTriggered();
     }
 
     /**
@@ -383,20 +374,18 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
             return List.of(new ExitSignal(EXIT_LOCAL_STOP, BigDecimal.ONE, "本地兜底止损触发，止损阈值=-" + percent(localStop) + "，触发时回报率=" + percent(currentReturn), false, PROTECTION_LOCAL_STOP,
                 ExitSignal.QuantityBase.CURRENT));
         }
+        int stepIndex = reachedStep(context, params);
+        if (stepIndex > 0) {
+            BigDecimal maxReturn = maxFavorableReturn(context);
+            BigDecimal locked = step.multiply(BigDecimal.valueOf(Math.max(0, stepIndex - 1L)));
+            if (currentReturn.compareTo(locked) <= 0) {
+                return List.of(new ExitSignal(EXIT_STEP_TP, BigDecimal.ONE, "阶梯追踪止盈触发，阶梯实际最高回报率=" + percent(maxReturn) + "，触发时回报率=" + percent(currentReturn) + "，回撤保护比例=" + percent(locked), false, PROTECTION_STEP_TP,
+                    ExitSignal.QuantityBase.CURRENT));
+            }
+        }
         if (!context.firstTakeProfitTriggered() && currentReturn.compareTo(firstProfit) >= 0) {
             return List.of(new ExitSignal(EXIT_FIRST_TP, firstClose, "首次止盈触发，首次止盈阈值=" + percent(firstProfit) + "，触发时回报率=" + percent(currentReturn) + "，计划平初始仓位比例=" + percent(firstClose), true, PROTECTION_FIRST_TP,
                 ExitSignal.QuantityBase.INITIAL));
-        }
-        if (stepProtectionStarted(context)) {
-            BigDecimal maxReturn = maxFavorableReturn(context);
-            int stepIndex = reachedStep(context, params);
-            if (stepIndex > 0) {
-                BigDecimal locked = step.multiply(BigDecimal.valueOf(Math.max(0, stepIndex - 1L)));
-                if (currentReturn.compareTo(locked) <= 0) {
-                    return List.of(new ExitSignal(EXIT_STEP_TP, BigDecimal.ONE, "阶梯追踪止盈触发，持仓期间最大回报率=" + percent(maxReturn) + "，触发时回报率=" + percent(currentReturn) + "，回撤保护比例=" + percent(locked), false, PROTECTION_STEP_TP,
-                        ExitSignal.QuantityBase.CURRENT));
-                }
-            }
         }
         return List.of();
     }
@@ -420,19 +409,16 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
                 context.direction(), localStop.negate(), leverage), "Binance 本地止损镜像"));
         }
 
-        boolean firstProfitReached = stepProtectionStarted(context);
         if (!context.firstTakeProfitTriggered()) {
             result.add(new ProtectionSignal(PROTECTION_FIRST_TP, "TAKE_PROFIT_MARKET", firstClose, ProtectionSignal.QuantityBase.INITIAL, priceForReturn(context.entryPrice(),
                 context.direction(), firstProfit, leverage), "Binance 首次分批止盈"));
         }
-        if (firstProfitReached) {
+        int stepIndex = reachedStep(context, params);
+        if (stepIndex > 0) {
             BigDecimal maxReturn = maxFavorableReturn(context);
-            int stepIndex = reachedStep(context, params);
-            if (stepIndex > 0) {
-                BigDecimal locked = step.multiply(BigDecimal.valueOf(Math.max(0, stepIndex - 1L)));
-                result.add(new ProtectionSignal(PROTECTION_STEP_TP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
-                    context.direction(), locked, leverage), "Binance 阶梯追踪止盈，第" + stepIndex + "阶，锁定回报率=" + percent(locked), stepIndex));
-            }
+            BigDecimal locked = step.multiply(BigDecimal.valueOf(Math.max(0, stepIndex - 1L)));
+            result.add(new ProtectionSignal(PROTECTION_STEP_TP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
+                context.direction(), locked, leverage), "Binance 阶梯追踪止盈，第" + stepIndex + "阶，最高回报率=" + percent(maxReturn) + "，锁定回报率=" + percent(locked), stepIndex));
         }
         if (unifiedProtection(params)) {
             result.sort(java.util.Comparator.comparingInt(signal -> "STEP_TP".equals(signal.type()) ? 0 : 1));
