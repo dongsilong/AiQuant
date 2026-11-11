@@ -495,6 +495,45 @@ class QuantTradeNotificationServiceTest {
     }
 
     @Test
+    void closeSnapshotUsesDurableRetryWhenCloseOrderIdentityIsNotReady() {
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+        long closeMillis = System.currentTimeMillis();
+        long transactionMillis = closeMillis + 1;
+        long orderEventMillis = closeMillis + 2;
+        String orderPayload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + orderEventMillis
+            + ",\"T\":" + transactionMillis
+            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
+        long accountUpdateMillis = closeMillis + 10;
+        String accountPayload = "{\"e\":\"ACCOUNT_UPDATE\",\"E\":" + accountUpdateMillis
+            + ",\"T\":" + transactionMillis + ",\"a\":{\"m\":\"ORDER\",\"B\":[],\"P\":[]}}";
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(901L);
+            return 1;
+        });
+
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(orderEventMillis), orderPayload));
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
+
+        var task = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, timeout(3000)).insert(task.capture());
+        assertEquals("FACT_PENDING", task.getValue().getChannel());
+        assertEquals("SNAPSHOT:BTCUSDT:99:" + transactionMillis, task.getValue().getRecipient());
+        assertTrue(task.getValue().getContent().contains("\"clientOrderId\":\"close-99\""));
+        assertTrue(task.getValue().getContent().contains("\"orderTransactionTime\":\"" + Instant.ofEpochMilli(transactionMillis) + "\""));
+        verify(gateway, never()).queryAccountFresh(any());
+        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+    }
+
+    @Test
     void streamEventForUnverifiedCloseOrderDoesNotQueryAccountOrPersistSnapshot() {
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
