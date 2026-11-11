@@ -392,6 +392,36 @@ class QuantTradeNotificationServiceTest {
     }
 
     @Test
+    void accountUpdateReceivedBeforeFinalOrderEventStillTriggersMatchedSnapshot() {
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+        long eventMillis = System.currentTimeMillis();
+        long accountUpdateMillis = eventMillis + 10;
+        String accountPayload = "{\\"e\\":\\"ACCOUNT_UPDATE\\",\\"E\\":" + accountUpdateMillis
+            + ",\\"T\\":" + accountUpdateMillis + ",\\"a\\":{\\"m\\":\\"ORDER\\",\\"B\\":[],\\"P\\":[]}}";
+        String orderPayload = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + eventMillis
+            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"close-99\\","
+            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"2\\",\\"T\\":" + eventMillis + "}}";
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1, 0);
+        when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(accountUpdateMillis), accountPayload));
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), orderPayload));
+
+        verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
+        verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+    }
+
+    @Test
     void incompleteRestAccountResponseIsNotPersistedAsCloseSnapshot() {
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
