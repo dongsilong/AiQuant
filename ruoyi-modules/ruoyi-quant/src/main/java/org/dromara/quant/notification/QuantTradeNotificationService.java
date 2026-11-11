@@ -967,18 +967,29 @@ public class QuantTradeNotificationService {
                 if ("SNAPSHOT".equalsIgnoreCase(String.valueOf(data.get("taskType")))) {
                     String symbol = String.valueOf(data.get("symbol"));
                     Long orderId = Long.valueOf(String.valueOf(data.get("orderId")));
-                    Instant closeTime = Instant.parse(String.valueOf(data.get("closeTime")));
-                    if (!withinCloseSnapshotWindow(closeTime)) {
+                    if (data.get("orderEventTime") == null || data.get("accountUpdateEventTime") == null
+                        || data.get("accountUpdateReceivedAt") == null) {
                         task.setStatus("FAILED");
                         task.setNextRetryAt(null);
-                        task.setLastError("超过平仓后即时资金快照窗口，不使用当前账户余额冒充历史平仓余额");
-                    } else if (captureCloseEquitySnapshot(credential, symbol, orderId)) {
-                        task.setStatus("SENT");
-                        task.setSentAt(LocalDateTime.now());
-                        task.setNextRetryAt(null);
-                        task.setLastError(null);
+                        task.setLastError("资金快照重试任务缺少已确认的账户更新事件，不使用未确认的账户余额");
                     } else {
-                        retryCloseFactTask(task, "平仓账户资金快照尚未完整");
+                        Instant closeTime = Instant.parse(String.valueOf(data.get("closeTime")));
+                        Instant orderEventTime = Instant.parse(String.valueOf(data.get("orderEventTime")));
+                        Instant accountUpdateEventTime = Instant.parse(String.valueOf(data.get("accountUpdateEventTime")));
+                        Instant accountUpdateReceivedAt = Instant.parse(String.valueOf(data.get("accountUpdateReceivedAt")));
+                        if (!withinCloseSnapshotWindow(closeTime)) {
+                            task.setStatus("FAILED");
+                            task.setNextRetryAt(null);
+                            task.setLastError("超过平仓后即时资金快照窗口，不使用当前账户余额冒充历史平仓余额");
+                        } else if (captureCloseEquitySnapshot(credential, symbol, orderId, closeTime, orderEventTime,
+                            accountUpdateEventTime, accountUpdateReceivedAt)) {
+                            task.setStatus("SENT");
+                            task.setSentAt(LocalDateTime.now());
+                            task.setNextRetryAt(null);
+                            task.setLastError(null);
+                        } else {
+                            retryCloseFactTask(task, "平仓账户资金快照尚未完整");
+                        }
                     }
                 } else if ("OPEN".equalsIgnoreCase(String.valueOf(data.get("taskType")))) {
                     Instant openTime = resolveOpenFillTime(credential, String.valueOf(data.get("symbol")),
