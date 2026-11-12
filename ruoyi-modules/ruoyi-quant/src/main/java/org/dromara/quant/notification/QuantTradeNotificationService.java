@@ -507,9 +507,19 @@ public class QuantTradeNotificationService {
                         log.error("更新平仓账户资金快照任务状态失败 notificationId={}", snapshotTask.getId(), ex);
                     }
                 }
-            } else if (snapshotTask == null) {
-                log.error("平仓后账户资金快照任务无法持久化 credentialId={} symbol={} orderId={}",
-                    credential.getId(), symbol, orderId);
+            } else {
+                if (snapshotTask == null) {
+                    log.error("平仓后账户资金快照任务无法持久化 credentialId={} symbol={} orderId={}",
+                        credential.getId(), symbol, orderId);
+                }
+                // 另一个线程可能正在采集或已经完成同一订单的快照。
+                // 任务租约只负责避免重复持久化，不应导致本次邮件丢失可即时取得的账户资金。
+                try {
+                    account = gateway.queryAccountFresh(exchangeCredential);
+                } catch (RuntimeException ex) {
+                    log.warn("平仓通知并发快照兜底查询失败 credentialId={} symbol={} orderId={}",
+                        credential.getId(), symbol, orderId, ex);
+                }
             }
         } else {
             log.warn("平仓时间已超出即时账户快照窗口，不使用当前余额冒充平仓时余额 credentialId={} symbol={} orderId={} closeTime={}",
