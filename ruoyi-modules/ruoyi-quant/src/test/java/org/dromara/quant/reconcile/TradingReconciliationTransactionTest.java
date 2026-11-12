@@ -602,7 +602,11 @@ class TradingReconciliationTransactionTest {
             .thenReturn(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(1));
         when(fillCursors.selectLastCompleteTo(1L, "ETHUSDT")).thenReturn(null);
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
-        when(gateway.queryTrades(any(), eq("ETHUSDT"), any())).thenThrow(new IllegalStateException("history unavailable"));
+        when(gateway.queryTrades(any(), eq("ETHUSDT"), any())).thenAnswer(call -> {
+            ExchangeGateway.TimeRange window = call.getArgument(2);
+            assertTrue(java.time.Duration.between(window.from(), window.to()).compareTo(java.time.Duration.ofDays(6)) <= 0);
+            throw new IllegalStateException("history unavailable");
+        });
         when(orders.selectOne(any())).thenReturn(null);
 
         assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 24));
@@ -612,6 +616,26 @@ class TradingReconciliationTransactionTest {
         var persistedOrder = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.order.domain.QuantOrder.class);
         verify(orders, times(1)).insert(persistedOrder.capture());
         assertEquals("BTCUSDT", persistedOrder.getValue().getSymbol());
+    }
+
+    @Test
+    void deferredHistoryOrderReadStillCommitsKnownSymbolFillCursor() {
+        stubCommonFacts();
+        when(fillCursors.selectSymbols(1L)).thenReturn(List.of("BTCUSDT"));
+        when(fillCursors.selectLastCompleteTo(1L, "BTCUSDT"))
+            .thenReturn(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(1));
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenThrow(
+            new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException(
+                "QUEUE_FULL", "BACKGROUND", 16, new int[]{0, 0, 0, 16}, 0L, 2_000L));
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+
+        assertThrows(org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException.class,
+            () -> service().reconcileCredential(credential(), 24));
+
+        verify(fillCursorService).advance(eq(1L), eq("BTCUSDT"), any(java.time.LocalDateTime.class));
+        var record = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.reconcile.domain.QuantReconcileRecord.class);
+        verify(records).insert(record.capture());
+        assertTrue(record.getValue().getDetailJson().contains("\"historyOrdersSyncDeferred\":true"));
     }
 
     @Test

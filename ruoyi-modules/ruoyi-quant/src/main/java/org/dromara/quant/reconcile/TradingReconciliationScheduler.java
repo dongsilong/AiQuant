@@ -58,7 +58,7 @@ public class TradingReconciliationScheduler {
 
     private void runReconciliation(QuantCredential credential, int historyHours) {
         Long credentialId = credential.getId();
-        if (credentialId == null) {
+        if (credentialId == null || !properties.getReconcile().isEnabled()) {
             return;
         }
         ScheduledFuture<?> pending = retryTasks.get(credentialId);
