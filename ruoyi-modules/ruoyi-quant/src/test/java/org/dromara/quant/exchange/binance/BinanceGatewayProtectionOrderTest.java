@@ -81,6 +81,7 @@ class BinanceGatewayProtectionOrderTest {
         } finally {
             server.stop(0);
         }
+    }
 
     @org.junit.jupiter.api.Test
     void protectionOrderPassesMarkPriceWorkingType() throws Exception {
@@ -115,6 +116,5 @@ class BinanceGatewayProtectionOrderTest {
         } finally {
             server.stop(0);
         }
-    }
     }
 }
