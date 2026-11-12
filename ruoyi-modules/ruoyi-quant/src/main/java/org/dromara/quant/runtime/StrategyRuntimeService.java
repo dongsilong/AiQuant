@@ -4056,8 +4056,11 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                         }
                         boolean hardStopAlreadyTriggered = failure instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException rejected
                             && Integer.valueOf(-2021).equals(rejected.code());
-                        if (hardStopAlreadyTriggered) {
-                            log.error("Binance -2021 拒绝硬止损条件单，停止本轮其它保护单提交并立即启动本地镜像退出 instanceId={} credentialId={} symbol={} positionId={} triggerPrice={} currentPrice={}",
+                        if (!hardStopConfirmed) {
+                            // 整仓硬止损未确认时，不再串行提交动态止盈/阶梯保护。
+                            // 本地镜像退出必须尽快接管；其它已有交易所保护单保持不动，
+                            // 后续持仓核验再恢复缺失的交易所保护，不能用非硬止损请求拖延兜底。
+                            log.error("Binance 硬止损尚未确认，跳过本轮非紧急保护同步并保留本地镜像保护 instanceId={} credentialId={} symbol={} positionId={} triggerPrice={} currentPrice={}",
                                 runtime.instance.getId(), work.credentialId(), work.position().getSymbol(), work.position().getId(),
                                 work.position().getProtectionStopLossPrice(), runtime.currentPrice(), failure);
                         } else {
