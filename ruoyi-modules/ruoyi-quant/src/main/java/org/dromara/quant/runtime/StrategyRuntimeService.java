@@ -1293,6 +1293,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.marketHealthy = false;
                 runtime.latestTradePrice = null;
                 runtime.latestTradeEventAt = null;
+                runtime.latestMarkPrice = null;
                 return;
             }
             if ("DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
@@ -1300,6 +1301,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.marketHealthy = false;
                 runtime.latestTradePrice = null;
                 runtime.latestTradeEventAt = null;
+                runtime.latestMarkPrice = null;
                 return;
             }
             if ("CONNECTED".equals(event.type())) {
