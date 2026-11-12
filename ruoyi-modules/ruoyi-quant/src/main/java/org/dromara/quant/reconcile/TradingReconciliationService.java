@@ -1020,26 +1020,50 @@ public class TradingReconciliationService {
         Set<String> projectionDirtySymbols = new HashSet<>();
         for (ExchangeGateway.OrderSnapshot s : snapshots) {
             String clientOrderId = s.clientOrderId() == null ? "EXCHANGE:" + s.orderId() : s.clientOrderId();
+            boolean matchedByExchangeOrderId = false;
             QuantOrder entity = s.orderId() == null ? null :
                 orderMapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credential.getId()).eq(QuantOrder::getSymbol, s.symbol())
                     .eq(QuantOrder::getExchangeOrderId, s.orderId()));
+            matchedByExchangeOrderId = entity != null;
             if (entity == null) {
                 entity = orderMapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credential.getId()).eq(QuantOrder::getClientOrderId,
                     clientOrderId).eq(QuantOrder::getSymbol, s.symbol()));
             }
-            if (entity != null && (
-                s.orderId() != null && entity.getExchangeOrderId() != null && !entity.getExchangeOrderId().equals(s.orderId())
-                    || s.clientOrderId() != null && !s.clientOrderId().isBlank()
-                        && entity.getClientOrderId() != null && !entity.getClientOrderId().startsWith("EXCHANGE:")
-                        && !entity.getClientOrderId().equals(s.clientOrderId())
-                    || s.side() != null && entity.getSide() != null && !entity.getSide().equalsIgnoreCase(s.side())
-                    || s.positionSide() != null && entity.getPositionSide() != null && !entity.getPositionSide().isBlank()
-                        && !entity.getPositionSide().equalsIgnoreCase(s.positionSide())
-                    || s.reduceOnly() != null && "BINANCE_REST".equals(entity.getReduceOnlySource())
-                        && entity.getReduceOnly() != null && !entity.getReduceOnly().equals(s.reduceOnly())
-                    || s.closePosition() != null && entity.getClosePosition() != null
-                        && !entity.getClosePosition().equals(s.closePosition()))) {
-                throw new IllegalStateException("Binance 订单身份、方向或持仓来源事实与本地账本冲突，拒绝覆盖 orderId=" + s.orderId());
+            if (entity != null) {
+                List<String> conflictingFields = new ArrayList<>(6);
+                if (s.orderId() != null && entity.getExchangeOrderId() != null && !entity.getExchangeOrderId().equals(s.orderId())) {
+                    conflictingFields.add("exchangeOrderId(local=" + entity.getExchangeOrderId() + ",exchange=" + s.orderId() + ")");
+                }
+                if (s.clientOrderId() != null && !s.clientOrderId().isBlank()
+                    && entity.getClientOrderId() != null && !entity.getClientOrderId().startsWith("EXCHANGE:")
+                    && !entity.getClientOrderId().equals(s.clientOrderId())) {
+                    conflictingFields.add("clientOrderId(local=" + entity.getClientOrderId() + ",exchange=" + s.clientOrderId() + ")");
+                }
+                if (s.side() != null && entity.getSide() != null && !entity.getSide().equalsIgnoreCase(s.side())) {
+                    conflictingFields.add("side(local=" + entity.getSide() + ",exchange=" + s.side() + ")");
+                }
+                if (s.positionSide() != null && entity.getPositionSide() != null && !entity.getPositionSide().isBlank()
+                    && !entity.getPositionSide().equalsIgnoreCase(s.positionSide())) {
+                    conflictingFields.add("positionSide(local=" + entity.getPositionSide() + ",exchange=" + s.positionSide() + ")");
+                }
+                if (s.reduceOnly() != null && "BINANCE_REST".equals(entity.getReduceOnlySource())
+                    && entity.getReduceOnly() != null && !entity.getReduceOnly().equals(s.reduceOnly())) {
+                    conflictingFields.add("reduceOnly(local=" + entity.getReduceOnly() + ",exchange=" + s.reduceOnly() + ")");
+                }
+                if (s.closePosition() != null && entity.getClosePosition() != null
+                    && !entity.getClosePosition().equals(s.closePosition())) {
+                    conflictingFields.add("closePosition(local=" + entity.getClosePosition() + ",exchange=" + s.closePosition() + ")");
+                }
+                if (!conflictingFields.isEmpty()) {
+                    throw new IllegalStateException("Binance 订单身份、方向或持仓来源事实与本地账本冲突，拒绝覆盖"
+                        + " credentialId=" + credential.getId()
+                        + " symbol=" + s.symbol()
+                        + " orderId=" + s.orderId()
+                        + " clientOrderId=" + s.clientOrderId()
+                        + " localOrderId=" + entity.getId()
+                        + " matchedBy=" + (matchedByExchangeOrderId ? "EXCHANGE_ORDER_ID" : "CLIENT_ORDER_ID")
+                        + " conflictingFields=[" + String.join(", ", conflictingFields) + "]");
+                }
             }
             boolean sourceFactsChanged = entity == null
                 || entity.getExchangeOrderId() == null && s.orderId() != null
