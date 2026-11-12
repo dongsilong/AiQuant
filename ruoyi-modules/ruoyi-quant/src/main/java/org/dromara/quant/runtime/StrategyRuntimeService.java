@@ -1321,9 +1321,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.market.lastKlineEventAt = event.eventTime();
                 runtime.lastEvaluatedKlineOpenTime = event.kline().openTime();
             }
-            if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && runtime.position != null && !runtime.exitCoordinating.get()) {
-                // Binance 条件单使用 CONTRACT_PRICE；MARK_PRICE 仅用于账户表现统计，不能推进保护阶梯。
-                updateRuntimeMaximumReturnRate(runtime, event.price());
+            if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
+                runtime.latestMarkPrice = event.price();
+                if (runtime.position != null && !runtime.exitCoordinating.get()) {
+                    updateRuntimeMaximumReturnRate(runtime, event.price());
+                }
             }
             if (event.replay()) {
                 // 成交补偿仅恢复开仓后的峰值，不产生回溯下单。
@@ -2374,7 +2376,9 @@ evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePerc
         List<ProtectionSignal> signals = new ArrayList<>(runtime.plugin.evaluateProtection(context, params));
         if (runtime.plugin instanceof KlineSlopeRateStrategy && runtime.state != null && runtime.state.getFrozenSymbolStopLossRatio() != null && !KlineSlopeRateStrategy.unifiedProtection(params)) {
             signals.add(new ProtectionSignal("SYMBOL_STOP", "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT,
-KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(), runtime.state.getFrozenSymbolStopLossRatio().negate(), context.leverage()),
+(KlineSlopeRateStrategy.markPriceProtection(params)
+    ? KlineSlopeRateStrategy.priceForMarkReturn(context.entryPrice(), context.direction(), runtime.state.getFrozenSymbolStopLossRatio().negate(), context.leverage())
+    : KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(), runtime.state.getFrozenSymbolStopLossRatio().negate(), context.leverage())),
 "交易对绑定止损"));
         }
         return signals;
@@ -2395,14 +2399,20 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
         if (hard != null) {
             signals.addFirst(new ProtectionSignal("HARD_STOP", "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT,
              KlineSlopeRateStrategy.unifiedProtection(frozenParams(runtime)) && runtime.state.getStopLossPrice() != null ? runtime.state.getStopLossPrice()
-                : KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(), hard.negate(), context.leverage()), "固定硬止损"));
+                : (KlineSlopeRateStrategy.markPriceProtection(frozenParams(runtime))
+                    ? KlineSlopeRateStrategy.priceForMarkReturn(context.entryPrice(), context.direction(), hard.negate(), context.leverage())
+                    : KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(), hard.negate(), context.leverage())), "固定硬止损"));
         }
         for (ProtectionSignal signal : signals) {
             BigDecimal trigger = runtime.protectionRule == null ? signal.triggerPrice()
                 : org.dromara.quant.exchange.QuantityNormalizer.protectionPrice(signal.triggerPrice(), runtime.protectionRule, context.direction(), signal.orderType());
             boolean shortPosition = "SHORT".equalsIgnoreCase(context.direction());
             boolean profit = "TAKE_PROFIT_MARKET".equals(signal.orderType());
-            boolean triggered = shortPosition == profit ? context.currentPrice().compareTo(trigger) <= 0 : context.currentPrice().compareTo(trigger) >= 0;
+            BigDecimal triggerPrice = KlineSlopeRateStrategy.markPriceProtection(frozenParams(runtime)) ? context.markPrice() : context.currentPrice();
+            if (triggerPrice == null) {
+                continue;
+            }
+            boolean triggered = shortPosition == profit ? triggerPrice.compareTo(trigger) <= 0 : triggerPrice.compareTo(trigger) >= 0;
             if (!triggered) {
                 continue;
             }
@@ -2813,7 +2823,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             (position == null ? BigDecimal.ZERO : position.getQuantity()) : runtime.state.getInitialPositionQty(), position == null ? BigDecimal.ZERO : position.getMargin(),
              leverage, runtime.state == null ? null : runtime.state.getHighestPriceSinceEntry(), runtime.state == null ? null : runtime.state.getLowestPriceSinceEntry(),
             runtime.state != null && Boolean.TRUE.equals(runtime.state.getFirstTakeProfitTriggered()), runtime.state == null || runtime.state.getHighestStep() == null ? 0 :
-               runtime.state.getHighestStep());
+               runtime.state.getHighestStep(), runtime.latestMarkPrice != null ? runtime.latestMarkPrice : position == null ? null : position.getMarkPrice());
     }
 
     /**
@@ -2859,7 +2869,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
         Map<String, Object> snapshotParams = new java.util.LinkedHashMap<>(runtime.params);
         snapshotParams.remove(KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY);
         if (runtime.plugin instanceof KlineSlopeRateStrategy) {
-            snapshotParams.put(KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY, 2);
+            snapshotParams.put(KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY, 3);
         }
         state.setStrategyParamsSnapshot(writeParams(snapshotParams));
         state.setFrozenStopLossRatio(runtime.plugin instanceof KlineSlopeRateStrategy
@@ -3964,7 +3974,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                             QuantPosition snapshot = new QuantPosition();
                             BeanUtils.copyProperties(runtime.position, snapshot);
                             snapshot.setProtectionCycleKey(runtime.state == null ? null : runtime.state.getPositionCycleKey());
-                            snapshot.setProtectionPolicyVersion(runtime.plugin instanceof KlineSlopeRateStrategy && KlineSlopeRateStrategy.unifiedProtection(frozenParams(runtime)) ? 2 : null);
+                            snapshot.setProtectionPolicyVersion(runtime.plugin instanceof KlineSlopeRateStrategy && KlineSlopeRateStrategy.markPriceProtection(frozenParams(runtime)) ? 3
+                                 : runtime.plugin instanceof KlineSlopeRateStrategy && KlineSlopeRateStrategy.unifiedProtection(frozenParams(runtime)) ? 2 : null);
                             if (runtime.state != null && runtime.state.getFrozenLeverage() != null) {
                                 snapshot.setLeverage(runtime.state.getFrozenLeverage());
                                 snapshot.setEntryPrice(runtime.state.getEntryPrice());
@@ -5107,6 +5118,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private boolean partialOpenProtectionVerified;
         private BigDecimal latestTradePrice;
         private Instant latestTradeEventAt;
+        private BigDecimal latestMarkPrice;
         // 健康回调直接关闭决策，不能等待普通行情队列的断线通知。
         private volatile boolean marketStreamReady;
         private volatile long nextReconcileAt;
