@@ -853,6 +853,7 @@ class ProtectionOrderServiceTest {
     @Test
     void missingLocalProtectionRecoversMatchingUnknownCancelOnlyFromExactTerminalFact() {
         QuantProtectionOrder local = order();
+        local.setPositionSide("LONG");
         local.setStatus("MISSING");
         when(mapper.selectList(any())).thenReturn(List.of(local));
         when(dispatcher.activeProtectionTicket(1L, "BTCUSDT", local.getClientOrderId(), "PROTECT_CANCEL")).thenReturn("pending-protection-cancel");
