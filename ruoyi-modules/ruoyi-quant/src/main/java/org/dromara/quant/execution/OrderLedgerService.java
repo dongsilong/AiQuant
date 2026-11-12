@@ -89,7 +89,11 @@ public class OrderLedgerService {
         entity.setAveragePrice(snapshot.averagePrice() != null && snapshot.averagePrice().signum() > 0 ? snapshot.averagePrice() : null);
         entity.setOriginalQuantity(snapshot.originalQuantity());
         entity.setExecutedQuantity(snapshot.executedQuantity());
-        entity.setReduceOnly(snapshot.reduceOnly());
+        if (snapshot.reduceOnly() != null) {
+            entity.setReduceOnly(snapshot.reduceOnly());
+            entity.setReduceOnlySource("BINANCE_REST");
+        }
+        entity.setClosePosition(snapshot.closePosition());
         entity.setUpdatedAt(snapshot.updateTime() == null ? LocalDateTime.now(ZoneOffset.UTC) : LocalDateTime.ofInstant(snapshot.updateTime(), java.time.ZoneOffset.UTC));
         return persistMonotonic(entity);
     }
