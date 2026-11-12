@@ -230,7 +230,7 @@ class QuantTradeNotificationServiceTest {
             && "FACT_PENDING".equals(updated.getChannel())));
         var snapshotWrite = ArgumentCaptor.forClass(Object[].class);
         verify(jdbc).update(contains("UPDATE quant_trade_close_equity"), snapshotWrite.capture());
-        assertEquals("REST_FALLBACK", snapshotWrite.getValue()[3]);
+        assertEquals("REST_CLOSE_QUERY", snapshotWrite.getValue()[3]);
         assertTrue(snapshotWrite.getValue()[8] instanceof java.time.LocalDateTime);
         assertTrue(snapshotWrite.getValue()[9] instanceof java.time.LocalDateTime);
         assertTrue(content.contains("实际平仓均价: 102"));
@@ -436,7 +436,7 @@ class QuantTradeNotificationServiceTest {
         verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), values.capture());
         assertEquals(new BigDecimal("1003"), values.getValue()[0]);
         assertEquals(new BigDecimal("1000"), values.getValue()[1]);
-        assertEquals("REST_FALLBACK", values.getValue()[3]);
+        assertEquals("REST_CLOSE_QUERY", values.getValue()[3]);
         assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(closeMillis), java.time.ZoneOffset.UTC),
             values.getValue()[4]);
         assertNull(values.getValue()[5]);
