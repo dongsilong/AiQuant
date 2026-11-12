@@ -971,7 +971,7 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
-    void recentFillsInOneBatchShareOnePostFillWalletSnapshotRequest() {
+    void recentFillsInOneBatchCaptureOnlyTheLatestOrderWalletSnapshot() {
         initializeManualSyncMapperMetadata();
         Instant recentTime = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
         var firstFill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 911L, 802L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
@@ -996,7 +996,8 @@ class TradingReconciliationTransactionTest {
             service(), "syncTrades", credential(), List.of(firstFill, secondFill));
 
         verify(gateway, timeout(2000).times(1)).queryAccountFresh(any());
-        verify(orders, timeout(2000).times(2)).savePostFillBalanceSnapshot(anyLong(), eq(BigDecimal.TEN), any());
+        verify(orders, timeout(2000)).savePostFillBalanceSnapshot(eq(703L), eq(BigDecimal.TEN), any());
+        verify(orders, never()).savePostFillBalanceSnapshot(eq(702L), any(), any());
     }
 
 }
