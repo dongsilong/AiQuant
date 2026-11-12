@@ -587,9 +587,10 @@ public class QuantTradeNotificationService {
             return;
         }
         Instant streamReceivedAt = Instant.now();
+        // ORDER_TRADE_UPDATE 的 E/接收时间不是 ACCOUNT_UPDATE 元数据，不能写入对应字段。
         QuantNotification task = enqueuePendingCloseSnapshot(credentialId, symbol, orderId,
             Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime,
-            null, event.eventTime(), streamReceivedAt);
+            null, null, null);
         if (task == null) {
             activeStreamCloseCaptures.remove(captureKey);
             log.error("平仓账户资金快照无法建立持久化任务 credentialId={} symbol={} orderId={}",
@@ -612,7 +613,7 @@ public class QuantTradeNotificationService {
                 task.setLeaseUntil(leaseUntil);
                 if (captureCloseEquitySnapshot(credentialId, credential, symbol, orderId,
                     Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime,
-                    null, event.eventTime(), streamReceivedAt)) {
+                    null, null, null)) {
                     task.setStatus("SENT");
                     task.setSentAt(LocalDateTime.now());
                     task.setNextRetryAt(null);
