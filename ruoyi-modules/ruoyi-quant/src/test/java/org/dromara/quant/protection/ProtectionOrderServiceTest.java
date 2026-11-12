@@ -134,6 +134,21 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void v3HardStopUsesMarkRoiAndPersistsMarkWorkingType() {
+        position.setProtectionPolicyVersion(3);
+        when(gateway.placeProtectionOrder(any())).thenAnswer(call -> new ExchangeGateway.ProtectionOrderResult(55L,
+            call.<ExchangeGateway.ProtectionOrderRequest>getArgument(0).clientOrderId(), "NEW"));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenAnswer(call -> snapshot(55L, call.getArgument(2), BigDecimal.ONE, "NEW", null));
+
+        var protection = service.placeMarginHardStop(1L, position, new BigDecimal("0.1"), true);
+
+        assertEquals(0, new BigDecimal("99.01").compareTo(protection.getStopPrice()));
+        assertEquals("MARK_PRICE", protection.getWorkingType());
+        verify(gateway).placeProtectionOrder(argThat(request -> "MARK_PRICE".equals(request.workingType())
+            && new BigDecimal("99.01").compareTo(request.stopPrice()) == 0));
+    }
+
+    @Test
     void unknownLiveAlgoPlacementKeepsDispatchGuardOccupied() {
         when(gateway.placeProtectionOrder(any())).thenThrow(new IllegalStateException("Binance timeout"));
         when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenThrow(new IllegalStateException("query unavailable"));
