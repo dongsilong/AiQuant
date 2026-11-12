@@ -59,6 +59,7 @@ class StrategyFillJournalMapperTest {
         assertEquals(1, mapper.insertRaw(raw));
         var stored = mapper.selectByKey(2L, "BTCUSDT", 3L);
         assertNull(stored.getCommission());
+        assertNull(stored.getCommissionAsset());
         assertNull(stored.getRealizedPnl());
         assertEquals("SHORT", stored.getPositionSide());
         assertEquals("CAPTURED", stored.getAttributionStatus());
