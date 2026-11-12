@@ -245,6 +245,44 @@ class QuantTradeNotificationServiceTest {
 
 
     @Test
+    void closeNotificationDoesNotRepeatAccountQueryWhenAnotherWorkerOwnsSnapshot() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-close-snapshot-owned-elsewhere-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(43L);
+            return 1;
+        });
+        when(mapper.claim(eq(43L), any(), any())).thenReturn(0);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        credential.setAccountName("test-account");
+        credential.setApiKey("test-key");
+        credential.setSecretKey("test-secret");
+        credential.setSignatureType("HMAC");
+        credential.setRunMode("TESTNET");
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), isNull())).thenReturn(
+            new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "client-close", "SELL", "MARKET", "FILLED",
+                BigDecimal.ZERO, BigDecimal.valueOf(2), BigDecimal.valueOf(2), Instant.now(), BigDecimal.valueOf(102)));
+        when(gateway.queryTradesByOrder(any(), eq("BTCUSDT"), eq(99L), any(), eq(1000L))).thenReturn(List.of(
+            new ExchangeGateway.TradeSnapshot("BTCUSDT", 1L, 99L, "SELL", BigDecimal.ONE, BigDecimal.valueOf(101),
+                new BigDecimal("0.01"), BigDecimal.ONE, Instant.now(), "USDT", "LONG"),
+            new ExchangeGateway.TradeSnapshot("BTCUSDT", 2L, 99L, "SELL", BigDecimal.ONE, BigDecimal.valueOf(103),
+                new BigDecimal("0.02"), BigDecimal.valueOf(2), Instant.now(), "USDT", "LONG")));
+
+        service.notifyCloseByOrder(null, credential, "BTCUSDT", "LONG", BigDecimal.valueOf(2), BigDecimal.valueOf(100),
+            99L, "USDT", new BigDecimal("5.86351456"), "MANUAL", "test close");
+
+        verify(gateway, never()).queryAccountFresh(any());
+        verify(jdbc, never()).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+    }
+
+    @Test
     void canceledStrategyCloseWithPartialFillUsesConfirmedFillFacts() {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-partial-close-test"), QuantNotification.class);
