@@ -148,10 +148,10 @@ class OrderLedgerMonotonicTest {
     void postFillBalanceSnapshotUsesDatabaseThrottleAndPersistsObservedTime() throws Exception {
         var f = fixture();
         var requestedAt = LocalDateTime.now();
-        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt));
-        assertEquals(0, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(10)));
+        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt, requestedAt.minusSeconds(1)));
+        assertEquals(0, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(10), requestedAt.minusSeconds(1)));
         f.jdbc().update("UPDATE quant_order SET post_fill_balance_requested_at=TIMESTAMPADD(SECOND, -31, CURRENT_TIMESTAMP) WHERE id=1");
-        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(31)));
+        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(31), requestedAt.minusSeconds(1)));
         assertEquals(1, f.mapper().savePostFillBalanceSnapshot(1L, new BigDecimal("125.5"), requestedAt.plusSeconds(32)));
         assertEquals(0, new BigDecimal("125.5").compareTo(f.jdbc().queryForObject("SELECT post_fill_wallet_balance FROM quant_order WHERE id=1", BigDecimal.class)));
     }
