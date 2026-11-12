@@ -170,21 +170,12 @@ public class TradingReconciliationService {
     public record TradingDataSyncResult(int symbolCount, int orderCount, int tradeCount) {
     }
 
-    public record TradingDataSyncProgress(int totalSymbolCount, int completedSymbolCount, String currentSymbol,
-                                          int orderCount, int tradeCount) {
-    }
-
     /**
      * Manually synchronize historical order and fill facts as one account-symbol unit.
      * Order facts come from allOrders history windows, not the current open-order snapshot.
      * Exchange reads are completed before the short per-symbol write transaction.
      */
     public TradingDataSyncResult syncTradingData(QuantCredential credential, String requestedSymbol) {
-        return syncTradingData(credential, requestedSymbol, null);
-    }
-
-    public TradingDataSyncResult syncTradingData(QuantCredential credential, String requestedSymbol,
-                                                  java.util.function.Consumer<TradingDataSyncProgress> progressListener) {
         if (credential == null || credential.getId() == null) {
             throw new IllegalArgumentException("交易账户不能为空");
         }
@@ -198,18 +189,14 @@ public class TradingReconciliationService {
         Map<String, List<ExchangeGateway.OrderSnapshot>> ordersBySymbol = collectManualOrderHistory(
             exchangeCredential, credential.getId(), symbolFilter, historyStart, historyEnd);
         if (ordersBySymbol.isEmpty()) {
-            reportSyncProgress(progressListener, 0, 0, null, 0, 0);
             return new TradingDataSyncResult(0, 0, 0);
         }
 
         int orderCount = 0;
         int tradeCount = 0;
-        int completedSymbolCount = 0;
-        reportSyncProgress(progressListener, ordersBySymbol.size(), completedSymbolCount, null, orderCount, tradeCount);
         for (Map.Entry<String, List<ExchangeGateway.OrderSnapshot>> entry : ordersBySymbol.entrySet()) {
             String symbol = entry.getKey();
             List<ExchangeGateway.OrderSnapshot> orders = entry.getValue();
-            reportSyncProgress(progressListener, ordersBySymbol.size(), completedSymbolCount, symbol, orderCount, tradeCount);
             try {
                 List<ExchangeGateway.TradeSnapshot> trades = tradeCollector.collectByOrders(
                     exchangeCredential, symbol, orders, historyStart, historyEnd);
@@ -248,8 +235,6 @@ public class TradingReconciliationService {
                         + (reason == null || reason.isBlank() ? "" : "：" + reason) + "；可重试同步重新生成交易记录", failure);
                 }
             }
-            completedSymbolCount++;
-            reportSyncProgress(progressListener, ordersBySymbol.size(), completedSymbolCount, null, orderCount, tradeCount);
         }
 
         if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
@@ -265,14 +250,6 @@ public class TradingReconciliationService {
         log.info("手动历史同步完成 credentialId={} symbolCount={} orderCount={} tradeCount={} historyStart={} historyEnd={} mode=ACCOUNT_ORDER_FIRST_90D",
             credential.getId(), ordersBySymbol.size(), orderCount, tradeCount, historyStart, historyEnd);
         return new TradingDataSyncResult(ordersBySymbol.size(), orderCount, tradeCount);
-    }
-
-    private static void reportSyncProgress(java.util.function.Consumer<TradingDataSyncProgress> listener,
-                                            int totalSymbols, int completedSymbols, String currentSymbol,
-                                            int orderCount, int tradeCount) {
-        if (listener != null) {
-            listener.accept(new TradingDataSyncProgress(totalSymbols, completedSymbols, currentSymbol, orderCount, tradeCount));
-        }
     }
 
     private Map<String, List<ExchangeGateway.OrderSnapshot>> collectManualOrderHistory(ExchangeGateway.Credential credential, Long credentialId,
