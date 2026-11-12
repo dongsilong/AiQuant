@@ -964,6 +964,9 @@ public class TradingReconciliationService {
         for (String symbol : symbols) {
             LocalDateTime storedCursor = fillSyncCursors.selectLastCompleteTo(credential.getId(), symbol);
             Instant from = storedCursor == null ? range.from() : storedCursor.toInstant(ZoneOffset.UTC);
+            if (from.isBefore(range.from())) {
+                from = range.from();
+            }
             Instant to = range.to();
             LocalDateTime futureCursor = null;
             if (from.isAfter(to)) {
