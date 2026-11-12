@@ -1489,7 +1489,8 @@ public class TradingReconciliationService {
         Thread.startVirtualThread(() -> {
             try {
                 LocalDateTime requestedAt = LocalDateTime.now(ZoneOffset.UTC);
-                if (orderMapper.claimPostFillBalanceSnapshot(orderId, requestedAt) != 1) {
+                LocalDateTime latestFillTime = LocalDateTime.ofInstant(candidate.fillTime(), ZoneOffset.UTC);
+                if (orderMapper.claimPostFillBalanceSnapshot(orderId, requestedAt, latestFillTime) != 1) {
                     return;
                 }
                 ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
