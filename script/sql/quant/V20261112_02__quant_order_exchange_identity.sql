@@ -1,5 +1,6 @@
 -- V20261112_02: use the Binance exchange order identity as the durable order key.
--- Run against the application's active quantdb after taking a database backup.
+-- DRAFT: validate on an isolated staging clone restored from the deployed database.
+-- Do NOT run on the primary LIVE database until the staging-clone acceptance gate passes.
 --
 -- IMPORTANT:
 -- 1. Run the duplicate check below first. It must return no rows.
