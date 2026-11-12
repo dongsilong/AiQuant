@@ -69,6 +69,7 @@ public class TradingReconciliationScheduler {
             return;
         }
         try {
+            reconciliationService.recoverMissingTradeLedger(credential);
             reconciliationService.reconcileCredential(credential, historyHours);
             clearRetry(credentialId);
         } catch (TradingReconciliationService.SnapshotSupersededException ex) {
