@@ -2378,9 +2378,7 @@ evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePerc
         List<ProtectionSignal> signals = new ArrayList<>(runtime.plugin.evaluateProtection(context, params));
         if (runtime.plugin instanceof KlineSlopeRateStrategy && runtime.state != null && runtime.state.getFrozenSymbolStopLossRatio() != null && !KlineSlopeRateStrategy.unifiedProtection(params)) {
             signals.add(new ProtectionSignal("SYMBOL_STOP", "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT,
-(KlineSlopeRateStrategy.markPriceProtection(params)
-    ? KlineSlopeRateStrategy.priceForMarkReturn(context.entryPrice(), context.direction(), runtime.state.getFrozenSymbolStopLossRatio().negate(), context.leverage())
-    : KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(), runtime.state.getFrozenSymbolStopLossRatio().negate(), context.leverage())),
+KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(), runtime.state.getFrozenSymbolStopLossRatio().negate(), context.leverage()),
 "交易对绑定止损"));
         }
         return signals;
