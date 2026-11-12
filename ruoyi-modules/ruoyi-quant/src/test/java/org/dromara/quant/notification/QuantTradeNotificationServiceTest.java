@@ -238,6 +238,7 @@ class QuantTradeNotificationServiceTest {
         assertTrue(content.contains("交易所已实现盈亏（未扣手续费）: 3 USDT"));
         assertTrue(content.contains("手续费: 0.03 USDT"));
         assertTrue(content.contains("钱包余额: 1000 USDT"));
+        verify(gateway, times(1)).queryAccountFresh(any());
         assertTrue(content.contains("账户权益: 1003 USDT"));
         assertTrue(content.contains("可用余额: 900 USDT"));
     }
