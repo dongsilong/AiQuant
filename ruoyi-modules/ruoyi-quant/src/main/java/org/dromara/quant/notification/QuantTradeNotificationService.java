@@ -735,7 +735,8 @@ public class QuantTradeNotificationService {
             || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
-        if (!isVerifiedCloseOrder(credentialId, credential, symbol, orderId, clientOrderId)) {
+        if (!isVerifiedCloseOrder(credentialId, credential, symbol, orderId, clientOrderId)
+            || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
         if (hasCompleteCloseEquitySnapshot(credentialId, symbol, orderId)) {
