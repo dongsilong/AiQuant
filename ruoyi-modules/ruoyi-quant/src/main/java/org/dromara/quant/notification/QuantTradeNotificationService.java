@@ -415,7 +415,7 @@ public class QuantTradeNotificationService {
                     Instant restResponseReceivedAt = Instant.now();
                     boolean persisted = withinCloseSnapshotWindow(closeTime)
                         && persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
-                            "REST_FALLBACK", closeTime, null, null, null, restRequestStartedAt, restResponseReceivedAt);
+                            "REST_CLOSE_QUERY", closeTime, null, null, null, restRequestStartedAt, restResponseReceivedAt);
                     if (persisted && hasCompleteCloseEquitySnapshot(credential.getId(), symbol, orderId)) {
                         snapshotTask.setStatus("SENT");
                         snapshotTask.setSentAt(LocalDateTime.now());
@@ -750,7 +750,7 @@ public class QuantTradeNotificationService {
             return false;
         }
         boolean persisted = persistCloseEquitySnapshot(credentialId, symbol, orderId, account,
-            "REST_FALLBACK", closeEventTime, accountUpdateTransactionTime,
+            "REST_CLOSE_QUERY", closeEventTime, accountUpdateTransactionTime,
             accountUpdateEventTime, accountUpdateReceivedAt, restRequestStartedAt, restResponseReceivedAt);
         return persisted && hasCompleteCloseEquitySnapshot(credentialId, symbol, orderId);
     }
