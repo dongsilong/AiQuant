@@ -646,7 +646,8 @@ public class QuantTradeNotificationService {
         });
     }
 
-    private boolean isVerifiedCloseOrder(Long credentialId, String symbol, Long orderId, String clientOrderId) {
+    private boolean isVerifiedCloseOrder(Long credentialId, ExchangeGateway.Credential credential,
+                                          String symbol, Long orderId, String clientOrderId) {
         Integer matched = jdbcTemplate.queryForObject("""
             SELECT EXISTS (
                 SELECT 1
@@ -668,7 +669,34 @@ public class QuantTradeNotificationService {
             """, Integer.class, credentialId, symbol, orderId,
             credentialId, symbol, orderId, credentialId, symbol, clientOrderId,
             credentialId, symbol, orderId);
-        return matched != null && matched == 1;
+        if (matched != null && matched == 1) {
+            return true;
+        }
+
+        try {
+            ExchangeGateway.OrderSnapshot order = gateway.queryOrder(credential, symbol, orderId, null);
+            if (order == null || !orderId.equals(order.orderId()) || !symbol.equalsIgnoreCase(order.symbol())
+                || clientOrderId != null && !clientOrderId.isBlank()
+                    && !clientOrderId.equals(order.clientOrderId())
+                || !Set.of("FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH")
+                    .contains(order.status() == null ? "" : order.status().toUpperCase(java.util.Locale.ROOT))
+                || order.executedQuantity() == null || order.executedQuantity().signum() <= 0) {
+                return false;
+            }
+
+            String positionSide = order.positionSide() == null ? "" : order.positionSide().toUpperCase(java.util.Locale.ROOT);
+            String side = order.side() == null ? "" : order.side().toUpperCase(java.util.Locale.ROOT);
+            return switch (positionSide) {
+                case "LONG" -> "SELL".equals(side);
+                case "SHORT" -> "BUY".equals(side);
+                case "", "BOTH" -> Boolean.TRUE.equals(order.reduceOnly()) || Boolean.TRUE.equals(order.closePosition());
+                default -> false;
+            };
+        } catch (RuntimeException ex) {
+            log.warn("平仓资金快照无法通过 Binance 订单回查确认身份 credentialId={} symbol={} orderId={} errorType={}",
+                credentialId, symbol, orderId, ex.getClass().getSimpleName());
+            return false;
+        }
     }
 
     private boolean hasCompleteCloseEquitySnapshot(Long credentialId, String symbol, Long orderId) {
@@ -707,7 +735,7 @@ public class QuantTradeNotificationService {
             || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
-        if (!isVerifiedCloseOrder(credentialId, symbol, orderId, clientOrderId)) {
+        if (!isVerifiedCloseOrder(credentialId, credential, symbol, orderId, clientOrderId)) {
             return false;
         }
         if (hasCompleteCloseEquitySnapshot(credentialId, symbol, orderId)) {
