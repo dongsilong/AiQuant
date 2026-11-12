@@ -78,6 +78,7 @@ class OrderLedgerMonotonicTest {
     @Test
     void sameClientOrderIdWithDifferentExchangeOrderIdsRemainSeparateOrders() throws Exception {
         var f = fixture();
+        f.jdbc().update("UPDATE quant_order SET client_order_id=? WHERE id=1", "autoclose-same-client-id");
         var ledger = new OrderLedgerService(f.mapper());
         var liquidation = new org.dromara.quant.exchange.ExchangeGateway.OrderSnapshot(
             "BTCUSDT", 100L, "autoclose-same-client-id", "SELL", "LIMIT", "FILLED",
