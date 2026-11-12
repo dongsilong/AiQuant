@@ -545,34 +545,27 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
-    void orderIdentityConflictReportsMatchedLocalOrderAndConflictingField() {
+    void sameClientOrderIdDoesNotRebindDifferentExchangeOrderId() {
         initializeManualSyncMapperMetadata();
-        var local = new org.dromara.quant.order.domain.QuantOrder();
-        local.setId(88L);
-        local.setCredentialId(1L);
-        local.setSymbol("BRUSDT");
-        local.setExchangeOrderId(329283473L);
-        local.setClientOrderId("client-272");
-        local.setSide("BUY");
-        local.setPositionSide("LONG");
-        when(orders.selectOne(any())).thenReturn(null, local);
+        when(orders.selectOne(any())).thenReturn(null, null);
+        when(orders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
 
         var snapshot = new ExchangeGateway.OrderSnapshot("BRUSDT", 272662089L, "client-272",
             "BUY", "MARKET", "FILLED", BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE,
             Instant.now(), BigDecimal.ONE, "LONG", Boolean.FALSE, Instant.now(), Boolean.FALSE);
 
-        IllegalStateException conflict = assertThrows(IllegalStateException.class,
-            () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(
-                service(), "syncOrders", credential(), List.of(snapshot)));
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+            service(), "syncOrders", credential(), List.of(snapshot));
 
-        assertTrue(conflict.getMessage().contains("symbol=BRUSDT"));
-        assertTrue(conflict.getMessage().contains("orderId=272662089"));
-        assertTrue(conflict.getMessage().contains("clientOrderId=client-272"));
-        assertTrue(conflict.getMessage().contains("localOrderId=88"));
-        assertTrue(conflict.getMessage().contains("matchedBy=CLIENT_ORDER_ID"));
-        assertTrue(conflict.getMessage().contains("exchangeOrderId(local=329283473,exchange=272662089)"));
-        verify(orders, never()).insert(any(org.dromara.quant.order.domain.QuantOrder.class));
+        var inserted = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.order.domain.QuantOrder.class);
+        verify(orders).insert(inserted.capture());
         verify(orders, never()).mergeExchangeFactIfMonotonic(any(org.dromara.quant.order.domain.QuantOrder.class));
+        assertEquals(272662089L, inserted.getValue().getExchangeOrderId());
+        assertEquals("EXCHANGE_ORDER:BRUSDT:272662089", inserted.getValue().getIdempotencyKey());
+
+        var queries = org.mockito.ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(orders, times(2)).selectOne(queries.capture());
+        assertTrue(queries.getAllValues().get(1).getSqlSegment().contains("exchange_order_id IS NULL"));
     }
 
     private void initializeManualSyncMapperMetadata() {
