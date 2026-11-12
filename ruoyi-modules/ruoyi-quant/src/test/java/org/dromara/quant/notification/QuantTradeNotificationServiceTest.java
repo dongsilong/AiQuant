@@ -501,10 +501,10 @@ class QuantTradeNotificationServiceTest {
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
         long closeMillis = System.currentTimeMillis();
-        String payload = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + (closeMillis + 2)
-            + ",\\"T\\":" + (closeMillis + 1)
-            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"close-99\\","
-            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"2\\",\\"T\\":" + closeMillis + "}}";
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (closeMillis + 2)
+            + ",\"T\":" + (closeMillis + 1)
+            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
         when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
             ((QuantNotification) invocation.getArgument(0)).setId(931L);
             return 1;
@@ -543,10 +543,10 @@ class QuantTradeNotificationServiceTest {
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
         long closeMillis = System.currentTimeMillis();
-        String payload = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + (closeMillis + 2)
-            + ",\\"T\\":" + (closeMillis + 1)
-            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"open-99\\","
-            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"2\\",\\"T\\":" + closeMillis + "}}";
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (closeMillis + 2)
+            + ",\"T\":" + (closeMillis + 1)
+            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"open-99\","
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
         when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
             ((QuantNotification) invocation.getArgument(0)).setId(932L);
             return 1;
