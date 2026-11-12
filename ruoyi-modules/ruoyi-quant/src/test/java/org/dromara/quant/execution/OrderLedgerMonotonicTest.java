@@ -154,6 +154,7 @@ class OrderLedgerMonotonicTest {
         assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(31), requestedAt.minusSeconds(1)));
         assertEquals(1, f.mapper().savePostFillBalanceSnapshot(1L, new BigDecimal("125.5"), requestedAt.plusSeconds(32)));
         assertEquals(0, new BigDecimal("125.5").compareTo(f.jdbc().queryForObject("SELECT post_fill_wallet_balance FROM quant_order WHERE id=1", BigDecimal.class)));
+        f.jdbc().update("UPDATE quant_order SET post_fill_balance_requested_at=TIMESTAMPADD(SECOND, -31, CURRENT_TIMESTAMP) WHERE id=1");
         assertEquals(0, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(33), requestedAt.minusSeconds(1)));
         assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(34), requestedAt.plusSeconds(33)));
     }
