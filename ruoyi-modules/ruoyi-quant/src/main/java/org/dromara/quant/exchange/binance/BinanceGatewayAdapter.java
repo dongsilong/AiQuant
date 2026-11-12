@@ -1526,8 +1526,13 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             return new ProtectionOrderResult(null, request.clientOrderId(), "PAPER_ACCEPTED");
         }
         requireCredential(request.credential());
+        WorkingType workingType = switch (request.workingType() == null ? "CONTRACT_PRICE" : request.workingType().toUpperCase()) {
+            case "MARK_PRICE" -> WorkingType.MARK_PRICE;
+            case "CONTRACT_PRICE" -> WorkingType.CONTRACT_PRICE;
+            default -> throw new IllegalArgumentException("不支持的保护单触发价格类型: " + request.workingType());
+        };
         NewAlgoOrderRequest algo =
-            new NewAlgoOrderRequest().algoType(AlgoType.CONDITIONAL).symbol(request.symbol()).side(Side.fromValue(request.side().toUpperCase())).type(OrderType.fromValue((request.orderType() == null ? "STOP_MARKET" : request.orderType()).toUpperCase())).quantity(request.quantity().doubleValue()).triggerPrice(request.stopPrice().doubleValue()).workingType(WorkingType.CONTRACT_PRICE).clientAlgoId(request.clientOrderId());
+            new NewAlgoOrderRequest().algoType(AlgoType.CONDITIONAL).symbol(request.symbol()).side(Side.fromValue(request.side().toUpperCase())).type(OrderType.fromValue((request.orderType() == null ? "STOP_MARKET" : request.orderType()).toUpperCase())).quantity(request.quantity().doubleValue()).triggerPrice(request.stopPrice().doubleValue()).workingType(workingType).clientAlgoId(request.clientOrderId());
         if (request.positionSide() != null && !request.positionSide().isBlank()) {
             algo.positionSide(request.positionSide().toUpperCase());
         }
