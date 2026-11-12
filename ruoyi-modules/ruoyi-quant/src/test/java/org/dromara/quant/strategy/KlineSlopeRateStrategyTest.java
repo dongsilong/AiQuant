@@ -228,7 +228,7 @@ class KlineSlopeRateStrategyTest {
         var first = signals.stream().filter(signal -> signal.type().equals("FIRST_TP")).findFirst().orElseThrow();
         var step = signals.stream().filter(signal -> signal.type().equals("STEP_TP")).findFirst().orElseThrow();
         assertEquals(0, new BigDecimal("101.0101010101010101").compareTo(first.triggerPrice()));
-        assertEquals(0, BigDecimal.ZERO.compareTo(step.triggerPrice()));
+        assertEquals(0, new BigDecimal("100").compareTo(step.triggerPrice()));
         assertEquals(1, step.stepIndex());
     }
 
