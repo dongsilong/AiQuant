@@ -28,6 +28,7 @@ import org.dromara.quant.reconcile.domain.QuantReconcileRecord;
 import org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
+import org.dromara.quant.reconcile.mapper.TradeLedgerRecoveryMapper;
 import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
@@ -122,6 +123,7 @@ public class TradingReconciliationService {
     private final org.dromara.quant.execution.StrictBinanceIncomeCollector incomeCollector;
     private final StrategyFillJournalService fillJournal;
     private final StrategyFillSyncCursorMapper fillSyncCursors;
+    private final TradeLedgerRecoveryMapper tradeLedgerRecoveryMapper;
     private final StrategyFillSyncCursorService fillSyncCursorService;
     private final FinancialEventSyncCursorMapper incomeSyncCursors;
     private final FinancialEventSyncCursorService incomeSyncCursorService;
@@ -143,7 +145,8 @@ public class TradingReconciliationService {
                                         QuantFinancialEventMapper financialEventMapper, QuantReconcileRecordMapper reconcileMapper, ReconciliationFailureRecorder failureRecorder
         , StrategyPositionStateService strategyPositionStateService, PlatformTransactionManager transactionManager, StrictBinanceTradeCollector tradeCollector,
                                         org.dromara.quant.execution.StrictBinanceIncomeCollector incomeCollector, StrategyFillJournalService fillJournal, StrategyFillSyncCursorMapper fillSyncCursors, StrategyFillSyncCursorService fillSyncCursorService,
-                                        FinancialEventSyncCursorMapper incomeSyncCursors, FinancialEventSyncCursorService incomeSyncCursorService) {
+                                        FinancialEventSyncCursorMapper incomeSyncCursors, FinancialEventSyncCursorService incomeSyncCursorService,
+                                        TradeLedgerRecoveryMapper tradeLedgerRecoveryMapper) {
         this.gateway = gateway;
         this.accountSnapshotMapper = accountSnapshotMapper;
         this.positionMapper = positionMapper;
@@ -161,6 +164,7 @@ public class TradingReconciliationService {
         this.fillSyncCursorService = fillSyncCursorService;
         this.incomeSyncCursors = incomeSyncCursors;
         this.incomeSyncCursorService = incomeSyncCursorService;
+        this.tradeLedgerRecoveryMapper = tradeLedgerRecoveryMapper;
         this.transaction = new TransactionTemplate(transactionManager);
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -169,6 +173,36 @@ public class TradingReconciliationService {
 
     public record TradingDataSyncResult(int symbolCount, int orderCount, int tradeCount) {
     }
+
+    /**
+     * Restore an emptied local fill ledger from Binance historical orders.
+     * The account-level marker prevents every scheduler tick from rescanning the same 90-day history.
+     */
+    public void recoverMissingTradeLedger(QuantCredential credential) {
+        if (credential == null || credential.getId() == null
+            || tradeMapper.selectCount(new LambdaQueryWrapper<QuantTrade>()
+                .eq(QuantTrade::getCredentialId, credential.getId())) > 0) {
+            return;
+        }
+        List<String> symbols = orderMapper.selectHistoricalSymbolsByCredential(credential.getId());
+        if (symbols == null || symbols.isEmpty()) {
+            return;
+        }
+        tradeLedgerRecoveryMapper.insertReady(credential.getId());
+        if (tradeLedgerRecoveryMapper.claim(credential.getId()) != 1) {
+            return;
+        }
+        try {
+            TradingDataSyncResult result = syncTradingData(credential, null);
+            tradeLedgerRecoveryMapper.complete(credential.getId());
+            log.info("后台订单驱动成交账本恢复完成 credentialId={} knownSymbolCount={} recoveredSymbolCount={} orderCount={} tradeCount={} scope=90D",
+                credential.getId(), symbols.size(), result.symbolCount(), result.orderCount(), result.tradeCount());
+        } catch (RuntimeException failure) {
+            tradeLedgerRecoveryMapper.releaseForRetry(credential.getId());
+            throw failure;
+        }
+    }
+
 
     /**
      * Manually synchronize historical order and fill facts as one account-symbol unit.
