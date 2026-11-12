@@ -434,7 +434,7 @@ public class QuantTradeNotificationService {
                     snapshotTask.setOwnerToken(null);
                     snapshotTask.setLeaseUntil(null);
                     try {
-                        notificationMapper.updateById(snapshotTask);
+                        updateFactPendingTask(snapshotTask);
                     } catch (RuntimeException ex) {
                         log.error("更新平仓账户资金快照任务状态失败 notificationId={}", snapshotTask.getId(), ex);
                     }
@@ -636,7 +636,7 @@ public class QuantTradeNotificationService {
                     task.setOwnerToken(null);
                     task.setLeaseUntil(null);
                     try {
-                        notificationMapper.updateById(task);
+                        updateFactPendingTask(task);
                     } catch (RuntimeException ex) {
                         log.error("更新平仓账户资金快照任务状态失败 notificationId={}", task.getId(), ex);
                     }
@@ -920,6 +920,13 @@ public class QuantTradeNotificationService {
         }
     }
 
+    private void updateFactPendingTask(QuantNotification task) {
+        notificationMapper.updateById(task);
+        if (task.getId() != null && "SENT".equalsIgnoreCase(task.getStatus())) {
+            jdbcTemplate.update("UPDATE quant_notification SET last_error=NULL WHERE id=?", task.getId());
+        }
+    }
+
     private void markCloseFactSent(QuantNotification task) {
         if (task == null) {
             return;
@@ -928,7 +935,7 @@ public class QuantTradeNotificationService {
         task.setSentAt(LocalDateTime.now());
         task.setNextRetryAt(null);
         task.setLastError(null);
-        notificationMapper.updateById(task);
+        updateFactPendingTask(task);
     }
 
     private void enqueuePendingOpenFact(QuantStrategy strategy, QuantCredential credential, String symbol, String direction, BigDecimal quantity,
@@ -1106,7 +1113,7 @@ public class QuantTradeNotificationService {
             }
             task.setOwnerToken(null);
             task.setLeaseUntil(null);
-            notificationMapper.updateById(task);
+            updateFactPendingTask(task);
         }
     }
 
@@ -1327,7 +1334,7 @@ public class QuantTradeNotificationService {
                 }
                 task.setOwnerToken(null);
                 task.setLeaseUntil(null);
-                notificationMapper.updateById(task);
+                updateFactPendingTask(task);
             });
         } catch (RuntimeException ex) {
             log.warn("开仓通知即时核验任务提交失败，等待后台补偿 notificationId={}", notificationId, ex);
