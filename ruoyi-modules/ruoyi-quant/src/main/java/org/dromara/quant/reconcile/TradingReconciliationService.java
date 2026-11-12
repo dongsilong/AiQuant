@@ -1130,7 +1130,7 @@ public class TradingReconciliationService {
                         + " orderId=" + s.orderId()
                         + " clientOrderId=" + s.clientOrderId()
                         + " localOrderId=" + entity.getId()
-                        + " matchedBy=" + (matchedByExchangeOrderId ? "EXCHANGE_ORDER_ID" : "CLIENT_ORDER_ID")
+                        + " matchedBy=" + (matchedByExchangeOrderId ? "EXCHANGE_ORDER_ID" : "CLIENT_ORDER_ID_UNBOUND")
                         + " conflictingFields=[" + String.join(", ", conflictingFields) + "]");
                 }
             }
