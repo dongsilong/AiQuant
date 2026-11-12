@@ -321,7 +321,11 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param live          是否真正向交易所发送有交易副作用的请求
      */
     record ProtectionOrderRequest(Credential credential, String symbol, String side, String positionSide, String orderType, BigDecimal quantity, BigDecimal stopPrice,
-                                  String clientOrderId, boolean live) {
+                                  String clientOrderId, boolean live, String workingType) {
+        public ProtectionOrderRequest(Credential credential, String symbol, String side, String positionSide, String orderType, BigDecimal quantity, BigDecimal stopPrice,
+                                       String clientOrderId, boolean live) {
+            this(credential, symbol, side, positionSide, orderType, quantity, stopPrice, clientOrderId, live, "CONTRACT_PRICE");
+        }
     }
 
     /**
