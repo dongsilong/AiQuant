@@ -515,5 +515,14 @@ CREATE TABLE `quant_strategy_position_state`
     KEY                               `idx_quant_strategy_state_recovery` (`status`,`recovery_required`,`unsafe_recovery`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='策略持仓运行状态事实表';
 
+CREATE TABLE IF NOT EXISTS `quant_trade_ledger_recovery` (
+    `credential_id` bigint NOT NULL COMMENT '量化凭证ID',
+    `status` varchar(16) NOT NULL DEFAULT 'READY' COMMENT '恢复状态：READY/RUNNING/COMPLETED',
+    `lease_until` datetime(3) NOT NULL COMMENT '恢复任务租约到期时间',
+    `updated_at` datetime(3) NOT NULL COMMENT '状态更新时间',
+    PRIMARY KEY (`credential_id`),
+    KEY `idx_quant_trade_ledger_recovery_lease` (`status`, `lease_until`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='量化成交账本订单驱动恢复状态';
+
 SET
 FOREIGN_KEY_CHECKS = 1;
