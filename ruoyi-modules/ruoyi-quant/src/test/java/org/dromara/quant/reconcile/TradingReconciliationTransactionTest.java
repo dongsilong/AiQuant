@@ -966,7 +966,7 @@ class TradingReconciliationTransactionTest {
 
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", credential(), List.of(fill));
 
-        verify(orders, never()).claimPostFillBalanceSnapshot(anyLong(), any());
+        verify(orders, never()).claimPostFillBalanceSnapshot(anyLong(), any(), any());
         verify(gateway, never()).queryAccountFresh(any());
     }
 
@@ -987,7 +987,7 @@ class TradingReconciliationTransactionTest {
         when(orders.selectOne(any())).thenReturn(firstOrder, secondOrder);
         when(trades.selectOne(any())).thenReturn(
             persistedTradeForBalanceTest(firstFill), persistedTradeForBalanceTest(secondFill));
-        when(orders.claimPostFillBalanceSnapshot(anyLong(), any())).thenReturn(1);
+        when(orders.claimPostFillBalanceSnapshot(anyLong(), any(), any())).thenReturn(1);
         when(orders.savePostFillBalanceSnapshot(anyLong(), eq(BigDecimal.TEN), any())).thenReturn(1);
         when(gateway.queryAccountFresh(any())).thenReturn(
             new ExchangeGateway.AccountSnapshot(BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ZERO));
