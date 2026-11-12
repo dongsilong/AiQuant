@@ -107,6 +107,7 @@ public class TradingReconciliationService {
     private final Map<Long, Integer> positionRetryAttempts = new HashMap<>();
     private final ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicLong> runtimeSnapshotGenerations = new ConcurrentHashMap<>();
     private static final Duration RUNTIME_POSITION_CACHE_AGE = Duration.ofSeconds(20);
+    private static final Duration FILL_HISTORY_RECONCILE_WINDOW = Duration.ofDays(6);
     @Autowired
     private TradeDecisionLogService decisionLogs;
     @Autowired
@@ -763,21 +764,104 @@ public class TradingReconciliationService {
     }
 
     /**
-     * Query Binance outside of a transaction; missing facts must not partially overwrite
-     * account positions, orders or protections.
+     * Query Binance outside of a transaction; persist complete facts independently per symbol.
+     * A failed symbol must not roll back completed history windows for other symbols.
      */
     public void reconcileCredential(QuantCredential credential, int historyHours) {
         try {
-            ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(),
-                credential.getRunMode());
-            // 完整对账继续独立同步订单、成交、保护单和财务事件；账户快照复用统一协调器。
+            ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
+                credential.getSignatureType(), credential.getRunMode());
             AccountPositionSnapshot snapshot = loadAccountPositionSnapshot(credential, "full-reconcile", true, true);
-            ExchangeFacts facts = collectExchangeFacts(credential, historyHours, exchangeCredential, snapshot.account(), snapshot.positions());
-            transaction.executeWithoutResult(status -> applyExchangeFacts(credential, facts));
+            Instant now = Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(credential.getRunMode()));
+            ExchangeGateway.TimeRange range = new ExchangeGateway.TimeRange(now.minus(Duration.ofHours(Math.max(1, historyHours))), now);
+
+            List<ExchangeGateway.OrderSnapshot> openOrders = List.of();
+            ExchangeMarketPort.RequestDeferredException deferredAccountRead = null;
+            try {
+                openOrders = List.copyOf(gateway.queryOrders(exchangeCredential, null));
+            } catch (ExchangeMarketPort.RequestDeferredException deferred) {
+                deferredAccountRead = deferred;
+                log.warn("Binance 活动订单查询被本地 REST 调度器延期；继续推进历史成交游标 credentialId={} kind={} reason={} retryAfterMs={}",
+                    credential.getId(), deferred.kind(), deferred.reason(), deferred.retryAfterMillis());
+            }
+            log.info("周期账户对账历史订单查询 credentialId={} historyHours={} rangeStart={} rangeEnd={} mode=PERIODIC",
+                credential.getId(), historyHours, range.from(), range.to());
+            List<ExchangeGateway.OrderSnapshot> history = List.copyOf(gateway.queryOrderHistory(exchangeCredential, null, range, 1000L));
+
+            int fillHistoryBacklogSymbols = syncHistoricalSymbolFacts(credential, exchangeCredential, snapshot.positions(),
+                openOrders, history, range);
+
+            int unmatchedProtections = 0;
+            boolean protectionSyncDeferred = deferredAccountRead != null;
+            ExchangeMarketPort.RequestDeferredException deferredAccountFacts = deferredAccountRead;
+            if (deferredAccountFacts == null) {
+                try {
+                    unmatchedProtections = syncAccountProtectionFacts(credential, exchangeCredential, snapshot.positions());
+                } catch (ExchangeMarketPort.RequestDeferredException deferred) {
+                    protectionSyncDeferred = true;
+                    deferredAccountFacts = deferred;
+                    log.warn("账户级保护单查询被本地 REST 调度器延期；本轮订单/成交事实已独立提交 credentialId={} kind={} reason={} retryAfterMs={}",
+                        credential.getId(), deferred.kind(), deferred.reason(), deferred.retryAfterMillis());
+                }
+            }
+            final boolean accountOrdersDeferred = deferredAccountRead != null;
+            final boolean accountProtectionsDeferred = protectionSyncDeferred;
+            final ExchangeMarketPort.RequestDeferredException deferredToRetry = deferredAccountFacts;
+
+            LocalDateTime storedIncomeCursor = incomeSyncCursors.selectLastCompleteTo(credential.getId());
+            Instant incomeFrom = initialRetainedHistoryStart(now, storedIncomeCursor);
+            Instant incomeTo = range.to();
+            if (incomeFrom.isAfter(incomeTo)) {
+                throw new IllegalStateException("Binance income-history cursor is in the future; refusing to skip financial events: credentialId="
+                    + credential.getId() + ", cursor=" + storedIncomeCursor);
+            }
+            boolean incomeHistoryBacklog = Duration.between(incomeFrom, incomeTo).compareTo(Duration.ofDays(180)) > 0;
+            if (incomeHistoryBacklog) {
+                incomeTo = incomeFrom.plus(Duration.ofDays(180));
+            }
+            List<ExchangeGateway.IncomeSnapshot> income = incomeFrom.isBefore(incomeTo)
+                ? incomeCollector.collect(exchangeCredential, new ExchangeGateway.TimeRange(incomeFrom, incomeTo))
+                : List.of();
+            LocalDateTime incomeCursorEnd = LocalDateTime.ofInstant(incomeTo, ZoneOffset.UTC);
+
+            boolean[] financialLedgerConflict = {false};
+            transaction.executeWithoutResult(status -> {
+                if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                    fillJournal.retryPending(credential.getId());
+                }
+                try {
+                    syncFinancialEvents(credential, income);
+                    incomeSyncCursorService.advance(credential.getId(), incomeCursorEnd);
+                } catch (IllegalStateException ex) {
+                    // Preserve already persisted symbol facts and do not advance a conflicting income cursor.
+                    if (ex.getMessage() == null || !ex.getMessage().startsWith("Binance financial event conflicts with persisted ledger:")) {
+                        throw ex;
+                    }
+                    financialLedgerConflict[0] = true;
+                    log.error("Binance 财务事件账本冲突；已保留本轮成交同步结果且不推进财务游标 credentialId={} cursorEnd={}",
+                        credential.getId(), incomeCursorEnd, ex);
+                }
+
+                long unattributedFills = "LIVE".equalsIgnoreCase(credential.getRunMode())
+                    ? fillJournal.countUnresolved(credential.getId()) : 0L;
+                boolean degraded = unmatchedProtections > 0 || unattributedFills > 0 || fillHistoryBacklogSymbols > 0
+                    || incomeHistoryBacklog || financialLedgerConflict[0] || accountOrdersDeferred || accountProtectionsDeferred;
+                if (degraded) {
+                    reconcileMapper.insert(record(credential.getId(), "DEGRADED",
+                        "{\"unmatchedLiveProtections\":" + unmatchedProtections + ",\"unattributedFills\":" + unattributedFills
+                            + ",\"fillHistoryBacklogSymbols\":" + fillHistoryBacklogSymbols + ",\"incomeHistoryBacklog\":" + incomeHistoryBacklog
+                            + ",\"financialLedgerConflict\":" + financialLedgerConflict[0]
+                            + ",\"openOrdersSyncDeferred\":" + accountOrdersDeferred
+                            + ",\"protectionSyncDeferred\":" + accountProtectionsDeferred + "}"));
+                } else {
+                    reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
+                }
+            });
+
+            if (deferredToRetry != null) {
+                throw deferredToRetry;
+            }
         } catch (SnapshotSupersededException ex) {
-            // The account snapshot lost the generation fence to a newer private-stream fact.
-            // Schedule a fresh read-only full reconciliation so this credential can converge
-            // even if no subsequent market event arrives for the affected symbols.
             schedulePositionSnapshotRetry(credential, "full-reconcile:superseded", 1_000L);
             throw ex;
         } catch (RuntimeException ex) {
@@ -787,12 +871,8 @@ public class TradingReconciliationService {
     }
 
     /**
-     * 对单个交易凭证执行完整事实对账。
-     */
-
-    /**
-     * Binance income history is retained for up to six months. A missing cursor is a
-     * bootstrap, not proof that the recent scheduler window is the full history.
+     * Binance income history is retained for up to six months. A missing cursor is
+     * a bootstrap, not proof that the recent scheduler window is the full history.
      */
     static Instant initialRetainedHistoryStart(Instant now, LocalDateTime storedCursor) {
         if (now == null) {
@@ -802,122 +882,93 @@ public class TradingReconciliationService {
     }
 
     /**
-     * 收集并校验账户、持仓和成交事实，缺项时不写入部分同步结果。
+     * Collect one bounded history interval and commit it before moving to the next symbol.
+     * Six-day windows match the exchange collector's request boundary, so a 180-day bootstrap
+     * is spread over multiple reconciliation runs instead of issuing roughly 30 requests per symbol at once.
      */
-    private ExchangeFacts collectExchangeFacts(QuantCredential credential, int historyHours, ExchangeGateway.Credential c, ExchangeGateway.AccountSnapshot account,
-                                               List<ExchangeGateway.PositionSnapshot> positions) {
-        Instant now = Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(credential.getRunMode()));
-        ExchangeGateway.TimeRange range = new ExchangeGateway.TimeRange(now.minus(Duration.ofHours(Math.max(1, historyHours))), now);
-        var openOrders = List.copyOf(gateway.queryOrders(c, null));
-        log.info("周期账户对账历史订单查询 credentialId={} historyHours={} rangeStart={} rangeEnd={} mode=PERIODIC",
-            credential.getId(), historyHours, range.from(), range.to());
-        var history = List.copyOf(gateway.queryOrderHistory(c, null, range, 1000L));
-        Set<String> symbols = new HashSet<>();
-        positions.forEach(p -> addSymbol(symbols, p.symbol()));
-        history.forEach(o -> addSymbol(symbols, o.symbol()));
-        openOrders.forEach(o -> addSymbol(symbols, o.symbol()));
+    private int syncHistoricalSymbolFacts(QuantCredential credential, ExchangeGateway.Credential exchangeCredential,
+                                          List<ExchangeGateway.PositionSnapshot> positions,
+                                          List<ExchangeGateway.OrderSnapshot> openOrders,
+                                          List<ExchangeGateway.OrderSnapshot> history,
+                                          ExchangeGateway.TimeRange range) {
+        Set<String> symbols = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        positions.forEach(position -> addSymbol(symbols, position.symbol()));
+        history.forEach(order -> addSymbol(symbols, order.symbol()));
+        openOrders.forEach(order -> addSymbol(symbols, order.symbol()));
         symbols.addAll(fillSyncCursors.selectSymbols(credential.getId()));
         symbols.addAll(orderMapper.selectHistoricalSymbolsByCredential(credential.getId()));
-        Map<String, List<ExchangeGateway.TradeSnapshot>> trades = new HashMap<>();
-        Map<String, Instant> fillCursorEnds = new HashMap<>();
-        Map<String, LocalDateTime> futureFillCursors = new HashMap<>();
-        Set<String> fillHistoryBacklogSymbols = new HashSet<>();
-        Map<String, List<ExchangeGateway.ProtectionOrderSnapshot>> protections = new HashMap<>();
+
+        int fillHistoryBacklogSymbols = 0;
         for (String symbol : symbols) {
             LocalDateTime storedCursor = fillSyncCursors.selectLastCompleteTo(credential.getId(), symbol);
-            Instant from = initialRetainedHistoryStart(now, storedCursor);
+            Instant from = initialRetainedHistoryStart(range.to(), storedCursor);
             Instant to = range.to();
+            LocalDateTime futureCursor = null;
             if (from.isAfter(to)) {
-                // 旧版把本地时间按 UTC 写入游标。先完整重采窗口，事务内再以原值 CAS 修复，不能直接跳到现在。
-                futureFillCursors.put(symbol, storedCursor);
+                futureCursor = storedCursor;
                 from = range.from().minus(Duration.between(to, from));
             }
-            if (Duration.between(from, to).compareTo(Duration.ofDays(180)) > 0) {
-                to = from.plus(Duration.ofDays(180));
+            if (Duration.between(from, to).compareTo(FILL_HISTORY_RECONCILE_WINDOW) > 0) {
+                to = from.plus(FILL_HISTORY_RECONCILE_WINDOW);
             }
-            if (to.isBefore(range.to())) {
-                fillHistoryBacklogSymbols.add(symbol);
+            boolean hasBacklog = to.isBefore(range.to());
+            List<ExchangeGateway.TradeSnapshot> trades = from.isBefore(to)
+                ? tradeCollector.collect(exchangeCredential, symbol, from, to)
+                : List.of();
+            List<ExchangeGateway.OrderSnapshot> symbolHistory = history.stream()
+                .filter(order -> symbol.equalsIgnoreCase(order.symbol())).toList();
+            List<ExchangeGateway.OrderSnapshot> symbolOpenOrders = openOrders.stream()
+                .filter(order -> symbol.equalsIgnoreCase(order.symbol())).toList();
+            Instant collectedTo = to;
+            Instant collectedFrom = from;
+            LocalDateTime expectedFutureCursor = futureCursor;
+            long collectionStartedAt = System.nanoTime();
+
+            transaction.executeWithoutResult(status -> {
+                syncOrders(credential, symbolHistory);
+                syncOrders(credential, symbolOpenOrders);
+                syncTrades(credential, trades);
+                if (collectedFrom.isBefore(collectedTo)) {
+                    LocalDateTime cursorEnd = LocalDateTime.ofInstant(collectedTo, ZoneOffset.UTC);
+                    if (expectedFutureCursor == null) {
+                        fillSyncCursorService.advance(credential.getId(), symbol, cursorEnd);
+                    } else {
+                        fillSyncCursorService.repairFutureAfterCollection(credential.getId(), symbol, expectedFutureCursor, cursorEnd);
+                    }
+                }
+            });
+            if (hasBacklog) {
+                fillHistoryBacklogSymbols++;
             }
-            if (from.isBefore(to)) {
-                trades.put(symbol, tradeCollector.collect(c, symbol, from, to));
-                fillCursorEnds.put(symbol, to);
-            } else {
-                trades.put(symbol, List.of());
-            }
-            protections.put(symbol, List.copyOf(gateway.queryProtectionOrders(c, symbol)));
+            log.info("周期交易对订单/成交事实已提交 credentialId={} symbol={} orderCount={} tradeCount={} from={} to={} hasBacklog={} elapsedMs={}",
+                credential.getId(), symbol, symbolHistory.size() + symbolOpenOrders.size(), trades.size(), collectedFrom, collectedTo,
+                hasBacklog, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - collectionStartedAt));
         }
-        LocalDateTime storedIncomeCursor = incomeSyncCursors.selectLastCompleteTo(credential.getId());
-        Instant incomeFrom = initialRetainedHistoryStart(now, storedIncomeCursor);
-        Instant incomeTo = range.to();
-        if (incomeFrom.isAfter(incomeTo)) {
-            throw new IllegalStateException("Binance income-history cursor is in the future; refusing to skip financial events: credentialId="
-                + credential.getId() + ", cursor=" + storedIncomeCursor);
-        }
-        boolean incomeHistoryBacklog = Duration.between(incomeFrom, incomeTo).compareTo(Duration.ofDays(180)) > 0;
-        if (incomeHistoryBacklog) {
-            incomeTo = incomeFrom.plus(Duration.ofDays(180));
-        }
-        List<ExchangeGateway.IncomeSnapshot> income = incomeFrom.isBefore(incomeTo)
-            ? incomeCollector.collect(c, new ExchangeGateway.TimeRange(incomeFrom, incomeTo))
-            : List.of();
-        LocalDateTime incomeCursorEnd = LocalDateTime.ofInstant(incomeTo, ZoneOffset.UTC);
-        return new ExchangeFacts(account, positions, openOrders, history, trades, fillCursorEnds, futureFillCursors, fillHistoryBacklogSymbols,
-            protections, income, incomeCursorEnd, incomeHistoryBacklog);
+        return fillHistoryBacklogSymbols;
     }
 
     /**
-     * Only database writes are permitted inside this short transaction.
+     * Query all active conditional orders once per account, then persist them by symbol.
      */
-    private void applyExchangeFacts(QuantCredential credential, ExchangeFacts facts) {
-        syncOrders(credential, facts.history());
-        syncOrders(credential, facts.openOrders());
-        if ("LIVE".equalsIgnoreCase(credential.getRunMode())) {
-            fillJournal.retryPending(credential.getId());
-        }
-        for (var entry : facts.trades().entrySet()) {
-            syncTrades(credential, entry.getValue());
-        }
-        for (var entry : facts.fillCursorEnds().entrySet()) {
-            LocalDateTime cursorEnd = LocalDateTime.ofInstant(entry.getValue(), ZoneOffset.UTC);
-            LocalDateTime futureCursor = facts.futureFillCursors().get(entry.getKey());
-            if (futureCursor == null) {
-                fillSyncCursorService.advance(credential.getId(), entry.getKey(), cursorEnd);
-            } else {
-                fillSyncCursorService.repairFutureAfterCollection(credential.getId(), entry.getKey(), futureCursor, cursorEnd);
+    private int syncAccountProtectionFacts(QuantCredential credential, ExchangeGateway.Credential exchangeCredential,
+                                           List<ExchangeGateway.PositionSnapshot> positions) {
+        List<ExchangeGateway.ProtectionOrderSnapshot> snapshots = List.copyOf(gateway.queryProtectionOrders(exchangeCredential, null));
+        Map<String, List<ExchangeGateway.ProtectionOrderSnapshot>> grouped = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (ExchangeGateway.ProtectionOrderSnapshot snapshot : snapshots) {
+            if (snapshot == null || snapshot.symbol() == null || snapshot.symbol().isBlank()) {
+                throw new IllegalStateException("Binance 账户级保护单快照缺少交易对，无法安全归属");
             }
+            grouped.computeIfAbsent(snapshot.symbol(), ignored -> new ArrayList<>()).add(snapshot);
         }
-        long unattributedFills = "LIVE".equalsIgnoreCase(credential.getRunMode()) ? fillJournal.countUnresolved(credential.getId()) : 0L;
         int unmatchedProtections = 0;
-        for (var entry : facts.protections().entrySet()) {
-            unmatchedProtections += syncProtectionOrders(credential, entry.getKey(), facts.positions(), entry.getValue());
+        for (Map.Entry<String, List<ExchangeGateway.ProtectionOrderSnapshot>> entry : grouped.entrySet()) {
+            Integer unmatched = transaction.execute(status ->
+                syncProtectionOrders(credential, entry.getKey(), positions, entry.getValue()));
+            unmatchedProtections += unmatched == null ? 0 : unmatched;
         }
-        boolean financialLedgerConflict = false;
-        try {
-            syncFinancialEvents(credential, facts.income());
-            incomeSyncCursorService.advance(credential.getId(), facts.incomeCursorEnd());
-        } catch (IllegalStateException ex) {
-            // An immutable financial-ledger conflict must not roll back verified order/fill facts
-            // written earlier in this transaction. Do not advance the income cursor: the
-            // conflicting event must be retried/reviewed, while already inserted income events
-            // remain idempotently replayable on the next reconciliation.
-            if (ex.getMessage() == null || !ex.getMessage().startsWith("Binance financial event conflicts with persisted ledger:")) {
-                throw ex;
-            }
-            financialLedgerConflict = true;
-            log.error("Binance 财务事件账本冲突；已保留本轮成交同步结果且不推进财务游标 credentialId={} cursorEnd={}",
-                credential.getId(), facts.incomeCursorEnd(), ex);
-        }
-        int fillHistoryBacklogSymbols = facts.fillHistoryBacklogSymbols().size();
-        if (unmatchedProtections > 0 || unattributedFills > 0 || fillHistoryBacklogSymbols > 0 || facts.incomeHistoryBacklog() || financialLedgerConflict) {
-            // Unmatched protections, unattributed fills, financial conflicts, or a catch-up cursor
-            // behind the current interval may not be reported as complete.
-            reconcileMapper.insert(record(credential.getId(), "DEGRADED",
-                "{\"unmatchedLiveProtections\":" + unmatchedProtections + ",\"unattributedFills\":" + unattributedFills
-                    + ",\"fillHistoryBacklogSymbols\":" + fillHistoryBacklogSymbols + ",\"incomeHistoryBacklog\":" + facts.incomeHistoryBacklog()
-                    + ",\"financialLedgerConflict\":" + financialLedgerConflict + "}"));
-        } else {
-            reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
-        }
+        log.info("周期账户级保护单查询完成 credentialId={} requestCount=1 protectionCount={} symbolCount={} unmatchedCount={}",
+            credential.getId(), snapshots.size(), grouped.size(), unmatchedProtections);
+        return unmatchedProtections;
     }
 
     /**
@@ -1597,13 +1648,6 @@ public class TradingReconciliationService {
         public SnapshotSupersededException(String message) {
             super(message);
         }
-    }
-
-    private record ExchangeFacts(ExchangeGateway.AccountSnapshot account, List<ExchangeGateway.PositionSnapshot> positions, List<ExchangeGateway.OrderSnapshot> openOrders,
-                                 List<ExchangeGateway.OrderSnapshot> history, Map<String, List<ExchangeGateway.TradeSnapshot>> trades,
-                                 Map<String, Instant> fillCursorEnds, Map<String, LocalDateTime> futureFillCursors, Set<String> fillHistoryBacklogSymbols,
-                                 Map<String, List<ExchangeGateway.ProtectionOrderSnapshot>> protections,
-                                 List<ExchangeGateway.IncomeSnapshot> income, LocalDateTime incomeCursorEnd, boolean incomeHistoryBacklog) {
     }
 
     private record AccountPositionSnapshot(ExchangeGateway.AccountSnapshot account, List<ExchangeGateway.PositionSnapshot> positions,
