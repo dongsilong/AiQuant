@@ -1218,26 +1218,34 @@ public class TradingReconciliationService {
                 .eq(QuantOrder::getSymbol, s.symbol())
                 .eq(QuantOrder::getExchangeOrderId, s.orderId()));
 
-            boolean completeFacts = s.orderId() != null && s.orderId() > 0
-                && java.util.Set.of("BUY", "SELL").contains(s.side() == null ? "" : s.side().toUpperCase(Locale.ROOT))
-                && s.quantity() != null && s.quantity().signum() > 0
-                && s.price() != null && s.price().signum() > 0
-                && s.commission() != null && s.commission().signum() >= 0
-                && s.realizedPnl() != null
-                && s.commissionAsset() != null && s.commissionAsset().matches("[A-Za-z0-9]{2,20}");
+            List<String> incompleteFields = new ArrayList<>(7);
+            if (s.orderId() == null || s.orderId() <= 0) incompleteFields.add("orderId");
+            if (!java.util.Set.of("BUY", "SELL").contains(s.side() == null ? "" : s.side().toUpperCase(Locale.ROOT))) incompleteFields.add("side");
+            if (s.quantity() == null || s.quantity().signum() <= 0) incompleteFields.add("quantity");
+            if (s.price() == null || s.price().signum() <= 0) incompleteFields.add("price");
+            if (s.commission() == null || s.commission().signum() < 0) incompleteFields.add("commission");
+            if (s.realizedPnl() == null) incompleteFields.add("realizedPnl");
+            if (s.commissionAsset() == null || !s.commissionAsset().matches("[A-Za-z0-9]{2,20}")) incompleteFields.add("commissionAsset");
+            boolean completeFacts = incompleteFields.isEmpty();
             if (!completeFacts) {
-                if (live) {
-                    String status = fillJournal.attribute(s, sourceOrder, credential.getId());
-                    if ("CONFLICT".equals(status)) {
-                        log.error("Incomplete LIVE fill conflicts with persisted raw fact credentialId={} symbol={} exchangeTradeId={}",
-                            credential.getId(), s.symbol(), s.tradeId());
-                    } else {
-                        log.warn("LIVE Binance fill retained for attribution review; local numeric trade row was not fabricated credentialId={} symbol={} exchangeTradeId={} orderId={}",
-                            credential.getId(), s.symbol(), s.tradeId(), s.orderId());
-                    }
+                String status = fillJournal.attribute(s, sourceOrder, credential.getId());
+                if ("CONFLICT".equals(status)) {
+                    log.error("Binance fill with incomplete immutable facts conflicts with persisted raw fact credentialId={} runMode={} symbol={} exchangeTradeId={} orderId={} missingFields={}",
+                        credential.getId(), credential.getRunMode(), s.symbol(), s.tradeId(), s.orderId(), incompleteFields);
+                } else {
+                    log.warn("Binance fill with incomplete immutable facts retained for review; local numeric trade row was not fabricated credentialId={} runMode={} symbol={} exchangeTradeId={} orderId={} missingFields={} journalStatus={}",
+                        credential.getId(), credential.getRunMode(), s.symbol(), s.tradeId(), s.orderId(), incompleteFields, status);
+                }
+                continue;
+            }
+
+            if (!live) {
+                String journalStatus = fillJournal.attributeIfPresent(s, sourceOrder, credential.getId());
+                if ("CONFLICT".equals(journalStatus)) {
+                    log.error("Complete TESTNET fill conflicts with an earlier raw exchange fact; local trade row was not written credentialId={} symbol={} exchangeTradeId={} orderId={}",
+                        credential.getId(), s.symbol(), s.tradeId(), s.orderId());
                     continue;
                 }
-                throw new IllegalStateException("Binance fill lacks valid immutable facts; refusing to persist partial trade");
             }
 
             // First persist/check the raw exchange fact WITHOUT allocating it. Only after the local
