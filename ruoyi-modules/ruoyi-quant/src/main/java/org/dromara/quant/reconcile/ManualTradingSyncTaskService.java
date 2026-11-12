@@ -237,7 +237,7 @@ public class ManualTradingSyncTaskService {
             message = failure.getClass().getSimpleName();
         }
         if (message.length() > ERROR_MESSAGE_LIMIT) {
-            message = message.substring(0, ERROR_MESSAGE_LIMIT) + "...";
+            message = message.substring(0, ERROR_MESSAGE_LIMIT - 3) + "...";
         }
         LocalDateTime now = LocalDateTime.now();
         return taskMapper.update(null, new LambdaUpdateWrapper<QuantTradingSyncTask>()
