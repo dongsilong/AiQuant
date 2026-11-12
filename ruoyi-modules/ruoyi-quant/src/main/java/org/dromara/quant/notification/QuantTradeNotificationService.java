@@ -546,7 +546,7 @@ public class QuantTradeNotificationService {
 
     /**
      * 仅凭已终态且有实际成交量的订单事件建立待采集任务。
-     * 不再等待 ACCOUNT_UPDATE 与订单事件按毫秒时间戳一对一匹配；
+     * ACCOUNT_UPDATE 是稀疏增量，不直接还原整账户权益；订单确认后通过 REST 获取完整账户总览。
      * 事件先持久化为快照任务，再立即 REST 采样，进程重启后仍可在有效窗口内重试。
      */
     public void captureCloseSnapshotFromUserDataEvent(Long credentialId, ExchangeGateway.Credential credential,
@@ -586,7 +586,7 @@ public class QuantTradeNotificationService {
         if (!activeStreamCloseCaptures.add(captureKey)) {
             return;
         }
-        Instant streamReceivedAt = Instant.now();
+        // ACCOUNT_UPDATE 是稀疏增量，不是完整资金快照；交易记录资金值由确认平仓后的 REST 总览提供。
         // ORDER_TRADE_UPDATE 的 E/接收时间不是 ACCOUNT_UPDATE 元数据，不能写入对应字段。
         QuantNotification task = enqueuePendingCloseSnapshot(credentialId, symbol, orderId,
             Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime,
@@ -725,10 +725,7 @@ public class QuantTradeNotificationService {
                                                 Instant accountUpdateTransactionTime, Instant accountUpdateEventTime,
                                                 Instant accountUpdateReceivedAt) {
         if (credentialId == null || credential == null || symbol == null || orderId == null
-            || closeEventTime == null
-            || accountUpdateTransactionTime != null && (orderTransactionTime == null
-                || !orderTransactionTime.equals(accountUpdateTransactionTime))
-            || !withinCloseSnapshotWindow(closeEventTime)) {
+            || closeEventTime == null || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
         if (!isVerifiedCloseOrder(credentialId, credential, symbol, orderId, clientOrderId)
@@ -762,9 +759,7 @@ public class QuantTradeNotificationService {
                                                             Instant orderTransactionTime,
                                                             Instant accountUpdateTransactionTime,
                                                             Instant exchangeEventTime, Instant streamReceivedAt) {
-        if (credentialId == null || symbol == null || orderId == null || closeEventTime == null
-            || accountUpdateTransactionTime != null && (orderTransactionTime == null
-                || !orderTransactionTime.equals(accountUpdateTransactionTime))) {
+        if (credentialId == null || symbol == null || orderId == null || closeEventTime == null) {
             return null;
         }
         String taskKey = SNAPSHOT_TASK_PREFIX + symbol + ":" + orderId;
