@@ -131,6 +131,47 @@ class ManualTradingSyncTaskServiceTest {
     }
 
     @Test
+    void backgroundWorkerPersistsFailureAndQueuesFailureNotification() {
+        initializeTableInfo();
+        var tasks = mock(QuantTradingSyncTaskMapper.class);
+        var credentials = mock(QuantCredentialMapper.class);
+        var reconciliation = mock(TradingReconciliationService.class);
+        var notifications = mock(QuantTradeNotificationService.class);
+        var executor = mock(TaskExecutor.class);
+        var queued = new AtomicReference<Runnable>();
+        doAnswer(invocation -> {
+            queued.set(invocation.getArgument(0));
+            return null;
+        }).when(executor).execute(any(Runnable.class));
+        when(tasks.selectOne(any())).thenReturn(null);
+        when(tasks.insert(any(QuantTradingSyncTask.class))).thenAnswer(invocation -> {
+            ((QuantTradingSyncTask) invocation.getArgument(0)).setId(705L);
+            return 1;
+        });
+        when(tasks.update(isNull(), any())).thenReturn(1);
+
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        when(credentials.selectById(10L)).thenReturn(credential);
+        var task = new QuantTradingSyncTask();
+        task.setId(705L);
+        task.setCredentialId(10L);
+        task.setRequestedSymbol("JCTUSDT");
+        when(tasks.selectById(705L)).thenReturn(task);
+        var failure = new IllegalStateException("JCTUSDT 历史同步失败");
+        when(reconciliation.syncTradingData(eq(credential), eq("JCTUSDT"),
+            ArgumentMatchers.<Consumer<TradingReconciliationService.TradingDataSyncProgress>>any())).thenThrow(failure);
+
+        var service = new ManualTradingSyncTaskService(tasks, credentials, reconciliation, notifications, executor);
+        service.start(10L, "JCTUSDT");
+        assertNotNull(queued.get());
+        queued.get().run();
+
+        verify(tasks, times(2)).update(isNull(), any());
+        verify(notifications).notifyOrderTradeSyncFailure(credential, "JCTUSDT", failure);
+    }
+
+    @Test
     void differentScopeCannotStartWhileAccountHasActiveTask() {
         initializeTableInfo();
         var tasks = mock(QuantTradingSyncTaskMapper.class);
