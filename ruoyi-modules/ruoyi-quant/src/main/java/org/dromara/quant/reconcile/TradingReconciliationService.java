@@ -111,7 +111,7 @@ public class TradingReconciliationService {
     private static final Duration RUNTIME_POSITION_CACHE_AGE = Duration.ofSeconds(20);
     private static final Duration FILL_HISTORY_RECONCILE_WINDOW = Duration.ofDays(6);
     /** Current wallet snapshots cannot reconstruct balances for historical fills. */
-    private static final Duration POST_FILL_BALANCE_CAPTURE_WINDOW = Duration.ofMinutes(5);
+    private static final Duration POST_FILL_BALANCE_CAPTURE_WINDOW = Duration.ofMinutes(2);
     @Autowired
     private TradeDecisionLogService decisionLogs;
     @Autowired
@@ -1203,7 +1203,7 @@ public class TradingReconciliationService {
      * 同步交易所成交事实。已落库的交易所事实不可被重放覆盖；仅允许补齐此前缺失且可证明的策略归属。
      */
     private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
-        Map<Long, QuantOrder> recentFilledOrders = new LinkedHashMap<>();
+        Map<Long, RecentFilledOrder> recentFilledOrders = new LinkedHashMap<>();
         Instant postFillBalanceCutoff = Instant.now().minus(POST_FILL_BALANCE_CAPTURE_WINDOW);
         boolean live = "LIVE".equalsIgnoreCase(credential.getRunMode());
         boolean projectionDirty = false;
@@ -1350,12 +1350,14 @@ public class TradingReconciliationService {
             // wallet snapshot. Replaying historical fills and reading today's balance would
             // write a false historical fact into quant_order.
             if (sourceOrder != null && sourceOrder.getId() != null && !s.time().isBefore(postFillBalanceCutoff)) {
-                recentFilledOrders.put(sourceOrder.getId(), sourceOrder);
+                recentFilledOrders.merge(sourceOrder.getId(), new RecentFilledOrder(sourceOrder, s.time()),
+                    (current, incoming) -> incoming.fillTime().isAfter(current.fillTime()) ? incoming : current);
             }
         }
         if (!recentFilledOrders.isEmpty()) {
-            List<QuantOrder> ordersToCapture = List.copyOf(recentFilledOrders.values());
-            Runnable capture = () -> capturePostFillBalance(credential, ordersToCapture);
+            RecentFilledOrder latestFill = recentFilledOrders.values().stream()
+                .max(java.util.Comparator.comparing(RecentFilledOrder::fillTime)).orElseThrow();
+            Runnable capture = () -> capturePostFillBalance(credential, latestFill);
             if (TransactionSynchronizationManager.isSynchronizationActive()) {
                 TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                     @Override
@@ -1477,29 +1479,17 @@ public class TradingReconciliationService {
         return stored.equals(persistedPrecision);
     }
 
-    /** Capture one best-effort account wallet snapshot for the recent fills in this batch. */
-    private void capturePostFillBalance(QuantCredential credential, List<QuantOrder> orders) {
-        if (orders.isEmpty()) {
+    /** Capture one best-effort wallet snapshot for the latest recent fill in this batch. */
+    private void capturePostFillBalance(QuantCredential credential, RecentFilledOrder candidate) {
+        QuantOrder order = candidate.order();
+        Long orderId = order.getId();
+        if (orderId == null || !balanceSnapshotTasks.add(orderId)) {
             return;
         }
         Thread.startVirtualThread(() -> {
-            List<Long> reservedOrderIds = new ArrayList<>();
-            List<Long> claimedOrderIds = new ArrayList<>();
             try {
                 LocalDateTime requestedAt = LocalDateTime.now(ZoneOffset.UTC);
-                for (QuantOrder order : orders) {
-                    Long orderId = order.getId();
-                    if (orderId == null || !balanceSnapshotTasks.add(orderId)) {
-                        continue;
-                    }
-                    reservedOrderIds.add(orderId);
-                    if (orderMapper.claimPostFillBalanceSnapshot(orderId, requestedAt) == 1) {
-                        claimedOrderIds.add(orderId);
-                    } else {
-                        balanceSnapshotTasks.remove(orderId);
-                    }
-                }
-                if (claimedOrderIds.isEmpty()) {
+                if (orderMapper.claimPostFillBalanceSnapshot(orderId, requestedAt) != 1) {
                     return;
                 }
                 ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
@@ -1508,16 +1498,13 @@ public class TradingReconciliationService {
                 if (snapshot == null || snapshot.walletBalance() == null) {
                     return;
                 }
-                LocalDateTime observedAt = LocalDateTime.now(ZoneOffset.UTC);
-                for (Long orderId : claimedOrderIds) {
-                    orderMapper.savePostFillBalanceSnapshot(orderId, snapshot.walletBalance(), observedAt);
-                }
+                orderMapper.savePostFillBalanceSnapshot(orderId, snapshot.walletBalance(), LocalDateTime.now(ZoneOffset.UTC));
             } catch (RuntimeException ex) {
                 // Balance is informational; an unavailable snapshot must never affect order or position handling.
-                log.debug("成交后账户余额批量核实失败 credentialId={} orderCount={} errorType={}",
-                    credential.getId(), claimedOrderIds.size(), ex.getClass().getSimpleName());
+                log.debug("成交后账户余额核实失败 credentialId={} orderId={} errorType={}",
+                    credential.getId(), orderId, ex.getClass().getSimpleName());
             } finally {
-                balanceSnapshotTasks.removeAll(reservedOrderIds);
+                balanceSnapshotTasks.remove(orderId);
             }
         });
     }
@@ -1712,5 +1699,8 @@ public class TradingReconciliationService {
 
     private record CachedPositionSnapshot(long positionGeneration, long runtimeGeneration, Instant fetchedAt,
                                           ExchangeGateway.AccountSnapshot account, List<ExchangeGateway.PositionSnapshot> positions) {
+    }
+
+    private record RecentFilledOrder(QuantOrder order, Instant fillTime) {
     }
 }
