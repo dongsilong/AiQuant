@@ -245,7 +245,7 @@ class QuantTradeNotificationServiceTest {
 
 
     @Test
-    void closeNotificationDoesNotRepeatAccountQueryWhenAnotherWorkerOwnsSnapshot() {
+    void closeNotificationQueriesAccountForEmailWhenAnotherWorkerOwnsSnapshot() {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-close-snapshot-owned-elsewhere-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
@@ -275,11 +275,23 @@ class QuantTradeNotificationServiceTest {
             new ExchangeGateway.TradeSnapshot("BTCUSDT", 2L, 99L, "SELL", BigDecimal.ONE, BigDecimal.valueOf(103),
                 new BigDecimal("0.02"), BigDecimal.valueOf(2), Instant.now(), "USDT", "LONG")));
 
+        when(gateway.queryAccountFresh(any())).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
         service.notifyCloseByOrder(null, credential, "BTCUSDT", "LONG", BigDecimal.valueOf(2), BigDecimal.valueOf(100),
             99L, "USDT", new BigDecimal("5.86351456"), "MANUAL", "test close");
 
-        verify(gateway, never()).queryAccountFresh(any());
+        verify(gateway, times(1)).queryAccountFresh(any());
         verify(jdbc, never()).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+        var notifications = org.mockito.ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, atLeastOnce()).insert(notifications.capture());
+        String content = notifications.getAllValues().stream()
+            .filter(row -> "SYSTEM".equals(row.getChannel()))
+            .map(QuantNotification::getContent).findFirst().orElseThrow();
+        assertTrue(content.contains("钱包余额: 1000 USDT"));
+        assertTrue(content.contains("账户权益: 1003 USDT"));
+        assertTrue(content.contains("可用余额: 900 USDT"));
     }
 
     @Test
