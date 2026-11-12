@@ -413,8 +413,9 @@ public class QuantTradeNotificationService {
                 try {
                     account = gateway.queryAccountFresh(exchangeCredential);
                     Instant restResponseReceivedAt = Instant.now();
-                    boolean persisted = persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
-                        "REST_FALLBACK", closeTime, null, null, null, restRequestStartedAt, restResponseReceivedAt);
+                    boolean persisted = withinCloseSnapshotWindow(closeTime)
+                        && persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
+                            "REST_FALLBACK", closeTime, null, null, null, restRequestStartedAt, restResponseReceivedAt);
                     if (persisted && hasCompleteCloseEquitySnapshot(credential.getId(), symbol, orderId)) {
                         snapshotTask.setStatus("SENT");
                         snapshotTask.setSentAt(LocalDateTime.now());
