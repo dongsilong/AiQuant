@@ -194,6 +194,7 @@ CREATE TABLE `quant_protection_order`
     `created_at_epoch_ms` bigint NULL DEFAULT NULL COMMENT '本地保护意图创建时间(epoch毫秒)，历史未知保持NULL',
     `protection_type`   varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci  NOT NULL COMMENT '保护单类型',
     `order_type`        varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '条件单类型',
+    `working_type`      varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '条件单触发价格类型：MARK_PRICE/CONTRACT_PRICE',
     `quantity`          decimal(32, 16) NULL DEFAULT NULL COMMENT '条件单数量',
     `stop_price`        decimal(32, 16)                                               NOT NULL COMMENT '触发价格',
     `status`            varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci  NOT NULL COMMENT '状态',
