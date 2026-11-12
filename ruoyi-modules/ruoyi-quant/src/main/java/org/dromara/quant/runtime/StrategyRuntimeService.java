@@ -3952,6 +3952,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 Thread heartbeat = null;
                 AtomicBoolean renewing = new AtomicBoolean(true);
                 AtomicBoolean leaseHeld = new AtomicBoolean(true);
+                AtomicBoolean protectionSyncFailed = new AtomicBoolean(false);
                 try {
                     do {
                         runtime.protectionRequested.set(false);
@@ -4119,6 +4120,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                     publishPositionPerformance(runtime);
                                 }
                                 if (failure != null) {
+                                    protectionSyncFailed.set(true);
                                     markProtectionDegraded(runtime, "交易所保护创建/同步失败", failure);
                                 } else if (work.dynamic() && runtime.protectionDegraded && !runtime.hasPendingAction()) {
                                     // 保护恢复只能解除自身降级；未知成交/持仓归属必须由事实恢复链路核实。
@@ -4221,6 +4223,11 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                         }
                     }
                     runtime.protectionSyncing.set(false);
+                    if (!runtime.closed && protectionSyncFailed.get()) {
+                        // 保护同步失败后立即触发一次账户事实核验；核验完成后沿用既有节流重试，
+                        // 由 requestProtectionSync 复用原保护意图/客户端 ID 恢复 Binance 保护。
+                        requestReconciliation(runtime);
+                    }
                     if (!runtime.closed && runtime.protectionRequested.get()) {
                         requestProtectionSync(runtime, runtime.dynamicProtectionRequested.get());
                     }
