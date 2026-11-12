@@ -42,7 +42,7 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
 
     /** 判断冻结快照是否启用统一保护规则；运行时不会直接信任客户端提供的版本标识。 */
     public static boolean unifiedProtection(Map<String, Object> params) {
-        return params != null && ("2".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY))
+        return params != null && ("2".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY)))
             || "3".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY))));
     }
 
