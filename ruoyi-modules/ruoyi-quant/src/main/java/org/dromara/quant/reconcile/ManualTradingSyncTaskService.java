@@ -41,8 +41,8 @@ public class ManualTradingSyncTaskService {
     private final TradingReconciliationService reconciliationService;
     private final QuantTradeNotificationService notificationService;
     private final TaskExecutor executor;
-    private final String workerToken = UUID.randomUUID().toString();
     private final Set<Long> submittedTasks = ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.ConcurrentMap<Long, String> activeWorkerTokens = new ConcurrentHashMap<>();
 
     public ManualTradingSyncTaskService(QuantTradingSyncTaskMapper taskMapper,
                                         QuantCredentialMapper credentialMapper,
@@ -134,6 +134,7 @@ public class ManualTradingSyncTaskService {
                 try {
                     execute(taskId);
                 } finally {
+                    activeWorkerTokens.remove(taskId);
                     submittedTasks.remove(taskId);
                 }
             });
@@ -145,54 +146,60 @@ public class ManualTradingSyncTaskService {
     }
 
     private void execute(Long taskId) {
-        LocalDateTime now = LocalDateTime.now();
-        int claimed = taskMapper.update(null, new LambdaUpdateWrapper<QuantTradingSyncTask>()
-            .eq(QuantTradingSyncTask::getId, taskId)
-            .eq(QuantTradingSyncTask::getStatus, PENDING)
-            .set(QuantTradingSyncTask::getStatus, RUNNING)
-            .set(QuantTradingSyncTask::getWorkerToken, workerToken)
-            .set(QuantTradingSyncTask::getLeaseUntil, now.plusMinutes(2))
-            .set(QuantTradingSyncTask::getStartedAt, now)
-            .set(QuantTradingSyncTask::getUpdatedAt, now));
-        if (claimed != 1) {
-            return;
-        }
-
-        QuantTradingSyncTask task = taskMapper.selectById(taskId);
-        if (task == null) {
-            log.error("已抢占的历史同步任务记录不存在 taskId={}", taskId);
-            return;
-        }
-        QuantCredential credential = credentialMapper.selectById(task.getCredentialId());
-        if (credential == null) {
-            IllegalStateException failure = new IllegalStateException("交易凭证不存在或已删除");
-            if (finishFailure(taskId, failure)) {
-                notificationService.notifyOrderTradeSyncFailure(null, task.getRequestedSymbol(), failure);
-            }
-            return;
-        }
-
+        String taskWorkerToken = UUID.randomUUID().toString();
+        QuantCredential credential = null;
+        String requestedSymbol = null;
+        Long credentialId = null;
         try {
+            LocalDateTime now = LocalDateTime.now();
+            int claimed = taskMapper.update(null, new LambdaUpdateWrapper<QuantTradingSyncTask>()
+                .eq(QuantTradingSyncTask::getId, taskId)
+                .eq(QuantTradingSyncTask::getStatus, PENDING)
+                .set(QuantTradingSyncTask::getStatus, RUNNING)
+                .set(QuantTradingSyncTask::getWorkerToken, taskWorkerToken)
+                .set(QuantTradingSyncTask::getLeaseUntil, now.plusMinutes(2))
+                .set(QuantTradingSyncTask::getStartedAt, now)
+                .set(QuantTradingSyncTask::getUpdatedAt, now));
+            if (claimed != 1) {
+                return;
+            }
+            activeWorkerTokens.put(taskId, taskWorkerToken);
+
+            QuantTradingSyncTask task = taskMapper.selectById(taskId);
+            if (task == null) {
+                throw new IllegalStateException("已抢占的历史同步任务记录不存在");
+            }
+            credentialId = task.getCredentialId();
+            requestedSymbol = task.getRequestedSymbol();
+            credential = credentialMapper.selectById(credentialId);
+            if (credential == null) {
+                throw new IllegalStateException("交易凭证不存在或已删除");
+            }
+
             TradingReconciliationService.TradingDataSyncResult result = reconciliationService.syncTradingData(
-                credential, task.getRequestedSymbol(), progress -> updateProgress(taskId, progress));
-            if (finishSuccess(taskId, result)) {
-                notificationService.notifyOrderTradeSyncResult(credential, task.getRequestedSymbol(),
+                credential, requestedSymbol, progress -> updateProgress(taskId, taskWorkerToken, progress));
+            if (finishSuccess(taskId, taskWorkerToken, result)) {
+                notificationService.notifyOrderTradeSyncResult(credential, requestedSymbol,
                     result.symbolCount(), result.orderCount(), result.tradeCount());
             }
         } catch (RuntimeException failure) {
-            if (finishFailure(taskId, failure)) {
-                notificationService.notifyOrderTradeSyncFailure(credential, task.getRequestedSymbol(), failure);
+            if (finishFailure(taskId, taskWorkerToken, failure)) {
+                if (credential == null && credentialId != null) {
+                    credential = new QuantCredential();
+                    credential.setId(credentialId);
+                }
+                notificationService.notifyOrderTradeSyncFailure(credential, requestedSymbol, failure);
             }
-            log.error("后台订单与成交历史同步失败 taskId={} credentialId={}", taskId, task.getCredentialId(), failure);
+            log.error("后台订单与成交历史同步失败 taskId={} credentialId={}", taskId, credentialId, failure);
         }
     }
 
-    private void updateProgress(Long taskId, TradingReconciliationService.TradingDataSyncProgress progress) {
+    private void updateProgress(Long taskId, String taskWorkerToken, TradingReconciliationService.TradingDataSyncProgress progress) {
         try {
             taskMapper.update(null, new LambdaUpdateWrapper<QuantTradingSyncTask>()
                 .eq(QuantTradingSyncTask::getId, taskId)
                 .eq(QuantTradingSyncTask::getStatus, RUNNING)
-                .eq(QuantTradingSyncTask::getWorkerToken, workerToken)
+                .eq(QuantTradingSyncTask::getWorkerToken, taskWorkerToken)
                 .set(QuantTradingSyncTask::getTotalSymbolCount, progress.totalSymbolCount())
                 .set(QuantTradingSyncTask::getCompletedSymbolCount, progress.completedSymbolCount())
                 .set(QuantTradingSyncTask::getCurrentSymbol, progress.currentSymbol())
@@ -205,12 +212,12 @@ public class ManualTradingSyncTaskService {
         }
     }
 
-    private boolean finishSuccess(Long taskId, TradingReconciliationService.TradingDataSyncResult result) {
+    private boolean finishSuccess(Long taskId, String taskWorkerToken, TradingReconciliationService.TradingDataSyncResult result) {
         LocalDateTime now = LocalDateTime.now();
         return taskMapper.update(null, new LambdaUpdateWrapper<QuantTradingSyncTask>()
             .eq(QuantTradingSyncTask::getId, taskId)
             .eq(QuantTradingSyncTask::getStatus, RUNNING)
-            .eq(QuantTradingSyncTask::getWorkerToken, workerToken)
+            .eq(QuantTradingSyncTask::getWorkerToken, taskWorkerToken)
             .set(QuantTradingSyncTask::getStatus, SUCCESS)
             .set(QuantTradingSyncTask::getTotalSymbolCount, result.symbolCount())
             .set(QuantTradingSyncTask::getCompletedSymbolCount, result.symbolCount())
@@ -224,7 +231,7 @@ public class ManualTradingSyncTaskService {
             .set(QuantTradingSyncTask::getLeaseUntil, null)) == 1;
     }
 
-    private boolean finishFailure(Long taskId, RuntimeException failure) {
+    private boolean finishFailure(Long taskId, String taskWorkerToken, RuntimeException failure) {
         String message = failure.getMessage();
         if (message == null || message.isBlank()) {
             message = failure.getClass().getSimpleName();
@@ -236,7 +243,7 @@ public class ManualTradingSyncTaskService {
         return taskMapper.update(null, new LambdaUpdateWrapper<QuantTradingSyncTask>()
             .eq(QuantTradingSyncTask::getId, taskId)
             .eq(QuantTradingSyncTask::getStatus, RUNNING)
-            .eq(QuantTradingSyncTask::getWorkerToken, workerToken)
+            .eq(QuantTradingSyncTask::getWorkerToken, taskWorkerToken)
             .set(QuantTradingSyncTask::getStatus, FAILED)
             .set(QuantTradingSyncTask::getErrorMessage, message)
             .set(QuantTradingSyncTask::getCompletedAt, now)
@@ -251,11 +258,18 @@ public class ManualTradingSyncTaskService {
     @Scheduled(fixedDelay = 30000L, initialDelay = 30000L)
     public void renewRunningTaskLeases() {
         LocalDateTime now = LocalDateTime.now();
-        taskMapper.update(null, new LambdaUpdateWrapper<QuantTradingSyncTask>()
-            .eq(QuantTradingSyncTask::getStatus, RUNNING)
-            .eq(QuantTradingSyncTask::getWorkerToken, workerToken)
-            .set(QuantTradingSyncTask::getLeaseUntil, now.plusMinutes(2))
-            .set(QuantTradingSyncTask::getUpdatedAt, now));
+        activeWorkerTokens.forEach((taskId, taskWorkerToken) -> {
+            try {
+                taskMapper.update(null, new LambdaUpdateWrapper<QuantTradingSyncTask>()
+                    .eq(QuantTradingSyncTask::getId, taskId)
+                    .eq(QuantTradingSyncTask::getStatus, RUNNING)
+                    .eq(QuantTradingSyncTask::getWorkerToken, taskWorkerToken)
+                    .set(QuantTradingSyncTask::getLeaseUntil, now.plusMinutes(2))
+                    .set(QuantTradingSyncTask::getUpdatedAt, now));
+            } catch (RuntimeException ex) {
+                log.warn("续租历史订单与成交同步任务失败 taskId={}", taskId, ex);
+            }
+        });
     }
 
     /**
