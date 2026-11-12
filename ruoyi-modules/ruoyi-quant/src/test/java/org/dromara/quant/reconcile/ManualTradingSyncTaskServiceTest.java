@@ -9,6 +9,7 @@ import org.dromara.quant.reconcile.domain.QuantTradingSyncTask;
 import org.dromara.quant.reconcile.mapper.QuantTradingSyncTaskMapper;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
 import org.springframework.core.task.TaskExecutor;
 
 import java.util.concurrent.atomic.AtomicReference;
