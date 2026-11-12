@@ -140,8 +140,16 @@ public class AccountPositionCache {
             }
             try {
                 Map<String, Object> json = QuantJsonMapper.readMap(event.rawJson());
-                if (!(json.get("T") instanceof Number time) || time.longValue() <= 0 || !(json.get("a") instanceof Map<?, ?> update) || !(update.get("P") instanceof List<?> positions)) {
-                    throw new IllegalArgumentException("缺少持仓增量字段");
+                if (!(json.get("T") instanceof Number time) || time.longValue() <= 0 || !(json.get("a") instanceof Map<?, ?> update)) {
+                    throw new IllegalArgumentException("缺少账户增量字段");
+                }
+                Object rawPositions = update.get("P");
+                // 资金费率等合法 ACCOUNT_UPDATE 可能只有 B，没有 P；它不改变持仓缓存。
+                if (rawPositions == null) {
+                    return;
+                }
+                if (!(rawPositions instanceof List<?> positions)) {
+                    throw new IllegalArgumentException("持仓增量格式错误");
                 }
                 // 先完整解析，避免半个事件成功、半个事件失败。
                 List<ExchangeGateway.PositionSnapshot> changes = new ArrayList<>();
