@@ -203,16 +203,17 @@ public class TradingReconciliationService {
                 log.info("手动订单关联成交获取完成 credentialId={} symbol={} orderCount={} tradeCount={}",
                     credential.getId(), symbol, orders.size(), trades.size());
 
-                transaction.executeWithoutResult(status -> {
+                int acceptedTradeCount = transaction.execute(status -> {
                     syncOrders(credential, orders);
-                    syncTrades(credential, trades);
+                    int accepted = syncTrades(credential, trades);
                     if (tradeCycleProjectionService != null) {
                         tradeCycleProjectionService.markDirty(credential.getId(), symbol);
                     }
+                    return accepted;
                 });
 
                 orderCount += orders.size();
-                tradeCount += trades.size();
+                tradeCount += acceptedTradeCount;
                 int recoveredOrders = backfillMissingOrderFacts(exchangeCredential, credential, symbol, historyStart);
                 if (recoveredOrders > 0) {
                     orderCount += recoveredOrders;
@@ -1202,14 +1203,15 @@ public class TradingReconciliationService {
     /**
      * 同步交易所成交事实。已落库的交易所事实不可被重放覆盖；仅允许补齐此前缺失且可证明的策略归属。
      */
-    private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
+    private int syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
         Map<Long, RecentFilledOrder> recentFilledOrders = new LinkedHashMap<>();
+        int acceptedTradeCount = 0;
         Instant postFillBalanceCutoff = Instant.now().minus(POST_FILL_BALANCE_CAPTURE_WINDOW);
         boolean live = "LIVE".equalsIgnoreCase(credential.getRunMode());
         boolean projectionDirty = false;
         for (ExchangeGateway.TradeSnapshot s : snapshots) {
             // Pagination identity is mandatory, but incomplete money facts must still reach the
-            // LIVE raw-fill journal so the account's history watermark does not erase the evidence.
+            // raw-fill journal so incomplete facts are retained for review without fabricating a trade row.
             if (s == null || s.symbol() == null || s.symbol().isBlank() || s.tradeId() == null || s.tradeId() <= 0 || s.time() == null) {
                 throw new IllegalStateException("Binance fill lacks stable symbol/trade/time identity; refusing to advance history");
             }
@@ -1354,6 +1356,7 @@ public class TradingReconciliationService {
                         credential.getId(), s.symbol(), s.tradeId());
                 }
             }
+            acceptedTradeCount++;
             // Only fills observed in the recent window can have a meaningful post-fill
             // wallet snapshot. Replaying historical fills and reading today's balance would
             // write a false historical fact into quant_order.
@@ -1380,6 +1383,7 @@ public class TradingReconciliationService {
         if (projectionDirty && tradeCycleProjectionService != null && !snapshots.isEmpty()) {
             tradeCycleProjectionService.markDirty(credential.getId(), snapshots.getFirst().symbol());
         }
+        return acceptedTradeCount;
     }
 
     private static void assertImmutableTradeFacts(QuantTrade stored, ExchangeGateway.TradeSnapshot incoming) {
