@@ -770,7 +770,7 @@ class QuantTradeNotificationServiceTest {
     }
 
     @Test
-    void manualOrderTradeSyncFailureQueuesSystemMessageWithoutThrowingNotificationErrors() {
+    void manualOrderTradeSyncFailureQueuesSystemMessage() {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-manual-sync-failure-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
@@ -793,6 +793,24 @@ class QuantTradeNotificationServiceTest {
         assertEquals("订单与成交同步未完成", notification.getValue().getSubject());
         assertTrue(notification.getValue().getContent().contains("JCTUSDT 历史成交同步失败"));
         assertTrue(notification.getValue().getContent().contains("失败前已完成的交易对数据可能已经保存"));
+    }
+
+    @Test
+    void manualOrderTradeSyncNotificationPersistenceFailureDoesNotPropagate() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-manual-sync-persist-failure-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var executor = mock(TaskExecutor.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), mock(JdbcTemplate.class), mock(ExchangeGateway.class), executor);
+        when(mapper.insert(any(QuantNotification.class))).thenThrow(new IllegalStateException("database unavailable"));
+        var credential = new QuantCredential();
+        credential.setId(10L);
+
+        assertDoesNotThrow(() -> service.notifyOrderTradeSyncResult(credential, null, 1, 5, 4));
+
+        verify(mapper).insert(any(QuantNotification.class));
+        verifyNoInteractions(executor);
     }
 
 
