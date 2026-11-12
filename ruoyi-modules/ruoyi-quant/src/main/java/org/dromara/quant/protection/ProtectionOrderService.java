@@ -402,7 +402,7 @@ public class ProtectionOrderService {
         if (!validPosition(position)) {
             return null;
         }
-        if (live && !Integer.valueOf(2).equals(position.getProtectionPolicyVersion())) {
+        if (live && !isUnifiedProtection(position)) {
             BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), true);
             BigDecimal price = QuantityNormalizer.protectionPrice(hardStopPrice(position, marginLossRatio), rule(credentialId, position.getSymbol()), position.getPositionSide(), "STOP_MARKET");
             // 已冻结的硬止损不能因均价变化而被更弱的替代单覆盖。
@@ -464,6 +464,14 @@ public class ProtectionOrderService {
             normalizeProtectionPrice(credentialId, position, hardStopPrice(position, marginLossRatio), "STOP_MARKET", live), live);
     }
 
+    private static boolean isUnifiedProtection(QuantPosition position) {
+        return position.getProtectionPolicyVersion() != null && position.getProtectionPolicyVersion() >= 2;
+    }
+
+    private static String protectionWorkingType(QuantPosition position) {
+        return Integer.valueOf(3).equals(position.getProtectionPolicyVersion()) ? "MARK_PRICE" : "CONTRACT_PRICE";
+    }
+
     /**
      * 将保证金损失率换算为符合方向的止损触发价格。
      */
@@ -471,12 +479,15 @@ public class ProtectionOrderService {
         if (marginLossRatio == null || marginLossRatio.signum() <= 0 || marginLossRatio.compareTo(BigDecimal.ONE) >= 0) {
             throw new IllegalArgumentException("硬止损回报率必须 > 0 且 < 1");
         }
-        if (Integer.valueOf(2).equals(position.getProtectionPolicyVersion()) && position.getProtectionStopLossPrice() != null
+        if (isUnifiedProtection(position) && position.getProtectionStopLossPrice() != null
             && position.getProtectionStopLossPrice().signum() > 0) {
             return position.getProtectionStopLossPrice();
         }
-        BigDecimal price = org.dromara.quant.strategy.KlineSlopeRateStrategy.priceForReturn(position.getEntryPrice(), position.getPositionSide(), marginLossRatio.negate(),
-            position.getLeverage() == null ? 1 : position.getLeverage());
+        BigDecimal price = Integer.valueOf(3).equals(position.getProtectionPolicyVersion())
+            ? org.dromara.quant.strategy.KlineSlopeRateStrategy.priceForMarkReturn(position.getEntryPrice(), position.getPositionSide(), marginLossRatio.negate(),
+                position.getLeverage() == null ? 1 : position.getLeverage())
+            : org.dromara.quant.strategy.KlineSlopeRateStrategy.priceForReturn(position.getEntryPrice(), position.getPositionSide(), marginLossRatio.negate(),
+                position.getLeverage() == null ? 1 : position.getLeverage());
         if (price.signum() <= 0) {
             throw new IllegalArgumentException("计算出的硬止损价格无效");
         }
@@ -516,7 +527,7 @@ public class ProtectionOrderService {
             if (signal == null || signal.type() == null || !STRATEGY_PROTECTION_TYPES.contains(signal.type())) {
                 continue;
             }
-            if (Integer.valueOf(2).equals(position.getProtectionPolicyVersion()) && !Set.of("FIRST_TP", "STEP_TP").contains(signal.type())) {
+            if (isUnifiedProtection(position) && !Set.of("FIRST_TP", "STEP_TP").contains(signal.type())) {
                 continue;
             }
             desiredTypes.add(signal.type());
@@ -611,7 +622,7 @@ public class ProtectionOrderService {
     private void pruneCoveredStops(Long credentialId, QuantPosition position) {
         BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), true);
         for (var old : scopedStops(credentialId, position)) {
-            if ("STEP_TP".equals(old.getProtectionType()) || Integer.valueOf(2).equals(position.getProtectionPolicyVersion()) && "HARD_STOP".equals(old.getProtectionType()) || !"STOP_MARKET".equalsIgnoreCase(old.getOrderType()) || old.getStopPrice() == null) {
+            if ("STEP_TP".equals(old.getProtectionType()) || isUnifiedProtection(position) && "HARD_STOP".equals(old.getProtectionType()) || !"STOP_MARKET".equalsIgnoreCase(old.getOrderType()) || old.getStopPrice() == null) {
                 continue;
             }
             var covering = confirmedCover(credentialId, position, old.getProtectionType(), quantity, old.getStopPrice());
@@ -637,7 +648,7 @@ public class ProtectionOrderService {
             if (firstRemaining != null && firstRemaining.signum() <= 0) {
                 return;
             }
-            if (live && Integer.valueOf(2).equals(position.getProtectionPolicyVersion())) {
+            if (live && isUnifiedProtection(position)) {
                 if (firstLocalExecuted == null || firstLocalExecuted.signum() < 0) {
                     throw new IllegalStateException("首平缺少可信本地累计成交量，禁止创建新目标");
                 }
@@ -757,6 +768,7 @@ public class ProtectionOrderService {
             entity.setClientOrderId(prefix + UUID.randomUUID().toString().replace("-", "").substring(0, 28));
             entity.setProtectionType(protectionType);
             entity.setOrderType(normalizedOrderType);
+            entity.setWorkingType(protectionWorkingType(position));
             entity.setQuantity(quantity);
             entity.setStopPrice(stopPrice);
             entity.setStepIndex(stepIndex);
@@ -788,7 +800,8 @@ public class ProtectionOrderService {
         try {
             checkTargetLeaseBeforeDispatch();
             ExchangeGateway.ProtectionOrderResult result = submitProtected(credentialId, entity, new ExchangeGateway.ProtectionOrderRequest(credential, position.getSymbol(),
-                "SHORT".equalsIgnoreCase(position.getPositionSide()) ? "BUY" : "SELL", exchangePositionSide, entity.getOrderType(), quantity, stopPrice, clientAlgoId, live));
+                "SHORT".equalsIgnoreCase(position.getPositionSide()) ? "BUY" : "SELL", exchangePositionSide, entity.getOrderType(), quantity, stopPrice, clientAlgoId, live,
+                entity.getWorkingType() == null ? "CONTRACT_PRICE" : entity.getWorkingType()));
             entity.setExchangeOrderId(result.orderId());
             if (!live) {
                 entity.setStatus("PAPER_ACCEPTED");
