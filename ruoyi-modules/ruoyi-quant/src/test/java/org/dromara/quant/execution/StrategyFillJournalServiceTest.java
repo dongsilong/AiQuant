@@ -46,6 +46,17 @@ class StrategyFillJournalServiceTest {
     }
 
     @Test
+    void attributeIfPresentDoesNotCreateJournalRowsForUnseenCompleteTestnetFills() {
+        when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(null);
+
+        assertNull(service.attributeIfPresent(fill(), null, 1L));
+
+        verify(journal).selectByKey(1L, "BTCUSDT", 101L);
+        verify(journal, never()).insertRaw(any());
+        verifyNoInteractions(allocations);
+    }
+
+    @Test
     void keepsRawFactAndMarksMissingAllocationFieldsForRetry() {
         when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(null);
         when(journal.insertRaw(any())).thenReturn(1);
