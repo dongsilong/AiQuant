@@ -2340,7 +2340,7 @@ class StrategyRuntimeSafetyTest {
             doThrow(new IllegalStateException("hard stop rejected")).when(f.protection).ensureMarginHardStop(any(), any(), any(), anyBoolean());
             ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime);
             ((java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "protectionTask")).get(2, java.util.concurrent.TimeUnit.SECONDS);
-            verify(f.protection, never()).syncStrategyProtections(any(), any(), anyList(), any(), any(), anyBoolean());
+            verify(f.protection, never()).syncStrategyProtections(any(), any(), any(), anyList(), any(), any(), anyBoolean());
             assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "hardStopConfirmed"));
             assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "protectionDegraded"));
             var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
