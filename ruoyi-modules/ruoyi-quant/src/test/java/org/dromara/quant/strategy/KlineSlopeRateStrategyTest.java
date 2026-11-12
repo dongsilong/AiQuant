@@ -232,6 +232,18 @@ class KlineSlopeRateStrategyTest {
         assertEquals(1, step.stepIndex());
     }
 
+    @Test
+    void markPricePeakDoesNotAdvanceContractPriceLadder() {
+        StrategyContext context = new StrategyContext("BTCUSDT", "LONG", new BigDecimal("100"), new BigDecimal("100"),
+            new BigDecimal("100"), new BigDecimal("100"), Instant.now(), false, Instant.now(), BigDecimal.ONE, BigDecimal.ONE,
+            BigDecimal.TEN, 10, new BigDecimal("100"), new BigDecimal("100"), false, 0, new BigDecimal("120"));
+        assertEquals(0, KlineSlopeRateStrategy.reachedStep(context, Map.of("stepRatio", "0.10")));
+        assertTrue(strategy.evaluateProtection(context, Map.of(
+            KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY, 3,
+            "stepRatio", "0.10"
+        )).stream().noneMatch(signal -> signal.type().equals("STEP_TP")));
+    }
+
     private StrategyContext context(String direction, BigDecimal entry, BigDecimal previousOpen, BigDecimal current, boolean firstTp, BigDecimal high, BigDecimal low) {
         return new StrategyContext("BTCUSDT", direction, entry, current, current, previousOpen == null ? new BigDecimal("100") : previousOpen, Instant.ofEpochMilli(1_000), false
             , Instant.ofEpochMilli(2_000), direction == null ? BigDecimal.ZERO : new BigDecimal("1"), direction == null ? BigDecimal.ZERO : new BigDecimal("1"),
