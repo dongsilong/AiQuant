@@ -239,7 +239,7 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
             END AS closingEquityCapturedAt,
             DATE_FORMAT(ce.rest_response_received_at, '%Y-%m-%dT%H:%i:%sZ') AS closingEquityResponseReceivedAt,
             ce.capture_source AS closingEquityCaptureSource,
-            DATE_FORMAT(ce.close_event_time, '%Y-%m-%dT%H:%i:%sZ') AS closeEventTime,
+            DATE_FORMAT(last_close_fill.trade_time, '%Y-%m-%dT%H:%i:%sZ') AS closeEventTime,
             DATE_FORMAT(ce.account_update_transaction_time, '%Y-%m-%dT%H:%i:%sZ') AS accountUpdateTransactionTime,
             DATE_FORMAT(c.closed_at, '%Y-%m-%dT%H:%i:%sZ') AS closedAt,
             c.fill_count AS fillCount
