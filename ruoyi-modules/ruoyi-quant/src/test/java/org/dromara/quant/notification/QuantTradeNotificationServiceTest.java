@@ -402,9 +402,8 @@ class QuantTradeNotificationServiceTest {
         assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(closeMillis), java.time.ZoneOffset.UTC),
             values.getValue()[4]);
         assertNull(values.getValue()[5]);
-        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(eventMillis), java.time.ZoneOffset.UTC),
-            values.getValue()[6]);
-        assertTrue(values.getValue()[7] instanceof java.time.LocalDateTime);
+        assertNull(values.getValue()[6]);
+        assertNull(values.getValue()[7]);
         assertTrue(values.getValue()[8] instanceof java.time.LocalDateTime);
         assertTrue(values.getValue()[9] instanceof java.time.LocalDateTime);
         var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
