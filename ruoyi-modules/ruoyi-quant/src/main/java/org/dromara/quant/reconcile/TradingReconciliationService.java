@@ -179,26 +179,34 @@ public class TradingReconciliationService {
      * The account-level marker prevents every scheduler tick from rescanning the same 90-day history.
      */
     public void recoverMissingTradeLedger(QuantCredential credential) {
-        if (credential == null || credential.getId() == null
-            || tradeMapper.selectCount(new LambdaQueryWrapper<QuantTrade>()
-                .eq(QuantTrade::getCredentialId, credential.getId())) > 0) {
+        if (credential == null || credential.getId() == null) {
             return;
         }
-        List<String> symbols = orderMapper.selectHistoricalSymbolsByCredential(credential.getId());
-        if (symbols == null || symbols.isEmpty()) {
+        Long credentialId = credential.getId();
+        String recoveryStatus = tradeLedgerRecoveryMapper.selectStatus(credentialId);
+        if ("COMPLETED".equals(recoveryStatus)) {
             return;
         }
-        tradeLedgerRecoveryMapper.insertReady(credential.getId());
-        if (tradeLedgerRecoveryMapper.claim(credential.getId()) != 1) {
+        List<String> symbols = orderMapper.selectHistoricalSymbolsByCredential(credentialId);
+        if (recoveryStatus == null) {
+            if (tradeMapper.selectCount(new LambdaQueryWrapper<QuantTrade>()
+                .eq(QuantTrade::getCredentialId, credentialId)) > 0 || symbols == null || symbols.isEmpty()) {
+                return;
+            }
+            tradeLedgerRecoveryMapper.insertReady(credentialId);
+        }
+        if (tradeLedgerRecoveryMapper.claim(credentialId) != 1) {
             return;
         }
         try {
             TradingDataSyncResult result = syncTradingData(credential, null);
-            tradeLedgerRecoveryMapper.complete(credential.getId());
+            if (tradeLedgerRecoveryMapper.complete(credentialId) != 1) {
+                throw new IllegalStateException("成交账本恢复状态未能提交完成 credentialId=" + credentialId);
+            }
             log.info("后台订单驱动成交账本恢复完成 credentialId={} knownSymbolCount={} recoveredSymbolCount={} orderCount={} tradeCount={} scope=90D",
-                credential.getId(), symbols.size(), result.symbolCount(), result.orderCount(), result.tradeCount());
+                credentialId, symbols == null ? 0 : symbols.size(), result.symbolCount(), result.orderCount(), result.tradeCount());
         } catch (RuntimeException failure) {
-            tradeLedgerRecoveryMapper.releaseForRetry(credential.getId());
+            tradeLedgerRecoveryMapper.releaseForRetry(credentialId);
             throw failure;
         }
     }
