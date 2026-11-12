@@ -738,5 +738,62 @@ class QuantTradeNotificationServiceTest {
         verify(intentMapper).findCloseOrderIdsByCycle(10L, "BTCUSDT", 21L, "cycle-abc", "LONG", "SELL", BigDecimal.ONE);
     }
 
+    @Test
+    void manualOrderTradeSyncSuccessQueuesOnlyTerminalSystemMessageWithResultCounts() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-manual-sync-success-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var executor = mock(TaskExecutor.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), mock(JdbcTemplate.class), mock(ExchangeGateway.class), executor);
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(701L);
+            return 1;
+        });
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        credential.setRunMode("LIVE");
+
+        service.notifyOrderTradeSyncResult(credential, null, 3, 27, 24);
+
+        var notification = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper).insert(notification.capture());
+        assertEquals("SYSTEM", notification.getValue().getChannel());
+        assertEquals("TERMINAL", notification.getValue().getRecipient());
+        assertEquals("PENDING", notification.getValue().getStatus());
+        assertEquals("订单与成交同步成功", notification.getValue().getSubject());
+        assertTrue(notification.getValue().getContent().contains("涉及交易对：3 个"));
+        assertTrue(notification.getValue().getContent().contains("处理订单数：27 笔"));
+        assertTrue(notification.getValue().getContent().contains("完整且已核实的成交数：24 笔"));
+        verify(executor).execute(any(Runnable.class));
+        verify(mapper, times(1)).insert(any(QuantNotification.class));
+    }
+
+    @Test
+    void manualOrderTradeSyncFailureQueuesSystemMessageWithoutThrowingNotificationErrors() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-manual-sync-failure-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), mock(JdbcTemplate.class), mock(ExchangeGateway.class), mock(TaskExecutor.class));
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(702L);
+            return 1;
+        });
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        var failure = new IllegalStateException("JCTUSDT 历史成交同步失败");
+
+        assertDoesNotThrow(() -> service.notifyOrderTradeSyncFailure(credential, null, failure));
+
+        var notification = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper).insert(notification.capture());
+        assertEquals("SYSTEM", notification.getValue().getChannel());
+        assertEquals("TERMINAL", notification.getValue().getRecipient());
+        assertEquals("订单与成交同步未完成", notification.getValue().getSubject());
+        assertTrue(notification.getValue().getContent().contains("JCTUSDT 历史成交同步失败"));
+        assertTrue(notification.getValue().getContent().contains("失败前已完成的交易对数据可能已经保存"));
+    }
+
 
 }
