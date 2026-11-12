@@ -268,20 +268,6 @@ public class QuantAccountQueryController {
         return R.ok(manualTradingSyncTaskService.start(credentialId, symbol));
     }
 
-    /**
-     * 查询后台订单与成交历史同步任务状态；先通过任务账户归属校验，再返回状态。
-     */
-    @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
-    @GetMapping("/sync-task/{taskId}")
-    public R<ManualTradingSyncTaskService.TradingSyncTaskView> syncTask(@PathVariable Long taskId) {
-        ManualTradingSyncTaskService.TradingSyncTaskView task = manualTradingSyncTaskService.get(taskId);
-        if (task == null) {
-            throw new ServiceException("同步任务不存在");
-        }
-        credentialEntity(task.credentialId());
-        return R.ok(task);
-    }
-
     static LocalDateTime tradeDateBoundary(String date, boolean nextDay) {
         LocalDate target = LocalDate.parse(date);
         if (nextDay) {
