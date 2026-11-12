@@ -23,6 +23,7 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.dromara.quant.reconcile.TradingReconciliationService;
+import org.dromara.quant.notification.QuantTradeNotificationService;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -62,6 +63,7 @@ public class QuantAccountQueryController {
     private final QuantAccountSnapshotMapper accountSnapshotMapper;
     private final QuantOrderMapper orderMapper;
     private final TradingReconciliationService tradingReconciliationService;
+    private final QuantTradeNotificationService tradeNotificationService;
 
     /**
      * 查询指定凭证的账户资金快照。
@@ -176,7 +178,17 @@ public class QuantAccountQueryController {
     @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
     @PostMapping("/order/{credentialId}/sync")
     public R<Integer> syncOrders(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
-        return R.ok(tradingReconciliationService.syncTradingData(credentialEntity(credentialId), symbol).orderCount());
+        QuantCredential credential = credentialEntity(credentialId);
+        try {
+            TradingReconciliationService.TradingDataSyncResult result =
+                tradingReconciliationService.syncTradingData(credential, symbol);
+            tradeNotificationService.notifyOrderTradeSyncResult(
+                credential, symbol, result.symbolCount(), result.orderCount(), result.tradeCount());
+            return R.ok(result.orderCount());
+        } catch (RuntimeException failure) {
+            tradeNotificationService.notifyOrderTradeSyncFailure(credential, symbol, failure);
+            throw failure;
+        }
     }
 
     /**
