@@ -87,6 +87,7 @@ class TradingReconciliationTransactionTest {
         when(gateway.queryOrders(any(), isNull())).thenReturn(List.of());
         when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of());
         when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of());
+        when(orders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
         doAnswer(invocation -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive(), "DB write not inside short transaction");
             return 1;
@@ -223,7 +224,7 @@ class TradingReconciliationTransactionTest {
             assertTrue(range.from().isBefore(Instant.now().minus(java.time.Duration.ofHours(30))));
             return List.of();
         });
-        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), isNull())).thenReturn(List.of());
 
         service().reconcileCredential(credential(), 24);
 
@@ -282,11 +283,15 @@ class TradingReconciliationTransactionTest {
     void orphanProtectionDoesNotGetCanceledJustBecauseLocalPositionIsMissing() {
         stubCommonFacts();
         var open = new ExchangeGateway.OrderSnapshot("BTCUSDT", 7L, "open7", "BUY", "MARKET", "NEW", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, Instant.EPOCH);
-        when(gateway.queryOrders(any(), isNull())).thenReturn(List.of(open));
+        var anotherOpen = new ExchangeGateway.OrderSnapshot("ETHUSDT", 8L, "open8", "BUY", "MARKET", "NEW", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, Instant.EPOCH);
+        when(gateway.queryOrders(any(), isNull())).thenReturn(List.of(open, anotherOpen));
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
-        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 123L, "protect123", "NEW", "SELL",
+        when(gateway.queryTrades(any(), eq("ETHUSDT"), any())).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), isNull())).thenReturn(List.of(new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 123L, "protect123", "NEW", "SELL",
             "LONG", "STOP_MARKET", BigDecimal.ONE, BigDecimal.ONE, Instant.EPOCH)));
         service().reconcileCredential(credential(), 48);
+        verify(gateway, times(1)).queryProtectionOrders(any(), isNull());
+        verify(gateway, never()).queryProtectionOrders(any(), anyString());
         verify(gateway, never()).cancelProtectionOrder(any());
         verify(protection).insert(any(org.dromara.quant.protection.domain.QuantProtectionOrder.class));
         var record = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.reconcile.domain.QuantReconcileRecord.class);
@@ -314,7 +319,7 @@ class TradingReconciliationTransactionTest {
         when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of(new ExchangeGateway.OrderSnapshot("BTCUSDT", 78L, "filled78", "SELL", "MARKET",
             "FILLED", BigDecimal.TEN, BigDecimal.ONE, BigDecimal.ONE, Instant.EPOCH)));
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
-        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), isNull())).thenReturn(List.of());
         when(orders.selectOne(any())).thenThrow(new IllegalStateException("order database write failed"));
         assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 48));
         verify(positions).updateById(stale);
@@ -581,6 +586,32 @@ class TradingReconciliationTransactionTest {
     private ExchangeGateway.TradeSnapshot manualSyncFill(String symbol, long orderId) {
         return new ExchangeGateway.TradeSnapshot(symbol, 901L, orderId, "BUY", BigDecimal.ONE, BigDecimal.TEN,
             new BigDecimal("0.01"), BigDecimal.ZERO, Instant.now().minusSeconds(60), "USDT");
+    }
+
+    @Test
+    void completedSymbolCommitsItsFillCursorBeforeAnotherSymbolHistoryFails() {
+        stubCommonFacts();
+        initializeManualSyncMapperMetadata();
+        var btcOrder = new ExchangeGateway.OrderSnapshot("BTCUSDT", 801L, "btc-801", "BUY", "MARKET", "FILLED",
+            BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, Instant.now(), BigDecimal.TEN);
+        var ethOrder = new ExchangeGateway.OrderSnapshot("ETHUSDT", 802L, "eth-802", "BUY", "MARKET", "FILLED",
+            BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, Instant.now(), BigDecimal.TEN);
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of(btcOrder, ethOrder));
+        when(fillCursors.selectSymbols(1L)).thenReturn(List.of("BTCUSDT", "ETHUSDT"));
+        when(fillCursors.selectLastCompleteTo(1L, "BTCUSDT"))
+            .thenReturn(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(1));
+        when(fillCursors.selectLastCompleteTo(1L, "ETHUSDT")).thenReturn(null);
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+        when(gateway.queryTrades(any(), eq("ETHUSDT"), any())).thenThrow(new IllegalStateException("history unavailable"));
+        when(orders.selectOne(any())).thenReturn(null);
+
+        assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 24));
+
+        verify(fillCursorService).advance(eq(1L), eq("BTCUSDT"), any(java.time.LocalDateTime.class));
+        verify(fillCursorService, never()).advance(eq(1L), eq("ETHUSDT"), any(java.time.LocalDateTime.class));
+        var persistedOrder = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.order.domain.QuantOrder.class);
+        verify(orders, times(1)).insert(persistedOrder.capture());
+        assertEquals("BTCUSDT", persistedOrder.getValue().getSymbol());
     }
 
     @Test

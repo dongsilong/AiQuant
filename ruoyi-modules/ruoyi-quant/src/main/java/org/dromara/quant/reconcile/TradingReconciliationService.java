@@ -786,14 +786,23 @@ public class TradingReconciliationService {
             }
             log.info("周期账户对账历史订单查询 credentialId={} historyHours={} rangeStart={} rangeEnd={} mode=PERIODIC",
                 credential.getId(), historyHours, range.from(), range.to());
-            List<ExchangeGateway.OrderSnapshot> history = List.copyOf(gateway.queryOrderHistory(exchangeCredential, null, range, 1000L));
+            List<ExchangeGateway.OrderSnapshot> history = List.of();
+            ExchangeMarketPort.RequestDeferredException deferredHistoryRead = null;
+            try {
+                history = List.copyOf(gateway.queryOrderHistory(exchangeCredential, null, range, 1000L));
+            } catch (ExchangeMarketPort.RequestDeferredException deferred) {
+                deferredHistoryRead = deferred;
+                log.warn("Binance 历史订单查询被本地 REST 调度器延期；继续核对已有交易对成交事实 credentialId={} kind={} reason={} retryAfterMs={}",
+                    credential.getId(), deferred.kind(), deferred.reason(), deferred.retryAfterMillis());
+            }
 
             int fillHistoryBacklogSymbols = syncHistoricalSymbolFacts(credential, exchangeCredential, snapshot.positions(),
                 openOrders, history, range);
 
             int unmatchedProtections = 0;
             boolean protectionSyncDeferred = deferredAccountRead != null;
-            ExchangeMarketPort.RequestDeferredException deferredAccountFacts = deferredAccountRead;
+            ExchangeMarketPort.RequestDeferredException deferredAccountFacts =
+                deferredAccountRead != null ? deferredAccountRead : deferredHistoryRead;
             if (deferredAccountFacts == null) {
                 try {
                     unmatchedProtections = syncAccountProtectionFacts(credential, exchangeCredential, snapshot.positions());
@@ -805,7 +814,9 @@ public class TradingReconciliationService {
                 }
             }
             final boolean accountOrdersDeferred = deferredAccountRead != null;
+            final boolean historyOrdersDeferred = deferredHistoryRead != null;
             final boolean accountProtectionsDeferred = protectionSyncDeferred;
+            final int unmatchedProtectionCount = unmatchedProtections;
             final ExchangeMarketPort.RequestDeferredException deferredToRetry = deferredAccountFacts;
 
             LocalDateTime storedIncomeCursor = incomeSyncCursors.selectLastCompleteTo(credential.getId());
@@ -844,14 +855,16 @@ public class TradingReconciliationService {
 
                 long unattributedFills = "LIVE".equalsIgnoreCase(credential.getRunMode())
                     ? fillJournal.countUnresolved(credential.getId()) : 0L;
-                boolean degraded = unmatchedProtections > 0 || unattributedFills > 0 || fillHistoryBacklogSymbols > 0
-                    || incomeHistoryBacklog || financialLedgerConflict[0] || accountOrdersDeferred || accountProtectionsDeferred;
+                boolean degraded = unmatchedProtectionCount > 0 || unattributedFills > 0 || fillHistoryBacklogSymbols > 0
+                    || incomeHistoryBacklog || financialLedgerConflict[0] || accountOrdersDeferred
+                    || historyOrdersDeferred || accountProtectionsDeferred;
                 if (degraded) {
                     reconcileMapper.insert(record(credential.getId(), "DEGRADED",
-                        "{\"unmatchedLiveProtections\":" + unmatchedProtections + ",\"unattributedFills\":" + unattributedFills
+                        "{\"unmatchedLiveProtections\":" + unmatchedProtectionCount + ",\"unattributedFills\":" + unattributedFills
                             + ",\"fillHistoryBacklogSymbols\":" + fillHistoryBacklogSymbols + ",\"incomeHistoryBacklog\":" + incomeHistoryBacklog
                             + ",\"financialLedgerConflict\":" + financialLedgerConflict[0]
                             + ",\"openOrdersSyncDeferred\":" + accountOrdersDeferred
+                            + ",\"historyOrdersSyncDeferred\":" + historyOrdersDeferred
                             + ",\"protectionSyncDeferred\":" + accountProtectionsDeferred + "}"));
                 } else {
                     reconcileMapper.insert(record(credential.getId(), "SUCCESS", "{}"));
