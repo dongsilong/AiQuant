@@ -14,6 +14,7 @@ import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
+import org.dromara.quant.reconcile.mapper.TradeLedgerRecoveryMapper;
 import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.junit.jupiter.api.Tag;
@@ -50,6 +51,7 @@ class TradingReconciliationTransactionTest {
     private final StrategyPositionStateService state = mock(StrategyPositionStateService.class);
     private final StrategyFillJournalService fillJournal = mock(StrategyFillJournalService.class);
     private final StrategyFillSyncCursorMapper fillCursors = mock(StrategyFillSyncCursorMapper.class);
+    private final TradeLedgerRecoveryMapper tradeLedgerRecovery = mock(TradeLedgerRecoveryMapper.class);
     private final StrategyFillSyncCursorService fillCursorService = mock(StrategyFillSyncCursorService.class);
     private final FinancialEventSyncCursorMapper incomeCursors = mock(FinancialEventSyncCursorMapper.class);
     private final FinancialEventSyncCursorService incomeCursorService = mock(FinancialEventSyncCursorService.class);
@@ -60,7 +62,7 @@ class TradingReconciliationTransactionTest {
         var source = new DriverManagerDataSource("jdbc:h2:mem:reconciliation_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         var reconciliation = new TradingReconciliationService(gateway, accounts, positions, orders, trades, protection, finance, records, errors, state,
             new DataSourceTransactionManager(source), new StrictBinanceTradeCollector(gateway), new StrictBinanceIncomeCollector(gateway), fillJournal,
-            fillCursors, fillCursorService, incomeCursors, incomeCursorService);
+            fillCursors, fillCursorService, incomeCursors, incomeCursorService, tradeLedgerRecovery);
         org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "tradeHistoryMapper", tradeHistory);
         org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "tradeCycleProjectionService", tradeCycleProjection);
         return reconciliation;
