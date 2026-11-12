@@ -30,6 +30,7 @@ import org.dromara.quant.strategy.mapper.QuantStrategyInstanceMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.strategy.service.QuantStrategyService;
+import org.dromara.quant.strategy.KlineSlopeRateStrategy;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -219,6 +220,17 @@ public class QuantAdminController {
             row.put("highestPriceSinceEntry", item.getHighestPriceSinceEntry());
             row.put("lowestPriceSinceEntry", item.getLowestPriceSinceEntry());
             row.put("maximumReturnRate", item.getMaximumReturnRate());
+            java.math.BigDecimal favorablePrice = "SHORT".equalsIgnoreCase(item.getDirection())
+                ? item.getLowestPriceSinceEntry() : item.getHighestPriceSinceEntry();
+            java.math.BigDecimal ladderMaximumReturnRate = null;
+            if (strategy != null && KlineSlopeRateStrategy.CODE.equalsIgnoreCase(strategy.getPluginCode())
+                && item.getEntryPrice() != null && item.getEntryPrice().signum() > 0 && favorablePrice != null
+                && item.getFrozenLeverage() != null && item.getFrozenLeverage() > 0) {
+                ladderMaximumReturnRate = KlineSlopeRateStrategy.leveragedReturn(
+                    item.getDirection(), favorablePrice, item.getEntryPrice(), item.getFrozenLeverage())
+                    .max(java.math.BigDecimal.ZERO).multiply(java.math.BigDecimal.valueOf(100));
+            }
+            row.put("ladderMaximumReturnRate", ladderMaximumReturnRate);
             row.put("highestStep", item.getHighestStep());
             row.put("confirmedProtectionStep", item.getConfirmedProtectionStep());
             row.put("firstTakeProfitTriggered", item.getFirstTakeProfitTriggered());
