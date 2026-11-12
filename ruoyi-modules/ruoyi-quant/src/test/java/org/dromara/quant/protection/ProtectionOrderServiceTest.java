@@ -1371,6 +1371,25 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void manualRecheckKeepsCancelGuardWhenBinanceTriggerPriceDoesNotMatchLocalIntent() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        local.setPositionSide("LONG");
+        local.setStatus("UNKNOWN");
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "cancel-key", "PROTECT_CANCEL", local.getClientOrderId(), "UNKNOWN", 55L);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(local);
+        var mismatched = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "CANCELED", "SELL", "BOTH",
+            "STOP_MARKET", BigDecimal.ONE, new BigDecimal("98"), Instant.now(), BigDecimal.ZERO, true, false);
+        when(gateway.queryProtectionOrder(any(), eq(55L), eq(local.getClientOrderId()), eq("BTCUSDT"), any()))
+            .thenReturn(mismatched, mismatched);
+
+        assertFalse(service.recheckProtectionDispatch(1L, "BTCUSDT", "cancel-key", local.getClientOrderId()));
+
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+    }
+
+    @Test
     void manualRecheckRecoversFullyFilledTriggeredProtectionCreate() {
         QuantProtectionOrder local = order();
         local.setCredentialId(1L);
