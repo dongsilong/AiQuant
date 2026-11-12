@@ -6,6 +6,8 @@ import org.apache.ibatis.annotations.Param;
 /** Coordinates one-time account-level recovery when the local trade ledger has been emptied. */
 @Mapper
 public interface TradeLedgerRecoveryMapper {
+    String selectStatus(@Param("credentialId") Long credentialId);
+
     int insertReady(@Param("credentialId") Long credentialId);
 
     /** Claims an absent/expired recovery lease; completed or actively running recoveries are not claimed. */
