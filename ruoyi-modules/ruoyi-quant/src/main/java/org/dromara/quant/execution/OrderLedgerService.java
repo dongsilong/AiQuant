@@ -55,8 +55,10 @@ public class OrderLedgerService {
             mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getSymbol, expectedSymbol).eq(QuantOrder::getExchangeOrderId,
                 snapshot.orderId()));
         if (entity == null) {
-            entity = mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getSymbol, expectedSymbol).eq(QuantOrder::getClientOrderId,
-                clientOrderId));
+            // 只允许用客户端订单号认领尚未绑定交易所订单 ID 的本地待确认订单。
+            entity = mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId)
+                .eq(QuantOrder::getSymbol, expectedSymbol).eq(QuantOrder::getClientOrderId, clientOrderId)
+                .isNull(QuantOrder::getExchangeOrderId));
         }
         if (entity != null && snapshot.positionSide() != null && entity.getPositionSide() != null && !entity.getPositionSide().isBlank()
             && !entity.getPositionSide().equalsIgnoreCase(snapshot.positionSide())) {
@@ -70,7 +72,7 @@ public class OrderLedgerService {
             entity.setCredentialId(credentialId);
             entity.setClientOrderId(clientOrderId);
             entity.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
-            entity.setIdempotencyKey(clientOrderId);
+            entity.setIdempotencyKey("EXCHANGE_ORDER:" + snapshot.symbol() + ":" + snapshot.orderId());
         }
         // Always carry the exchange-confirmed client ID into the merge statement.
         // Existing rows may have been found by exchangeOrderId and still contain an
@@ -104,9 +106,13 @@ public class OrderLedgerService {
                              Integer leverageSnapshot, java.math.BigDecimal priceTickSizeSnapshot) {
         String clientOrderId = result.clientOrderId() == null ? "EXCHANGE:" + result.orderId() : result.clientOrderId();
         QuantOrder entity = result.orderId() == null ? null :
-            mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getExchangeOrderId, result.orderId()));
+            mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId)
+                .eq(QuantOrder::getSymbol, request.symbol()).eq(QuantOrder::getExchangeOrderId, result.orderId()));
         if (entity == null) {
-            entity = mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId).eq(QuantOrder::getClientOrderId, clientOrderId));
+            // 本地请求回执只能认领尚未绑定交易所订单 ID 的同交易对订单。
+            entity = mapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credentialId)
+                .eq(QuantOrder::getSymbol, request.symbol()).eq(QuantOrder::getClientOrderId, clientOrderId)
+                .isNull(QuantOrder::getExchangeOrderId));
         }
         if (entity == null) {
             entity = new QuantOrder();

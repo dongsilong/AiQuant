@@ -149,7 +149,8 @@ CREATE TABLE `quant_order`
     `updated_at`           datetime                                                      NOT NULL COMMENT '更新时间',
     PRIMARY KEY (`id`) USING BTREE,
     UNIQUE INDEX `uk_quant_order_idempotency`(`credential_id` ASC, `idempotency_key` ASC) USING BTREE,
-    UNIQUE INDEX `uk_quant_order_client`(`credential_id` ASC, `client_order_id` ASC) USING BTREE,
+    UNIQUE INDEX `uk_quant_order_exchange`(`credential_id` ASC, `symbol` ASC, `exchange_order_id` ASC) USING BTREE,
+    INDEX `idx_quant_order_client`(`credential_id` ASC, `symbol` ASC, `client_order_id` ASC) USING BTREE,
     INDEX                  `idx_quant_order_strategy_instance`(`strategy_instance_id` ASC, `created_at` ASC) USING BTREE
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '量化订单表' ROW_FORMAT = Dynamic;
 

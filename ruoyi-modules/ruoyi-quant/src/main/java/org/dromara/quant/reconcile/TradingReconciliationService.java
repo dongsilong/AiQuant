@@ -1092,8 +1092,11 @@ public class TradingReconciliationService {
                     .eq(QuantOrder::getExchangeOrderId, s.orderId()));
             matchedByExchangeOrderId = entity != null;
             if (entity == null) {
-                entity = orderMapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credential.getId()).eq(QuantOrder::getClientOrderId,
-                    clientOrderId).eq(QuantOrder::getSymbol, s.symbol()));
+                // clientOrderId 仅用于认领尚未绑定交易所订单 ID 的本地待确认订单；
+                // 已绑定其他 exchangeOrderId 的历史订单绝不能被复用。
+                entity = orderMapper.selectOne(new LambdaQueryWrapper<QuantOrder>().eq(QuantOrder::getCredentialId, credential.getId())
+                    .eq(QuantOrder::getClientOrderId, clientOrderId).eq(QuantOrder::getSymbol, s.symbol())
+                    .isNull(QuantOrder::getExchangeOrderId));
             }
             if (entity != null) {
                 List<String> conflictingFields = new ArrayList<>(6);
@@ -1147,7 +1150,7 @@ public class TradingReconciliationService {
                 entity.setCredentialId(credential.getId());
                 entity.setClientOrderId(clientOrderId);
                 entity.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
-                entity.setIdempotencyKey(clientOrderId);
+                entity.setIdempotencyKey("EXCHANGE_ORDER:" + s.symbol() + ":" + s.orderId());
             }
             entity.setClientOrderId(clientOrderId);
             entity.setSymbol(s.symbol());
