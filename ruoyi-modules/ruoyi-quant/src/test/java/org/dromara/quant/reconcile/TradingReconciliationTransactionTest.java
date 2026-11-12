@@ -960,6 +960,39 @@ class TradingReconciliationTransactionTest {
     }
 
 
+    @Test
+    void emptyTradeLedgerIsRecoveredThroughTheAccountOrderDrivenManualSyncPath() {
+        when(tradeLedgerRecovery.selectStatus(1L)).thenReturn(null);
+        when(trades.selectCount(any())).thenReturn(0L);
+        when(orders.selectHistoricalSymbolsByCredential(1L)).thenReturn(List.of("BTCUSDT"));
+        when(tradeLedgerRecovery.insertReady(1L)).thenReturn(1);
+        when(tradeLedgerRecovery.claim(1L)).thenReturn(1);
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of());
+        when(tradeLedgerRecovery.complete(1L)).thenReturn(1);
+
+        service().recoverMissingTradeLedger(credential());
+
+        verify(gateway, atLeast(13)).queryOrderHistory(any(), isNull(), any(), eq(1000L));
+        verify(tradeLedgerRecovery).claim(1L);
+        verify(tradeLedgerRecovery).complete(1L);
+        verify(tradeLedgerRecovery, never()).releaseForRetry(1L);
+    }
+
+    @Test
+    void interruptedLedgerRecoveryResumesEvenWhenSomeTradesWereAlreadyPersisted() {
+        when(tradeLedgerRecovery.selectStatus(1L)).thenReturn("RUNNING");
+        when(orders.selectHistoricalSymbolsByCredential(1L)).thenReturn(List.of("BTCUSDT"));
+        when(tradeLedgerRecovery.claim(1L)).thenReturn(1);
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of());
+        when(tradeLedgerRecovery.complete(1L)).thenReturn(1);
+
+        service().recoverMissingTradeLedger(credential());
+
+        verify(trades, never()).selectCount(any());
+        verify(tradeLedgerRecovery).claim(1L);
+        verify(tradeLedgerRecovery).complete(1L);
+    }
+
     private org.dromara.quant.account.domain.QuantTrade persistedTradeForBalanceTest(ExchangeGateway.TradeSnapshot fill) {
         var trade = new org.dromara.quant.account.domain.QuantTrade();
         trade.setId(fill.tradeId());
