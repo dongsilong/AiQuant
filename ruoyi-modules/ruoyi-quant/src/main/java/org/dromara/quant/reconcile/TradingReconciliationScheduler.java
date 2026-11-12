@@ -105,7 +105,8 @@ public class TradingReconciliationScheduler {
             }
             return retryExecutor.schedule(() -> {
                 retryTasks.remove(id);
-                runReconciliation(credential, historyHours);
+                Thread.ofVirtual().name("quant-reconciliation-retry-" + id).start(() ->
+                    runReconciliation(credential, historyHours));
             }, delay, TimeUnit.MILLISECONDS);
         });
         return delay;

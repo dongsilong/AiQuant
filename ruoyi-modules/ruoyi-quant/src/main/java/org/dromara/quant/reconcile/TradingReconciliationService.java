@@ -803,12 +803,14 @@ public class TradingReconciliationService {
             boolean protectionSyncDeferred = deferredAccountRead != null;
             ExchangeMarketPort.RequestDeferredException deferredAccountFacts =
                 deferredAccountRead != null ? deferredAccountRead : deferredHistoryRead;
-            if (deferredAccountFacts == null) {
+            if (deferredAccountRead == null) {
                 try {
                     unmatchedProtections = syncAccountProtectionFacts(credential, exchangeCredential, snapshot.positions());
                 } catch (ExchangeMarketPort.RequestDeferredException deferred) {
                     protectionSyncDeferred = true;
-                    deferredAccountFacts = deferred;
+                    if (deferredAccountFacts == null) {
+                        deferredAccountFacts = deferred;
+                    }
                     log.warn("账户级保护单查询被本地 REST 调度器延期；本轮订单/成交事实已独立提交 credentialId={} kind={} reason={} retryAfterMs={}",
                         credential.getId(), deferred.kind(), deferred.reason(), deferred.retryAfterMillis());
                 }
