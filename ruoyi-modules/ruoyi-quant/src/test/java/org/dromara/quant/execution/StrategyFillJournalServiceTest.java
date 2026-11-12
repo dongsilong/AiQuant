@@ -47,9 +47,12 @@ class StrategyFillJournalServiceTest {
 
     @Test
     void attributeIfPresentDoesNotCreateJournalRowsForUnseenCompleteTestnetFills() {
+        var completeFill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE,
+            BigDecimal.TEN, new BigDecimal("0.01"), BigDecimal.ZERO,
+            Instant.parse("2026-10-17T00:00:00.123Z"), "USDT", "LONG");
         when(journal.selectByKey(1L, "BTCUSDT", 101L)).thenReturn(null);
 
-        assertNull(service.attributeIfPresent(fill(), null, 1L));
+        assertNull(service.attributeIfPresent(completeFill, null, 1L));
 
         verify(journal).selectByKey(1L, "BTCUSDT", 101L);
         verify(journal, never()).insertRaw(any());
