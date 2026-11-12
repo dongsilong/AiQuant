@@ -93,11 +93,6 @@ public class ManualTradingSyncTaskService {
         return view(task);
     }
 
-    public TradingSyncTaskView get(Long taskId) {
-        QuantTradingSyncTask task = taskMapper.selectById(taskId);
-        return task == null ? null : view(task);
-    }
-
     private TradingSyncTaskView reuseOrReject(QuantTradingSyncTask existing, String requestedSymbol) {
         if (!Objects.equals(existing.getRequestedSymbol(), requestedSymbol)) {
             throw new ServiceException("该交易账户已有订单与成交同步任务正在执行，任务编号：" + existing.getId());
