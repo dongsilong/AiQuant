@@ -544,6 +544,8 @@ public class QuantTradeNotificationService {
             log.warn("平仓账户资金快照持久化失败 credentialId={} symbol={} orderId={}",
                 credentialId, symbol, orderId, ex);
             return false;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -566,6 +568,8 @@ public class QuantTradeNotificationService {
             log.warn("平仓账户快照忽略无法解析的 Binance 用户事件 credentialId={} eventType={}",
                 credentialId, event.eventType(), ex);
             return;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
         if (!(payload.get("o") instanceof Map<?, ?> order)) {
             return;
@@ -780,6 +784,8 @@ public class QuantTradeNotificationService {
             log.error("平仓账户资金快照重试任务持久化失败 credentialId={} symbol={} orderId={}",
                 credentialId, symbol, orderId, ex);
             return null;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 
