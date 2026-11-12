@@ -22,8 +22,7 @@ import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
-import org.dromara.quant.reconcile.TradingReconciliationService;
-import org.dromara.quant.notification.QuantTradeNotificationService;
+import org.dromara.quant.reconcile.ManualTradingSyncTaskService;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -62,8 +61,7 @@ public class QuantAccountQueryController {
      */
     private final QuantAccountSnapshotMapper accountSnapshotMapper;
     private final QuantOrderMapper orderMapper;
-    private final TradingReconciliationService tradingReconciliationService;
-    private final QuantTradeNotificationService tradeNotificationService;
+    private final ManualTradingSyncTaskService manualTradingSyncTaskService;
 
     /**
      * 查询指定凭证的账户资金快照。
@@ -177,18 +175,10 @@ public class QuantAccountQueryController {
     /** 同步交易所订单和成交事实；保持订单管理原有权限入口。 */
     @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
     @PostMapping("/order/{credentialId}/sync")
-    public R<Integer> syncOrders(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
-        QuantCredential credential = credentialEntity(credentialId);
-        try {
-            TradingReconciliationService.TradingDataSyncResult result =
-                tradingReconciliationService.syncTradingData(credential, symbol);
-            tradeNotificationService.notifyOrderTradeSyncResult(
-                credential, symbol, result.symbolCount(), result.orderCount(), result.tradeCount());
-            return R.ok(result.orderCount());
-        } catch (RuntimeException failure) {
-            tradeNotificationService.notifyOrderTradeSyncFailure(credential, symbol, failure);
-            throw failure;
-        }
+    public R<ManualTradingSyncTaskService.TradingSyncTaskView> syncOrders(
+        @PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
+        credentialEntity(credentialId);
+        return R.ok(manualTradingSyncTaskService.start(credentialId, symbol));
     }
 
     /**
@@ -272,18 +262,24 @@ public class QuantAccountQueryController {
      */
     @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
     @PostMapping("/trade/{credentialId}/sync")
-    public R<Integer> syncTrades(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
-        QuantCredential credential = credentialEntity(credentialId);
-        try {
-            TradingReconciliationService.TradingDataSyncResult result =
-                tradingReconciliationService.syncTradingData(credential, symbol);
-            tradeNotificationService.notifyOrderTradeSyncResult(
-                credential, symbol, result.symbolCount(), result.orderCount(), result.tradeCount());
-            return R.ok(result.tradeCount());
-        } catch (RuntimeException failure) {
-            tradeNotificationService.notifyOrderTradeSyncFailure(credential, symbol, failure);
-            throw failure;
+    public R<ManualTradingSyncTaskService.TradingSyncTaskView> syncTrades(
+        @PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
+        credentialEntity(credentialId);
+        return R.ok(manualTradingSyncTaskService.start(credentialId, symbol));
+    }
+
+    /**
+     * 查询后台订单与成交历史同步任务状态；先通过任务账户归属校验，再返回状态。
+     */
+    @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
+    @GetMapping("/sync-task/{taskId}")
+    public R<ManualTradingSyncTaskService.TradingSyncTaskView> syncTask(@PathVariable Long taskId) {
+        ManualTradingSyncTaskService.TradingSyncTaskView task = manualTradingSyncTaskService.get(taskId);
+        if (task == null) {
+            throw new ServiceException("同步任务不存在");
         }
+        credentialEntity(task.credentialId());
+        return R.ok(task);
     }
 
     static LocalDateTime tradeDateBoundary(String date, boolean nextDay) {
