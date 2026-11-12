@@ -491,6 +491,85 @@ class QuantTradeNotificationServiceTest {
     }
 
     @Test
+    void exchangeVerifiedHedgeCloseCanCaptureSnapshotBeforeLocalFillProjection() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-exchange-verified-close-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+        long closeMillis = System.currentTimeMillis();
+        String payload = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + (closeMillis + 2)
+            + ",\\"T\\":" + (closeMillis + 1)
+            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"close-99\\","
+            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"2\\",\\"T\\":" + closeMillis + "}}";
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(931L);
+            return 1;
+        });
+        when(mapper.claim(eq(931L), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any()))
+            .thenReturn(0, 0, 1);
+        when(jdbc.update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(gateway.queryOrder(exchangeCredential, "BTCUSDT", 99L, null)).thenReturn(
+            new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "close-99", "SELL", "MARKET", "FILLED",
+                BigDecimal.ZERO, BigDecimal.valueOf(2), BigDecimal.valueOf(2), Instant.ofEpochMilli(closeMillis),
+                BigDecimal.valueOf(101), "LONG", false, Instant.ofEpochMilli(closeMillis - 1000), false));
+        when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
+
+        verify(gateway, timeout(3000)).queryOrder(exchangeCredential, "BTCUSDT", 99L, null);
+        verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
+        verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+        var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
+        assertEquals("SENT", taskUpdate.getValue().getStatus());
+    }
+
+    @Test
+    void exchangeVerifiedOpeningOrderCannotCaptureCloseSnapshot() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-exchange-opening-order-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+        long closeMillis = System.currentTimeMillis();
+        String payload = "{\\"e\\":\\"ORDER_TRADE_UPDATE\\",\\"E\\":" + (closeMillis + 2)
+            + ",\\"T\\":" + (closeMillis + 1)
+            + ",\\"o\\":{\\"s\\":\\"BTCUSDT\\",\\"i\\":99,\\"c\\":\\"open-99\\","
+            + "\\"x\\":\\"TRADE\\",\\"X\\":\\"FILLED\\",\\"z\\":\\"2\\",\\"T\\":" + closeMillis + "}}";
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(932L);
+            return 1;
+        });
+        when(mapper.claim(eq(932L), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
+        when(gateway.queryOrder(exchangeCredential, "BTCUSDT", 99L, null)).thenReturn(
+            new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "open-99", "BUY", "MARKET", "FILLED",
+                BigDecimal.ZERO, BigDecimal.valueOf(2), BigDecimal.valueOf(2), Instant.ofEpochMilli(closeMillis),
+                BigDecimal.valueOf(101), "LONG", false, Instant.ofEpochMilli(closeMillis - 1000), false));
+
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
+
+        verify(gateway, timeout(3000)).queryOrder(exchangeCredential, "BTCUSDT", 99L, null);
+        verify(gateway, never()).queryAccountFresh(any());
+        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+        var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
+        assertEquals("RETRY", taskUpdate.getValue().getStatus());
+    }
+
+    @Test
     void unverifiedOrderDoesNotWriteAccountSnapshotButKeepsDurableRetry() throws Exception {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-unverified-close-snapshot-test"), QuantNotification.class);
