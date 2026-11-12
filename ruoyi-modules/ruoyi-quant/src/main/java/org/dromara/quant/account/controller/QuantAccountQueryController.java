@@ -273,7 +273,17 @@ public class QuantAccountQueryController {
     @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
     @PostMapping("/trade/{credentialId}/sync")
     public R<Integer> syncTrades(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
-        return R.ok(tradingReconciliationService.syncTradingData(credentialEntity(credentialId), symbol).tradeCount());
+        QuantCredential credential = credentialEntity(credentialId);
+        try {
+            TradingReconciliationService.TradingDataSyncResult result =
+                tradingReconciliationService.syncTradingData(credential, symbol);
+            tradeNotificationService.notifyOrderTradeSyncResult(
+                credential, symbol, result.symbolCount(), result.orderCount(), result.tradeCount());
+            return R.ok(result.tradeCount());
+        } catch (RuntimeException failure) {
+            tradeNotificationService.notifyOrderTradeSyncFailure(credential, symbol, failure);
+            throw failure;
+        }
     }
 
     static LocalDateTime tradeDateBoundary(String date, boolean nextDay) {
