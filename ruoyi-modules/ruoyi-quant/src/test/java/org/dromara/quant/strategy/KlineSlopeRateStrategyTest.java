@@ -206,6 +206,32 @@ class KlineSlopeRateStrategyTest {
         assertEquals(0, stop.compareTo(mirror.triggerPrice()));
     }
 
+    @Test
+    void markPriceRoiConversionUsesMarkNotionalFormulaForBothDirections() {
+        assertEquals(0, new BigDecimal("102.0408163265306122").compareTo(
+            KlineSlopeRateStrategy.priceForMarkReturn(new BigDecimal("100"), "LONG", new BigDecimal("0.20"), 10)));
+        assertEquals(0, new BigDecimal("98.0392156862745098").compareTo(
+            KlineSlopeRateStrategy.priceForMarkReturn(new BigDecimal("100"), "SHORT", new BigDecimal("0.20"), 10)));
+        assertEquals(0, new BigDecimal("99.5024875621890547").compareTo(
+            KlineSlopeRateStrategy.priceForMarkReturn(new BigDecimal("100"), "LONG", new BigDecimal("-0.05"), 10)));
+    }
+
+    @Test
+    void v3ProtectionSignalsUseMarkPriceRoiWithoutChangingContractPriceLadder() {
+        StrategyContext context = context("LONG", new BigDecimal("100"), null, new BigDecimal("101"), false, new BigDecimal("101"), null);
+        Map<String, Object> params = Map.of(
+            KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY, 3,
+            "firstProfitTakingRate", "0.10",
+            "stepRatio", "0.10"
+        );
+        var signals = strategy.evaluateProtection(context, params);
+        var first = signals.stream().filter(signal -> signal.type().equals("FIRST_TP")).findFirst().orElseThrow();
+        var step = signals.stream().filter(signal -> signal.type().equals("STEP_TP")).findFirst().orElseThrow();
+        assertEquals(0, new BigDecimal("101.0101010101010101").compareTo(first.triggerPrice()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(step.triggerPrice()));
+        assertEquals(1, step.stepIndex());
+    }
+
     private StrategyContext context(String direction, BigDecimal entry, BigDecimal previousOpen, BigDecimal current, boolean firstTp, BigDecimal high, BigDecimal low) {
         return new StrategyContext("BTCUSDT", direction, entry, current, current, previousOpen == null ? new BigDecimal("100") : previousOpen, Instant.ofEpochMilli(1_000), false
             , Instant.ofEpochMilli(2_000), direction == null ? BigDecimal.ZERO : new BigDecimal("1"), direction == null ? BigDecimal.ZERO : new BigDecimal("1"),
