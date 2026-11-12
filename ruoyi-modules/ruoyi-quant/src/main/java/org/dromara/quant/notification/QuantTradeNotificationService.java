@@ -408,11 +408,11 @@ public class QuantTradeNotificationService {
                 snapshotTask.setOwnerToken(ownerToken);
                 snapshotTask.setLeaseUntil(leaseUntil);
             }
-            Instant restRequestStartedAt = Instant.now();
-            try {
-                account = gateway.queryAccountFresh(exchangeCredential);
-                Instant restResponseReceivedAt = Instant.now();
-                if (snapshotClaimed) {
+            if (snapshotClaimed) {
+                Instant restRequestStartedAt = Instant.now();
+                try {
+                    account = gateway.queryAccountFresh(exchangeCredential);
+                    Instant restResponseReceivedAt = Instant.now();
                     boolean persisted = persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
                         "REST_FALLBACK", closeTime, null, null, null, restRequestStartedAt, restResponseReceivedAt);
                     if (persisted && hasCompleteCloseEquitySnapshot(credential.getId(), symbol, orderId)) {
@@ -423,14 +423,10 @@ public class QuantTradeNotificationService {
                     } else {
                         retryCloseFactTask(snapshotTask, "平仓后 REST 资金采样尚未完整");
                     }
-                }
-            } catch (RuntimeException ex) {
-                if (snapshotClaimed) {
+                } catch (RuntimeException ex) {
                     retryCloseFactTask(snapshotTask, "平仓后账户资金快照获取或持久化失败: " + ex.getClass().getSimpleName());
-                }
-                log.warn("平仓后账户资金快照获取或持久化失败 credentialId={} orderId={}", credential.getId(), orderId, ex);
-            } finally {
-                if (snapshotClaimed) {
+                    log.warn("平仓后账户资金快照获取或持久化失败 credentialId={} orderId={}", credential.getId(), orderId, ex);
+                } finally {
                     snapshotTask.setOwnerToken(null);
                     snapshotTask.setLeaseUntil(null);
                     try {
@@ -439,8 +435,7 @@ public class QuantTradeNotificationService {
                         log.error("更新平仓账户资金快照任务状态失败 notificationId={}", snapshotTask.getId(), ex);
                     }
                 }
-            }
-            if (snapshotTask == null) {
+            } else if (snapshotTask == null) {
                 log.error("平仓后账户资金快照任务无法持久化 credentialId={} symbol={} orderId={}",
                     credential.getId(), symbol, orderId);
             }
