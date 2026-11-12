@@ -770,18 +770,25 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
-    void incompleteTestnetFillIsJournaledAndDoesNotAbortTradeSync() {
-        var fill = new ExchangeGateway.TradeSnapshot("JCTUSDT", 502L, 203L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+    void incompleteTestnetFillIsJournaledAndDoesNotAbortCompleteFills() {
+        initializeManualSyncMapperMetadata();
+        var incomplete = new ExchangeGateway.TradeSnapshot("JCTUSDT", 502L, 203L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
             null, null, Instant.parse("2026-10-17T00:00:00Z"), null);
+        var complete = new ExchangeGateway.TradeSnapshot("JCTUSDT", 503L, 204L, "SELL", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:01:00Z"), "USDT");
         var testnetCredential = credential();
         testnetCredential.setRunMode("TESTNET");
-        when(orders.selectOne(any())).thenReturn(null);
+        when(orders.selectOne(any())).thenReturn(null, null);
+        when(trades.selectOne(any())).thenReturn(null);
+        when(trades.insert(any(org.dromara.quant.account.domain.QuantTrade.class))).thenReturn(1);
 
-        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
-            service(), "syncTrades", testnetCredential, List.of(fill));
+        Integer accepted = org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+            service(), "syncTrades", testnetCredential, List.of(incomplete, complete));
 
-        verify(fillJournal).attribute(fill, null, 1L);
-        verify(trades, never()).insert(any(org.dromara.quant.account.domain.QuantTrade.class));
+        assertEquals(1, accepted);
+        verify(fillJournal).attribute(incomplete, null, 1L);
+        verify(fillJournal).attributeIfPresent(complete, null, 1L);
+        verify(trades).insert(any(org.dromara.quant.account.domain.QuantTrade.class));
         verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
     }
 
