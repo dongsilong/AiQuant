@@ -1,6 +1,5 @@
 package org.dromara.quant.reconcile;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.dromara.quant.credential.domain.QuantCredential;
@@ -12,7 +11,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.TaskExecutor;
 
-import java.math.BigDecimal;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
