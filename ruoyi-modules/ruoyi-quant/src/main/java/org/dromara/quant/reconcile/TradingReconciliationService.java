@@ -38,6 +38,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -108,6 +110,8 @@ public class TradingReconciliationService {
     private final ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicLong> runtimeSnapshotGenerations = new ConcurrentHashMap<>();
     private static final Duration RUNTIME_POSITION_CACHE_AGE = Duration.ofSeconds(20);
     private static final Duration FILL_HISTORY_RECONCILE_WINDOW = Duration.ofDays(6);
+    /** Current wallet snapshots cannot reconstruct balances for historical fills. */
+    private static final Duration POST_FILL_BALANCE_CAPTURE_WINDOW = Duration.ofMinutes(5);
     @Autowired
     private TradeDecisionLogService decisionLogs;
     @Autowired
@@ -1199,7 +1203,8 @@ public class TradingReconciliationService {
      * 同步交易所成交事实。已落库的交易所事实不可被重放覆盖；仅允许补齐此前缺失且可证明的策略归属。
      */
     private void syncTrades(QuantCredential credential, List<ExchangeGateway.TradeSnapshot> snapshots) {
-        Map<Long, QuantOrder> filledOrders = new LinkedHashMap<>();
+        Map<Long, QuantOrder> recentFilledOrders = new LinkedHashMap<>();
+        Instant postFillBalanceCutoff = Instant.now().minus(POST_FILL_BALANCE_CAPTURE_WINDOW);
         boolean live = "LIVE".equalsIgnoreCase(credential.getRunMode());
         boolean projectionDirty = false;
         for (ExchangeGateway.TradeSnapshot s : snapshots) {
@@ -1341,11 +1346,27 @@ public class TradingReconciliationService {
                         credential.getId(), s.symbol(), s.tradeId());
                 }
             }
-            if (sourceOrder != null && sourceOrder.getId() != null) {
-                filledOrders.put(sourceOrder.getId(), sourceOrder);
+            // Only fills observed in the recent window can have a meaningful post-fill
+            // wallet snapshot. Replaying historical fills and reading today's balance would
+            // write a false historical fact into quant_order.
+            if (sourceOrder != null && sourceOrder.getId() != null && !s.time().isBefore(postFillBalanceCutoff)) {
+                recentFilledOrders.put(sourceOrder.getId(), sourceOrder);
             }
         }
-        filledOrders.values().forEach(order -> capturePostFillBalance(credential, order));
+        if (!recentFilledOrders.isEmpty()) {
+            List<QuantOrder> ordersToCapture = List.copyOf(recentFilledOrders.values());
+            Runnable capture = () -> capturePostFillBalance(credential, ordersToCapture);
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        capture.run();
+                    }
+                });
+            } else {
+                capture.run();
+            }
+        }
         if (projectionDirty && tradeCycleProjectionService != null && !snapshots.isEmpty()) {
             tradeCycleProjectionService.markDirty(credential.getId(), snapshots.getFirst().symbol());
         }
@@ -1456,30 +1477,47 @@ public class TradingReconciliationService {
         return stored.equals(persistedPrecision);
     }
 
-    /** Capture a best-effort account wallet balance after reconciled exchange fills. */
-    private void capturePostFillBalance(QuantCredential credential, QuantOrder order) {
-        if (order.getId() == null || !balanceSnapshotTasks.add(order.getId())) {
-            return;
-        }
-        LocalDateTime requestedAt = LocalDateTime.now(ZoneOffset.UTC);
-        if (orderMapper.claimPostFillBalanceSnapshot(order.getId(), requestedAt) != 1) {
-            balanceSnapshotTasks.remove(order.getId());
+    /** Capture one best-effort account wallet snapshot for the recent fills in this batch. */
+    private void capturePostFillBalance(QuantCredential credential, List<QuantOrder> orders) {
+        if (orders.isEmpty()) {
             return;
         }
         Thread.startVirtualThread(() -> {
+            List<Long> reservedOrderIds = new ArrayList<>();
+            List<Long> claimedOrderIds = new ArrayList<>();
             try {
+                LocalDateTime requestedAt = LocalDateTime.now(ZoneOffset.UTC);
+                for (QuantOrder order : orders) {
+                    Long orderId = order.getId();
+                    if (orderId == null || !balanceSnapshotTasks.add(orderId)) {
+                        continue;
+                    }
+                    reservedOrderIds.add(orderId);
+                    if (orderMapper.claimPostFillBalanceSnapshot(orderId, requestedAt) == 1) {
+                        claimedOrderIds.add(orderId);
+                    } else {
+                        balanceSnapshotTasks.remove(orderId);
+                    }
+                }
+                if (claimedOrderIds.isEmpty()) {
+                    return;
+                }
                 ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
                     credential.getSignatureType(), credential.getRunMode());
                 ExchangeGateway.AccountSnapshot snapshot = gateway.queryAccountFresh(exchangeCredential);
                 if (snapshot == null || snapshot.walletBalance() == null) {
                     return;
                 }
-                orderMapper.savePostFillBalanceSnapshot(order.getId(), snapshot.walletBalance(), LocalDateTime.now(ZoneOffset.UTC));
+                LocalDateTime observedAt = LocalDateTime.now(ZoneOffset.UTC);
+                for (Long orderId : claimedOrderIds) {
+                    orderMapper.savePostFillBalanceSnapshot(orderId, snapshot.walletBalance(), observedAt);
+                }
             } catch (RuntimeException ex) {
                 // Balance is informational; an unavailable snapshot must never affect order or position handling.
-                log.debug("成交后账户余额核实失败 credentialId={} orderId={} errorType={}", credential.getId(), order.getId(), ex.getClass().getSimpleName());
+                log.debug("成交后账户余额批量核实失败 credentialId={} orderCount={} errorType={}",
+                    credential.getId(), claimedOrderIds.size(), ex.getClass().getSimpleName());
             } finally {
-                balanceSnapshotTasks.remove(order.getId());
+                balanceSnapshotTasks.removeAll(reservedOrderIds);
             }
         });
     }
