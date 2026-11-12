@@ -4618,12 +4618,9 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         BigDecimal ladderMaximumReturnRate = null;
         if (state.getEntryPrice() != null && state.getEntryPrice().signum() > 0 && favorablePrice != null
             && state.getFrozenLeverage() != null && state.getFrozenLeverage() > 0) {
-            BigDecimal favorableMove = "SHORT".equalsIgnoreCase(state.getDirection())
-                ? state.getEntryPrice().subtract(favorablePrice) : favorablePrice.subtract(state.getEntryPrice());
-            ladderMaximumReturnRate = favorableMove.max(BigDecimal.ZERO)
-                .divide(state.getEntryPrice(), 12, RoundingMode.HALF_UP)
-                .multiply(BigDecimal.valueOf(state.getFrozenLeverage()))
-                .multiply(BigDecimal.valueOf(100));
+            ladderMaximumReturnRate = KlineSlopeRateStrategy.leveragedReturn(
+                state.getDirection(), favorablePrice, state.getEntryPrice(), state.getFrozenLeverage())
+                .max(BigDecimal.ZERO).multiply(BigDecimal.valueOf(100));
         }
         positionPerformanceHub.publish(new StrategyPositionPerformanceEvent(runtime.credential.getId(), runtime.instance.getId(), state.getPositionId(), state.getPositionCycleKey(),
             runtime.symbol.getSymbol(), runtime.strategy.getPluginCode(), state.getDirection(), state.getEntryPrice(), state.getInitialPositionQty(), state.getInitialMargin(), state.getHighestPriceSinceEntry(),
