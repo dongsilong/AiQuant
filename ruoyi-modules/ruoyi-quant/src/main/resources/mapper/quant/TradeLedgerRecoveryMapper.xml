@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="org.dromara.quant.reconcile.mapper.TradeLedgerRecoveryMapper">
+    <select id="selectStatus" resultType="java.lang.String" timeout="3"><![CDATA[
+SELECT status FROM quant_trade_ledger_recovery WHERE credential_id=#{credentialId}
+    ]]></select>
+
     <insert id="insertReady" timeout="3"><![CDATA[
 INSERT IGNORE INTO quant_trade_ledger_recovery
     (credential_id, status, lease_until, updated_at)
