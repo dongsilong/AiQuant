@@ -195,6 +195,25 @@ public class ProtectionOrderService {
                 log.warn("策略启动前保护创建票据仍未恢复，保持启动阻断 accountId={} symbol={} clientAlgoId={}", active.credentialId(), active.symbol(), active.clientOrderId());
             }
             return recovered;
+        } catch (ProtectionExecutionPendingException pending) {
+            // Algo FINISHED alone is not enough. Re-query the exact Algo and child order,
+            // persist only a fully-filled child fact, then release the matching dispatch ticket.
+            try {
+                ExchangeGateway.Credential credential = executionApplicationService.toCredential(
+                    executionApplicationService.requireCredential(active.credentialId()));
+                Long terminalAlgoId = persistVerifiedTriggeredProtection(active.credentialId(), local, credential);
+                boolean recovered = requireLiveDispatcher().recoveredFromExchange(active.credentialId(), active.symbol(),
+                    active.dispatchKey(), active.clientOrderId(), terminalAlgoId);
+                if (!recovered) {
+                    log.warn("保护单已触发并核验，但派发票据未能恢复，继续保持调度阻断 accountId={} symbol={} dispatchKey={} clientAlgoId={} algoId={}",
+                        active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), terminalAlgoId);
+                }
+                return recovered;
+            } catch (RuntimeException ex) {
+                log.warn("保护单触发后的实际子订单尚未完成严格核验，继续保持调度阻断 accountId={} symbol={} dispatchKey={} clientAlgoId={} errorType={}",
+                    active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), ex.getClass().getSimpleName());
+                return false;
+            }
         } catch (RuntimeException ex) {
             log.warn("策略启动前保护创建事实核实失败，保持启动阻断 accountId={} symbol={} clientAlgoId={} errorType={}", active.credentialId(), active.symbol(),
                 active.clientOrderId(), ex.getClass().getSimpleName());
@@ -336,14 +355,7 @@ public class ProtectionOrderService {
     private boolean isExactUnfilledWorkingProtection(QuantProtectionOrder local, ExchangeGateway.ProtectionOrderSnapshot actual) {
         return actual != null && Set.of("NEW", "WORKING", "ACCEPTED").contains(actual.status())
             && actual.executedQuantity() != null && actual.executedQuantity().signum() == 0
-            && local.getClientOrderId() != null && local.getClientOrderId().equals(actual.clientAlgoId())
-            && actual.algoId() != null && actual.algoId() > 0
-            && (local.getExchangeOrderId() == null || local.getExchangeOrderId().equals(actual.algoId()))
-            && local.getSymbol() != null && local.getSymbol().equalsIgnoreCase(actual.symbol())
-            && local.getPositionSide() != null
-            && sameTarget(local, actual.type(), actual.quantity(), actual.triggerPrice())
-            && ("SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" : "SELL").equalsIgnoreCase(actual.side())
-            && ("BOTH".equalsIgnoreCase(actual.positionSide()) || local.getPositionSide().equalsIgnoreCase(actual.positionSide()));
+            && matchesProtectionIdentity(local, actual);
     }
 
     /**
@@ -1101,6 +1113,31 @@ public class ProtectionOrderService {
     /**
      * Persist exact exchange cancellation/trigger result before freeing any dispatch guard.
      */
+    private static boolean matchesProtectionIdentity(QuantProtectionOrder local, ExchangeGateway.ProtectionOrderSnapshot actual) {
+        if (local == null || actual == null || local.getPositionSide() == null) {
+            return false;
+        }
+        String expectedSide;
+        if ("SHORT".equalsIgnoreCase(local.getPositionSide())) {
+            expectedSide = "BUY";
+        } else if ("LONG".equalsIgnoreCase(local.getPositionSide())) {
+            expectedSide = "SELL";
+        } else {
+            return false;
+        }
+        return local.getClientOrderId() != null && local.getClientOrderId().equals(actual.clientAlgoId())
+            && local.getSymbol() != null && local.getSymbol().equalsIgnoreCase(actual.symbol())
+            && actual.algoId() != null && actual.algoId() > 0
+            && (local.getExchangeOrderId() == null || local.getExchangeOrderId().equals(actual.algoId()))
+            && local.getOrderType() != null && local.getOrderType().equalsIgnoreCase(actual.type())
+            && local.getQuantity() != null && actual.quantity() != null && local.getQuantity().compareTo(actual.quantity()) == 0
+            && local.getStopPrice() != null && actual.triggerPrice() != null && local.getStopPrice().compareTo(actual.triggerPrice()) == 0
+            && expectedSide.equalsIgnoreCase(actual.side())
+            && ("BOTH".equalsIgnoreCase(actual.positionSide()) || local.getPositionSide().equalsIgnoreCase(actual.positionSide()))
+            && Boolean.TRUE.equals(actual.reduceOnly())
+            && Boolean.FALSE.equals(actual.closePosition());
+    }
+
     private Long persistVerifiedCancelledProtection(Long credentialId, QuantProtectionOrder local, ExchangeGateway.Credential credential, Set<String> allowedStatuses,
                                                     boolean requireUnfilled) {
         var actual = readProtectionSnapshot(credential, local);
@@ -1112,14 +1149,11 @@ public class ProtectionOrderService {
         boolean statusAllowed = allowedStatuses.contains(actual.status());
         boolean executionKnown = actual.executedQuantity() != null;
         boolean unfilledWhenRequired = !requireUnfilled || executionKnown && actual.executedQuantity().signum() == 0;
-        boolean exchangeIdKnown = actual.algoId() != null && actual.algoId() > 0;
-        boolean clientIdMatches = local.getClientOrderId().equals(actual.clientAlgoId());
-        boolean storedIdMatches = local.getExchangeOrderId() == null || local.getExchangeOrderId().equals(actual.algoId());
-        if (!statusAllowed || !executionKnown || !unfilledWhenRequired || !exchangeIdKnown || !clientIdMatches || !storedIdMatches) {
+        boolean identityMatches = matchesProtectionIdentity(local, actual);
+        if (!statusAllowed || !executionKnown || !unfilledWhenRequired || !identityMatches) {
             log.warn("保护单终态记录不满足释放条件，保持派发阻断: accountId={}, symbol={}, clientAlgoId={}, runMode={}, exchangeStatus={}, executedQuantity={}, " +
-                "statusAllowed={}, executionKnown={}, unfilledWhenRequired={}, exchangeIdKnown={}, clientIdMatches={}, storedIdMatches={}", credentialId, local.getSymbol(),
-                local.getClientOrderId(), credential.runMode(), actual.status(), actual.executedQuantity(), statusAllowed, executionKnown, unfilledWhenRequired, exchangeIdKnown,
-                clientIdMatches, storedIdMatches);
+                "statusAllowed={}, executionKnown={}, unfilledWhenRequired={}, identityMatches={}", credentialId, local.getSymbol(),
+                local.getClientOrderId(), credential.runMode(), actual.status(), actual.executedQuantity(), statusAllowed, executionKnown, unfilledWhenRequired, identityMatches);
             return null;
         }
         if (decisionLogs != null) {

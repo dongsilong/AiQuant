@@ -287,6 +287,7 @@ class ProtectionOrderServiceTest {
     @Test
     void unresolvedLiveCancelChecksExactBinanceFactWithoutResending() {
         var local = order();
+        local.setPositionSide("LONG");
         when(mapper.selectOne(any())).thenReturn(local);
         when(dispatcher.activeProtectionTicket(1L, "BTCUSDT", "QFTP_test", "PROTECT_CANCEL")).thenReturn("pending-protection-cancel");
         when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(snapshot(55L, "QFTP_test", BigDecimal.ONE, "CANCELED", BigDecimal.ZERO));
@@ -900,6 +901,7 @@ class ProtectionOrderServiceTest {
     void startupRecoversOnlyExactUnfilledProtectionCancelBeforeAllowingStrategy() {
         QuantProtectionOrder local = order();
         local.setCredentialId(1L);
+        local.setPositionSide("LONG");
         local.setStatus("CANCELED");
         var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "cancel-key", "PROTECT_CANCEL", local.getClientOrderId(), "UNKNOWN", null);
         when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
@@ -1368,6 +1370,54 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void manualRecheckRecoversFullyFilledTriggeredProtectionCreate() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        local.setPositionSide("LONG");
+        local.setPositionCycleKey("cycle-1");
+        local.setStatus("UNKNOWN");
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "create-key", "PROTECT_CREATE", local.getClientOrderId(), "UNKNOWN", 55L);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(local);
+        var algo = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "BOTH",
+            "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), BigDecimal.ONE, true, false, 77L, new BigDecimal("99"));
+        var child = new ExchangeGateway.OrderSnapshot("BTCUSDT", 77L, local.getClientOrderId(), "SELL", "MARKET", "FILLED",
+            BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, Instant.now(), new BigDecimal("99"), "BOTH", true, Instant.now(), false);
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(algo, algo);
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(77L), isNull())).thenReturn(child, child);
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        when(dispatcher.recoveredFromExchange(1L, "BTCUSDT", "create-key", local.getClientOrderId(), 55L)).thenReturn(true);
+
+        assertTrue(service.recheckProtectionDispatch(1L, "BTCUSDT", "create-key", local.getClientOrderId()));
+
+        verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "create-key", local.getClientOrderId(), 55L);
+        assertEquals("FINISHED", local.getStatus());
+        assertEquals(0, BigDecimal.ONE.compareTo(local.getExecutedQuantity()));
+    }
+
+    @Test
+    void manualRecheckKeepsDispatchBlockedWhenTriggeredChildWasOnlyPartiallyFilled() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        local.setPositionSide("LONG");
+        local.setPositionCycleKey("cycle-1");
+        local.setStatus("UNKNOWN");
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "create-key", "PROTECT_CREATE", local.getClientOrderId(), "UNKNOWN", 55L);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(local);
+        var algo = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "BOTH",
+            "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), new BigDecimal("0.2"), true, false, 77L, new BigDecimal("99"));
+        var child = new ExchangeGateway.OrderSnapshot("BTCUSDT", 77L, local.getClientOrderId(), "SELL", "MARKET", "CANCELED",
+            BigDecimal.ZERO, BigDecimal.ONE, new BigDecimal("0.2"), Instant.now(), new BigDecimal("99"), "BOTH", true, Instant.now(), false);
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(algo, algo);
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(77L), isNull())).thenReturn(child, child);
+
+        assertFalse(service.recheckProtectionDispatch(1L, "BTCUSDT", "create-key", local.getClientOrderId()));
+
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+    }
+
+    @Test
     void firstProfitFinishingBetweenFactReadAndActiveLookupDoesNotCreateSecondIntent() {
         var old = scopedStop("FIRST_TP", "101");
         old.setOrderType("TAKE_PROFIT_MARKET");
@@ -1421,7 +1471,8 @@ class ProtectionOrderServiceTest {
     }
 
     private ExchangeGateway.ProtectionOrderSnapshot snapshot(Long id, String clientId, BigDecimal qty, String status, BigDecimal filled) {
-        return new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", id, clientId, status, "SELL", "BOTH", "STOP_MARKET", qty, new BigDecimal("99"), Instant.now(), filled);
+        return new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", id, clientId, status, "SELL", "BOTH", "STOP_MARKET", qty, new BigDecimal("99"), Instant.now(), filled,
+            true, false);
     }
 
     private QuantProtectionOrder order() {
