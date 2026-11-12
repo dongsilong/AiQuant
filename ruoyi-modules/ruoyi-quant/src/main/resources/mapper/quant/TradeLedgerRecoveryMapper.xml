@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.reconcile.mapper.TradeLedgerRecoveryMapper">
+    <insert id="insertReady" timeout="3"><![CDATA[
+INSERT IGNORE INTO quant_trade_ledger_recovery
+    (credential_id, status, lease_until, updated_at)
+VALUES
+    (#{credentialId}, 'READY', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))
+    ]]></insert>
+
+    <update id="claim" timeout="3"><![CDATA[
+UPDATE quant_trade_ledger_recovery
+SET status='RUNNING',
+    lease_until=DATE_ADD(UTC_TIMESTAMP(3), INTERVAL 6 HOUR),
+    updated_at=UTC_TIMESTAMP(3)
+WHERE credential_id=#{credentialId}
+  AND status<>'COMPLETED'
+  AND (status<>'RUNNING' OR lease_until<UTC_TIMESTAMP(3))
+    ]]></update>
+
+    <update id="complete" timeout="3"><![CDATA[
+UPDATE quant_trade_ledger_recovery
+SET status='COMPLETED',
+    lease_until=UTC_TIMESTAMP(3),
+    updated_at=UTC_TIMESTAMP(3)
+WHERE credential_id=#{credentialId} AND status='RUNNING'
+    ]]></update>
+
+    <update id="releaseForRetry" timeout="3"><![CDATA[
+UPDATE quant_trade_ledger_recovery
+SET status='READY',
+    lease_until=UTC_TIMESTAMP(3),
+    updated_at=UTC_TIMESTAMP(3)
+WHERE credential_id=#{credentialId} AND status='RUNNING'
+    ]]></update>
+</mapper>
