@@ -3982,11 +3982,12 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                             }
                             boolean includeDynamic = runtime.dynamicProtectionRequested.getAndSet(false) && !runtime.hasPendingAction();
                             BigDecimal hardStopRatio = resolveHardStopRatio(runtime);
-                            if (Integer.valueOf(2).equals(snapshot.getProtectionPolicyVersion()) && hardStopRatio != null
+                            if (snapshot.getProtectionPolicyVersion() != null && snapshot.getProtectionPolicyVersion() >= 2 && hardStopRatio != null
                                 && hardStopRatio.signum() > 0 && hardStopRatio.compareTo(BigDecimal.ONE) < 0) {
                                 if (runtime.state.getStopLossPrice() == null) {
-                                    BigDecimal stop = KlineSlopeRateStrategy.priceForReturn(snapshot.getEntryPrice(), snapshot.getPositionSide(),
-                                        hardStopRatio.negate(), snapshot.getLeverage());
+                                    BigDecimal stop = KlineSlopeRateStrategy.markPriceProtection(frozenParams(runtime))
+                                        ? KlineSlopeRateStrategy.priceForMarkReturn(snapshot.getEntryPrice(), snapshot.getPositionSide(), hardStopRatio.negate(), snapshot.getLeverage())
+                                        : KlineSlopeRateStrategy.priceForReturn(snapshot.getEntryPrice(), snapshot.getPositionSide(), hardStopRatio.negate(), snapshot.getLeverage());
                                     runtime.state.setStopLossPrice(runtime.protectionRule == null ? stop
                                         : org.dromara.quant.exchange.QuantityNormalizer.protectionPrice(stop, runtime.protectionRule, snapshot.getPositionSide(), "STOP_MARKET"));
                                     try {
