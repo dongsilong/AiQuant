@@ -770,6 +770,22 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void incompleteTestnetFillIsJournaledAndDoesNotAbortTradeSync() {
+        var fill = new ExchangeGateway.TradeSnapshot("JCTUSDT", 502L, 203L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            null, null, Instant.parse("2026-10-17T00:00:00Z"), null);
+        var testnetCredential = credential();
+        testnetCredential.setRunMode("TESTNET");
+        when(orders.selectOne(any())).thenReturn(null);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+            service(), "syncTrades", testnetCredential, List.of(fill));
+
+        verify(fillJournal).attribute(fill, null, 1L);
+        verify(trades, never()).insert(any(org.dromara.quant.account.domain.QuantTrade.class));
+        verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
+    }
+
+    @Test
     void replayCannotOverwriteImmutableTradeFactsOrFundingFee() {
         var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
             new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00Z"), "USDT");
@@ -901,7 +917,7 @@ class TradingReconciliationTransactionTest {
             () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", testnetCredential, List.of(fill)));
 
         assertTrue(conflict.getMessage().contains("conflictingFields=price"));
-        verifyNoInteractions(fillJournal);
+        verify(fillJournal).attributeIfPresent(fill, null, 1L);
         verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
         verifyNoInteractions(fillCursors, fillCursorService);
     }
