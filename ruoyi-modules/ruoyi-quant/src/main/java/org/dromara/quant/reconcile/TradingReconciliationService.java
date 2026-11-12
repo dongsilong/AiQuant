@@ -963,7 +963,7 @@ public class TradingReconciliationService {
         int fillHistoryBacklogSymbols = 0;
         for (String symbol : symbols) {
             LocalDateTime storedCursor = fillSyncCursors.selectLastCompleteTo(credential.getId(), symbol);
-            Instant from = initialRetainedHistoryStart(range.to(), storedCursor);
+            Instant from = storedCursor == null ? range.from() : storedCursor.toInstant(ZoneOffset.UTC);
             Instant to = range.to();
             LocalDateTime futureCursor = null;
             if (from.isAfter(to)) {
