@@ -941,4 +941,69 @@ class TradingReconciliationTransactionTest {
             queriedRanges.getLast().to()).compareTo(java.time.Duration.ofDays(89)) > 0);
     }
 
+
+    private org.dromara.quant.account.domain.QuantTrade persistedTradeForBalanceTest(ExchangeGateway.TradeSnapshot fill) {
+        var trade = new org.dromara.quant.account.domain.QuantTrade();
+        trade.setId(fill.tradeId());
+        trade.setCredentialId(1L);
+        trade.setSymbol(fill.symbol());
+        trade.setExchangeTradeId(fill.tradeId());
+        trade.setExchangeOrderId(fill.orderId());
+        trade.setSide(fill.side());
+        trade.setQuantity(fill.quantity());
+        trade.setPrice(fill.price());
+        trade.setCommission(fill.commission());
+        trade.setCommissionAsset(fill.commissionAsset());
+        trade.setRealizedPnl(fill.realizedPnl());
+        trade.setTradeTime(java.time.LocalDateTime.ofInstant(fill.time(), java.time.ZoneOffset.UTC));
+        return trade;
+    }
+
+    @Test
+    void historicalFillReplayDoesNotQueryCurrentWalletBalance() {
+        initializeManualSyncMapperMetadata();
+        Instant historicalTime = Instant.now().minus(java.time.Duration.ofDays(30)).truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 910L, 801L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, historicalTime, "USDT");
+        var order = new org.dromara.quant.order.domain.QuantOrder();
+        order.setId(701L);
+        order.setCredentialId(1L);
+        when(orders.selectOne(any())).thenReturn(order);
+        when(trades.selectOne(any())).thenReturn(persistedTradeForBalanceTest(fill));
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", credential(), List.of(fill));
+
+        verify(orders, never()).claimPostFillBalanceSnapshot(anyLong(), any());
+        verify(gateway, never()).queryAccountFresh(any());
+    }
+
+    @Test
+    void recentFillsInOneBatchShareOnePostFillWalletSnapshotRequest() {
+        initializeManualSyncMapperMetadata();
+        Instant recentTime = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        var firstFill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 911L, 802L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, recentTime, "USDT");
+        var secondFill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 912L, 803L, "SELL", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, recentTime.plusSeconds(1), "USDT");
+        var firstOrder = new org.dromara.quant.order.domain.QuantOrder();
+        firstOrder.setId(702L);
+        firstOrder.setCredentialId(1L);
+        var secondOrder = new org.dromara.quant.order.domain.QuantOrder();
+        secondOrder.setId(703L);
+        secondOrder.setCredentialId(1L);
+        when(orders.selectOne(any())).thenReturn(firstOrder, secondOrder);
+        when(trades.selectOne(any())).thenReturn(
+            persistedTradeForBalanceTest(firstFill), persistedTradeForBalanceTest(secondFill));
+        when(orders.claimPostFillBalanceSnapshot(anyLong(), any())).thenReturn(1);
+        when(orders.savePostFillBalanceSnapshot(anyLong(), eq(BigDecimal.TEN), any())).thenReturn(1);
+        when(gateway.queryAccountFresh(any())).thenReturn(
+            new ExchangeGateway.AccountSnapshot(BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ZERO));
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+            service(), "syncTrades", credential(), List.of(firstFill, secondFill));
+
+        verify(gateway, timeout(2000).times(1)).queryAccountFresh(any());
+        verify(orders, timeout(2000).times(2)).savePostFillBalanceSnapshot(anyLong(), eq(BigDecimal.TEN), any());
+    }
+
 }
