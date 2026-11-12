@@ -316,7 +316,7 @@ public class ProtectionOrderService {
                 // Repeating cancellation with the same exchange/client identity is idempotent; never create a new ticket.
                 stage = "RETRY_EXCHANGE_CANCEL";
                 try {
-                    gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(credential, local.getExchangeOrderId(), local.getClientOrderId(), true, local.getWorkingType() == null ? "CONTRACT_PRICE" : local.getWorkingType()));
+                    gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(credential, local.getExchangeOrderId(), local.getClientOrderId(), true));
                 } catch (RuntimeException retryFailure) {
                     log.debug("恢复期间重复保护撤单没有明确回执，随后按同一客户端标识查询终态 accountId={} symbol={} clientAlgoId={} errorType={} errorMessage={}",
                         active.credentialId(), active.symbol(), active.clientOrderId(), retryFailure.getClass().getSimpleName(), retryFailure.getMessage());
@@ -1256,7 +1256,7 @@ public class ProtectionOrderService {
                     checkTargetLeaseBeforeDispatch();
                     result = submitProtected(credentialId, local, new ExchangeGateway.ProtectionOrderRequest(credential, local.getSymbol(),
                         "SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" : "SELL", exchangeSide, local.getOrderType(), local.getQuantity(), local.getStopPrice(),
-                        local.getClientOrderId(), true));
+                        local.getClientOrderId(), true, local.getWorkingType() == null ? "CONTRACT_PRICE" : local.getWorkingType()));
                 } catch (RuntimeException ex) {
                     if (ex instanceof ProtectionIntentChangedException) {
                         throw ex;
