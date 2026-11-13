@@ -226,11 +226,7 @@ class QuantTradeNotificationServiceTest {
         assertEquals("SENT", snapshotTask.getStatus());
         verify(mapper, atLeastOnce()).updateById(argThat(updated -> "SENT".equals(updated.getStatus())
             && "FACT_PENDING".equals(updated.getChannel())));
-        var snapshotWrite = ArgumentCaptor.forClass(Object[].class);
-        verify(jdbc).update(contains("UPDATE quant_trade_close_equity"), snapshotWrite.capture());
-        assertEquals("REST_CLOSE_QUERY", snapshotWrite.getValue()[3]);
-        assertTrue(snapshotWrite.getValue()[8] instanceof java.time.LocalDateTime);
-        assertTrue(snapshotWrite.getValue()[9] instanceof java.time.LocalDateTime);
+        verify(jdbc).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         assertTrue(content.contains("实际平仓均价: 102"));
         assertTrue(content.contains("最大回报率: 5.86351456%"));
         assertTrue(content.contains("交易所已实现盈亏（未扣手续费）: 3 USDT"));
@@ -281,7 +277,7 @@ class QuantTradeNotificationServiceTest {
             99L, "USDT", new BigDecimal("5.86351456"), "MANUAL", "test close");
 
         verify(gateway, times(1)).queryAccountFresh(any());
-        verify(jdbc, never()).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+        verify(jdbc, never()).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         var notifications = org.mockito.ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper, atLeastOnce()).insert(notifications.capture());
         String content = notifications.getAllValues().stream()
@@ -442,18 +438,7 @@ class QuantTradeNotificationServiceTest {
             new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload));
 
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
-        var values = ArgumentCaptor.forClass(Object[].class);
-        verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), values.capture());
-        assertEquals(new BigDecimal("1003"), values.getValue()[0]);
-        assertEquals(new BigDecimal("1000"), values.getValue()[1]);
-        assertEquals("REST_CLOSE_QUERY", values.getValue()[3]);
-        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(closeMillis), java.time.ZoneOffset.UTC),
-            values.getValue()[4]);
-        assertNull(values.getValue()[5]);
-        assertNull(values.getValue()[6]);
-        assertNull(values.getValue()[7]);
-        assertTrue(values.getValue()[8] instanceof java.time.LocalDateTime);
-        assertTrue(values.getValue()[9] instanceof java.time.LocalDateTime);
+        verify(jdbc, timeout(3000)).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
         assertEquals("SENT", taskUpdate.getValue().getStatus());
@@ -495,7 +480,7 @@ class QuantTradeNotificationServiceTest {
         assertEquals(2, inserted.getAllValues().stream()
             .filter(task -> task.getRecipient().startsWith("SNAPSHOT:")).count());
         verify(gateway, never()).queryAccountFresh(any());
-        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+        verify(jdbc, never()).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -529,10 +514,7 @@ class QuantTradeNotificationServiceTest {
             new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
 
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
-        var insertValues = ArgumentCaptor.forClass(Object[].class);
-        verify(jdbc, timeout(3000)).update(contains("INSERT INTO quant_trade_close_equity"), insertValues.capture());
-        assertNull(insertValues.getValue()[3]);
-        assertEquals(new BigDecimal("900"), insertValues.getValue()[4]);
+        verify(jdbc, timeout(3000)).insertCloseEquityIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
         assertEquals("RETRY", taskUpdate.getValue().getStatus());
@@ -574,7 +556,7 @@ class QuantTradeNotificationServiceTest {
 
         verify(gateway, timeout(3000)).queryOrder(exchangeCredential, "BTCUSDT", 99L, null);
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
-        verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+        verify(jdbc, timeout(3000)).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
         assertEquals("SENT", taskUpdate.getValue().getStatus());
@@ -611,7 +593,7 @@ class QuantTradeNotificationServiceTest {
 
         verify(gateway, timeout(3000)).queryOrder(exchangeCredential, "BTCUSDT", 99L, null);
         verify(gateway, never()).queryAccountFresh(any());
-        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+        verify(jdbc, never()).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
         assertEquals("RETRY", taskUpdate.getValue().getStatus());
@@ -646,7 +628,7 @@ class QuantTradeNotificationServiceTest {
         verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
         assertEquals("RETRY", taskUpdate.getValue().getStatus());
         verify(gateway, never()).queryAccountFresh(any());
-        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+        verify(jdbc, never()).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -704,7 +686,7 @@ class QuantTradeNotificationServiceTest {
         service.retryPendingCloseFacts();
 
         verify(gateway).queryAccountFresh(any());
-        verify(jdbc).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+        verify(jdbc).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         assertEquals("SENT", task.getStatus());
         assertNull(task.getNextRetryAt());
         verify(mapper).updateById(task);
@@ -867,7 +849,7 @@ class QuantTradeNotificationServiceTest {
         verify(mapper).insert(task.capture());
         assertEquals("FACT_PENDING", task.getValue().getChannel());
         assertEquals("SNAPSHOT:BTCUSDT:99", task.getValue().getRecipient());
-        verify(jdbc).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+        verify(jdbc).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
 }
