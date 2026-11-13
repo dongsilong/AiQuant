@@ -665,10 +665,14 @@ public class QuantTradeNotificationService {
         }
 
         Instant streamReceivedAt = event.receivedAt();
+        Instant captureStartedAt = Instant.now();
         long exchangeToReceiveMillis = event.eventTime() == null || streamReceivedAt == null
             ? -1L : Duration.between(event.eventTime(), streamReceivedAt).toMillis();
-        log.info("平仓资金快照事件到达 credentialId={} symbol={} orderId={} exchangeEventTime={} streamReceivedAt={} exchangeToReceiveMs={}",
-            credentialId, symbol, orderId, event.eventTime(), streamReceivedAt, exchangeToReceiveMillis);
+        long receiveToCaptureMillis = streamReceivedAt == null
+            ? -1L : Duration.between(streamReceivedAt, captureStartedAt).toMillis();
+        log.info("平仓资金快照事件到达 credentialId={} symbol={} orderId={} exchangeEventTime={} streamReceivedAt={} captureStartedAt={} exchangeToReceiveMs={} receiveToCaptureMs={}",
+            credentialId, symbol, orderId, event.eventTime(), streamReceivedAt, captureStartedAt,
+            exchangeToReceiveMillis, receiveToCaptureMillis);
 
         String captureKey = credentialId + ":" + symbol + ":" + orderId;
         if (!activeStreamCloseCaptures.add(captureKey)) {
