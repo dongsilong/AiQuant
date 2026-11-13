@@ -403,7 +403,10 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param eventTime 当前行情事件时间
      * @param rawJson   交易所私有事件原始 JSON
      */
-    record UserDataEvent(String eventType, Instant eventTime, String rawJson) {
+    record UserDataEvent(String eventType, Instant eventTime, String rawJson, Instant receivedAt) {
+        public UserDataEvent(String eventType, Instant eventTime, String rawJson) {
+            this(eventType, eventTime, rawJson, Instant.now());
+        }
     }
 
     /**
