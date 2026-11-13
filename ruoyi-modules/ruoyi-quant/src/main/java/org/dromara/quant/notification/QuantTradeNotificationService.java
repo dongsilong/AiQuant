@@ -19,7 +19,6 @@ import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.dromara.system.api.MessageService;
 import org.dromara.system.api.domain.PushPayloadDTO;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -65,7 +64,7 @@ public class QuantTradeNotificationService {
      */
     private final QuantProperties properties;
     private final MessageService messageService;
-    private final JdbcTemplate jdbcTemplate;
+    private final QuantTradeNotificationQueryMapper tradeNotificationQueryMapper;
     private final ExchangeGateway gateway;
     private final TaskExecutor notificationExecutor;
     @Autowired
@@ -79,13 +78,13 @@ public class QuantTradeNotificationService {
      * 创建 QuantTradeNotificationService 实例并初始化其依赖。
      */
     public QuantTradeNotificationService(QuantRiskConfigMapper riskConfigMapper, QuantNotificationMapper notificationMapper, QuantProperties properties,
-                                         MessageService messageService, JdbcTemplate jdbcTemplate, ExchangeGateway gateway,
+                                         MessageService messageService, QuantTradeNotificationQueryMapper tradeNotificationQueryMapper, ExchangeGateway gateway,
                                          @Qualifier("quantNotificationExecutor") TaskExecutor notificationExecutor) {
         this.riskConfigMapper = riskConfigMapper;
         this.notificationMapper = notificationMapper;
         this.properties = properties;
         this.messageService = messageService;
-        this.jdbcTemplate = jdbcTemplate;
+        this.tradeNotificationQueryMapper = tradeNotificationQueryMapper;
         this.gateway = gateway;
         this.notificationExecutor = notificationExecutor;
     }
@@ -245,8 +244,7 @@ public class QuantTradeNotificationService {
      * 日志线程调用；与交易风险消息分开，发布到顶部工作分类。
      */
     public void notifyDecisionLogLoss(long count) {
-        List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur.user_id " +
-            "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
+        List<Long> admins = tradeNotificationQueryMapper.selectActiveAdminUserIds();
         if (!admins.isEmpty()) {
             messageService.publishMessage(admins, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, "开平仓日志写入故障，累计丢失 " + count + " 条，请检查日志队列和数据库。", null, "/trade" +
                 "/trade-decision-log"));
@@ -276,8 +274,7 @@ public class QuantTradeNotificationService {
         String content =
             "实盘开仓已阻止\n账户: " + safe(credential == null ? null : credential.getAccountName()) + "\n交易对: " + safe(symbol) + "\n原因: " + safe(reason) + "\n时间: " + LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
         try {
-            List<Long> adminIds = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur" +
-                ".user_id " + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
+            List<Long> adminIds = tradeNotificationQueryMapper.selectActiveAdminUserIds();
             if (!adminIds.isEmpty()) {
                 messageService.publishMessage(adminIds, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, content, null, "/quant/terminal/index"));
             }
@@ -575,51 +572,21 @@ public class QuantTradeNotificationService {
         LocalDateTime restRequestTime = LocalDateTime.ofInstant(restRequestStartedAt, ZoneOffset.UTC);
         LocalDateTime restResponseTime = LocalDateTime.ofInstant(restResponseReceivedAt, ZoneOffset.UTC);
         try {
-            boolean complete = account.marginBalance() != null && account.walletBalance() != null;
-            int upgraded = jdbcTemplate.update("""
-                UPDATE quant_trade_close_equity
-                SET closing_equity=?, wallet_balance=?, unrealized_pnl=?,
-                    capture_source=?, close_event_time=?, account_update_transaction_time=?,
-                    exchange_event_time=?, stream_received_at=?, rest_query_started_at=?,
-                    rest_response_received_at=?, captured_at=UTC_TIMESTAMP(3)
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=?
-                  AND (closing_equity IS NULL OR wallet_balance IS NULL)
-                """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
-                captureSource, closeTime, accountTransactionTime, exchangeTime, receivedTime,
-                restRequestTime, restResponseTime, candidateCredentialId, symbol, orderId);
+            int upgraded = tradeNotificationQueryMapper.updateIncompleteCloseEquity(
+                credentialId, symbol, orderId, account.marginBalance(), account.walletBalance(),
+                account.unrealizedPnl(), captureSource, closeTime, accountTransactionTime,
+                exchangeTime, receivedTime, restRequestTime, restResponseTime);
             if (upgraded == 1) {
                 return true;
             }
-            if (!complete) {
-                // 不把不同 REST 请求时刻的 partial values 合并成一条快照，否则单一 captured_at 会失去真实含义。
-                jdbcTemplate.update("""
-                    INSERT INTO quant_trade_close_equity
-                        (credential_id, symbol, exchange_order_id, closing_equity,
-                         wallet_balance, unrealized_pnl, capture_source, close_event_time,
-                         account_update_transaction_time, exchange_event_time, stream_received_at,
-                         rest_query_started_at, rest_response_received_at, captured_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
-                    ON DUPLICATE KEY UPDATE id=id
-                    """, credentialId, symbol, orderId, account.marginBalance(),
-                    account.walletBalance(), account.unrealizedPnl(), captureSource, closeTime,
-                    accountTransactionTime, exchangeTime, receivedTime, restRequestTime, restResponseTime);
-                return true;
-            }
-            jdbcTemplate.update("""
-                INSERT INTO quant_trade_close_equity
-                    (credential_id, symbol, exchange_order_id, closing_equity,
-                     wallet_balance, unrealized_pnl, capture_source, close_event_time,
-                     account_update_transaction_time, exchange_event_time, stream_received_at,
-                     rest_query_started_at, rest_response_received_at, captured_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
-                ON DUPLICATE KEY UPDATE id=id
-                """, credentialId, symbol, orderId, account.marginBalance(),
-                account.walletBalance(), account.unrealizedPnl(), captureSource, closeTime,
-                accountTransactionTime, exchangeTime, receivedTime, restRequestTime, restResponseTime);
+            tradeNotificationQueryMapper.insertCloseEquityIfAbsent(
+                credentialId, symbol, orderId, account.marginBalance(), account.walletBalance(),
+                account.unrealizedPnl(), captureSource, closeTime, accountTransactionTime,
+                exchangeTime, receivedTime, restRequestTime, restResponseTime);
             return true;
         } catch (RuntimeException ex) {
             log.warn("平仓账户资金快照持久化失败 credentialId={} symbol={} orderId={}",
-                candidateCredentialId, symbol, orderId, ex);
+                credentialId, symbol, orderId, ex);
             return false;
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -749,35 +716,7 @@ public class QuantTradeNotificationService {
         if (credentialId == null || exchangeCredential == null || "PAPER".equalsIgnoreCase(exchangeCredential.runMode())) {
             return;
         }
-        List<Map<String, Object>> candidates = jdbcTemplate.queryForList("""
-            SELECT c.credential_id, c.symbol, f.exchange_order_id,
-                   DATE_FORMAT(f.trade_time, '%Y-%m-%dT%H:%i:%s.%f') AS close_time_utc
-            FROM quant_trade_cycle c
-            JOIN quant_trade_cycle_fill f
-              ON f.cycle_id=c.id AND f.fill_role='CLOSE'
-            WHERE c.credential_id=?
-              AND c.status='CLOSED'
-              AND c.closed_at >= UTC_TIMESTAMP(3) - INTERVAL 2 MINUTE
-              AND NOT EXISTS (
-                  SELECT 1 FROM quant_trade_cycle_fill newer
-                  WHERE newer.cycle_id=f.cycle_id AND newer.fill_role='CLOSE'
-                    AND (newer.trade_time > f.trade_time
-                         OR (newer.trade_time=f.trade_time AND newer.id > f.id))
-              )
-              AND NOT EXISTS (
-                  SELECT 1 FROM quant_trade_close_equity s
-                  WHERE s.credential_id=c.credential_id AND s.symbol=c.symbol
-                    AND s.exchange_order_id=f.exchange_order_id
-                    AND s.closing_equity IS NOT NULL AND s.wallet_balance IS NOT NULL
-              )
-              AND NOT EXISTS (
-                  SELECT 1 FROM quant_notification n
-                  WHERE n.credential_id=c.credential_id AND n.channel='FACT_PENDING'
-                    AND n.recipient=CONCAT('SNAPSHOT:', c.symbol, ':', f.exchange_order_id)
-              )
-            ORDER BY c.closed_at ASC
-            LIMIT 50
-            """, credentialId);
+        List<Map<String, Object>> candidates = tradeNotificationQueryMapper.selectRecentCloseSnapshotCandidates(credentialId);
         Set<String> scheduled = new java.util.HashSet<>();
         for (Map<String, Object> row : candidates) {
             Long candidateCredentialId = longValue(row.get("credential_id"));
@@ -819,27 +758,8 @@ public class QuantTradeNotificationService {
 
     private boolean isVerifiedCloseOrder(Long credentialId, ExchangeGateway.Credential credential,
                                           String symbol, Long orderId, String clientOrderId) {
-        Integer matched = jdbcTemplate.queryForObject("""
-            SELECT EXISTS (
-                SELECT 1
-                FROM quant_strategy_order_intent
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=? AND fill_role='CLOSE'
-                UNION ALL
-                SELECT 1
-                FROM quant_execution_record
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=? AND operation_type='CLOSE'
-                UNION ALL
-                SELECT 1
-                FROM quant_strategy_pre_dispatch_intent
-                WHERE credential_id=? AND symbol=? AND client_order_id=? AND operation_type='CLOSE'
-                UNION ALL
-                SELECT 1
-                FROM quant_trade_cycle_fill
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=? AND fill_role='CLOSE'
-            )
-            """, Integer.class, credentialId, symbol, orderId,
-            credentialId, symbol, orderId, credentialId, symbol, clientOrderId,
-            credentialId, symbol, orderId);
+        Integer matched = tradeNotificationQueryMapper.existsVerifiedCloseOrder(
+            credentialId, symbol, orderId, clientOrderId);
         if (matched != null && matched == 1) {
             return true;
         }
@@ -871,14 +791,7 @@ public class QuantTradeNotificationService {
     }
 
     private boolean hasCompleteCloseEquitySnapshot(Long credentialId, String symbol, Long orderId) {
-        Integer complete = jdbcTemplate.queryForObject("""
-            SELECT EXISTS (
-                SELECT 1
-                FROM quant_trade_close_equity
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=?
-                  AND closing_equity IS NOT NULL AND wallet_balance IS NOT NULL
-            )
-            """, Integer.class, credentialId, symbol, orderId);
+        Integer complete = tradeNotificationQueryMapper.existsCompleteCloseEquity(credentialId, symbol, orderId);
         return complete != null && complete == 1;
     }
 
@@ -1118,7 +1031,7 @@ public class QuantTradeNotificationService {
     private void updateFactPendingTask(QuantNotification task) {
         notificationMapper.updateById(task);
         if (task.getId() != null && "SENT".equalsIgnoreCase(task.getStatus())) {
-            jdbcTemplate.update("UPDATE quant_notification SET last_error=NULL WHERE id=?", task.getId());
+            tradeNotificationQueryMapper.clearNotificationLastError(task.getId());
         }
     }
 
@@ -1452,7 +1365,7 @@ public class QuantTradeNotificationService {
         java.util.LinkedHashSet<Long> recipients = new java.util.LinkedHashSet<>();
         if (credentialId != null) {
             try {
-                Long ownerId = jdbcTemplate.queryForObject("SELECT user_id FROM quant_credential WHERE id=? AND del_flag='0'", Long.class, credentialId);
+                Long ownerId = tradeNotificationQueryMapper.selectCredentialOwnerId(credentialId);
                 if (ownerId != null) {
                     recipients.add(ownerId);
                 }
@@ -1460,8 +1373,7 @@ public class QuantTradeNotificationService {
                 // 凭证不存在或已删除：交给管理员兜底
             }
         }
-        List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur " + "JOIN sys_role r ON r.role_id=ur.role_id " + "JOIN sys_user u ON u" +
-            ".user_id=ur.user_id " + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
+        List<Long> admins = tradeNotificationQueryMapper.selectActiveAdminUserIds();
         if (admins != null) {
             recipients.addAll(admins);
         }
