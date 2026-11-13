@@ -4,6 +4,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.apache.ibatis.builder.xml.XMLMapperBuilder;
+import org.apache.ibatis.mapping.Environment;
+import org.apache.ibatis.session.SqlSession;
+import org.apache.ibatis.session.SqlSessionFactoryBuilder;
+import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
+import org.dromara.quant.decision.mapper.TradeDecisionLogMapper;
+import org.junit.jupiter.api.AfterEach;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -15,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class TradeDecisionRepositoryTest {
     JdbcTemplate jdbc;
     TradeDecisionLogRepository repository;
+    SqlSession sqlSession;
 
     @BeforeEach
     void setup() throws Exception {
@@ -38,7 +46,21 @@ class TradeDecisionRepositoryTest {
         jdbc.execute("CREATE TABLE quant_strategy_instance(id BIGINT,strategy_id BIGINT)");
         jdbc.update("INSERT INTO quant_credential VALUES(1,'测试账户','TESTNET')");
         jdbc.update("INSERT INTO quant_strategy VALUES(2,'原策略名称')");
-        repository = new TradeDecisionLogRepository(jdbc);
+        var configuration = new org.apache.ibatis.session.Configuration(
+            new Environment("test", new JdbcTransactionFactory(), ds));
+        configuration.addMapper(TradeDecisionLogMapper.class);
+        try (var input = org.apache.ibatis.io.Resources.getResourceAsStream("mapper/quant/TradeDecisionLogMapper.xml")) {
+            new XMLMapperBuilder(input, configuration, "mapper/quant/TradeDecisionLogMapper.xml", configuration.getSqlFragments()).parse();
+        }
+        sqlSession = new SqlSessionFactoryBuilder().build(configuration).openSession(true);
+        repository = new TradeDecisionLogRepository(sqlSession.getMapper(TradeDecisionLogMapper.class));
+    }
+
+    @AfterEach
+    void closeSession() {
+        if (sqlSession != null) {
+            sqlSession.close();
+        }
     }
 
     DecisionLogEvent request() {
