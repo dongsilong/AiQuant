@@ -862,7 +862,7 @@ class QuantTradeNotificationServiceTest {
             new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
                 new BigDecimal("1003"), new BigDecimal("3")));
 
-        service.recoverRecentCloseSnapshots();
+        service.recoverRecentCloseSnapshots(10L, new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "TESTNET"));
 
         verify(gateway, timeout(3000)).queryAccountFresh(any());
         var task = ArgumentCaptor.forClass(QuantNotification.class);
