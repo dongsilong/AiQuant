@@ -2450,7 +2450,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
     private void evaluateExit(ActiveRuntime runtime, StrategyContext context, boolean forceHardStop) {
         synchronized (runtime) {
             List<ExitSignal> evaluated = forceHardStop
-                ? List.of(new ExitSignal("HARD_STOP_LOSS", BigDecimal.ONE, "Binance -2021 明确拒绝硬止损，按已穿价事实强制本地接管",
+                ? List.of(new ExitSignal("HARD_STOP_LOSS", BigDecimal.ONE, "硬止损超过 5 秒仍未确认生效，按未保护持仓执行紧急退出",
                     false, "HARD_STOP", ExitSignal.QuantityBase.CURRENT))
                 : protectionExits(runtime, context);
             if (runtime.position == null || runtime.hasPendingAction() || evaluated.isEmpty() || !runtime.exitCoordinating.compareAndSet(false, true)) {
@@ -4143,6 +4143,13 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                              !runtime.closed && !obsolete && runtime.state == work.state() && runtime.position.getQuantity().compareTo(work.position().getQuantity()) == 0;
                             if (current) {
                                 runtime.hardStopConfirmed = hardStopConfirmed;
+                                if (hardStopConfirmed) {
+                                    runtime.hardStopUnprotectedSince = 0L;
+                                    runtime.hardStopConfirmationPending = false;
+                                } else {
+                                    runtime.hardStopConfirmationPending = isProtectionStatePending(failure);
+                                    scheduleHardStopFailureExit(runtime, work.position(), work.state());
+                                }
                                 int previousStep = runtime.state.getConfirmedProtectionStep() == null ? 0 : runtime.state.getConfirmedProtectionStep();
                                 int highestStep = runtime.state.getHighestStep() == null ? 0 : runtime.state.getHighestStep();
                                 if (confirmedStep > previousStep || confirmedStep > highestStep) {
@@ -4303,6 +4310,62 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
 
     private boolean isProtectionStatePending(RuntimeException ex) {
         return ex instanceof ProtectionOrderService.ProtectionExecutionPendingException || ex instanceof ProtectionTargetCoordinator.PendingTargetException;
+    }
+
+    /**
+     * 硬止损连续未确认时启动 5 秒安全窗口。未知派发结果必须先核实，不能直接按拒绝处理。
+     */
+    private void scheduleHardStopFailureExit(ActiveRuntime runtime, QuantPosition position, QuantStrategyPositionState state) {
+        long delay;
+        synchronized (runtime) {
+            if (runtime.closed || runtime.position == null || runtime.state != state
+                || !Objects.equals(runtime.position.getId(), position.getId())
+                || !Objects.equals(runtime.state.getPositionCycleKey(), position.getProtectionCycleKey())
+                || runtime.hardStopConfirmed) {
+                return;
+            }
+            if (runtime.hardStopUnprotectedSince == 0L) {
+                runtime.hardStopUnprotectedSince = System.currentTimeMillis();
+            }
+            delay = Math.max(1L, 5_000L - (System.currentTimeMillis() - runtime.hardStopUnprotectedSince));
+        }
+        java.util.concurrent.CompletableFuture.delayedExecutor(delay, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .execute(() -> checkHardStopFailureExit(runtime, position.getId(), position.getProtectionCycleKey(), state));
+    }
+
+    private void checkHardStopFailureExit(ActiveRuntime runtime, Long positionId, String cycleKey, QuantStrategyPositionState expectedState) {
+        StrategyContext emergencyContext = null;
+        boolean retryVerification = false;
+        synchronized (runtime) {
+            if (runtime.closed || runtime.state != expectedState || runtime.position == null
+                || !Objects.equals(runtime.position.getId(), positionId)
+                || !Objects.equals(runtime.state.getPositionCycleKey(), cycleKey) || runtime.hardStopConfirmed) {
+                return;
+            }
+            if (runtime.protectionSyncing.get() || runtime.hardStopConfirmationPending) {
+                retryVerification = true;
+            } else if (System.currentTimeMillis() - runtime.hardStopUnprotectedSince < 5_000L) {
+                retryVerification = true;
+            } else if (!runtime.hasPendingAction() && !runtime.exitCoordinating.get()) {
+                BigDecimal price = runtime.currentPrice() != null ? runtime.currentPrice()
+                    : runtime.position.getMarkPrice() != null ? runtime.position.getMarkPrice() : runtime.position.getEntryPrice();
+                if (price != null && price.signum() > 0) {
+                    emergencyContext = buildContext(runtime, price, new ExchangeGateway.MarketEvent(
+                        "HARD_STOP_UNPROTECTED_TIMEOUT", runtime.symbol.getSymbol(), runtime.strategySymbol.getIntervalCode(),
+                        price, null, Instant.now()));
+                } else {
+                    retryVerification = true;
+                }
+            }
+        }
+        if (retryVerification) {
+            requestReconciliation(runtime);
+            scheduleHardStopFailureExit(runtime, runtime.position, expectedState);
+        } else if (emergencyContext != null) {
+            log.error("硬止损超过 5 秒仍未确认生效，对未保护持仓启动紧急市价平仓 instanceId={} credentialId={} symbol={} positionId={} cycle={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), positionId, cycleKey);
+            evaluateExit(runtime, emergencyContext, true);
+        }
     }
 
     /**
@@ -5136,6 +5199,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private long nextEntryProtectionCleanupAt;
         private java.util.concurrent.Future<?> entryProtectionCleanupTask;
         private boolean hardStopConfirmed;
+        private long hardStopUnprotectedSince;
+        private boolean hardStopConfirmationPending;
         private boolean partialOpenProtectionVerified;
         private BigDecimal latestTradePrice;
         private Instant latestTradeEventAt;
