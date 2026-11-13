@@ -849,7 +849,7 @@ class QuantTradeNotificationServiceTest {
 
         String closeTime = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1)
             .format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-        when(jdbc.queryForList(anyString())).thenReturn(List.of(java.util.Map.of(
+        when(jdbc.queryForList(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(List.of(java.util.Map.of(
             "credential_id", 10L, "symbol", "BTCUSDT", "exchange_order_id", 99L, "close_time_utc", closeTime)));
         when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
             ((QuantNotification) invocation.getArgument(0)).setId(950L);
