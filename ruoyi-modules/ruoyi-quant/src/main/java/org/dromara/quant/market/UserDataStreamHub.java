@@ -160,6 +160,13 @@ public class UserDataStreamHub {
                 }
             }
             stream.checkHealth();
+            if ("LIVE".equalsIgnoreCase(stream.credential.getRunMode()) && tradeNotifications != null && ownsLiveStream(id)) {
+                try {
+                    tradeNotifications.recoverRecentCloseSnapshots(id, executionService.toCredential(stream.credential));
+                } catch (RuntimeException ex) {
+                    log.warn("近期平仓账户快照补偿扫描失败 credentialId={}", id, ex);
+                }
+            }
         });
     }
 
