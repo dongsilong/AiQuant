@@ -147,6 +147,9 @@ public interface QuantTradeNotificationQueryMapper {
                                       @Param("symbol") String symbol,
                                       @Param("orderId") Long orderId);
 
+    @Select("SELECT user_id FROM quant_credential WHERE id = #{credentialId} AND del_flag = '0'")
+    Long selectCredentialOwnerId(@Param("credentialId") Long credentialId);
+
     @Update("UPDATE quant_notification SET last_error = NULL WHERE id = #{notificationId}")
     int clearNotificationLastError(@Param("notificationId") Long notificationId);
 }
