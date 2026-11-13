@@ -4148,7 +4148,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                     runtime.hardStopConfirmationPending = false;
                                 } else {
                                     runtime.hardStopConfirmationPending = isProtectionStatePending(failure);
-                                    scheduleHardStopFailureExit(runtime, work.position(), work.state());
+                                    // UNKNOWN/触发中状态只做精确核验，不启动 5 秒容忍计时；从明确确认未生效后开始计时。
+                                    if (!runtime.hardStopConfirmationPending) {
+                                        scheduleHardStopFailureExit(runtime, work.position(), work.state());
+                                    }
                                 }
                                 int previousStep = runtime.state.getConfirmedProtectionStep() == null ? 0 : runtime.state.getConfirmedProtectionStep();
                                 int highestStep = runtime.state.getHighestStep() == null ? 0 : runtime.state.getHighestStep();
