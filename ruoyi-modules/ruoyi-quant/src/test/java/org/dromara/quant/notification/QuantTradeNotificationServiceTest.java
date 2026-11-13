@@ -5,6 +5,7 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.notification.domain.QuantNotification;
 import org.dromara.quant.notification.mapper.QuantNotificationMapper;
+import org.dromara.quant.notification.mapper.QuantTradeNotificationQueryMapper;
 import org.dromara.quant.risk.mapper.QuantRiskConfigMapper;
 import org.dromara.system.api.MessageService;
 import org.junit.jupiter.api.Tag;
