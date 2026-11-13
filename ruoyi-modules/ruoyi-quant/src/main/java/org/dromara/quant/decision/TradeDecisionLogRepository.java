@@ -382,11 +382,11 @@ public class TradeDecisionLogRepository {
         boolean preserveReason = "EXECUTION_RESULT".equals(e.reasonCode());
         // 首次确认成交时清除计划数值；缺少成交均价时留空，不能把参考价标为实际成交价。
         boolean firstActual = !actual && e.tradeTime() != null;
-        Object quantity = firstActual ? e.quantity() : (olderFill || actual && e.tradeTime() == null || e.quantity() == null) ? old.get("quantity") : e.quantity();
+        BigDecimal quantity = firstActual ? e.quantity() : (olderFill || actual && e.tradeTime() == null || e.quantity() == null) ? asDecimal(old.get("quantity")) : e.quantity();
         // 累计数量增加但均价未知时，旧均价不能代表新的累计成交。
         boolean growingActual =
             actual && e.tradeTime() != null && e.quantity() != null && (!(old.get("quantity") instanceof BigDecimal oldQuantity) || e.quantity().compareTo(oldQuantity) > 0);
-        Object price = firstActual || growingActual ? e.price() : (olderFill || actual && e.tradeTime() == null || e.price() == null) ? old.get("price") : e.price();
+        BigDecimal price = firstActual || growingActual ? e.price() : (olderFill || actual && e.tradeTime() == null || e.price() == null) ? asDecimal(old.get("price")) : e.price();
         mapper.updateDecisionLog(status, preserveReason ? text(old, "reason") : e.reason(),
             preserveReason ? text(old, "reason_code") : e.reasonCode(), e.orderId(), e.clientOrderId(), quantity, price,
             olderFill ? null : timestamp(e.tradeTime()), e.direction(), e.margin(), timestamp(e.eventTime()), key(e.eventKey()));
@@ -449,7 +449,7 @@ public class TradeDecisionLogRepository {
                 status = "FILLED";
             }
         }
-        mapper.updateAggregatedFill(quantity, avg, totals.get("last_fill"), status, timestamp(e.eventTime()), parent, quantity);
+        mapper.updateAggregatedFill(quantity, avg, asTimestamp(totals.get("last_fill")), status, timestamp(e.eventTime()), parent, quantity);
     }
 
     private Map<String, Object> parameters(DecisionLogEvent e) {
