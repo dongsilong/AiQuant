@@ -19,10 +19,6 @@ import java.util.*;
 @Repository
 public class TradeDecisionLogRepository {
     private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
-    private static final String COLUMNS = "event_key,record_type,credential_id,account_name,run_mode,strategy_id,strategy_instance_id,strategy_name,symbol,operation,direction," +
-        "status,reason_code,reason,angle,threshold,kline_time,quantity,price,margin,idempotency_key,order_id,client_order_id,event_time,trade_time,repeat_count,last_time";
-    private static final String VALUES = ":eventKey,:recordType,:credentialId,:accountName,:runMode,:strategyId,:strategyInstanceId,:strategyName,:symbol,:operation,:direction," +
-        ":status,:reasonCode,:reason,:angle,:threshold,:klineTime,:quantity,:price,:margin,:idempotencyKey,:orderId,:clientOrderId,:eventTime,:tradeTime,1,:eventTime";
     private final TradeDecisionLogMapper mapper;
 
     public TradeDecisionLogRepository(TradeDecisionLogMapper mapper) {
@@ -496,7 +492,7 @@ public class TradeDecisionLogRepository {
             throw new org.dromara.common.core.exception.ServiceException("开始时间不能晚于结束时间");
         }
         int size = Math.clamp(q.getPageSize() == null ? 20 : q.getPageSize(), 1, 100);
-        long page = Math.max(1, q.getPageNum() == null ? 20 : q.getPageNum());
+        long page = Math.max(1, q.getPageNum() == null ? 1 : q.getPageNum());
         Long total = mapper.countLogs(q, from, to);
         var rows = mapper.selectLogs(q, from, to, size, (page - 1) * size);
         return PageResult.build(rows.stream().map(this::display).toList(), total == null ? 0 : total);
