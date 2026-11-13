@@ -629,8 +629,20 @@ public class StrategyRuntimeService {
      * 将账户事实刷新请求合并排队，避免每条行情事件都发起 REST 查询。
      */
     private void requestReconciliation(ActiveRuntime runtime) {
+        requestReconciliation(runtime, false);
+    }
+
+    /**
+     * 成交私有流事件需要绕过普通对账节流，尽快核实累计成交量并建立/更新硬止损。
+     */
+    private void requestReconciliation(ActiveRuntime runtime, boolean immediate) {
         synchronized (runtime) {
-            if (runtime.closed || System.currentTimeMillis() < runtime.nextReconcileAt) {
+            if (runtime.closed) {
+                return;
+            }
+            if (immediate) {
+                runtime.nextReconcileAt = 0L;
+            } else if (System.currentTimeMillis() < runtime.nextReconcileAt) {
                 return;
             }
             runtime.reconcileRequested.set(true);
@@ -1179,7 +1191,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             invalidatePositionFacts(runtime);
                             invalidateEntryProtectionCleanup(runtime);
                             reconciliationService.invalidateRuntimePositionSnapshot(credential.getId());
-                            requestReconciliation(runtime);
+                            requestReconciliation(runtime, "ORDER_TRADE_UPDATE".equalsIgnoreCase(event.eventType()));
                         }
                     });
                 }
@@ -3484,6 +3496,14 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             }
             runtime.state.setPendingNotFoundConfirmations(0);
             stateService.save(runtime.state);
+            if (runtime.partialOpenProtectionVerified) {
+                // 首次部分成交已与交易所持仓事实精确匹配：立即异步建立覆盖当前实际持仓量的硬止损，
+                // 不等待开仓订单完全 FILLED；动态止盈仍等待完整成交及冻结参数。
+                ensureHardStop(runtime);
+                log.info("开仓部分成交已核实，立即提交硬止损保护 instanceId={} credentialId={} symbol={} orderId={} executedQuantity={} positionQuantity={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), order.orderId(),
+                    order.executedQuantity(), runtime.position.getQuantity());
+            }
             return true;
         }
         if ("FILLED".equalsIgnoreCase(status)) {
