@@ -4,6 +4,8 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.dromara.quant.decision.TradeDecisionQuery;
 
+import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -61,25 +63,25 @@ public interface TradeDecisionLogMapper {
                           @Param("reasonCode") String reasonCode,
                           @Param("orderId") Long orderId,
                           @Param("clientOrderId") String clientOrderId,
-                          @Param("quantity") Object quantity,
-                          @Param("price") Object price,
-                          @Param("tradeTime") Object tradeTime,
+                          @Param("quantity") BigDecimal quantity,
+                          @Param("price") BigDecimal price,
+                          @Param("tradeTime") Timestamp tradeTime,
                           @Param("direction") String direction,
-                          @Param("margin") Object margin,
-                          @Param("eventTime") Object eventTime,
+                          @Param("margin") BigDecimal margin,
+                          @Param("eventTime") Timestamp eventTime,
                           @Param("eventKey") String eventKey);
 
     int updateFillParent(@Param("target") String target, @Param("source") String source);
 
     int deleteSourceOrder(@Param("source") String source);
 
-    int updateAggregatedFill(@Param("quantity") Object quantity,
-                             @Param("price") Object price,
-                             @Param("tradeTime") Object tradeTime,
+    int updateAggregatedFill(@Param("quantity") BigDecimal quantity,
+                             @Param("price") BigDecimal price,
+                             @Param("tradeTime") Timestamp tradeTime,
                              @Param("status") String status,
-                             @Param("eventTime") Object eventTime,
+                             @Param("eventTime") Timestamp eventTime,
                              @Param("parentKey") String parentKey,
-                             @Param("quantityLimit") Object quantityLimit);
+                             @Param("quantityLimit") BigDecimal quantityLimit);
 
     Long countLogs(@Param("q") TradeDecisionQuery query,
                    @Param("from") LocalDateTime from,
