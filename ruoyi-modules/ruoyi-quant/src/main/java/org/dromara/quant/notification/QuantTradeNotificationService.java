@@ -13,6 +13,7 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.notification.domain.QuantNotification;
 import org.dromara.quant.notification.mapper.QuantNotificationMapper;
+import org.dromara.quant.notification.mapper.QuantTradeNotificationQueryMapper;
 import org.dromara.quant.risk.domain.QuantRiskConfig;
 import org.dromara.quant.risk.mapper.QuantRiskConfigMapper;
 import org.dromara.quant.strategy.domain.QuantStrategy;
