@@ -316,6 +316,13 @@ public class UserDataStreamHub {
         }
 
         private void onEvent(ExchangeGateway.UserDataEvent event) {
+            // 快照触发必须先于持仓协调、决策日志和缓存处理，避免这些同步步骤推迟平仓资金采样。
+            if (event != null && tradeNotifications != null
+                && ("ORDER_TRADE_UPDATE".equals(event.eventType()) || "ACCOUNT_UPDATE".equals(event.eventType())
+                    || "DISCONNECTED".equals(event.eventType()) || "listenKeyExpired".equalsIgnoreCase(event.eventType()))) {
+                tradeNotifications.captureCloseSnapshotFromUserDataEvent(
+                    credential.getId(), executionService.toCredential(credential), event);
+            }
             if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && positionEvents != null) {
                 positionEvents.onUserDataEvent(credential.getId(), event);
             }
@@ -325,12 +332,6 @@ public class UserDataStreamHub {
             lastEventAt = Instant.now();
             positionCache.onEvent(credential.getId(), event);
             balanceCache.onEvent(credential.getId(), event);
-            if (event != null && tradeNotifications != null
-                && ("ORDER_TRADE_UPDATE".equals(event.eventType()) || "ACCOUNT_UPDATE".equals(event.eventType())
-                    || "DISCONNECTED".equals(event.eventType()) || "listenKeyExpired".equalsIgnoreCase(event.eventType()))) {
-                tradeNotifications.captureCloseSnapshotFromUserDataEvent(
-                    credential.getId(), executionService.toCredential(credential), event);
-            }
             preparationService.onEvent(credential.getId(), event);
             listeners.forEach(listener -> {
                 try {
