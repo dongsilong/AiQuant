@@ -664,6 +664,12 @@ public class QuantTradeNotificationService {
             return;
         }
 
+        Instant streamReceivedAt = event.receivedAt();
+        long exchangeToReceiveMillis = event.eventTime() == null || streamReceivedAt == null
+            ? -1L : Duration.between(event.eventTime(), streamReceivedAt).toMillis();
+        log.info("平仓资金快照事件到达 credentialId={} symbol={} orderId={} exchangeEventTime={} streamReceivedAt={} exchangeToReceiveMs={}",
+            credentialId, symbol, orderId, event.eventTime(), streamReceivedAt, exchangeToReceiveMillis);
+
         String captureKey = credentialId + ":" + symbol + ":" + orderId;
         if (!activeStreamCloseCaptures.add(captureKey)) {
             return;
