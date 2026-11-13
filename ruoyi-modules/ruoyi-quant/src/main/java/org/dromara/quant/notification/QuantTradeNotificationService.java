@@ -690,6 +690,14 @@ public class QuantTradeNotificationService {
             return;
         }
 
+        dispatchCloseSnapshotCapture(credentialId, credential, symbol, orderId,
+            Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime, task, captureKey);
+    }
+
+    private void dispatchCloseSnapshotCapture(Long credentialId, ExchangeGateway.Credential credential,
+                                               String symbol, Long orderId, String clientOrderId,
+                                               Instant closeEventTime, Instant orderTransactionTime,
+                                               QuantNotification task, String captureKey) {
         Thread.ofVirtual().name("quant-close-equity-stream").start(() -> {
             boolean claimed = false;
             String ownerToken = UUID.randomUUID().toString();
@@ -704,8 +712,7 @@ public class QuantTradeNotificationService {
                 task.setOwnerToken(ownerToken);
                 task.setLeaseUntil(leaseUntil);
                 if (captureCloseEquitySnapshot(credentialId, credential, symbol, orderId,
-                    Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime,
-                    null, null, null)) {
+                    clientOrderId, closeEventTime, orderTransactionTime, null, null, null)) {
                     task.setStatus("SENT");
                     task.setSentAt(LocalDateTime.now());
                     task.setNextRetryAt(null);
@@ -732,6 +739,86 @@ public class QuantTradeNotificationService {
                 activeStreamCloseCaptures.remove(captureKey);
             }
         });
+    }
+
+    /**
+     * 补偿 WebSocket 事件未触发或任务未落库的近期已平仓周期。
+     * 只在两分钟即时采样窗口内处理，绝不使用当前余额回填历史成交。
+     */
+    @Scheduled(fixedDelay = 15000L, initialDelay = 15000L)
+    public void recoverRecentCloseSnapshots() {
+        List<Map<String, Object>> candidates = jdbcTemplate.queryForList("""
+            SELECT c.credential_id, c.symbol, f.exchange_order_id,
+                   DATE_FORMAT(f.trade_time, '%Y-%m-%dT%H:%i:%s.%f') AS close_time_utc
+            FROM quant_trade_cycle c
+            JOIN quant_trade_cycle_fill f
+              ON f.cycle_id=c.id AND f.fill_role='CLOSE'
+            WHERE c.status='CLOSED'
+              AND c.closed_at >= UTC_TIMESTAMP(3) - INTERVAL 2 MINUTE
+              AND NOT EXISTS (
+                  SELECT 1 FROM quant_trade_cycle_fill newer
+                  WHERE newer.cycle_id=f.cycle_id AND newer.fill_role='CLOSE'
+                    AND (newer.trade_time > f.trade_time
+                         OR (newer.trade_time=f.trade_time AND newer.id > f.id))
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM quant_trade_close_equity s
+                  WHERE s.credential_id=c.credential_id AND s.symbol=c.symbol
+                    AND s.exchange_order_id=f.exchange_order_id
+                    AND s.closing_equity IS NOT NULL AND s.wallet_balance IS NOT NULL
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM quant_notification n
+                  WHERE n.credential_id=c.credential_id AND n.channel='FACT_PENDING'
+                    AND n.recipient=CONCAT('SNAPSHOT:', c.symbol, ':', f.exchange_order_id)
+              )
+            ORDER BY c.closed_at ASC
+            LIMIT 50
+            """);
+        Set<String> scheduled = new java.util.HashSet<>();
+        for (Map<String, Object> row : candidates) {
+            Long credentialId = longValue(row.get("credential_id"));
+            Long orderId = longValue(row.get("exchange_order_id"));
+            String symbol = Objects.toString(row.get("symbol"), "");
+            if (credentialId == null || orderId == null || symbol.isBlank()) {
+                continue;
+            }
+            String captureKey = credentialId + ":" + symbol + ":" + orderId;
+            if (!scheduled.add(captureKey) || !activeStreamCloseCaptures.add(captureKey)) {
+                continue;
+            }
+            try {
+                Instant closeTime = LocalDateTime.parse(String.valueOf(row.get("close_time_utc")))
+                    .toInstant(ZoneOffset.UTC);
+                if (!withinCloseSnapshotWindow(closeTime)) {
+                    activeStreamCloseCaptures.remove(captureKey);
+                    continue;
+                }
+                QuantCredential account = credentialMapper.selectById(credentialId);
+                if (account == null || "PAPER".equalsIgnoreCase(account.getRunMode())) {
+                    activeStreamCloseCaptures.remove(captureKey);
+                    continue;
+                }
+                QuantNotification task = enqueuePendingCloseSnapshot(
+                    credentialId, symbol, orderId, null, closeTime, null, null, null, null);
+                if (task == null || task.getId() == null) {
+                    activeStreamCloseCaptures.remove(captureKey);
+                    log.error("近期已平仓周期缺少快照任务，补偿任务创建失败 credentialId={} symbol={} orderId={}",
+                        credentialId, symbol, orderId);
+                    continue;
+                }
+                ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
+                    account.getApiKey(), account.getSecretKey(), account.getSignatureType(), account.getRunMode());
+                log.warn("发现近期已平仓周期缺少账户快照，已创建补偿任务 credentialId={} symbol={} orderId={}",
+                    credentialId, symbol, orderId);
+                dispatchCloseSnapshotCapture(credentialId, exchangeCredential, symbol, orderId,
+                    null, closeTime, null, task, captureKey);
+            } catch (RuntimeException ex) {
+                activeStreamCloseCaptures.remove(captureKey);
+                log.warn("近期平仓账户快照补偿失败 credentialId={} symbol={} orderId={}",
+                    credentialId, symbol, orderId, ex);
+            }
+        }
     }
 
     private boolean isVerifiedCloseOrder(Long credentialId, ExchangeGateway.Credential credential,
