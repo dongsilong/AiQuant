@@ -19,8 +19,7 @@ import org.dromara.quant.strategy.mapper.QuantStrategyAccountMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyUserMapper;
-import org.dromara.system.domain.SysDictData;
-import org.dromara.system.mapper.SysDictDataMapper;
+import org.dromara.quant.strategy.mapper.QuantDictionaryMapper;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,7 +51,7 @@ public class QuantStrategyService {
     private final QuantCredentialMapper credentialMapper;
     private final QuantSymbolMapper quantSymbolMapper;
     private final QuantStrategyUserMapper userMapper;
-    private final SysDictDataMapper dictDataMapper;
+    private final QuantDictionaryMapper dictionaryMapper;
 
     private static boolean validRate(java.math.BigDecimal value, boolean strictLessThanOne) {
         return value != null && value.signum() > 0 && (!strictLessThanOne ? value.compareTo(java.math.BigDecimal.ONE) <= 0 : value.compareTo(java.math.BigDecimal.ONE) < 0);
@@ -74,9 +73,7 @@ public class QuantStrategyService {
         if (interval == null || interval.isBlank()) {
             return false;
         }
-        return dictDataMapper.selectCount(new LambdaQueryWrapper<SysDictData>()
-            .eq(SysDictData::getDictType, "quant_kline_period")
-            .eq(SysDictData::getDictValue, interval)) > 0;
+        return dictionaryMapper.countKlinePeriod(interval) > 0;
     }
 
     /**
