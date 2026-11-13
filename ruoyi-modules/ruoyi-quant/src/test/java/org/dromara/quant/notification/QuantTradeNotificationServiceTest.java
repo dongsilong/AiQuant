@@ -826,4 +826,50 @@ class QuantTradeNotificationServiceTest {
     }
 
 
+    @Test
+    void recentClosedCycleWithoutSnapshotCreatesImmediateRecoveryTask() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-recent-snapshot-recovery-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(JdbcTemplate.class);
+        var credentials = mock(org.dromara.quant.credential.mapper.QuantCredentialMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var credentialMapperField = QuantTradeNotificationService.class.getDeclaredField("credentialMapper");
+        credentialMapperField.setAccessible(true);
+        credentialMapperField.set(service, credentials);
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        credential.setApiKey("test-key");
+        credential.setSecretKey("test-secret");
+        credential.setSignatureType("HMAC");
+        credential.setRunMode("TESTNET");
+        when(credentials.selectById(10L)).thenReturn(credential);
+
+        String closeTime = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1)
+            .format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        when(jdbc.queryForList(anyString())).thenReturn(List.of(java.util.Map.of(
+            "credential_id", 10L, "symbol", "BTCUSDT", "exchange_order_id", 99L, "close_time_utc", closeTime)));
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(950L);
+            return 1;
+        });
+        when(mapper.claim(eq(950L), any(), any())).thenReturn(1);
+        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(gateway.queryAccountFresh(any())).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
+        service.recoverRecentCloseSnapshots();
+
+        verify(gateway, timeout(3000)).queryAccountFresh(any());
+        var task = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper).insert(task.capture());
+        assertEquals("FACT_PENDING", task.getValue().getChannel());
+        assertEquals("SNAPSHOT:BTCUSDT:99", task.getValue().getRecipient());
+        verify(jdbc).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+    }
+
 }
