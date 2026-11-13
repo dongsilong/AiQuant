@@ -29,7 +29,8 @@ public class TradeCycleQueryService {
     private final QuantCredentialMapper credentialMapper;
     private final TradeCycleMapper cycleMapper;
 
-    public TradeCyclePageVo page(PageQuery query, Long credentialId, String symbol, String from, String to) {
+    public TradeCyclePageVo page(PageQuery query, Long credentialId, String symbol, String from, String to,
+                                 String sortField, String sortOrder) {
         Long userId = LoginHelper.getUserId();
         if (userId == null) {
             throw new ServiceException("请先登录后查询交易记录");
@@ -55,6 +56,15 @@ public class TradeCycleQueryService {
         if (normalizedSymbol != null && !normalizedSymbol.matches("[A-Z0-9]{2,32}")) {
             throw new ServiceException("交易对格式无效");
         }
+        String normalizedSortField = sortField == null || sortField.isBlank() ? "openedAt" : sortField;
+        if (!"openedAt".equals(normalizedSortField) && !"closedAt".equals(normalizedSortField)) {
+            throw new ServiceException("不支持的交易记录排序字段");
+        }
+        String normalizedSortOrder = sortOrder == null || sortOrder.isBlank() ? "DESC" : sortOrder.toUpperCase(Locale.ROOT);
+        if (!"ASC".equals(normalizedSortOrder) && !"DESC".equals(normalizedSortOrder)) {
+            throw new ServiceException("交易记录排序方向无效");
+        }
+
         LocalDateTime start = boundary(from, false);
         LocalDateTime end = boundary(to, true);
         if (start != null && end != null && !start.isBefore(end)) {
@@ -68,7 +78,7 @@ public class TradeCycleQueryService {
         int inferredCount = cycleMapper.countInferredCycles(credentialIds, normalizedSymbol, start, end);
         long offset = (long) (pageNum - 1) * pageSize;
         List<Map<String, Object>> rows = total == 0 ? List.of()
-            : cycleMapper.selectCycles(credentialIds, normalizedSymbol, start, end, offset, pageSize);
+            : cycleMapper.selectCycles(credentialIds, normalizedSymbol, start, end, normalizedSortField, normalizedSortOrder, offset, pageSize);
         return new TradeCyclePageVo(rows == null ? List.of() : rows, total, incompleteCount, inferredCount);
     }
 
