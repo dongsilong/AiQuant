@@ -25,14 +25,6 @@ public class TradeDecisionLogRepository {
         this.mapper = Objects.requireNonNull(mapper);
     }
 
-    private static void add(StringBuilder sql, List<Object> args, String column, Object value, boolean like) {
-        if (value == null || value.toString().isBlank()) {
-            return;
-        }
-        sql.append(" AND ").append(column).append(like ? " LIKE ?" : "=?");
-        args.add(like ? "%" + value + "%" : value);
-    }
-
     /**
      * 生成执行事件的稳定去重标识。
      */
@@ -449,7 +441,7 @@ public class TradeDecisionLogRepository {
                 status = "FILLED";
             }
         }
-        mapper.updateAggregatedFill(quantity, avg, asTimestamp(totals.get("last_fill")), status, timestamp(e.eventTime()), parent, quantity);
+        mapper.updateAggregatedFill(quantity, avg, totals.get("last_fill") == null ? null : asTimestamp(totals.get("last_fill")), status, timestamp(e.eventTime()), parent, quantity);
     }
 
     private Map<String, Object> parameters(DecisionLogEvent e) {
