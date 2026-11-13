@@ -745,15 +745,18 @@ public class QuantTradeNotificationService {
      * 补偿 WebSocket 事件未触发或任务未落库的近期已平仓周期。
      * 只在两分钟即时采样窗口内处理，绝不使用当前余额回填历史成交。
      */
-    @Scheduled(fixedDelay = 15000L, initialDelay = 15000L)
-    public void recoverRecentCloseSnapshots() {
+    public void recoverRecentCloseSnapshots(Long credentialId, ExchangeGateway.Credential exchangeCredential) {
+        if (credentialId == null || exchangeCredential == null || "PAPER".equalsIgnoreCase(exchangeCredential.runMode())) {
+            return;
+        }
         List<Map<String, Object>> candidates = jdbcTemplate.queryForList("""
             SELECT c.credential_id, c.symbol, f.exchange_order_id,
                    DATE_FORMAT(f.trade_time, '%Y-%m-%dT%H:%i:%s.%f') AS close_time_utc
             FROM quant_trade_cycle c
             JOIN quant_trade_cycle_fill f
               ON f.cycle_id=c.id AND f.fill_role='CLOSE'
-            WHERE c.status='CLOSED'
+            WHERE c.credential_id=?
+              AND c.status='CLOSED'
               AND c.closed_at >= UTC_TIMESTAMP(3) - INTERVAL 2 MINUTE
               AND NOT EXISTS (
                   SELECT 1 FROM quant_trade_cycle_fill newer
@@ -774,7 +777,7 @@ public class QuantTradeNotificationService {
               )
             ORDER BY c.closed_at ASC
             LIMIT 50
-            """);
+            """, credentialId);
         Set<String> scheduled = new java.util.HashSet<>();
         for (Map<String, Object> row : candidates) {
             Long credentialId = longValue(row.get("credential_id"));
@@ -794,11 +797,6 @@ public class QuantTradeNotificationService {
                     activeStreamCloseCaptures.remove(captureKey);
                     continue;
                 }
-                QuantCredential account = credentialMapper.selectById(credentialId);
-                if (account == null || "PAPER".equalsIgnoreCase(account.getRunMode())) {
-                    activeStreamCloseCaptures.remove(captureKey);
-                    continue;
-                }
                 QuantNotification task = enqueuePendingCloseSnapshot(
                     credentialId, symbol, orderId, null, closeTime, null, null, null, null);
                 if (task == null || task.getId() == null) {
@@ -807,8 +805,6 @@ public class QuantTradeNotificationService {
                         credentialId, symbol, orderId);
                     continue;
                 }
-                ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
-                    account.getApiKey(), account.getSecretKey(), account.getSignatureType(), account.getRunMode());
                 log.warn("发现近期已平仓周期缺少账户快照，已创建补偿任务 credentialId={} symbol={} orderId={}",
                     credentialId, symbol, orderId);
                 dispatchCloseSnapshotCapture(credentialId, exchangeCredential, symbol, orderId,
