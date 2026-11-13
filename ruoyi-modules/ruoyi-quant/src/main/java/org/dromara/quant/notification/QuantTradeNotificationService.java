@@ -586,7 +586,7 @@ public class QuantTradeNotificationService {
                   AND (closing_equity IS NULL OR wallet_balance IS NULL)
                 """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
                 captureSource, closeTime, accountTransactionTime, exchangeTime, receivedTime,
-                restRequestTime, restResponseTime, credentialId, symbol, orderId);
+                restRequestTime, restResponseTime, candidateCredentialId, symbol, orderId);
             if (upgraded == 1) {
                 return true;
             }
@@ -619,7 +619,7 @@ public class QuantTradeNotificationService {
             return true;
         } catch (RuntimeException ex) {
             log.warn("平仓账户资金快照持久化失败 credentialId={} symbol={} orderId={}",
-                credentialId, symbol, orderId, ex);
+                candidateCredentialId, symbol, orderId, ex);
             return false;
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -780,13 +780,13 @@ public class QuantTradeNotificationService {
             """, credentialId);
         Set<String> scheduled = new java.util.HashSet<>();
         for (Map<String, Object> row : candidates) {
-            Long credentialId = longValue(row.get("credential_id"));
+            Long candidateCredentialId = longValue(row.get("credential_id"));
             Long orderId = longValue(row.get("exchange_order_id"));
             String symbol = Objects.toString(row.get("symbol"), "");
-            if (credentialId == null || orderId == null || symbol.isBlank()) {
+            if (candidateCredentialId == null || orderId == null || symbol.isBlank()) {
                 continue;
             }
-            String captureKey = credentialId + ":" + symbol + ":" + orderId;
+            String captureKey = candidateCredentialId + ":" + symbol + ":" + orderId;
             if (!scheduled.add(captureKey) || !activeStreamCloseCaptures.add(captureKey)) {
                 continue;
             }
@@ -798,7 +798,7 @@ public class QuantTradeNotificationService {
                     continue;
                 }
                 QuantNotification task = enqueuePendingCloseSnapshot(
-                    credentialId, symbol, orderId, null, closeTime, null, null, null, null);
+                    candidateCredentialId, symbol, orderId, null, closeTime, null, null, null, null);
                 if (task == null || task.getId() == null) {
                     activeStreamCloseCaptures.remove(captureKey);
                     log.error("近期已平仓周期缺少快照任务，补偿任务创建失败 credentialId={} symbol={} orderId={}",
@@ -807,7 +807,7 @@ public class QuantTradeNotificationService {
                 }
                 log.warn("发现近期已平仓周期缺少账户快照，已创建补偿任务 credentialId={} symbol={} orderId={}",
                     credentialId, symbol, orderId);
-                dispatchCloseSnapshotCapture(credentialId, exchangeCredential, symbol, orderId,
+                dispatchCloseSnapshotCapture(candidateCredentialId, exchangeCredential, symbol, orderId,
                     null, closeTime, null, task, captureKey);
             } catch (RuntimeException ex) {
                 activeStreamCloseCaptures.remove(captureKey);
