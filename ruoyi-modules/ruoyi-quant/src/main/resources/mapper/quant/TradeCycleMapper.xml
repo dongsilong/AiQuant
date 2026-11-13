@@ -263,7 +263,17 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
         <if test="symbol != null">AND c.symbol=#{symbol}</if>
         <if test="from != null">AND c.opened_at&gt;=#{from}</if>
         <if test="to != null">AND c.opened_at&lt;#{to}</if>
-        ORDER BY c.opened_at DESC,c.id DESC
+        ORDER BY
+        <choose>
+            <when test="sortField == 'closedAt'">
+                CASE WHEN COALESCE(last_close_fill.trade_time,c.closed_at) IS NULL THEN 1 ELSE 0 END ASC,
+                COALESCE(last_close_fill.trade_time,c.closed_at) ${sortOrder},
+                c.id DESC
+            </when>
+            <otherwise>
+                c.opened_at ${sortOrder},c.id DESC
+            </otherwise>
+        </choose>
         LIMIT #{offset},#{pageSize}
     </select>
 
