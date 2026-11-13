@@ -1635,7 +1635,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         JsonObject json = gson.fromJson(text, JsonObject.class);
         String type = json.has("e") ? json.get("e").getAsString() : "UNKNOWN";
         Instant time = json.has("E") ? Instant.ofEpochMilli(json.get("E").getAsLong()) : Instant.now();
-        return new UserDataEvent(type, time, text);
+        return new UserDataEvent(type, time, text, Instant.now());
     }
 
     /**
