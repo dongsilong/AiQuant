@@ -2486,7 +2486,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                         Thread.sleep(Math.max(0, properties.getProtection().getConfirmationWaitMillis()));
                     }
                     java.util.concurrent.Future<?> inFlightProtection = runtime.protectionTask;
-                    // forceHardStop 仅由 Binance -2021 明确拒绝触发：本轮保护请求已明确未建立，且已跳过后续保护单提交。
+                    // 紧急整仓退出不等待保护同步任务；进入本路径前已确认保护同步不在执行中，或由明确触发/拒绝事实接管。
                     if (inFlightProtection != null && !forceHardStop) {
                         try {
                             inFlightProtection.get(Math.max(1, properties.getProtection().getSyncWaitMillis()), java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -4327,7 +4327,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             if (runtime.hardStopUnprotectedSince == 0L) {
                 runtime.hardStopUnprotectedSince = System.currentTimeMillis();
             }
-            delay = Math.max(1L, 5_000L - (System.currentTimeMillis() - runtime.hardStopUnprotectedSince));
+            // 5 秒窗口到期后仍在核验时按 1 秒间隔重试，避免 UNKNOWN 状态形成毫秒级调度循环。
+            delay = Math.max(1_000L, 5_000L - (System.currentTimeMillis() - runtime.hardStopUnprotectedSince));
         }
         java.util.concurrent.CompletableFuture.delayedExecutor(delay, java.util.concurrent.TimeUnit.MILLISECONDS)
             .execute(() -> checkHardStopFailureExit(runtime, position.getId(), position.getProtectionCycleKey(), state));
