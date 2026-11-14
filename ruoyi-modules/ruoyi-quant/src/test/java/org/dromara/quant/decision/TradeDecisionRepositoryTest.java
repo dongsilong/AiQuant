@@ -294,7 +294,7 @@ class TradeDecisionRepositoryTest {
         org.mockito.Mockito.when(mapper.selectExecutionRecord(1L, "BTCUSDT", 99L, null)).thenReturn(List.of());
         org.mockito.Mockito.when(mapper.selectOrderForExecution(1L, "BTCUSDT", 99L)).thenReturn(List.of());
         org.mockito.Mockito.when(mapper.selectProtectionForOrder(1L, "BTCUSDT", 99L, null)).thenReturn(List.of());
-        org.mockito.Mockito.when(mapper.selectFillTotals(org.mockito.ArgumentMatchers.anyString())).thenReturn(null);
+        org.mockito.Mockito.when(mapper.selectFillTotals(org.mockito.ArgumentMatchers.anyString())).thenReturn(List.of());
 
         var repository = new TradeDecisionLogRepository(mapper);
         var fill = DecisionLogEvent.builder().recordType("FILL").credentialId(1L).symbol("BTCUSDT").orderId(99L)
