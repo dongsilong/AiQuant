@@ -287,6 +287,15 @@ class TradeDecisionRepositoryTest {
     }
 
     @Test
+    void aggregateQueryReturnsOneNullValuedRowWhenNoFillMatches() {
+        var rows = sqlSession.getMapper(TradeDecisionLogMapper.class).selectFillTotals("missing-parent");
+        assertEquals(1, rows.size());
+        assertNull(rows.getFirst().get("qty"));
+        assertNull(rows.getFirst().get("amount"));
+        assertNull(rows.getFirst().get("last_fill"));
+    }
+
+    @Test
     void emptyFillTotalsResultDoesNotAbortBatchAfterFillFactIsInserted() {
         TradeDecisionLogMapper mapper = org.mockito.Mockito.mock(TradeDecisionLogMapper.class);
         org.mockito.Mockito.when(mapper.selectByEventKey(org.mockito.ArgumentMatchers.anyString())).thenReturn(List.of());
