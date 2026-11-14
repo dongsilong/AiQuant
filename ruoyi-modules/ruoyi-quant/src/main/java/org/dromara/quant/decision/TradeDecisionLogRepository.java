@@ -457,13 +457,13 @@ public class TradeDecisionLogRepository {
                         continue;
                     }
                     BigDecimal fillQuantity = asDecimal(fill.get("quantity"));
-                BigDecimal fillPrice = asDecimal(fill.get("price"));
-                if (fillQuantity == null || fillPrice == null || fillQuantity.signum() <= 0 || fillPrice.signum() <= 0) {
-                    continue;
-                }
-                quantity = quantity.add(fillQuantity);
-                amount = amount.add(fillQuantity.multiply(fillPrice));
-                Object fillTime = fill.get("trade_time");
+                    BigDecimal fillPrice = asDecimal(fill.get("price"));
+                    if (fillQuantity == null || fillPrice == null || fillQuantity.signum() <= 0 || fillPrice.signum() <= 0) {
+                        continue;
+                    }
+                    quantity = quantity.add(fillQuantity);
+                    amount = amount.add(fillQuantity.multiply(fillPrice));
+                    Object fillTime = fill.get("trade_time");
                     if (fillTime != null && (lastFill == null || asTimestamp(fillTime).after(asTimestamp(lastFill)))) {
                         lastFill = fillTime;
                     }
