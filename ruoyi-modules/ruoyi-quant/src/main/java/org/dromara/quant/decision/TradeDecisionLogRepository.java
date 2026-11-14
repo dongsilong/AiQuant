@@ -435,17 +435,28 @@ public class TradeDecisionLogRepository {
         Object lastFill = null;
         if (rows != null && !rows.isEmpty()) {
             var totals = rows.getFirst();
-            quantity = asDecimal(totals.get("qty"));
-            amount = asDecimal(totals.get("amount"));
-            lastFill = totals.get("last_fill");
+            if (totals != null) {
+                quantity = asDecimal(totals.get("qty"));
+                amount = asDecimal(totals.get("amount"));
+                lastFill = totals.get("last_fill");
+            } else {
+                log.warn("成交事实聚合查询返回空行，尝试读取成交明细重算 parentKey={} credentialId={} symbol={} orderId={}",
+                    parent, e.credentialId(), e.symbol(), e.orderId());
+            }
         }
         if (quantity == null || amount == null || quantity.signum() <= 0) {
             // 聚合查询异常返回空结果时，直接读取已持久化成交明细重算，避免主记录永久缺失成交数据。
             var fills = mapper.selectFillRows(parent);
             quantity = BigDecimal.ZERO;
             amount = BigDecimal.ZERO;
-            for (var fill : fills) {
-                BigDecimal fillQuantity = asDecimal(fill.get("quantity"));
+            if (fills != null) {
+                for (var fill : fills) {
+                    if (fill == null) {
+                        log.warn("成交明细查询返回空行，忽略该行 parentKey={} credentialId={} symbol={} orderId={}",
+                            parent, e.credentialId(), e.symbol(), e.orderId());
+                        continue;
+                    }
+                    BigDecimal fillQuantity = asDecimal(fill.get("quantity"));
                 BigDecimal fillPrice = asDecimal(fill.get("price"));
                 if (fillQuantity == null || fillPrice == null || fillQuantity.signum() <= 0 || fillPrice.signum() <= 0) {
                     continue;
@@ -453,8 +464,9 @@ public class TradeDecisionLogRepository {
                 quantity = quantity.add(fillQuantity);
                 amount = amount.add(fillQuantity.multiply(fillPrice));
                 Object fillTime = fill.get("trade_time");
-                if (fillTime != null && (lastFill == null || asTimestamp(fillTime).after(asTimestamp(lastFill)))) {
-                    lastFill = fillTime;
+                    if (fillTime != null && (lastFill == null || asTimestamp(fillTime).after(asTimestamp(lastFill)))) {
+                        lastFill = fillTime;
+                    }
                 }
             }
             if (quantity.signum() <= 0 || amount.signum() <= 0) {
@@ -470,8 +482,11 @@ public class TradeDecisionLogRepository {
         // REST 成交列表没有订单终态时使用已存在的本地订单状态；不能凭一次成交推断全部成交。
         if (e.orderStatus() == null) {
             var orders = mapper.selectOrderStatus(e.credentialId(), e.symbol(), e.orderId());
-            if (!orders.isEmpty() && "FILLED".equals(text(orders.getFirst(), "status"))) {
-                status = "FILLED";
+            if (orders != null && !orders.isEmpty()) {
+                var order = orders.getFirst();
+                if (order != null && "FILLED".equals(text(order, "status"))) {
+                    status = "FILLED";
+                }
             }
         }
         mapper.updateAggregatedFill(quantity, avg, lastFill == null ? null : asTimestamp(lastFill), status, timestamp(e.eventTime()), parent, quantity);
