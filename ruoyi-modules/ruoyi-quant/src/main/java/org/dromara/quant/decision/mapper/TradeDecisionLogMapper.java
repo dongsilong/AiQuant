@@ -46,6 +46,8 @@ public interface TradeDecisionLogMapper {
 
     List<Map<String, Object>> selectFillTotals(@Param("parentKey") String parentKey);
 
+    List<Map<String, Object>> selectFillRows(@Param("parentKey") String parentKey);
+
     int insertEvaluations(@Param("rows") List<Map<String, Object>> rows);
 
     int insertLog(@Param("row") Map<String, Object> row);
