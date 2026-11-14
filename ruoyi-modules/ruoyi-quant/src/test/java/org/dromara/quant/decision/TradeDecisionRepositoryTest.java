@@ -326,6 +326,62 @@ class TradeDecisionRepositoryTest {
     }
 
     @Test
+    void nullAggregateRowFallsBackToFillRowsAndNullOrderStatusRowsAreIgnored() {
+        TradeDecisionLogMapper mapper = org.mockito.Mockito.mock(TradeDecisionLogMapper.class);
+        org.mockito.Mockito.when(mapper.selectByEventKey(org.mockito.ArgumentMatchers.anyString())).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectCredentialInfo(1L)).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectExecutionRecord(1L, "BTCUSDT", 99L, null)).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectOrderForExecution(1L, "BTCUSDT", 99L)).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectProtectionForOrder(1L, "BTCUSDT", 99L, null)).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectFillTotals(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(java.util.Collections.singletonList(null));
+        org.mockito.Mockito.when(mapper.selectFillRows(org.mockito.ArgumentMatchers.anyString())).thenReturn(List.of(
+            java.util.Map.of("quantity", BigDecimal.ONE, "price", BigDecimal.TEN,
+                "trade_time", java.sql.Timestamp.from(Instant.now()))));
+        org.mockito.Mockito.when(mapper.selectOrderStatus(1L, "BTCUSDT", 99L)).thenReturn(null);
+
+        var repository = new TradeDecisionLogRepository(mapper);
+        var fill = DecisionLogEvent.builder().recordType("FILL").credentialId(1L).symbol("BTCUSDT").orderId(99L)
+            .tradeId(12L).direction("BUY").quantity(BigDecimal.ONE).price(BigDecimal.TEN)
+            .eventTime(Instant.now()).tradeTime(Instant.now()).build();
+
+        assertDoesNotThrow(() -> repository.writeBatch(List.of(fill)));
+        org.mockito.Mockito.verify(mapper).updateAggregatedFill(
+            org.mockito.ArgumentMatchers.eq(BigDecimal.ONE),
+            org.mockito.ArgumentMatchers.eq(BigDecimal.TEN),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq("PARTIALLY_FILLED"),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.eq(BigDecimal.ONE));
+    }
+
+    @Test
+    void nullFillRowsResultDoesNotAbortBatch() {
+        TradeDecisionLogMapper mapper = org.mockito.Mockito.mock(TradeDecisionLogMapper.class);
+        org.mockito.Mockito.when(mapper.selectByEventKey(org.mockito.ArgumentMatchers.anyString())).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectCredentialInfo(1L)).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectExecutionRecord(1L, "BTCUSDT", 99L, null)).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectOrderForExecution(1L, "BTCUSDT", 99L)).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectProtectionForOrder(1L, "BTCUSDT", 99L, null)).thenReturn(List.of());
+        org.mockito.Mockito.when(mapper.selectFillTotals(org.mockito.ArgumentMatchers.anyString()))
+            .thenReturn(java.util.Collections.singletonList(null));
+        org.mockito.Mockito.when(mapper.selectFillRows(org.mockito.ArgumentMatchers.anyString())).thenReturn(null);
+
+        var repository = new TradeDecisionLogRepository(mapper);
+        var fill = DecisionLogEvent.builder().recordType("FILL").credentialId(1L).symbol("BTCUSDT").orderId(99L)
+            .tradeId(13L).direction("BUY").quantity(BigDecimal.ONE).price(BigDecimal.TEN)
+            .eventTime(Instant.now()).tradeTime(Instant.now()).build();
+
+        assertDoesNotThrow(() -> repository.writeBatch(List.of(fill)));
+        org.mockito.Mockito.verify(mapper, org.mockito.Mockito.never()).updateAggregatedFill(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void externalUnknownDoesNotGuessDirectionOrStrategy() {
         var fill =
             DecisionLogEvent.builder().recordType("FILL").credentialId(1L).symbol("BTCUSDT").orderId(99L).tradeId(1L).direction("SELL").quantity(BigDecimal.ONE).price(BigDecimal.TEN).eventTime(Instant.now()).tradeTime(Instant.now()).build();
