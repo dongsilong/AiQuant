@@ -422,6 +422,7 @@ public class StrategyRuntimeService {
         log.debug("策略运行时监督任务开始 runtimeEnabled={}", properties.getRuntime().isEnabled());
         if (!properties.getRuntime().isEnabled()) {
             stopAll();
+            recoverClosedProtectionCleanup();
             return;
         }
         List<QuantStrategyInstance> instances = instanceMapper.selectList(new LambdaQueryWrapper<QuantStrategyInstance>().eq(QuantStrategyInstance::getStatus, "RUNNING"));
