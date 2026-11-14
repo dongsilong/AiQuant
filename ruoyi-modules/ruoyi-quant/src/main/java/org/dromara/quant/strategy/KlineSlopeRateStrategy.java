@@ -42,7 +42,13 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
 
     /** 判断冻结快照是否启用统一保护规则；运行时不会直接信任客户端提供的版本标识。 */
     public static boolean unifiedProtection(Map<String, Object> params) {
-        return params != null && "2".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY)));
+        return params != null && ("2".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY)))
+            || "3".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY))));
+    }
+
+    /** V3 将交易所保护单触发价统一换算为 MARK_PRICE ROI 口径；V2 历史周期继续使用 CONTRACT_PRICE。 */
+    public static boolean markPriceProtection(Map<String, Object> params) {
+        return params != null && "3".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY)));
     }
 
     /** 新周期硬止损比例与策略参数共用校验、默认值及历史别名。 */
@@ -131,11 +137,32 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
     }
 
     /**
-     * 将目标杠杆回报率换算为价格触发点，用于构造 Binance 条件单。
+     * 将目标 CONTRACT_PRICE 杠杆回报率换算为价格触发点。
      */
     public static BigDecimal priceForReturn(BigDecimal entryPrice, String direction, BigDecimal returnRate, int leverage) {
         BigDecimal priceRate = returnRate.divide(BigDecimal.valueOf(Math.max(1, leverage)), 12, RoundingMode.HALF_UP);
         return "SHORT".equalsIgnoreCase(direction) ? entryPrice.multiply(BigDecimal.ONE.subtract(priceRate)) : entryPrice.multiply(BigDecimal.ONE.add(priceRate));
+    }
+
+    /**
+     * 按 StrategyPositionReturnRate 的 MARK_PRICE ROI 口径反算条件单触发价。
+     * ROI = L * (P-E) / P（空头方向相反），returnRate 使用小数比例。
+     */
+    public static BigDecimal priceForMarkReturn(BigDecimal entryPrice, String direction, BigDecimal returnRate, int leverage) {
+        if (entryPrice == null || entryPrice.signum() <= 0 || returnRate == null) {
+            throw new IllegalArgumentException("MARK_PRICE 回报率换算缺少有效开仓价或目标回报率");
+        }
+        BigDecimal priceRate = returnRate.divide(BigDecimal.valueOf(Math.max(1, leverage)), 16, RoundingMode.HALF_UP);
+        BigDecimal denominator = "SHORT".equalsIgnoreCase(direction) ? BigDecimal.ONE.add(priceRate) : BigDecimal.ONE.subtract(priceRate);
+        if (denominator.signum() <= 0) {
+            throw new IllegalArgumentException("MARK_PRICE 回报率目标超出可换算价格范围");
+        }
+        return entryPrice.divide(denominator, 16, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal protectionPrice(BigDecimal entryPrice, String direction, BigDecimal returnRate, int leverage, Map<String, Object> params) {
+        return markPriceProtection(params) ? priceForMarkReturn(entryPrice, direction, returnRate, leverage)
+            : priceForReturn(entryPrice, direction, returnRate, leverage);
     }
 
     /**
@@ -405,20 +432,20 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         int leverage = leverage(context);
         List<ProtectionSignal> result = new ArrayList<>();
         if (!unifiedProtection(params)) {
-            result.add(new ProtectionSignal(PROTECTION_LOCAL_STOP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
-                context.direction(), localStop.negate(), leverage), "Binance 本地止损镜像"));
+            result.add(new ProtectionSignal(PROTECTION_LOCAL_STOP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, protectionPrice(context.entryPrice(),
+                context.direction(), localStop.negate(), leverage, params), "Binance 本地止损镜像"));
         }
 
         if (!context.firstTakeProfitTriggered()) {
-            result.add(new ProtectionSignal(PROTECTION_FIRST_TP, "TAKE_PROFIT_MARKET", firstClose, ProtectionSignal.QuantityBase.INITIAL, priceForReturn(context.entryPrice(),
-                context.direction(), firstProfit, leverage), "Binance 首次分批止盈"));
+            result.add(new ProtectionSignal(PROTECTION_FIRST_TP, "TAKE_PROFIT_MARKET", firstClose, ProtectionSignal.QuantityBase.INITIAL, protectionPrice(context.entryPrice(),
+                context.direction(), firstProfit, leverage, params), "Binance 首次分批止盈"));
         }
         int stepIndex = reachedStep(context, params);
         if (stepIndex > 0) {
             BigDecimal maxReturn = maxFavorableReturn(context);
             BigDecimal locked = step.multiply(BigDecimal.valueOf(Math.max(0, stepIndex - 1L)));
-            result.add(new ProtectionSignal(PROTECTION_STEP_TP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
-                context.direction(), locked, leverage), "Binance 阶梯追踪止盈，第" + stepIndex + "阶，最高回报率=" + percent(maxReturn) + "，锁定回报率=" + percent(locked), stepIndex));
+            result.add(new ProtectionSignal(PROTECTION_STEP_TP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, protectionPrice(context.entryPrice(),
+                context.direction(), locked, leverage, params), "Binance 阶梯追踪止盈，第" + stepIndex + "阶，最高回报率=" + percent(maxReturn) + "，锁定回报率=" + percent(locked), stepIndex));
         }
         result.sort(java.util.Comparator.comparingInt(signal -> switch (signal.type()) {
             case PROTECTION_LOCAL_STOP -> 0;

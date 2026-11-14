@@ -64,6 +64,21 @@ public class StrategyFillJournalService {
     }
 
     /**
+     * Enrich and retry only a previously captured fill. This avoids creating raw-journal
+     * rows for every complete TESTNET fill while allowing a later complete replay to
+     * resolve an earlier incomplete observation.
+     */
+    public String attributeIfPresent(ExchangeGateway.TradeSnapshot fill, QuantOrder order, Long credentialId) {
+        if (fill == null || fill.symbol() == null || fill.symbol().isBlank() || fill.tradeId() == null || fill.tradeId() <= 0
+            || credentialId == null || credentialId <= 0) {
+            throw new IllegalArgumentException("Valid exchange fill identity required");
+        }
+        StrategyFillJournalRecord existing = journal.selectByKey(
+            credentialId, fill.symbol().trim().toUpperCase(Locale.ROOT), fill.tradeId());
+        return existing == null ? null : attribute(fill, order, credentialId);
+    }
+
+    /**
      * Persist a cross-ledger conflict without rewriting the first exchange fact.
      * Callers must not throw afterward if this quarantine is to commit.
      */

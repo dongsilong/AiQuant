@@ -75,6 +75,10 @@ public class QuantProtectionOrder {
      */
     private String orderType;
     /**
+     * 条件单触发价格类型；历史记录为空时按 CONTRACT_PRICE 兼容恢复。
+     */
+    private String workingType;
+    /**
      * 数量。
      */
     private BigDecimal quantity;

@@ -2333,16 +2333,19 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
-    void hardStopFailureDoesNotSkipOtherProtectionTargets() throws Exception {
+    void hardStopFailureSkipsNonUrgentProtectionTargetsAndKeepsLocalFallback() throws Exception {
         Fixture f = fixture();
         try {
             ((QuantPosition) ReflectionTestUtils.getField(f.runtime, "position")).setMarkPrice(new BigDecimal("100"));
             doThrow(new IllegalStateException("hard stop rejected")).when(f.protection).ensureMarginHardStop(any(), any(), any(), anyBoolean());
             ReflectionTestUtils.invokeMethod(f.service, "ensureHardStop", f.runtime);
             ((java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "protectionTask")).get(2, java.util.concurrent.TimeUnit.SECONDS);
-            verify(f.protection).syncStrategyProtections(any(), any(), any(), anyList(), any(), any(), eq(true));
+            verify(f.protection, never()).syncStrategyProtections(any(), any(), any(), anyList(), any(), any(), anyBoolean());
             assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "hardStopConfirmed"));
             assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "protectionDegraded"));
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            assertTrue(state.getRecoveryRequired(), "交易所硬止损未确认时必须保持恢复阻断");
+            assertFalse(state.getUnsafeRecovery(), "保护单失败不能阻止本地安全减仓");
         } finally {
             f.service.destroy();
         }

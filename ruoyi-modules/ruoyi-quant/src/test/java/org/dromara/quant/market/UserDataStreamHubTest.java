@@ -149,10 +149,11 @@ class UserDataStreamHubTest {
             });
             var fill = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.now(), "{\"e\":\"ORDER_TRADE_UPDATE\",\"o\":{\"X\":\"FILLED\"}}");
             receiver.get().accept(fill);
-            verify(positionCache).onEvent(72L, fill);
-            verify(balanceCache).onEvent(72L, fill);
-            verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, fill);
-            verify(preparation).onEvent(72L, fill);
+            var eventOrder = inOrder(tradeNotifications, positionCache, balanceCache, preparation);
+            eventOrder.verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, fill);
+            eventOrder.verify(positionCache).onEvent(72L, fill);
+            eventOrder.verify(balanceCache).onEvent(72L, fill);
+            eventOrder.verify(preparation).onEvent(72L, fill);
             var accountUpdate = new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.now(),
                 "{\"e\":\"ACCOUNT_UPDATE\",\"a\":{\"m\":\"ORDER\"}}");
             receiver.get().accept(accountUpdate);

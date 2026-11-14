@@ -195,6 +195,25 @@ public class ProtectionOrderService {
                 log.warn("策略启动前保护创建票据仍未恢复，保持启动阻断 accountId={} symbol={} clientAlgoId={}", active.credentialId(), active.symbol(), active.clientOrderId());
             }
             return recovered;
+        } catch (ProtectionExecutionPendingException pending) {
+            // Algo FINISHED alone is not enough. Re-query the exact Algo and child order,
+            // persist only a fully-filled child fact, then release the matching dispatch ticket.
+            try {
+                ExchangeGateway.Credential credential = executionApplicationService.toCredential(
+                    executionApplicationService.requireCredential(active.credentialId()));
+                Long terminalAlgoId = persistVerifiedTriggeredProtection(active.credentialId(), local, credential);
+                boolean recovered = requireLiveDispatcher().recoveredFromExchange(active.credentialId(), active.symbol(),
+                    active.dispatchKey(), active.clientOrderId(), terminalAlgoId);
+                if (!recovered) {
+                    log.warn("保护单已触发并核验，但派发票据未能恢复，继续保持调度阻断 accountId={} symbol={} dispatchKey={} clientAlgoId={} algoId={}",
+                        active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), terminalAlgoId);
+                }
+                return recovered;
+            } catch (RuntimeException ex) {
+                log.warn("保护单触发后的实际子订单尚未完成严格核验，继续保持调度阻断 accountId={} symbol={} dispatchKey={} clientAlgoId={} errorType={}",
+                    active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), ex.getClass().getSimpleName());
+                return false;
+            }
         } catch (RuntimeException ex) {
             log.warn("策略启动前保护创建事实核实失败，保持启动阻断 accountId={} symbol={} clientAlgoId={} errorType={}", active.credentialId(), active.symbol(),
                 active.clientOrderId(), ex.getClass().getSimpleName());
@@ -336,14 +355,7 @@ public class ProtectionOrderService {
     private boolean isExactUnfilledWorkingProtection(QuantProtectionOrder local, ExchangeGateway.ProtectionOrderSnapshot actual) {
         return actual != null && Set.of("NEW", "WORKING", "ACCEPTED").contains(actual.status())
             && actual.executedQuantity() != null && actual.executedQuantity().signum() == 0
-            && local.getClientOrderId() != null && local.getClientOrderId().equals(actual.clientAlgoId())
-            && actual.algoId() != null && actual.algoId() > 0
-            && (local.getExchangeOrderId() == null || local.getExchangeOrderId().equals(actual.algoId()))
-            && local.getSymbol() != null && local.getSymbol().equalsIgnoreCase(actual.symbol())
-            && local.getPositionSide() != null
-            && sameTarget(local, actual.type(), actual.quantity(), actual.triggerPrice())
-            && ("SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" : "SELL").equalsIgnoreCase(actual.side())
-            && ("BOTH".equalsIgnoreCase(actual.positionSide()) || local.getPositionSide().equalsIgnoreCase(actual.positionSide()));
+            && matchesProtectionIdentity(local, actual);
     }
 
     /**
@@ -390,7 +402,7 @@ public class ProtectionOrderService {
         if (!validPosition(position)) {
             return null;
         }
-        if (live && !Integer.valueOf(2).equals(position.getProtectionPolicyVersion())) {
+        if (live && !isUnifiedProtection(position)) {
             BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), true);
             BigDecimal price = QuantityNormalizer.protectionPrice(hardStopPrice(position, marginLossRatio), rule(credentialId, position.getSymbol()), position.getPositionSide(), "STOP_MARKET");
             // 已冻结的硬止损不能因均价变化而被更弱的替代单覆盖。
@@ -452,6 +464,14 @@ public class ProtectionOrderService {
             normalizeProtectionPrice(credentialId, position, hardStopPrice(position, marginLossRatio), "STOP_MARKET", live), live);
     }
 
+    private static boolean isUnifiedProtection(QuantPosition position) {
+        return position.getProtectionPolicyVersion() != null && position.getProtectionPolicyVersion() >= 2;
+    }
+
+    private static String protectionWorkingType(QuantPosition position) {
+        return Integer.valueOf(3).equals(position.getProtectionPolicyVersion()) ? "MARK_PRICE" : "CONTRACT_PRICE";
+    }
+
     /**
      * 将保证金损失率换算为符合方向的止损触发价格。
      */
@@ -459,12 +479,15 @@ public class ProtectionOrderService {
         if (marginLossRatio == null || marginLossRatio.signum() <= 0 || marginLossRatio.compareTo(BigDecimal.ONE) >= 0) {
             throw new IllegalArgumentException("硬止损回报率必须 > 0 且 < 1");
         }
-        if (Integer.valueOf(2).equals(position.getProtectionPolicyVersion()) && position.getProtectionStopLossPrice() != null
+        if (isUnifiedProtection(position) && position.getProtectionStopLossPrice() != null
             && position.getProtectionStopLossPrice().signum() > 0) {
             return position.getProtectionStopLossPrice();
         }
-        BigDecimal price = org.dromara.quant.strategy.KlineSlopeRateStrategy.priceForReturn(position.getEntryPrice(), position.getPositionSide(), marginLossRatio.negate(),
-            position.getLeverage() == null ? 1 : position.getLeverage());
+        BigDecimal price = Integer.valueOf(3).equals(position.getProtectionPolicyVersion())
+            ? org.dromara.quant.strategy.KlineSlopeRateStrategy.priceForMarkReturn(position.getEntryPrice(), position.getPositionSide(), marginLossRatio.negate(),
+                position.getLeverage() == null ? 1 : position.getLeverage())
+            : org.dromara.quant.strategy.KlineSlopeRateStrategy.priceForReturn(position.getEntryPrice(), position.getPositionSide(), marginLossRatio.negate(),
+                position.getLeverage() == null ? 1 : position.getLeverage());
         if (price.signum() <= 0) {
             throw new IllegalArgumentException("计算出的硬止损价格无效");
         }
@@ -504,7 +527,7 @@ public class ProtectionOrderService {
             if (signal == null || signal.type() == null || !STRATEGY_PROTECTION_TYPES.contains(signal.type())) {
                 continue;
             }
-            if (Integer.valueOf(2).equals(position.getProtectionPolicyVersion()) && !Set.of("FIRST_TP", "STEP_TP").contains(signal.type())) {
+            if (isUnifiedProtection(position) && !Set.of("FIRST_TP", "STEP_TP").contains(signal.type())) {
                 continue;
             }
             desiredTypes.add(signal.type());
@@ -599,7 +622,7 @@ public class ProtectionOrderService {
     private void pruneCoveredStops(Long credentialId, QuantPosition position) {
         BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), true);
         for (var old : scopedStops(credentialId, position)) {
-            if ("STEP_TP".equals(old.getProtectionType()) || Integer.valueOf(2).equals(position.getProtectionPolicyVersion()) && "HARD_STOP".equals(old.getProtectionType()) || !"STOP_MARKET".equalsIgnoreCase(old.getOrderType()) || old.getStopPrice() == null) {
+            if ("STEP_TP".equals(old.getProtectionType()) || isUnifiedProtection(position) && "HARD_STOP".equals(old.getProtectionType()) || !"STOP_MARKET".equalsIgnoreCase(old.getOrderType()) || old.getStopPrice() == null) {
                 continue;
             }
             var covering = confirmedCover(credentialId, position, old.getProtectionType(), quantity, old.getStopPrice());
@@ -625,7 +648,7 @@ public class ProtectionOrderService {
             if (firstRemaining != null && firstRemaining.signum() <= 0) {
                 return;
             }
-            if (live && Integer.valueOf(2).equals(position.getProtectionPolicyVersion())) {
+            if (live && isUnifiedProtection(position)) {
                 if (firstLocalExecuted == null || firstLocalExecuted.signum() < 0) {
                     throw new IllegalStateException("首平缺少可信本地累计成交量，禁止创建新目标");
                 }
@@ -745,6 +768,7 @@ public class ProtectionOrderService {
             entity.setClientOrderId(prefix + UUID.randomUUID().toString().replace("-", "").substring(0, 28));
             entity.setProtectionType(protectionType);
             entity.setOrderType(normalizedOrderType);
+            entity.setWorkingType(protectionWorkingType(position));
             entity.setQuantity(quantity);
             entity.setStopPrice(stopPrice);
             entity.setStepIndex(stepIndex);
@@ -776,7 +800,8 @@ public class ProtectionOrderService {
         try {
             checkTargetLeaseBeforeDispatch();
             ExchangeGateway.ProtectionOrderResult result = submitProtected(credentialId, entity, new ExchangeGateway.ProtectionOrderRequest(credential, position.getSymbol(),
-                "SHORT".equalsIgnoreCase(position.getPositionSide()) ? "BUY" : "SELL", exchangePositionSide, entity.getOrderType(), quantity, stopPrice, clientAlgoId, live));
+                "SHORT".equalsIgnoreCase(position.getPositionSide()) ? "BUY" : "SELL", exchangePositionSide, entity.getOrderType(), quantity, stopPrice, clientAlgoId, live,
+                entity.getWorkingType() == null ? "CONTRACT_PRICE" : entity.getWorkingType()));
             entity.setExchangeOrderId(result.orderId());
             if (!live) {
                 entity.setStatus("PAPER_ACCEPTED");
@@ -1101,6 +1126,31 @@ public class ProtectionOrderService {
     /**
      * Persist exact exchange cancellation/trigger result before freeing any dispatch guard.
      */
+    private static boolean matchesProtectionIdentity(QuantProtectionOrder local, ExchangeGateway.ProtectionOrderSnapshot actual) {
+        if (local == null || actual == null || local.getPositionSide() == null) {
+            return false;
+        }
+        String expectedSide;
+        if ("SHORT".equalsIgnoreCase(local.getPositionSide())) {
+            expectedSide = "BUY";
+        } else if ("LONG".equalsIgnoreCase(local.getPositionSide())) {
+            expectedSide = "SELL";
+        } else {
+            return false;
+        }
+        return local.getClientOrderId() != null && local.getClientOrderId().equals(actual.clientAlgoId())
+            && local.getSymbol() != null && local.getSymbol().equalsIgnoreCase(actual.symbol())
+            && actual.algoId() != null && actual.algoId() > 0
+            && (local.getExchangeOrderId() == null || local.getExchangeOrderId().equals(actual.algoId()))
+            && local.getOrderType() != null && local.getOrderType().equalsIgnoreCase(actual.type())
+            && local.getQuantity() != null && actual.quantity() != null && local.getQuantity().compareTo(actual.quantity()) == 0
+            && local.getStopPrice() != null && actual.triggerPrice() != null && local.getStopPrice().compareTo(actual.triggerPrice()) == 0
+            && expectedSide.equalsIgnoreCase(actual.side())
+            && ("BOTH".equalsIgnoreCase(actual.positionSide()) || local.getPositionSide().equalsIgnoreCase(actual.positionSide()))
+            && Boolean.TRUE.equals(actual.reduceOnly())
+            && Boolean.FALSE.equals(actual.closePosition());
+    }
+
     private Long persistVerifiedCancelledProtection(Long credentialId, QuantProtectionOrder local, ExchangeGateway.Credential credential, Set<String> allowedStatuses,
                                                     boolean requireUnfilled) {
         var actual = readProtectionSnapshot(credential, local);
@@ -1112,14 +1162,11 @@ public class ProtectionOrderService {
         boolean statusAllowed = allowedStatuses.contains(actual.status());
         boolean executionKnown = actual.executedQuantity() != null;
         boolean unfilledWhenRequired = !requireUnfilled || executionKnown && actual.executedQuantity().signum() == 0;
-        boolean exchangeIdKnown = actual.algoId() != null && actual.algoId() > 0;
-        boolean clientIdMatches = local.getClientOrderId().equals(actual.clientAlgoId());
-        boolean storedIdMatches = local.getExchangeOrderId() == null || local.getExchangeOrderId().equals(actual.algoId());
-        if (!statusAllowed || !executionKnown || !unfilledWhenRequired || !exchangeIdKnown || !clientIdMatches || !storedIdMatches) {
+        boolean identityMatches = matchesProtectionIdentity(local, actual);
+        if (!statusAllowed || !executionKnown || !unfilledWhenRequired || !identityMatches) {
             log.warn("保护单终态记录不满足释放条件，保持派发阻断: accountId={}, symbol={}, clientAlgoId={}, runMode={}, exchangeStatus={}, executedQuantity={}, " +
-                "statusAllowed={}, executionKnown={}, unfilledWhenRequired={}, exchangeIdKnown={}, clientIdMatches={}, storedIdMatches={}", credentialId, local.getSymbol(),
-                local.getClientOrderId(), credential.runMode(), actual.status(), actual.executedQuantity(), statusAllowed, executionKnown, unfilledWhenRequired, exchangeIdKnown,
-                clientIdMatches, storedIdMatches);
+                "statusAllowed={}, executionKnown={}, unfilledWhenRequired={}, identityMatches={}", credentialId, local.getSymbol(),
+                local.getClientOrderId(), credential.runMode(), actual.status(), actual.executedQuantity(), statusAllowed, executionKnown, unfilledWhenRequired, identityMatches);
             return null;
         }
         if (decisionLogs != null) {
@@ -1209,7 +1256,7 @@ public class ProtectionOrderService {
                     checkTargetLeaseBeforeDispatch();
                     result = submitProtected(credentialId, local, new ExchangeGateway.ProtectionOrderRequest(credential, local.getSymbol(),
                         "SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" : "SELL", exchangeSide, local.getOrderType(), local.getQuantity(), local.getStopPrice(),
-                        local.getClientOrderId(), true));
+                        local.getClientOrderId(), true, local.getWorkingType() == null ? "CONTRACT_PRICE" : local.getWorkingType()));
                 } catch (RuntimeException ex) {
                     if (ex instanceof ProtectionIntentChangedException) {
                         throw ex;

@@ -22,7 +22,11 @@ import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.dromara.quant.notification.QuantTradeNotificationService;
 import org.dromara.quant.reconcile.TradingReconciliationService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -31,6 +35,8 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -61,7 +67,12 @@ public class QuantAccountQueryController {
      */
     private final QuantAccountSnapshotMapper accountSnapshotMapper;
     private final QuantOrderMapper orderMapper;
-    private final TradingReconciliationService tradingReconciliationService;
+    private final TradingReconciliationService reconciliationService;
+    private final QuantTradeNotificationService notificationService;
+    @Autowired
+    @Qualifier("quantTradingSyncExecutor")
+    private TaskExecutor tradingSyncExecutor;
+    private final Set<Long> activeManualSyncCredentials = ConcurrentHashMap.newKeySet();
 
     /**
      * 查询指定凭证的账户资金快照。
@@ -175,8 +186,10 @@ public class QuantAccountQueryController {
     /** 同步交易所订单和成交事实；保持订单管理原有权限入口。 */
     @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
     @PostMapping("/order/{credentialId}/sync")
-    public R<Integer> syncOrders(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
-        return R.ok(tradingReconciliationService.syncTradingData(credentialEntity(credentialId), symbol).orderCount());
+    public R<String> syncOrders(
+        @PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
+        submitManualTradingSync(credentialId, symbol);
+        return R.ok("同步任务已提交");
     }
 
     /**
@@ -260,8 +273,44 @@ public class QuantAccountQueryController {
      */
     @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
     @PostMapping("/trade/{credentialId}/sync")
-    public R<Integer> syncTrades(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
-        return R.ok(tradingReconciliationService.syncTradingData(credentialEntity(credentialId), symbol).tradeCount());
+    public R<String> syncTrades(
+        @PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
+        submitManualTradingSync(credentialId, symbol);
+        return R.ok("同步任务已提交");
+    }
+
+    private void submitManualTradingSync(Long credentialId, String symbol) {
+        QuantCredential credential = credentialEntity(credentialId);
+        if (!activeManualSyncCredentials.add(credentialId)) {
+            throw new ServiceException("该交易账户已有订单与成交同步正在执行，请勿重复提交");
+        }
+        try {
+            tradingSyncExecutor.execute(() -> {
+                try {
+                    TradingReconciliationService.TradingDataSyncResult result =
+                        reconciliationService.syncTradingData(credential, symbol);
+                    try {
+                        notificationService.notifyOrderTradeSyncResult(credential, symbol,
+                            result.symbolCount(), result.orderCount(), result.tradeCount());
+                    } catch (RuntimeException notificationFailure) {
+                        log.error("订单与成交同步成功，但成功通知投递失败 credentialId={}", credentialId, notificationFailure);
+                    }
+                } catch (RuntimeException failure) {
+                    log.error("后台订单与成交历史同步失败 credentialId={}", credentialId, failure);
+                    try {
+                        notificationService.notifyOrderTradeSyncFailure(credential, symbol, failure);
+                    } catch (RuntimeException notificationFailure) {
+                        log.error("订单与成交同步失败通知投递异常 credentialId={}", credentialId, notificationFailure);
+                    }
+                } finally {
+                    activeManualSyncCredentials.remove(credentialId);
+                }
+            });
+        } catch (RuntimeException rejected) {
+            activeManualSyncCredentials.remove(credentialId);
+            log.error("提交订单与成交后台同步任务失败 credentialId={}", credentialId, rejected);
+            throw new ServiceException("后台同步任务提交失败，请稍后重试");
+        }
     }
 
     static LocalDateTime tradeDateBoundary(String date, boolean nextDay) {

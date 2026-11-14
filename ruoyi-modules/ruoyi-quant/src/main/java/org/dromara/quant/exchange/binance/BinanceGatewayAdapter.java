@@ -1136,7 +1136,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         long from = range.from().toEpochMilli();
         long to = range.to().toEpochMilli();
         TradeHistoryResult result = collectCompleteTradeHistory(from, to, (startTime, endTime) ->
-            signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
+            signedRead(credential, RestRequestScheduler.Kind.BACKGROUND, client -> {
                 try {
                     ApiResponse<AccountTradeListResponse> response = client.accountTradeList(
                         symbol.trim(), null, startTime, endTime, null, (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS);
@@ -1220,7 +1220,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             || range == null || range.from() == null || range.to() == null || range.from().isAfter(range.to())) {
             throw new IllegalArgumentException("按订单查询成交必须指定交易对、订单 ID 和有效时间范围");
         }
-        return signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
+        return signedRead(credential, RestRequestScheduler.Kind.BACKGROUND, client -> {
             ApiResponse<AccountTradeListResponse> response = client.accountTradeList(
                 symbol.trim(), orderId, range.from().toEpochMilli(), range.to().toEpochMilli(), null,
                 limit == null ? 1000L : limit, RECV_WINDOW_MILLIS);
@@ -1526,8 +1526,13 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             return new ProtectionOrderResult(null, request.clientOrderId(), "PAPER_ACCEPTED");
         }
         requireCredential(request.credential());
+        WorkingType workingType = switch (request.workingType() == null ? "CONTRACT_PRICE" : request.workingType().toUpperCase()) {
+            case "MARK_PRICE" -> WorkingType.MARK_PRICE;
+            case "CONTRACT_PRICE" -> WorkingType.CONTRACT_PRICE;
+            default -> throw new IllegalArgumentException("不支持的保护单触发价格类型: " + request.workingType());
+        };
         NewAlgoOrderRequest algo =
-            new NewAlgoOrderRequest().algoType(AlgoType.CONDITIONAL).symbol(request.symbol()).side(Side.fromValue(request.side().toUpperCase())).type(OrderType.fromValue((request.orderType() == null ? "STOP_MARKET" : request.orderType()).toUpperCase())).quantity(request.quantity().doubleValue()).triggerPrice(request.stopPrice().doubleValue()).workingType(WorkingType.CONTRACT_PRICE).clientAlgoId(request.clientOrderId());
+            new NewAlgoOrderRequest().algoType(AlgoType.CONDITIONAL).symbol(request.symbol()).side(Side.fromValue(request.side().toUpperCase())).type(OrderType.fromValue((request.orderType() == null ? "STOP_MARKET" : request.orderType()).toUpperCase())).quantity(request.quantity().doubleValue()).triggerPrice(request.stopPrice().doubleValue()).workingType(workingType).clientAlgoId(request.clientOrderId());
         if (request.positionSide() != null && !request.positionSide().isBlank()) {
             algo.positionSide(request.positionSide().toUpperCase());
         }
@@ -1630,7 +1635,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         JsonObject json = gson.fromJson(text, JsonObject.class);
         String type = json.has("e") ? json.get("e").getAsString() : "UNKNOWN";
         Instant time = json.has("E") ? Instant.ofEpochMilli(json.get("E").getAsLong()) : Instant.now();
-        return new UserDataEvent(type, time, text);
+        return new UserDataEvent(type, time, text, Instant.now());
     }
 
     /**

@@ -1,8 +1,12 @@
 package org.dromara.quant.execution;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaCheckRole;
 import lombok.RequiredArgsConstructor;
+import org.dromara.common.core.constant.SystemConstants;
 import org.dromara.common.core.domain.R;
+import org.dromara.common.log.annotation.Log;
+import org.dromara.common.log.enums.BusinessType;
 import org.dromara.quant.execution.mapper.LiveOrderDispatchMapper;
 import org.dromara.quant.protection.ProtectionOrderService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,8 +19,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Operators can inspect quarantined outbound orders without unsafe manual unlock.
- * This endpoint deliberately has no write action. All exchange/snowflake IDs are
+ * The super administrator can inspect quarantined outbound orders and request
+ * fact-verified protection recovery. No force-unlock action exists. All IDs are
  * represented as strings to avoid JavaScript IEEE-754 precision loss.
  */
 @RequiredArgsConstructor
@@ -35,6 +39,7 @@ public class LiveDispatchInspectionController {
      * 查询尚未完成确认的 LIVE 订单派发摘要。
      */
     @GetMapping("/unresolved")
+    @SaCheckRole(SystemConstants.SUPER_ADMIN_ROLE_KEY)
     @SaCheckPermission("quant:dispatch:view")
     public R<List<BlockedDispatch>> unresolved() {
         return R.ok(mapper.unresolvedDispatches().stream().map(row -> new BlockedDispatch(value(row, "credential_id"), value(row, "symbol"), value(row, "dispatch_key"),
@@ -47,7 +52,9 @@ public class LiveDispatchInspectionController {
      * 只允许 PROTECT_CREATE / PROTECT_CANCEL；核验失败时不释放派发门禁。
      */
     @PostMapping("/recheck")
+    @SaCheckRole(SystemConstants.SUPER_ADMIN_ROLE_KEY)
     @SaCheckPermission("quant:dispatch:recover")
+    @Log(title = "LIVE 外发订单人工核查", businessType = BusinessType.UPDATE)
     public R<Boolean> recheck(@RequestBody RecheckRequest body) {
         long credentialId = parseId(body.credentialId());
         boolean recovered = protectionOrders.recheckProtectionDispatch(

@@ -31,17 +31,22 @@ class OrderLedgerMonotonicTest {
               side VARCHAR(8), order_type VARCHAR(24), status VARCHAR(32),
               position_side VARCHAR(8), price DECIMAL(30,12),
               original_quantity DECIMAL(30,12), executed_quantity DECIMAL(30,12),
-              reduce_only BOOLEAN, leverage_snapshot INT, price_tick_size_snapshot DECIMAL(32,16),
+              reduce_only BOOLEAN, reduce_only_source VARCHAR(24), close_position BOOLEAN,
+              average_price DECIMAL(30,12), leverage_snapshot INT, price_tick_size_snapshot DECIMAL(32,16),
               post_fill_wallet_balance DECIMAL(32,16), post_fill_balance_at TIMESTAMP,
-              post_fill_balance_requested_at TIMESTAMP, updated_at TIMESTAMP
+              post_fill_balance_requested_at TIMESTAMP, idempotency_key VARCHAR(128) NOT NULL,
+              created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP,
+              UNIQUE (credential_id, idempotency_key),
+              UNIQUE (credential_id, symbol, exchange_order_id)
             )
             """);
+        jdbc.execute("CREATE INDEX idx_quant_order_client ON quant_order(credential_id, symbol, client_order_id)");
         jdbc.update("""
             INSERT INTO quant_order (id,credential_id,strategy_id,strategy_instance_id,
               symbol,exchange_order_id,client_order_id,side,order_type,status,
-              executed_quantity,updated_at)
+              executed_quantity,idempotency_key,created_at,updated_at)
             VALUES (1,1,10,20,'BTCUSDT',99,'cid-99','BUY','LIMIT',
-              'PARTIALLY_FILLED',0.7,CURRENT_TIMESTAMP)
+              'PARTIALLY_FILLED',0.7,'local-cid-99',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
             """);
         var config = new Configuration();
         config.addMapper(QuantOrderMapper.class);
@@ -68,6 +73,26 @@ class OrderLedgerMonotonicTest {
         x.setOriginalQuantity(BigDecimal.ONE);
         x.setUpdatedAt(LocalDateTime.now());
         return x;
+    }
+
+    @Test
+    void sameClientOrderIdWithDifferentExchangeOrderIdsRemainSeparateOrders() throws Exception {
+        var f = fixture();
+        f.jdbc().update("UPDATE quant_order SET client_order_id=? WHERE id=1", "autoclose-same-client-id");
+        var ledger = new OrderLedgerService(f.mapper());
+        var liquidation = new org.dromara.quant.exchange.ExchangeGateway.OrderSnapshot(
+            "BTCUSDT", 100L, "autoclose-same-client-id", "SELL", "LIMIT", "FILLED",
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, java.time.Instant.now(),
+            BigDecimal.ONE, "SHORT", false, java.time.Instant.now(), false);
+
+        var persisted = ledger.syncSnapshot(1L, "BTCUSDT", liquidation);
+
+        assertEquals(2, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_order WHERE credential_id=1", Integer.class));
+        assertEquals(1, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_order WHERE exchange_order_id=99", Integer.class));
+        assertEquals(1, f.jdbc().queryForObject("SELECT COUNT(*) FROM quant_order WHERE exchange_order_id=100", Integer.class));
+        assertEquals("autoclose-same-client-id", persisted.getClientOrderId());
+        assertEquals("EXCHANGE_ORDER:BTCUSDT:100", persisted.getIdempotencyKey());
+        assertEquals(false, persisted.getReduceOnly());
     }
 
     @Test
@@ -123,12 +148,15 @@ class OrderLedgerMonotonicTest {
     void postFillBalanceSnapshotUsesDatabaseThrottleAndPersistsObservedTime() throws Exception {
         var f = fixture();
         var requestedAt = LocalDateTime.now();
-        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt));
-        assertEquals(0, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(10)));
+        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt, requestedAt.minusSeconds(1)));
+        assertEquals(0, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(10), requestedAt.minusSeconds(1)));
         f.jdbc().update("UPDATE quant_order SET post_fill_balance_requested_at=TIMESTAMPADD(SECOND, -31, CURRENT_TIMESTAMP) WHERE id=1");
-        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(31)));
+        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(31), requestedAt.minusSeconds(1)));
         assertEquals(1, f.mapper().savePostFillBalanceSnapshot(1L, new BigDecimal("125.5"), requestedAt.plusSeconds(32)));
         assertEquals(0, new BigDecimal("125.5").compareTo(f.jdbc().queryForObject("SELECT post_fill_wallet_balance FROM quant_order WHERE id=1", BigDecimal.class)));
+        f.jdbc().update("UPDATE quant_order SET post_fill_balance_requested_at=TIMESTAMPADD(SECOND, -31, CURRENT_TIMESTAMP) WHERE id=1");
+        assertEquals(0, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(33), requestedAt.minusSeconds(1)));
+        assertEquals(1, f.mapper().claimPostFillBalanceSnapshot(1L, requestedAt.plusSeconds(34), requestedAt.plusSeconds(33)));
     }
 
     private record Fixture(QuantOrderMapper mapper, JdbcTemplate jdbc) {

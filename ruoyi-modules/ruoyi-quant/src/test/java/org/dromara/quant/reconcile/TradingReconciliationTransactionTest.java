@@ -14,6 +14,7 @@ import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
+import org.dromara.quant.reconcile.mapper.TradeLedgerRecoveryMapper;
 import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
 import org.junit.jupiter.api.Tag;
@@ -50,6 +51,7 @@ class TradingReconciliationTransactionTest {
     private final StrategyPositionStateService state = mock(StrategyPositionStateService.class);
     private final StrategyFillJournalService fillJournal = mock(StrategyFillJournalService.class);
     private final StrategyFillSyncCursorMapper fillCursors = mock(StrategyFillSyncCursorMapper.class);
+    private final TradeLedgerRecoveryMapper tradeLedgerRecovery = mock(TradeLedgerRecoveryMapper.class);
     private final StrategyFillSyncCursorService fillCursorService = mock(StrategyFillSyncCursorService.class);
     private final FinancialEventSyncCursorMapper incomeCursors = mock(FinancialEventSyncCursorMapper.class);
     private final FinancialEventSyncCursorService incomeCursorService = mock(FinancialEventSyncCursorService.class);
@@ -60,7 +62,7 @@ class TradingReconciliationTransactionTest {
         var source = new DriverManagerDataSource("jdbc:h2:mem:reconciliation_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         var reconciliation = new TradingReconciliationService(gateway, accounts, positions, orders, trades, protection, finance, records, errors, state,
             new DataSourceTransactionManager(source), new StrictBinanceTradeCollector(gateway), new StrictBinanceIncomeCollector(gateway), fillJournal,
-            fillCursors, fillCursorService, incomeCursors, incomeCursorService);
+            fillCursors, fillCursorService, incomeCursors, incomeCursorService, tradeLedgerRecovery);
         org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "tradeHistoryMapper", tradeHistory);
         org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "tradeCycleProjectionService", tradeCycleProjection);
         return reconciliation;
@@ -87,6 +89,7 @@ class TradingReconciliationTransactionTest {
         when(gateway.queryOrders(any(), isNull())).thenReturn(List.of());
         when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of());
         when(gateway.queryIncomeHistory(any(), isNull(), isNull(), any(), anyLong())).thenReturn(List.of());
+        when(orders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
         doAnswer(invocation -> {
             assertTrue(TransactionSynchronizationManager.isActualTransactionActive(), "DB write not inside short transaction");
             return 1;
@@ -223,7 +226,7 @@ class TradingReconciliationTransactionTest {
             assertTrue(range.from().isBefore(Instant.now().minus(java.time.Duration.ofHours(30))));
             return List.of();
         });
-        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), isNull())).thenReturn(List.of());
 
         service().reconcileCredential(credential(), 24);
 
@@ -282,11 +285,15 @@ class TradingReconciliationTransactionTest {
     void orphanProtectionDoesNotGetCanceledJustBecauseLocalPositionIsMissing() {
         stubCommonFacts();
         var open = new ExchangeGateway.OrderSnapshot("BTCUSDT", 7L, "open7", "BUY", "MARKET", "NEW", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, Instant.EPOCH);
-        when(gateway.queryOrders(any(), isNull())).thenReturn(List.of(open));
+        var anotherOpen = new ExchangeGateway.OrderSnapshot("ETHUSDT", 8L, "open8", "BUY", "MARKET", "NEW", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, Instant.EPOCH);
+        when(gateway.queryOrders(any(), isNull())).thenReturn(List.of(open, anotherOpen));
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
-        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 123L, "protect123", "NEW", "SELL",
+        when(gateway.queryTrades(any(), eq("ETHUSDT"), any())).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), isNull())).thenReturn(List.of(new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 123L, "protect123", "NEW", "SELL",
             "LONG", "STOP_MARKET", BigDecimal.ONE, BigDecimal.ONE, Instant.EPOCH)));
         service().reconcileCredential(credential(), 48);
+        verify(gateway, times(1)).queryProtectionOrders(any(), isNull());
+        verify(gateway, never()).queryProtectionOrders(any(), anyString());
         verify(gateway, never()).cancelProtectionOrder(any());
         verify(protection).insert(any(org.dromara.quant.protection.domain.QuantProtectionOrder.class));
         var record = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.reconcile.domain.QuantReconcileRecord.class);
@@ -314,7 +321,7 @@ class TradingReconciliationTransactionTest {
         when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of(new ExchangeGateway.OrderSnapshot("BTCUSDT", 78L, "filled78", "SELL", "MARKET",
             "FILLED", BigDecimal.TEN, BigDecimal.ONE, BigDecimal.ONE, Instant.EPOCH)));
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
-        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), isNull())).thenReturn(List.of());
         when(orders.selectOne(any())).thenThrow(new IllegalStateException("order database write failed"));
         assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 48));
         verify(positions).updateById(stale);
@@ -539,6 +546,30 @@ class TradingReconciliationTransactionTest {
         assertEquals(BigDecimal.ZERO, fact.getValue().getExecutedQuantity());
     }
 
+    @Test
+    void sameClientOrderIdDoesNotRebindDifferentExchangeOrderId() {
+        initializeManualSyncMapperMetadata();
+        when(orders.selectOne(any())).thenReturn(null, null);
+        when(orders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
+
+        var snapshot = new ExchangeGateway.OrderSnapshot("BRUSDT", 272662089L, "client-272",
+            "BUY", "MARKET", "FILLED", BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE,
+            Instant.now(), BigDecimal.ONE, "LONG", Boolean.FALSE, Instant.now(), Boolean.FALSE);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+            service(), "syncOrders", credential(), List.of(snapshot));
+
+        var inserted = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.order.domain.QuantOrder.class);
+        verify(orders).insert(inserted.capture());
+        verify(orders, never()).mergeExchangeFactIfMonotonic(any(org.dromara.quant.order.domain.QuantOrder.class));
+        assertEquals(272662089L, inserted.getValue().getExchangeOrderId());
+        assertEquals("EXCHANGE_ORDER:BRUSDT:272662089", inserted.getValue().getIdempotencyKey());
+
+        var queries = org.mockito.ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+        verify(orders, times(2)).selectOne(queries.capture());
+        assertTrue(queries.getAllValues().get(1).getSqlSegment().contains("exchange_order_id IS NULL"));
+    }
+
     private void initializeManualSyncMapperMetadata() {
         var assistant = new org.apache.ibatis.builder.MapperBuilderAssistant(
             new org.apache.ibatis.session.Configuration(), "manual-trading-sync-test");
@@ -550,6 +581,56 @@ class TradingReconciliationTransactionTest {
     private ExchangeGateway.TradeSnapshot manualSyncFill(String symbol, long orderId) {
         return new ExchangeGateway.TradeSnapshot(symbol, 901L, orderId, "BUY", BigDecimal.ONE, BigDecimal.TEN,
             new BigDecimal("0.01"), BigDecimal.ZERO, Instant.now().minusSeconds(60), "USDT");
+    }
+
+    @Test
+    void completedSymbolCommitsItsFillCursorBeforeAnotherSymbolHistoryFails() {
+        stubCommonFacts();
+        initializeManualSyncMapperMetadata();
+        var btcOrder = new ExchangeGateway.OrderSnapshot("BTCUSDT", 801L, "btc-801", "BUY", "MARKET", "FILLED",
+            BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, Instant.now(), BigDecimal.TEN);
+        var ethOrder = new ExchangeGateway.OrderSnapshot("ETHUSDT", 802L, "eth-802", "BUY", "MARKET", "FILLED",
+            BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, Instant.now(), BigDecimal.TEN);
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of(btcOrder, ethOrder));
+        when(fillCursors.selectSymbols(1L)).thenReturn(List.of("BTCUSDT", "ETHUSDT"));
+        when(fillCursors.selectLastCompleteTo(1L, "BTCUSDT"))
+            .thenReturn(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(1));
+        when(fillCursors.selectLastCompleteTo(1L, "ETHUSDT")).thenReturn(null);
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+        when(gateway.queryTrades(any(), eq("ETHUSDT"), any())).thenAnswer(call -> {
+            ExchangeGateway.TimeRange window = call.getArgument(2);
+            assertTrue(java.time.Duration.between(window.from(), window.to()).compareTo(java.time.Duration.ofDays(6)) <= 0);
+            throw new IllegalStateException("history unavailable");
+        });
+        when(orders.selectOne(any())).thenReturn(null);
+
+        assertThrows(IllegalStateException.class, () -> service().reconcileCredential(credential(), 24));
+
+        verify(fillCursorService).advance(eq(1L), eq("BTCUSDT"), any(java.time.LocalDateTime.class));
+        verify(fillCursorService, never()).advance(eq(1L), eq("ETHUSDT"), any(java.time.LocalDateTime.class));
+        var persistedOrder = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.order.domain.QuantOrder.class);
+        verify(orders, times(1)).insert(persistedOrder.capture());
+        assertEquals("BTCUSDT", persistedOrder.getValue().getSymbol());
+    }
+
+    @Test
+    void deferredHistoryOrderReadStillCommitsKnownSymbolFillCursor() {
+        stubCommonFacts();
+        when(fillCursors.selectSymbols(1L)).thenReturn(List.of("BTCUSDT"));
+        when(fillCursors.selectLastCompleteTo(1L, "BTCUSDT"))
+            .thenReturn(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(1));
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenThrow(
+            new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException(
+                "QUEUE_FULL", "BACKGROUND", 16, new int[]{0, 0, 0, 16}, 0L, 2_000L));
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+
+        assertThrows(org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException.class,
+            () -> service().reconcileCredential(credential(), 24));
+
+        verify(fillCursorService).advance(eq(1L), eq("BTCUSDT"), any(java.time.LocalDateTime.class));
+        var record = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.reconcile.domain.QuantReconcileRecord.class);
+        verify(records).insert(record.capture());
+        assertTrue(record.getValue().getDetailJson().contains("\"historyOrdersSyncDeferred\":true"));
     }
 
     @Test
@@ -691,6 +772,29 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void incompleteTestnetFillIsJournaledAndDoesNotAbortCompleteFills() {
+        initializeManualSyncMapperMetadata();
+        var incomplete = new ExchangeGateway.TradeSnapshot("JCTUSDT", 502L, 203L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            null, null, Instant.parse("2026-10-17T00:00:00Z"), null);
+        var complete = new ExchangeGateway.TradeSnapshot("JCTUSDT", 503L, 204L, "SELL", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:01:00Z"), "USDT");
+        var testnetCredential = credential();
+        testnetCredential.setRunMode("TESTNET");
+        when(orders.selectOne(any())).thenReturn(null, null);
+        when(trades.selectOne(any())).thenReturn(null);
+        when(trades.insert(any(org.dromara.quant.account.domain.QuantTrade.class))).thenReturn(1);
+
+        Integer accepted = org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+            service(), "syncTrades", testnetCredential, List.of(incomplete, complete));
+
+        assertEquals(1, accepted);
+        verify(fillJournal).attribute(incomplete, null, 1L);
+        verify(fillJournal).attributeIfPresent(complete, null, 1L);
+        verify(trades).insert(any(org.dromara.quant.account.domain.QuantTrade.class));
+        verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
+    }
+
+    @Test
     void replayCannotOverwriteImmutableTradeFactsOrFundingFee() {
         var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 101L, 202L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
             new BigDecimal("0.01"), BigDecimal.ZERO, Instant.parse("2026-10-17T00:00:00Z"), "USDT");
@@ -822,7 +926,7 @@ class TradingReconciliationTransactionTest {
             () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", testnetCredential, List.of(fill)));
 
         assertTrue(conflict.getMessage().contains("conflictingFields=price"));
-        verifyNoInteractions(fillJournal);
+        verify(fillJournal).attributeIfPresent(fill, null, 1L);
         verify(trades, never()).updateById(any(org.dromara.quant.account.domain.QuantTrade.class));
         verifyNoInteractions(fillCursors, fillCursorService);
     }
@@ -853,6 +957,105 @@ class TradingReconciliationTransactionTest {
             java.time.Duration.between(range.from(), range.to()).compareTo(java.time.Duration.ofDays(7)) < 0));
         assertTrue(java.time.Duration.between(queriedRanges.getFirst().from(),
             queriedRanges.getLast().to()).compareTo(java.time.Duration.ofDays(89)) > 0);
+    }
+
+
+    @Test
+    void emptyTradeLedgerIsRecoveredThroughTheAccountOrderDrivenManualSyncPath() {
+        when(tradeLedgerRecovery.selectStatus(1L)).thenReturn(null);
+        when(trades.selectCount(any())).thenReturn(0L);
+        when(orders.selectHistoricalSymbolsByCredential(1L)).thenReturn(List.of("BTCUSDT"));
+        when(tradeLedgerRecovery.insertReady(1L)).thenReturn(1);
+        when(tradeLedgerRecovery.claim(1L)).thenReturn(1);
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of());
+        when(tradeLedgerRecovery.complete(1L)).thenReturn(1);
+
+        service().recoverMissingTradeLedger(credential());
+
+        verify(gateway, atLeast(13)).queryOrderHistory(any(), isNull(), any(), eq(1000L));
+        verify(tradeLedgerRecovery).claim(1L);
+        verify(tradeLedgerRecovery).complete(1L);
+        verify(tradeLedgerRecovery, never()).releaseForRetry(1L);
+    }
+
+    @Test
+    void interruptedLedgerRecoveryResumesEvenWhenSomeTradesWereAlreadyPersisted() {
+        when(tradeLedgerRecovery.selectStatus(1L)).thenReturn("RUNNING");
+        when(orders.selectHistoricalSymbolsByCredential(1L)).thenReturn(List.of("BTCUSDT"));
+        when(tradeLedgerRecovery.claim(1L)).thenReturn(1);
+        when(gateway.queryOrderHistory(any(), isNull(), any(), anyLong())).thenReturn(List.of());
+        when(tradeLedgerRecovery.complete(1L)).thenReturn(1);
+
+        service().recoverMissingTradeLedger(credential());
+
+        verify(trades, never()).selectCount(any());
+        verify(tradeLedgerRecovery).claim(1L);
+        verify(tradeLedgerRecovery).complete(1L);
+    }
+
+    private org.dromara.quant.account.domain.QuantTrade persistedTradeForBalanceTest(ExchangeGateway.TradeSnapshot fill) {
+        var trade = new org.dromara.quant.account.domain.QuantTrade();
+        trade.setId(fill.tradeId());
+        trade.setCredentialId(1L);
+        trade.setSymbol(fill.symbol());
+        trade.setExchangeTradeId(fill.tradeId());
+        trade.setExchangeOrderId(fill.orderId());
+        trade.setSide(fill.side());
+        trade.setQuantity(fill.quantity());
+        trade.setPrice(fill.price());
+        trade.setCommission(fill.commission());
+        trade.setCommissionAsset(fill.commissionAsset());
+        trade.setRealizedPnl(fill.realizedPnl());
+        trade.setTradeTime(java.time.LocalDateTime.ofInstant(fill.time(), java.time.ZoneOffset.UTC));
+        return trade;
+    }
+
+    @Test
+    void historicalFillReplayDoesNotQueryCurrentWalletBalance() {
+        initializeManualSyncMapperMetadata();
+        Instant historicalTime = Instant.now().minus(java.time.Duration.ofDays(30)).truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        var fill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 910L, 801L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, historicalTime, "USDT");
+        var order = new org.dromara.quant.order.domain.QuantOrder();
+        order.setId(701L);
+        order.setCredentialId(1L);
+        when(orders.selectOne(any())).thenReturn(order);
+        when(trades.selectOne(any())).thenReturn(persistedTradeForBalanceTest(fill));
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(service(), "syncTrades", credential(), List.of(fill));
+
+        verify(orders, never()).claimPostFillBalanceSnapshot(anyLong(), any(), any());
+        verify(gateway, never()).queryAccountFresh(any());
+    }
+
+    @Test
+    void recentFillsInOneBatchCaptureOnlyTheLatestOrderWalletSnapshot() {
+        initializeManualSyncMapperMetadata();
+        Instant recentTime = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        var firstFill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 911L, 802L, "BUY", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, recentTime, "USDT");
+        var secondFill = new ExchangeGateway.TradeSnapshot("BTCUSDT", 912L, 803L, "SELL", BigDecimal.ONE, BigDecimal.TEN,
+            new BigDecimal("0.01"), BigDecimal.ZERO, recentTime.plusSeconds(1), "USDT");
+        var firstOrder = new org.dromara.quant.order.domain.QuantOrder();
+        firstOrder.setId(702L);
+        firstOrder.setCredentialId(1L);
+        var secondOrder = new org.dromara.quant.order.domain.QuantOrder();
+        secondOrder.setId(703L);
+        secondOrder.setCredentialId(1L);
+        when(orders.selectOne(any())).thenReturn(firstOrder, secondOrder);
+        when(trades.selectOne(any())).thenReturn(
+            persistedTradeForBalanceTest(firstFill), persistedTradeForBalanceTest(secondFill));
+        when(orders.claimPostFillBalanceSnapshot(anyLong(), any(), any())).thenReturn(1);
+        when(orders.savePostFillBalanceSnapshot(anyLong(), eq(BigDecimal.TEN), any())).thenReturn(1);
+        when(gateway.queryAccountFresh(any())).thenReturn(
+            new ExchangeGateway.AccountSnapshot(BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ZERO));
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+            service(), "syncTrades", credential(), List.of(firstFill, secondFill));
+
+        verify(gateway, timeout(2000).times(1)).queryAccountFresh(any());
+        verify(orders, timeout(2000)).savePostFillBalanceSnapshot(eq(703L), eq(BigDecimal.TEN), any());
+        verify(orders, never()).savePostFillBalanceSnapshot(eq(702L), any(), any());
     }
 
 }

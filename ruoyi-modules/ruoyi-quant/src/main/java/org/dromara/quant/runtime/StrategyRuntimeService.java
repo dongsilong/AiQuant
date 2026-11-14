@@ -164,6 +164,8 @@ public class StrategyRuntimeService {
      * 当前 JVM 节点正在运行的策略实例上下文。
      */
     private final Map<Long, ActiveRuntime> activeRuntimes = new ConcurrentHashMap<>();
+    /** Prevents overlapping durable protection-cleanup recovery attempts for one strategy instance. */
+    private final Set<Long> protectionCleanupRecoveries = ConcurrentHashMap.newKeySet();
     /** 同一凭证/交易对的 REST 本地保护价格查询单飞门禁。 */
     private final Set<String> restProtectionPriceQueries = ConcurrentHashMap.newKeySet();
     /** 同一策略交易对的实例初始化与运行开关更新使用同一把锁。 */
@@ -420,6 +422,7 @@ public class StrategyRuntimeService {
         log.debug("策略运行时监督任务开始 runtimeEnabled={}", properties.getRuntime().isEnabled());
         if (!properties.getRuntime().isEnabled()) {
             stopAll();
+            recoverClosedProtectionCleanup();
             return;
         }
         List<QuantStrategyInstance> instances = instanceMapper.selectList(new LambdaQueryWrapper<QuantStrategyInstance>().eq(QuantStrategyInstance::getStatus, "RUNNING"));
@@ -453,6 +456,89 @@ public class StrategyRuntimeService {
             }
             return false;
         });
+        recoverClosedProtectionCleanup();
+    }
+
+    /**
+     * 已关闭周期的保护单清理不能依赖 ActiveRuntime；STOPPED 实例也必须能够从持久化状态恢复。
+     */
+    private void recoverClosedProtectionCleanup() {
+        for (QuantStrategyPositionState state : stateService.findClosedProtectionCleanupPending()) {
+            Long instanceId = state.getInstanceId();
+            if (instanceId == null || activeRuntimes.containsKey(instanceId) || !protectionCleanupRecoveries.add(instanceId)) {
+                continue;
+            }
+            try {
+                recoveryExecutor.execute(() -> {
+                    try {
+                        QuantStrategyPositionState latest = stateService.findByInstance(instanceId);
+                        if (latest == null || !Objects.equals(latest.getId(), state.getId())
+                            || !"CLOSED".equals(latest.getStatus())
+                            || latest.getPositionQty() == null || latest.getPositionQty().signum() != 0
+                            || latest.getPositionId() == null || latest.getPositionCycleKey() == null
+                            || latest.getPendingAction() != null
+                            || !Boolean.TRUE.equals(latest.getRecoveryRequired()) && !Boolean.TRUE.equals(latest.getUnsafeRecovery())) {
+                            return;
+                        }
+
+                        QuantStrategyInstance instance = instanceMapper.selectById(instanceId);
+                        if (instance == null || !"STOPPED".equals(instance.getStatus())) {
+                            return;
+                        }
+                        QuantCredential credential = credentialMapper.selectById(instance.getCredentialId());
+                        QuantStrategySymbol binding = strategySymbolMapper.selectById(instance.getStrategySymbolId());
+                        QuantSymbol symbol = binding == null ? null : symbolMapper.selectById(binding.getSymbolId());
+                        if (credential == null || symbol == null || credential.getId() == null) {
+                            return;
+                        }
+
+                        boolean live = !"PAPER".equalsIgnoreCase(credential.getRunMode());
+                        if (live) {
+                            List<ExchangeGateway.PositionSnapshot> snapshots =
+                                gateway.queryPositions(executionService.toCredential(credential), symbol.getSymbol());
+                            if (snapshots == null || snapshots.stream().anyMatch(snapshot ->
+                                snapshot == null || !symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
+                                    || snapshot.quantity() == null || snapshot.quantity().signum() != 0)) {
+                                log.warn("已关闭周期保护清理暂缓：交易所空仓未得到完整确认 instanceId={} positionId={} symbol={}",
+                                    instanceId, latest.getPositionId(), symbol.getSymbol());
+                                return;
+                            }
+                        }
+
+                        boolean cleaned = protectionOrderService.cancelActiveProtectionOrders(
+                            credential.getId(), latest.getPositionId(), latest.getPositionCycleKey(), live);
+                        if (!cleaned) {
+                            log.warn("已关闭周期保护单撤销未全部确认，保留恢复标记 instanceId={} positionId={} cycle={}",
+                                instanceId, latest.getPositionId(), latest.getPositionCycleKey());
+                            return;
+                        }
+
+                        QuantStrategyPositionState confirmed = stateService.findByInstance(instanceId);
+                        if (confirmed == null || !Objects.equals(confirmed.getId(), latest.getId())
+                            || !Objects.equals(confirmed.getPositionId(), latest.getPositionId())
+                            || !Objects.equals(confirmed.getPositionCycleKey(), latest.getPositionCycleKey())
+                            || !"CLOSED".equals(confirmed.getStatus())
+                            || confirmed.getPositionQty() == null || confirmed.getPositionQty().signum() != 0
+                            || confirmed.getPendingAction() != null) {
+                            return;
+                        }
+                        confirmed.setRecoveryRequired(false);
+                        confirmed.setUnsafeRecovery(false);
+                        stateService.save(confirmed);
+                        log.info("已关闭周期保护单清理恢复完成 instanceId={} positionId={} cycle={}",
+                            instanceId, confirmed.getPositionId(), confirmed.getPositionCycleKey());
+                    } catch (RuntimeException ex) {
+                        log.warn("已关闭周期保护单清理恢复失败，保留恢复标记 instanceId={} errorType={}",
+                            instanceId, ex.getClass().getSimpleName());
+                    } finally {
+                        protectionCleanupRecoveries.remove(instanceId);
+                    }
+                });
+            } catch (RuntimeException ex) {
+                protectionCleanupRecoveries.remove(instanceId);
+                throw ex;
+            }
+        }
     }
 
     /**
@@ -629,8 +715,20 @@ public class StrategyRuntimeService {
      * 将账户事实刷新请求合并排队，避免每条行情事件都发起 REST 查询。
      */
     private void requestReconciliation(ActiveRuntime runtime) {
+        requestReconciliation(runtime, false);
+    }
+
+    /**
+     * 成交私有流事件需要绕过普通对账节流，尽快核实累计成交量并建立/更新硬止损。
+     */
+    private void requestReconciliation(ActiveRuntime runtime, boolean immediate) {
         synchronized (runtime) {
-            if (runtime.closed || System.currentTimeMillis() < runtime.nextReconcileAt) {
+            if (runtime.closed) {
+                return;
+            }
+            if (immediate) {
+                runtime.nextReconcileAt = 0L;
+            } else if (System.currentTimeMillis() < runtime.nextReconcileAt) {
                 return;
             }
             runtime.reconcileRequested.set(true);
@@ -1179,7 +1277,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             invalidatePositionFacts(runtime);
                             invalidateEntryProtectionCleanup(runtime);
                             reconciliationService.invalidateRuntimePositionSnapshot(credential.getId());
-                            requestReconciliation(runtime);
+                            requestReconciliation(runtime, "ORDER_TRADE_UPDATE".equalsIgnoreCase(event.eventType()));
                         }
                     });
                 }
@@ -1293,6 +1391,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.marketHealthy = false;
                 runtime.latestTradePrice = null;
                 runtime.latestTradeEventAt = null;
+                runtime.latestMarkPrice = null;
                 return;
             }
             if ("DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
@@ -1300,6 +1399,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.marketHealthy = false;
                 runtime.latestTradePrice = null;
                 runtime.latestTradeEventAt = null;
+                runtime.latestMarkPrice = null;
                 return;
             }
             if ("CONNECTED".equals(event.type())) {
@@ -1321,9 +1421,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.market.lastKlineEventAt = event.eventTime();
                 runtime.lastEvaluatedKlineOpenTime = event.kline().openTime();
             }
-            if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && runtime.position != null && !runtime.exitCoordinating.get()) {
-                // Binance 条件单使用 CONTRACT_PRICE；MARK_PRICE 仅用于账户表现统计，不能推进保护阶梯。
-                updateRuntimeMaximumReturnRate(runtime, event.price());
+            if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
+                runtime.latestMarkPrice = event.price();
+                if (runtime.position != null && !runtime.exitCoordinating.get()) {
+                    updateRuntimeMaximumReturnRate(runtime, event.price());
+                }
             }
             if (event.replay()) {
                 // 成交补偿仅恢复开仓后的峰值，不产生回溯下单。
@@ -2395,14 +2497,20 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
         if (hard != null) {
             signals.addFirst(new ProtectionSignal("HARD_STOP", "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT,
              KlineSlopeRateStrategy.unifiedProtection(frozenParams(runtime)) && runtime.state.getStopLossPrice() != null ? runtime.state.getStopLossPrice()
-                : KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(), hard.negate(), context.leverage()), "固定硬止损"));
+                : (KlineSlopeRateStrategy.markPriceProtection(frozenParams(runtime))
+                    ? KlineSlopeRateStrategy.priceForMarkReturn(context.entryPrice(), context.direction(), hard.negate(), context.leverage())
+                    : KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(), hard.negate(), context.leverage())), "固定硬止损"));
         }
         for (ProtectionSignal signal : signals) {
             BigDecimal trigger = runtime.protectionRule == null ? signal.triggerPrice()
                 : org.dromara.quant.exchange.QuantityNormalizer.protectionPrice(signal.triggerPrice(), runtime.protectionRule, context.direction(), signal.orderType());
             boolean shortPosition = "SHORT".equalsIgnoreCase(context.direction());
             boolean profit = "TAKE_PROFIT_MARKET".equals(signal.orderType());
-            boolean triggered = shortPosition == profit ? context.currentPrice().compareTo(trigger) <= 0 : context.currentPrice().compareTo(trigger) >= 0;
+            BigDecimal triggerPrice = KlineSlopeRateStrategy.markPriceProtection(frozenParams(runtime)) ? context.markPrice() : context.currentPrice();
+            if (triggerPrice == null) {
+                continue;
+            }
+            boolean triggered = shortPosition == profit ? triggerPrice.compareTo(trigger) <= 0 : triggerPrice.compareTo(trigger) >= 0;
             if (!triggered) {
                 continue;
             }
@@ -2428,7 +2536,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
     private void evaluateExit(ActiveRuntime runtime, StrategyContext context, boolean forceHardStop) {
         synchronized (runtime) {
             List<ExitSignal> evaluated = forceHardStop
-                ? List.of(new ExitSignal("HARD_STOP_LOSS", BigDecimal.ONE, "Binance -2021 明确拒绝硬止损，按已穿价事实强制本地接管",
+                ? List.of(new ExitSignal("HARD_STOP_LOSS", BigDecimal.ONE, "硬止损超过 5 秒仍未确认生效，按未保护持仓执行紧急退出",
                     false, "HARD_STOP", ExitSignal.QuantityBase.CURRENT))
                 : protectionExits(runtime, context);
             if (runtime.position == null || runtime.hasPendingAction() || evaluated.isEmpty() || !runtime.exitCoordinating.compareAndSet(false, true)) {
@@ -2464,7 +2572,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                         Thread.sleep(Math.max(0, properties.getProtection().getConfirmationWaitMillis()));
                     }
                     java.util.concurrent.Future<?> inFlightProtection = runtime.protectionTask;
-                    // forceHardStop 仅由 Binance -2021 明确拒绝触发：本轮保护请求已明确未建立，且已跳过后续保护单提交。
+                    // 紧急整仓退出不等待保护同步任务；进入本路径前已确认保护同步不在执行中，或由明确触发/拒绝事实接管。
                     if (inFlightProtection != null && !forceHardStop) {
                         try {
                             inFlightProtection.get(Math.max(1, properties.getProtection().getSyncWaitMillis()), java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -2813,7 +2921,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             (position == null ? BigDecimal.ZERO : position.getQuantity()) : runtime.state.getInitialPositionQty(), position == null ? BigDecimal.ZERO : position.getMargin(),
              leverage, runtime.state == null ? null : runtime.state.getHighestPriceSinceEntry(), runtime.state == null ? null : runtime.state.getLowestPriceSinceEntry(),
             runtime.state != null && Boolean.TRUE.equals(runtime.state.getFirstTakeProfitTriggered()), runtime.state == null || runtime.state.getHighestStep() == null ? 0 :
-               runtime.state.getHighestStep());
+               runtime.state.getHighestStep(), runtime.latestMarkPrice != null ? runtime.latestMarkPrice : position == null ? null : position.getMarkPrice());
     }
 
     /**
@@ -2859,7 +2967,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
         Map<String, Object> snapshotParams = new java.util.LinkedHashMap<>(runtime.params);
         snapshotParams.remove(KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY);
         if (runtime.plugin instanceof KlineSlopeRateStrategy) {
-            snapshotParams.put(KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY, 2);
+            snapshotParams.put(KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY, 3);
         }
         state.setStrategyParamsSnapshot(writeParams(snapshotParams));
         state.setFrozenStopLossRatio(runtime.plugin instanceof KlineSlopeRateStrategy
@@ -3474,6 +3582,14 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
             }
             runtime.state.setPendingNotFoundConfirmations(0);
             stateService.save(runtime.state);
+            if (runtime.partialOpenProtectionVerified) {
+                // 首次部分成交已与交易所持仓事实精确匹配：立即异步建立覆盖当前实际持仓量的硬止损，
+                // 不等待开仓订单完全 FILLED；动态止盈仍等待完整成交及冻结参数。
+                ensureHardStop(runtime);
+                log.info("开仓部分成交已核实，立即提交硬止损保护 instanceId={} credentialId={} symbol={} orderId={} executedQuantity={} positionQuantity={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), order.orderId(),
+                    order.executedQuantity(), runtime.position.getQuantity());
+            }
             return true;
         }
         if ("FILLED".equalsIgnoreCase(status)) {
@@ -3952,6 +4068,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 Thread heartbeat = null;
                 AtomicBoolean renewing = new AtomicBoolean(true);
                 AtomicBoolean leaseHeld = new AtomicBoolean(true);
+                AtomicBoolean protectionSyncFailed = new AtomicBoolean(false);
                 try {
                     do {
                         runtime.protectionRequested.set(false);
@@ -3963,18 +4080,20 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                             QuantPosition snapshot = new QuantPosition();
                             BeanUtils.copyProperties(runtime.position, snapshot);
                             snapshot.setProtectionCycleKey(runtime.state == null ? null : runtime.state.getPositionCycleKey());
-                            snapshot.setProtectionPolicyVersion(runtime.plugin instanceof KlineSlopeRateStrategy && KlineSlopeRateStrategy.unifiedProtection(frozenParams(runtime)) ? 2 : null);
+                            snapshot.setProtectionPolicyVersion(runtime.plugin instanceof KlineSlopeRateStrategy && KlineSlopeRateStrategy.markPriceProtection(frozenParams(runtime)) ? 3
+                                 : runtime.plugin instanceof KlineSlopeRateStrategy && KlineSlopeRateStrategy.unifiedProtection(frozenParams(runtime)) ? 2 : null);
                             if (runtime.state != null && runtime.state.getFrozenLeverage() != null) {
                                 snapshot.setLeverage(runtime.state.getFrozenLeverage());
                                 snapshot.setEntryPrice(runtime.state.getEntryPrice());
                             }
                             boolean includeDynamic = runtime.dynamicProtectionRequested.getAndSet(false) && !runtime.hasPendingAction();
                             BigDecimal hardStopRatio = resolveHardStopRatio(runtime);
-                            if (Integer.valueOf(2).equals(snapshot.getProtectionPolicyVersion()) && hardStopRatio != null
+                            if (snapshot.getProtectionPolicyVersion() != null && snapshot.getProtectionPolicyVersion() >= 2 && hardStopRatio != null
                                 && hardStopRatio.signum() > 0 && hardStopRatio.compareTo(BigDecimal.ONE) < 0) {
                                 if (runtime.state.getStopLossPrice() == null) {
-                                    BigDecimal stop = KlineSlopeRateStrategy.priceForReturn(snapshot.getEntryPrice(), snapshot.getPositionSide(),
-                                        hardStopRatio.negate(), snapshot.getLeverage());
+                                    BigDecimal stop = KlineSlopeRateStrategy.markPriceProtection(frozenParams(runtime))
+                                        ? KlineSlopeRateStrategy.priceForMarkReturn(snapshot.getEntryPrice(), snapshot.getPositionSide(), hardStopRatio.negate(), snapshot.getLeverage())
+                                        : KlineSlopeRateStrategy.priceForReturn(snapshot.getEntryPrice(), snapshot.getPositionSide(), hardStopRatio.negate(), snapshot.getLeverage());
                                     runtime.state.setStopLossPrice(runtime.protectionRule == null ? stop
                                         : org.dromara.quant.exchange.QuantityNormalizer.protectionPrice(stop, runtime.protectionRule, snapshot.getPositionSide(), "STOP_MARKET"));
                                     try {
@@ -4056,8 +4175,11 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                         }
                         boolean hardStopAlreadyTriggered = failure instanceof org.dromara.quant.exchange.ExchangeTradingPort.OrderRejectedException rejected
                             && Integer.valueOf(-2021).equals(rejected.code());
-                        if (hardStopAlreadyTriggered) {
-                            log.error("Binance -2021 拒绝硬止损条件单，停止本轮其它保护单提交并立即启动本地镜像退出 instanceId={} credentialId={} symbol={} positionId={} triggerPrice={} currentPrice={}",
+                        if (!hardStopConfirmed) {
+                            // 整仓硬止损未确认时，不再串行提交动态止盈/阶梯保护。
+                            // 本地镜像退出必须尽快接管；其它已有交易所保护单保持不动，
+                            // 后续持仓核验再恢复缺失的交易所保护，不能用非硬止损请求拖延兜底。
+                            log.error("Binance 硬止损尚未确认，跳过本轮非紧急保护同步并保留本地镜像保护 instanceId={} credentialId={} symbol={} positionId={} triggerPrice={} currentPrice={}",
                                 runtime.instance.getId(), work.credentialId(), work.position().getSymbol(), work.position().getId(),
                                 work.position().getProtectionStopLossPrice(), runtime.currentPrice(), failure);
                         } else {
@@ -4107,6 +4229,16 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                              !runtime.closed && !obsolete && runtime.state == work.state() && runtime.position.getQuantity().compareTo(work.position().getQuantity()) == 0;
                             if (current) {
                                 runtime.hardStopConfirmed = hardStopConfirmed;
+                                if (hardStopConfirmed) {
+                                    runtime.hardStopUnprotectedSince = 0L;
+                                    runtime.hardStopConfirmationPending = false;
+                                } else {
+                                    runtime.hardStopConfirmationPending = isProtectionStatePending(failure);
+                                    // UNKNOWN/触发中状态只做精确核验，不启动 5 秒容忍计时；从明确确认未生效后开始计时。
+                                    if (!runtime.hardStopConfirmationPending) {
+                                        scheduleHardStopFailureExit(runtime, work.position(), work.state());
+                                    }
+                                }
                                 int previousStep = runtime.state.getConfirmedProtectionStep() == null ? 0 : runtime.state.getConfirmedProtectionStep();
                                 int highestStep = runtime.state.getHighestStep() == null ? 0 : runtime.state.getHighestStep();
                                 if (confirmedStep > previousStep || confirmedStep > highestStep) {
@@ -4116,6 +4248,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                     publishPositionPerformance(runtime);
                                 }
                                 if (failure != null) {
+                                    protectionSyncFailed.set(true);
                                     markProtectionDegraded(runtime, "交易所保护创建/同步失败", failure);
                                 } else if (work.dynamic() && runtime.protectionDegraded && !runtime.hasPendingAction()) {
                                     // 保护恢复只能解除自身降级；未知成交/持仓归属必须由事实恢复链路核实。
@@ -4218,6 +4351,11 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                         }
                     }
                     runtime.protectionSyncing.set(false);
+                    if (!runtime.closed && protectionSyncFailed.get()) {
+                        // 保护同步失败后立即触发一次账户事实核验；核验完成后沿用既有节流重试，
+                        // 由 requestProtectionSync 复用原保护意图/客户端 ID 恢复 Binance 保护。
+                        requestReconciliation(runtime);
+                    }
                     if (!runtime.closed && runtime.protectionRequested.get()) {
                         requestProtectionSync(runtime, runtime.dynamicProtectionRequested.get());
                     }
@@ -4261,6 +4399,63 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
 
     private boolean isProtectionStatePending(RuntimeException ex) {
         return ex instanceof ProtectionOrderService.ProtectionExecutionPendingException || ex instanceof ProtectionTargetCoordinator.PendingTargetException;
+    }
+
+    /**
+     * 硬止损连续未确认时启动 5 秒安全窗口。未知派发结果必须先核实，不能直接按拒绝处理。
+     */
+    private void scheduleHardStopFailureExit(ActiveRuntime runtime, QuantPosition position, QuantStrategyPositionState state) {
+        long delay;
+        synchronized (runtime) {
+            if (runtime.closed || runtime.position == null || runtime.state != state
+                || !Objects.equals(runtime.position.getId(), position.getId())
+                || !Objects.equals(runtime.state.getPositionCycleKey(), position.getProtectionCycleKey())
+                || runtime.hardStopConfirmed) {
+                return;
+            }
+            if (runtime.hardStopUnprotectedSince == 0L) {
+                runtime.hardStopUnprotectedSince = System.currentTimeMillis();
+            }
+            // 5 秒窗口到期后仍在核验时按 1 秒间隔重试，避免 UNKNOWN 状态形成毫秒级调度循环。
+            delay = Math.max(1_000L, 5_000L - (System.currentTimeMillis() - runtime.hardStopUnprotectedSince));
+        }
+        java.util.concurrent.CompletableFuture.delayedExecutor(delay, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .execute(() -> checkHardStopFailureExit(runtime, position.getId(), position.getProtectionCycleKey(), state));
+    }
+
+    private void checkHardStopFailureExit(ActiveRuntime runtime, Long positionId, String cycleKey, QuantStrategyPositionState expectedState) {
+        StrategyContext emergencyContext = null;
+        boolean retryVerification = false;
+        synchronized (runtime) {
+            if (runtime.closed || runtime.state != expectedState || runtime.position == null
+                || !Objects.equals(runtime.position.getId(), positionId)
+                || !Objects.equals(runtime.state.getPositionCycleKey(), cycleKey) || runtime.hardStopConfirmed) {
+                return;
+            }
+            if (runtime.protectionSyncing.get() || runtime.hardStopConfirmationPending) {
+                retryVerification = true;
+            } else if (System.currentTimeMillis() - runtime.hardStopUnprotectedSince < 5_000L) {
+                retryVerification = true;
+            } else if (!runtime.hasPendingAction() && !runtime.exitCoordinating.get()) {
+                BigDecimal price = runtime.currentPrice() != null ? runtime.currentPrice()
+                    : runtime.position.getMarkPrice() != null ? runtime.position.getMarkPrice() : runtime.position.getEntryPrice();
+                if (price != null && price.signum() > 0) {
+                    emergencyContext = buildContext(runtime, price, new ExchangeGateway.MarketEvent(
+                        "HARD_STOP_UNPROTECTED_TIMEOUT", runtime.symbol.getSymbol(), runtime.strategySymbol.getIntervalCode(),
+                        price, null, Instant.now()));
+                } else {
+                    retryVerification = true;
+                }
+            }
+        }
+        if (retryVerification) {
+            requestReconciliation(runtime);
+            scheduleHardStopFailureExit(runtime, runtime.position, expectedState);
+        } else if (emergencyContext != null) {
+            log.error("硬止损超过 5 秒仍未确认生效，对未保护持仓启动紧急市价平仓 instanceId={} credentialId={} symbol={} positionId={} cycle={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), positionId, cycleKey);
+            evaluateExit(runtime, emergencyContext, true);
+        }
     }
 
     /**
@@ -4603,10 +4798,19 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             return;
         }
         QuantStrategyPositionState state = runtime.state;
+        BigDecimal favorablePrice = "SHORT".equalsIgnoreCase(state.getDirection())
+            ? state.getLowestPriceSinceEntry() : state.getHighestPriceSinceEntry();
+        BigDecimal ladderMaximumReturnRate = null;
+        if (state.getEntryPrice() != null && state.getEntryPrice().signum() > 0 && favorablePrice != null
+            && state.getFrozenLeverage() != null && state.getFrozenLeverage() > 0) {
+            ladderMaximumReturnRate = KlineSlopeRateStrategy.leveragedReturn(
+                state.getDirection(), favorablePrice, state.getEntryPrice(), state.getFrozenLeverage())
+                .max(BigDecimal.ZERO).multiply(BigDecimal.valueOf(100));
+        }
         positionPerformanceHub.publish(new StrategyPositionPerformanceEvent(runtime.credential.getId(), runtime.instance.getId(), state.getPositionId(), state.getPositionCycleKey(),
             runtime.symbol.getSymbol(), runtime.strategy.getPluginCode(), state.getDirection(), state.getEntryPrice(), state.getInitialPositionQty(), state.getInitialMargin(), state.getHighestPriceSinceEntry(),
             state.getLowestPriceSinceEntry(), state.getMaximumReturnRate(), state.getHighestStep(), state.getConfirmedProtectionStep(), state.getFrozenLeverage(),
-            state.getUpdatedAt()));
+            ladderMaximumReturnRate, state.getUpdatedAt()));
     }
 
     /**
@@ -5085,9 +5289,12 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private long nextEntryProtectionCleanupAt;
         private java.util.concurrent.Future<?> entryProtectionCleanupTask;
         private boolean hardStopConfirmed;
+        private long hardStopUnprotectedSince;
+        private boolean hardStopConfirmationPending;
         private boolean partialOpenProtectionVerified;
         private BigDecimal latestTradePrice;
         private Instant latestTradeEventAt;
+        private BigDecimal latestMarkPrice;
         // 健康回调直接关闭决策，不能等待普通行情队列的断线通知。
         private volatile boolean marketStreamReady;
         private volatile long nextReconcileAt;

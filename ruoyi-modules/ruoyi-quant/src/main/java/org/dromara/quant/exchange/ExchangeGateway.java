@@ -319,9 +319,14 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param stopPrice     条件单触发价格
      * @param clientOrderId 客户端订单号
      * @param live          是否真正向交易所发送有交易副作用的请求
+     * @param workingType   条件单触发价格类型：MARK_PRICE 或 CONTRACT_PRICE
      */
     record ProtectionOrderRequest(Credential credential, String symbol, String side, String positionSide, String orderType, BigDecimal quantity, BigDecimal stopPrice,
-                                  String clientOrderId, boolean live) {
+                                  String clientOrderId, boolean live, String workingType) {
+        public ProtectionOrderRequest(Credential credential, String symbol, String side, String positionSide, String orderType, BigDecimal quantity, BigDecimal stopPrice,
+                                       String clientOrderId, boolean live) {
+            this(credential, symbol, side, positionSide, orderType, quantity, stopPrice, clientOrderId, live, "CONTRACT_PRICE");
+        }
     }
 
     /**
@@ -398,7 +403,10 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param eventTime 当前行情事件时间
      * @param rawJson   交易所私有事件原始 JSON
      */
-    record UserDataEvent(String eventType, Instant eventTime, String rawJson) {
+    record UserDataEvent(String eventType, Instant eventTime, String rawJson, Instant receivedAt) {
+        public UserDataEvent(String eventType, Instant eventTime, String rawJson) {
+            this(eventType, eventTime, rawJson, Instant.now());
+        }
     }
 
     /**

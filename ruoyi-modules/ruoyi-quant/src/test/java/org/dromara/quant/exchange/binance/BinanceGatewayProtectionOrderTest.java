@@ -82,4 +82,39 @@ class BinanceGatewayProtectionOrderTest {
             server.stop(0);
         }
     }
+
+    @org.junit.jupiter.api.Test
+    void protectionOrderPassesMarkPriceWorkingType() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        var submittedRequest = new java.util.concurrent.atomic.AtomicReference<String>();
+        server.createContext("/", exchange -> {
+            String response;
+            if (exchange.getRequestURI().getPath().contains("time")) {
+                response = "{\"serverTime\":" + System.currentTimeMillis() + "}";
+            } else {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                submittedRequest.set(exchange.getRequestURI().getRawQuery() + "&" + body);
+                response = "{\"algoId\":123456,\"clientAlgoId\":\"QFTP_test\",\"algoStatus\":\"NEW\"}";
+            }
+            byte[] data = response.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, data.length);
+            exchange.getResponseBody().write(data);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var properties = new QuantProperties();
+            properties.getBinance().setTestnetUrl("http://127.0.0.1:" + server.getAddress().getPort());
+            var gateway = new BinanceGatewayAdapter(properties);
+            var request = new ExchangeGateway.ProtectionOrderRequest(new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET"), "ONDOUSDT", "SELL", "BOTH", "STOP_MARKET",
+                new BigDecimal("5616.5"), new BigDecimal("0.4961"), "QFTP_test", true, "MARK_PRICE");
+
+            gateway.placeProtectionOrder(request);
+
+            assertNotNull(submittedRequest.get());
+            assertTrue(submittedRequest.get().contains("workingType=MARK_PRICE"), submittedRequest.get());
+        } finally {
+            server.stop(0);
+        }
+    }
 }

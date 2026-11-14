@@ -27,6 +27,11 @@ class TradeCycleMapperSqlContractTest {
         assertTrue(selectStart >= 0 && selectEnd > selectStart, "selectCycles SQL must exist");
         String sql = mapperXml.substring(selectStart, selectEnd);
 
+        assertTrue(sql.contains("<when test=\"sortField == 'closedAt'\">"));
+        assertTrue(sql.contains("CASE WHEN COALESCE(last_close_fill.trade_time,c.closed_at) IS NULL THEN 1 ELSE 0 END ASC"));
+        assertTrue(sql.contains("COALESCE(last_close_fill.trade_time,c.closed_at) ${sortOrder}"));
+        assertTrue(sql.contains("c.opened_at ${sortOrder},c.id DESC"));
+
         assertTrue(sql.contains("LEFT JOIN quant_trade_cycle_fill last_close_fill"));
         assertTrue(sql.contains("last_close_fill.id=("));
         assertTrue(sql.contains("WHERE f.cycle_id=c.id"));

@@ -24,7 +24,9 @@ public class TradeCycleController {
                                     @RequestParam(required = false) Long credentialId,
                                     @RequestParam(required = false) String symbol,
                                     @RequestParam(required = false) String from,
-                                    @RequestParam(required = false) String to) {
-        return R.ok(queryService.page(query, credentialId, symbol, from, to));
+                                    @RequestParam(required = false) String to,
+                                    @RequestParam(required = false) String sortField,
+                                    @RequestParam(required = false) String sortOrder) {
+        return R.ok(queryService.page(query, credentialId, symbol, from, to, sortField, sortOrder));
     }
 }

@@ -13,13 +13,13 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.notification.domain.QuantNotification;
 import org.dromara.quant.notification.mapper.QuantNotificationMapper;
+import org.dromara.quant.notification.mapper.QuantTradeNotificationQueryMapper;
 import org.dromara.quant.risk.domain.QuantRiskConfig;
 import org.dromara.quant.risk.mapper.QuantRiskConfigMapper;
 import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.dromara.system.api.MessageService;
 import org.dromara.system.api.domain.PushPayloadDTO;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -65,7 +65,7 @@ public class QuantTradeNotificationService {
      */
     private final QuantProperties properties;
     private final MessageService messageService;
-    private final JdbcTemplate jdbcTemplate;
+    private final QuantTradeNotificationQueryMapper tradeNotificationQueryMapper;
     private final ExchangeGateway gateway;
     private final TaskExecutor notificationExecutor;
     @Autowired
@@ -79,15 +79,86 @@ public class QuantTradeNotificationService {
      * 创建 QuantTradeNotificationService 实例并初始化其依赖。
      */
     public QuantTradeNotificationService(QuantRiskConfigMapper riskConfigMapper, QuantNotificationMapper notificationMapper, QuantProperties properties,
-                                         MessageService messageService, JdbcTemplate jdbcTemplate, ExchangeGateway gateway,
+                                         MessageService messageService, QuantTradeNotificationQueryMapper tradeNotificationQueryMapper, ExchangeGateway gateway,
                                          @Qualifier("quantNotificationExecutor") TaskExecutor notificationExecutor) {
         this.riskConfigMapper = riskConfigMapper;
         this.notificationMapper = notificationMapper;
         this.properties = properties;
         this.messageService = messageService;
-        this.jdbcTemplate = jdbcTemplate;
+        this.tradeNotificationQueryMapper = tradeNotificationQueryMapper;
         this.gateway = gateway;
         this.notificationExecutor = notificationExecutor;
+    }
+
+    /**
+     * 订单与成交历史同步完成后，仅发送系统消息，不触发邮件通知。
+     */
+    public void notifyOrderTradeSyncResult(QuantCredential credential, String symbol, int symbolCount, int orderCount, int tradeCount) {
+        String subject = "订单与成交同步成功";
+        String symbolText = symbol == null || symbol.isBlank() ? "全部交易对" : symbol.trim().toUpperCase(java.util.Locale.ROOT);
+        String resultText = symbolCount == 0
+            ? "未查询到需要同步的历史订单。"
+            : "涉及交易对：" + symbolCount + " 个\n"
+                + "处理订单数：" + orderCount + " 笔\n"
+                + "完整且已核实的成交数：" + tradeCount + " 笔";
+        String content = "同步状态：成功\n"
+            + "同步范围：最近 90 天\n"
+            + "同步交易对：" + symbolText + "\n"
+            + resultText + "\n"
+            + "账户模式：" + (credential == null || credential.getRunMode() == null ? "未知" : credential.getRunMode()) + "\n"
+            + "完成时间：" + NOTIFICATION_TIME_FORMAT.format(LocalDateTime.now(NOTIFICATION_ZONE));
+        enqueueSystemNotification(credential == null ? null : credential.getId(), subject, content);
+    }
+
+    /**
+     * 同步中断时发送系统消息；按交易对提交的历史数据可能已有部分成功落库。
+     */
+    public void notifyOrderTradeSyncFailure(QuantCredential credential, String symbol, RuntimeException failure) {
+        String subject = "订单与成交同步未完成";
+        String symbolText = symbol == null || symbol.isBlank() ? "全部交易对" : symbol.trim().toUpperCase(java.util.Locale.ROOT);
+        String reason = failure == null ? "未知异常" : failure.getMessage();
+        if (reason == null || reason.isBlank()) {
+            reason = failure == null ? "未知异常" : failure.getClass().getSimpleName();
+        }
+        if (reason.length() > 1000) {
+            reason = reason.substring(0, 1000) + "...";
+        }
+        String content = "同步状态：未完成\n"
+            + "同步范围：最近 90 天\n"
+            + "同步交易对：" + symbolText + "\n"
+            + "失败原因：" + reason + "\n"
+            + "说明：同步按交易对分别提交，失败前已完成的交易对数据可能已经保存；请结合日志核对后重试。\n"
+            + "发生时间：" + NOTIFICATION_TIME_FORMAT.format(LocalDateTime.now(NOTIFICATION_ZONE));
+        enqueueSystemNotification(credential == null ? null : credential.getId(), subject, content);
+    }
+
+    private void enqueueSystemNotification(Long credentialId, String subject, String content) {
+        if (credentialId == null) {
+            log.warn("订单与成交同步结果系统消息未入队：交易凭证 ID 为空");
+            return;
+        }
+        QuantNotification notification = new QuantNotification();
+        notification.setCredentialId(credentialId);
+        notification.setChannel("SYSTEM");
+        notification.setRecipient("TERMINAL");
+        notification.setSubject(subject);
+        notification.setContent(content);
+        notification.setStatus("PENDING");
+        notification.setRetryCount(0);
+        notification.setNextRetryAt(LocalDateTime.now());
+        notification.setCreatedAt(LocalDateTime.now());
+        try {
+            if (notificationMapper.insert(notification) != 1) {
+                log.error("订单与成交同步结果系统消息入队失败 credentialId={} subject={}", credentialId, subject);
+                return;
+            }
+            if (notification.getId() != null) {
+                dispatchNotification(notification.getId());
+            }
+        } catch (RuntimeException ex) {
+            // 通知故障不得覆盖已完成的同步结果或原始同步异常。
+            log.error("订单与成交同步结果系统消息入队失败 credentialId={} subject={}", credentialId, subject, ex);
+        }
     }
 
     /**
@@ -174,8 +245,7 @@ public class QuantTradeNotificationService {
      * 日志线程调用；与交易风险消息分开，发布到顶部工作分类。
      */
     public void notifyDecisionLogLoss(long count) {
-        List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur.user_id " +
-            "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
+        List<Long> admins = tradeNotificationQueryMapper.selectActiveAdminUserIds();
         if (!admins.isEmpty()) {
             messageService.publishMessage(admins, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, "开平仓日志写入故障，累计丢失 " + count + " 条，请检查日志队列和数据库。", null, "/trade" +
                 "/trade-decision-log"));
@@ -205,8 +275,7 @@ public class QuantTradeNotificationService {
         String content =
             "实盘开仓已阻止\n账户: " + safe(credential == null ? null : credential.getAccountName()) + "\n交易对: " + safe(symbol) + "\n原因: " + safe(reason) + "\n时间: " + LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
         try {
-            List<Long> adminIds = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur JOIN sys_role r ON r.role_id=ur.role_id JOIN sys_user u ON u.user_id=ur" +
-                ".user_id " + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
+            List<Long> adminIds = tradeNotificationQueryMapper.selectActiveAdminUserIds();
             if (!adminIds.isEmpty()) {
                 messageService.publishMessage(adminIds, PushPayloadDTO.of(PushTypeEnum.MESSAGE, PushSourceEnum.WORKFLOW, content, null, "/quant/terminal/index"));
             }
@@ -408,13 +477,14 @@ public class QuantTradeNotificationService {
                 snapshotTask.setOwnerToken(ownerToken);
                 snapshotTask.setLeaseUntil(leaseUntil);
             }
-            Instant restRequestStartedAt = Instant.now();
-            try {
-                account = gateway.queryAccountFresh(exchangeCredential);
-                Instant restResponseReceivedAt = Instant.now();
-                if (snapshotClaimed) {
-                    boolean persisted = persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
-                        "REST_FALLBACK", closeTime, null, null, null, restRequestStartedAt, restResponseReceivedAt);
+            if (snapshotClaimed) {
+                Instant restRequestStartedAt = Instant.now();
+                try {
+                    account = gateway.queryAccountFresh(exchangeCredential);
+                    Instant restResponseReceivedAt = Instant.now();
+                    boolean persisted = withinCloseSnapshotWindow(closeTime)
+                        && persistCloseEquitySnapshot(credential.getId(), symbol, orderId, account,
+                            "REST_CLOSE_QUERY", closeTime, null, null, null, restRequestStartedAt, restResponseReceivedAt);
                     if (persisted && hasCompleteCloseEquitySnapshot(credential.getId(), symbol, orderId)) {
                         snapshotTask.setStatus("SENT");
                         snapshotTask.setSentAt(LocalDateTime.now());
@@ -423,26 +493,31 @@ public class QuantTradeNotificationService {
                     } else {
                         retryCloseFactTask(snapshotTask, "平仓后 REST 资金采样尚未完整");
                     }
-                }
-            } catch (RuntimeException ex) {
-                if (snapshotClaimed) {
+                } catch (RuntimeException ex) {
                     retryCloseFactTask(snapshotTask, "平仓后账户资金快照获取或持久化失败: " + ex.getClass().getSimpleName());
-                }
-                log.warn("平仓后账户资金快照获取或持久化失败 credentialId={} orderId={}", credential.getId(), orderId, ex);
-            } finally {
-                if (snapshotClaimed) {
+                    log.warn("平仓后账户资金快照获取或持久化失败 credentialId={} orderId={}", credential.getId(), orderId, ex);
+                } finally {
                     snapshotTask.setOwnerToken(null);
                     snapshotTask.setLeaseUntil(null);
                     try {
-                        notificationMapper.updateById(snapshotTask);
+                        updateFactPendingTask(snapshotTask);
                     } catch (RuntimeException ex) {
                         log.error("更新平仓账户资金快照任务状态失败 notificationId={}", snapshotTask.getId(), ex);
                     }
                 }
-            }
-            if (snapshotTask == null) {
-                log.error("平仓后账户资金快照任务无法持久化 credentialId={} symbol={} orderId={}",
-                    credential.getId(), symbol, orderId);
+            } else {
+                if (snapshotTask == null) {
+                    log.error("平仓后账户资金快照任务无法持久化 credentialId={} symbol={} orderId={}",
+                        credential.getId(), symbol, orderId);
+                }
+                // 另一个线程可能正在采集或已经完成同一订单的快照。
+                // 任务租约只负责避免重复持久化，不应导致本次邮件丢失可即时取得的账户资金。
+                try {
+                    account = gateway.queryAccountFresh(exchangeCredential);
+                } catch (RuntimeException ex) {
+                    log.warn("平仓通知并发快照兜底查询失败 credentialId={} symbol={} orderId={}",
+                        credential.getId(), symbol, orderId, ex);
+                }
             }
         } else {
             log.warn("平仓时间已超出即时账户快照窗口，不使用当前余额冒充平仓时余额 credentialId={} symbol={} orderId={} closeTime={}",
@@ -498,47 +573,17 @@ public class QuantTradeNotificationService {
         LocalDateTime restRequestTime = LocalDateTime.ofInstant(restRequestStartedAt, ZoneOffset.UTC);
         LocalDateTime restResponseTime = LocalDateTime.ofInstant(restResponseReceivedAt, ZoneOffset.UTC);
         try {
-            boolean complete = account.marginBalance() != null && account.walletBalance() != null;
-            int upgraded = jdbcTemplate.update("""
-                UPDATE quant_trade_close_equity
-                SET closing_equity=?, wallet_balance=?, unrealized_pnl=?,
-                    capture_source=?, close_event_time=?, account_update_transaction_time=?,
-                    exchange_event_time=?, stream_received_at=?, rest_query_started_at=?,
-                    rest_response_received_at=?, captured_at=UTC_TIMESTAMP(3)
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=?
-                  AND (closing_equity IS NULL OR wallet_balance IS NULL)
-                """, account.marginBalance(), account.walletBalance(), account.unrealizedPnl(),
-                captureSource, closeTime, accountTransactionTime, exchangeTime, receivedTime,
-                restRequestTime, restResponseTime, credentialId, symbol, orderId);
+            int upgraded = tradeNotificationQueryMapper.updateIncompleteCloseEquity(
+                credentialId, symbol, orderId, account.marginBalance(), account.walletBalance(),
+                account.unrealizedPnl(), captureSource, closeTime, accountTransactionTime,
+                exchangeTime, receivedTime, restRequestTime, restResponseTime);
             if (upgraded == 1) {
                 return true;
             }
-            if (!complete) {
-                // 不把不同 REST 请求时刻的 partial values 合并成一条快照，否则单一 captured_at 会失去真实含义。
-                jdbcTemplate.update("""
-                    INSERT INTO quant_trade_close_equity
-                        (credential_id, symbol, exchange_order_id, closing_equity,
-                         wallet_balance, unrealized_pnl, capture_source, close_event_time,
-                         account_update_transaction_time, exchange_event_time, stream_received_at,
-                         rest_query_started_at, rest_response_received_at, captured_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
-                    ON DUPLICATE KEY UPDATE id=id
-                    """, credentialId, symbol, orderId, account.marginBalance(),
-                    account.walletBalance(), account.unrealizedPnl(), captureSource, closeTime,
-                    accountTransactionTime, exchangeTime, receivedTime, restRequestTime, restResponseTime);
-                return true;
-            }
-            jdbcTemplate.update("""
-                INSERT INTO quant_trade_close_equity
-                    (credential_id, symbol, exchange_order_id, closing_equity,
-                     wallet_balance, unrealized_pnl, capture_source, close_event_time,
-                     account_update_transaction_time, exchange_event_time, stream_received_at,
-                     rest_query_started_at, rest_response_received_at, captured_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))
-                ON DUPLICATE KEY UPDATE id=id
-                """, credentialId, symbol, orderId, account.marginBalance(),
-                account.walletBalance(), account.unrealizedPnl(), captureSource, closeTime,
-                accountTransactionTime, exchangeTime, receivedTime, restRequestTime, restResponseTime);
+            tradeNotificationQueryMapper.insertCloseEquityIfAbsent(
+                credentialId, symbol, orderId, account.marginBalance(), account.walletBalance(),
+                account.unrealizedPnl(), captureSource, closeTime, accountTransactionTime,
+                exchangeTime, receivedTime, restRequestTime, restResponseTime);
             return true;
         } catch (RuntimeException ex) {
             log.warn("平仓账户资金快照持久化失败 credentialId={} symbol={} orderId={}",
@@ -551,7 +596,7 @@ public class QuantTradeNotificationService {
 
     /**
      * 仅凭已终态且有实际成交量的订单事件建立待采集任务。
-     * 不再等待 ACCOUNT_UPDATE 与订单事件按毫秒时间戳一对一匹配；
+     * ACCOUNT_UPDATE 是稀疏增量，不直接还原整账户权益；订单确认后通过 REST 获取完整账户总览。
      * 事件先持久化为快照任务，再立即 REST 采样，进程重启后仍可在有效窗口内重试。
      */
     public void captureCloseSnapshotFromUserDataEvent(Long credentialId, ExchangeGateway.Credential credential,
@@ -587,14 +632,25 @@ public class QuantTradeNotificationService {
             return;
         }
 
+        Instant streamReceivedAt = event.receivedAt();
+        Instant captureStartedAt = Instant.now();
+        long exchangeToReceiveMillis = event.eventTime() == null || streamReceivedAt == null
+            ? -1L : Duration.between(event.eventTime(), streamReceivedAt).toMillis();
+        long receiveToCaptureMillis = streamReceivedAt == null
+            ? -1L : Duration.between(streamReceivedAt, captureStartedAt).toMillis();
+        log.info("平仓资金快照事件到达 credentialId={} symbol={} orderId={} exchangeEventTime={} streamReceivedAt={} captureStartedAt={} exchangeToReceiveMs={} receiveToCaptureMs={}",
+            credentialId, symbol, orderId, event.eventTime(), streamReceivedAt, captureStartedAt,
+            exchangeToReceiveMillis, receiveToCaptureMillis);
+
         String captureKey = credentialId + ":" + symbol + ":" + orderId;
         if (!activeStreamCloseCaptures.add(captureKey)) {
             return;
         }
-        Instant streamReceivedAt = Instant.now();
+        // ACCOUNT_UPDATE 是稀疏增量，不是完整资金快照；交易记录资金值由确认平仓后的 REST 总览提供。
+        // ORDER_TRADE_UPDATE 的 E/接收时间不是 ACCOUNT_UPDATE 元数据，不能写入对应字段。
         QuantNotification task = enqueuePendingCloseSnapshot(credentialId, symbol, orderId,
             Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime,
-            null, event.eventTime(), streamReceivedAt);
+            null, null, null);
         if (task == null) {
             activeStreamCloseCaptures.remove(captureKey);
             log.error("平仓账户资金快照无法建立持久化任务 credentialId={} symbol={} orderId={}",
@@ -602,6 +658,14 @@ public class QuantTradeNotificationService {
             return;
         }
 
+        dispatchCloseSnapshotCapture(credentialId, credential, symbol, orderId,
+            Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime, task, captureKey);
+    }
+
+    private void dispatchCloseSnapshotCapture(Long credentialId, ExchangeGateway.Credential credential,
+                                               String symbol, Long orderId, String clientOrderId,
+                                               Instant closeEventTime, Instant orderTransactionTime,
+                                               QuantNotification task, String captureKey) {
         Thread.ofVirtual().name("quant-close-equity-stream").start(() -> {
             boolean claimed = false;
             String ownerToken = UUID.randomUUID().toString();
@@ -616,8 +680,7 @@ public class QuantTradeNotificationService {
                 task.setOwnerToken(ownerToken);
                 task.setLeaseUntil(leaseUntil);
                 if (captureCloseEquitySnapshot(credentialId, credential, symbol, orderId,
-                    Objects.toString(order.get("c"), ""), closeEventTime, orderTransactionTime,
-                    null, event.eventTime(), streamReceivedAt)) {
+                    clientOrderId, closeEventTime, orderTransactionTime, null, null, null)) {
                     task.setStatus("SENT");
                     task.setSentAt(LocalDateTime.now());
                     task.setNextRetryAt(null);
@@ -636,7 +699,7 @@ public class QuantTradeNotificationService {
                     task.setOwnerToken(null);
                     task.setLeaseUntil(null);
                     try {
-                        notificationMapper.updateById(task);
+                        updateFactPendingTask(task);
                     } catch (RuntimeException ex) {
                         log.error("更新平仓账户资金快照任务状态失败 notificationId={}", task.getId(), ex);
                     }
@@ -646,40 +709,90 @@ public class QuantTradeNotificationService {
         });
     }
 
-    private boolean isVerifiedCloseOrder(Long credentialId, String symbol, Long orderId, String clientOrderId) {
-        Integer matched = jdbcTemplate.queryForObject("""
-            SELECT EXISTS (
-                SELECT 1
-                FROM quant_strategy_order_intent
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=? AND fill_role='CLOSE'
-                UNION ALL
-                SELECT 1
-                FROM quant_execution_record
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=? AND operation_type='CLOSE'
-                UNION ALL
-                SELECT 1
-                FROM quant_strategy_pre_dispatch_intent
-                WHERE credential_id=? AND symbol=? AND client_order_id=? AND operation_type='CLOSE'
-                UNION ALL
-                SELECT 1
-                FROM quant_trade_cycle_fill
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=? AND fill_role='CLOSE'
-            )
-            """, Integer.class, credentialId, symbol, orderId,
-            credentialId, symbol, orderId, credentialId, symbol, clientOrderId,
-            credentialId, symbol, orderId);
-        return matched != null && matched == 1;
+    /**
+     * 补偿 WebSocket 事件未触发或任务未落库的近期已平仓周期。
+     * 只在两分钟即时采样窗口内处理，绝不使用当前余额回填历史成交。
+     */
+    public void recoverRecentCloseSnapshots(Long credentialId, ExchangeGateway.Credential exchangeCredential) {
+        if (credentialId == null || exchangeCredential == null || "PAPER".equalsIgnoreCase(exchangeCredential.runMode())) {
+            return;
+        }
+        List<Map<String, Object>> candidates = tradeNotificationQueryMapper.selectRecentCloseSnapshotCandidates(credentialId);
+        Set<String> scheduled = new java.util.HashSet<>();
+        for (Map<String, Object> row : candidates) {
+            Long candidateCredentialId = longValue(row.get("credential_id"));
+            Long orderId = longValue(row.get("exchange_order_id"));
+            String symbol = Objects.toString(row.get("symbol"), "");
+            if (candidateCredentialId == null || orderId == null || symbol.isBlank()) {
+                continue;
+            }
+            String captureKey = candidateCredentialId + ":" + symbol + ":" + orderId;
+            if (!scheduled.add(captureKey) || !activeStreamCloseCaptures.add(captureKey)) {
+                continue;
+            }
+            try {
+                Instant closeTime = LocalDateTime.parse(String.valueOf(row.get("close_time_utc")))
+                    .toInstant(ZoneOffset.UTC);
+                if (!withinCloseSnapshotWindow(closeTime)) {
+                    activeStreamCloseCaptures.remove(captureKey);
+                    continue;
+                }
+                QuantNotification task = enqueuePendingCloseSnapshot(
+                    candidateCredentialId, symbol, orderId, null, closeTime, null, null, null, null);
+                if (task == null || task.getId() == null) {
+                    activeStreamCloseCaptures.remove(captureKey);
+                    log.error("近期已平仓周期缺少快照任务，补偿任务创建失败 credentialId={} symbol={} orderId={}",
+                        credentialId, symbol, orderId);
+                    continue;
+                }
+                log.warn("发现近期已平仓周期缺少账户快照，已创建补偿任务 credentialId={} symbol={} orderId={}",
+                    credentialId, symbol, orderId);
+                dispatchCloseSnapshotCapture(candidateCredentialId, exchangeCredential, symbol, orderId,
+                    null, closeTime, null, task, captureKey);
+            } catch (RuntimeException ex) {
+                activeStreamCloseCaptures.remove(captureKey);
+                log.warn("近期平仓账户快照补偿失败 credentialId={} symbol={} orderId={}",
+                    credentialId, symbol, orderId, ex);
+            }
+        }
+    }
+
+    private boolean isVerifiedCloseOrder(Long credentialId, ExchangeGateway.Credential credential,
+                                          String symbol, Long orderId, String clientOrderId) {
+        Integer matched = tradeNotificationQueryMapper.existsVerifiedCloseOrder(
+            credentialId, symbol, orderId, clientOrderId);
+        if (matched != null && matched == 1) {
+            return true;
+        }
+
+        try {
+            ExchangeGateway.OrderSnapshot order = gateway.queryOrder(credential, symbol, orderId, null);
+            if (order == null || !orderId.equals(order.orderId()) || !symbol.equalsIgnoreCase(order.symbol())
+                || clientOrderId != null && !clientOrderId.isBlank()
+                    && !clientOrderId.equals(order.clientOrderId())
+                || !Set.of("FILLED", "CANCELED", "EXPIRED", "EXPIRED_IN_MATCH")
+                    .contains(order.status() == null ? "" : order.status().toUpperCase(java.util.Locale.ROOT))
+                || order.executedQuantity() == null || order.executedQuantity().signum() <= 0) {
+                return false;
+            }
+
+            String positionSide = order.positionSide() == null ? "" : order.positionSide().toUpperCase(java.util.Locale.ROOT);
+            String side = order.side() == null ? "" : order.side().toUpperCase(java.util.Locale.ROOT);
+            return switch (positionSide) {
+                case "LONG" -> "SELL".equals(side);
+                case "SHORT" -> "BUY".equals(side);
+                case "", "BOTH" -> Boolean.TRUE.equals(order.reduceOnly()) || Boolean.TRUE.equals(order.closePosition());
+                default -> false;
+            };
+        } catch (RuntimeException ex) {
+            log.warn("平仓资金快照无法通过 Binance 订单回查确认身份 credentialId={} symbol={} orderId={} errorType={}",
+                credentialId, symbol, orderId, ex.getClass().getSimpleName());
+            return false;
+        }
     }
 
     private boolean hasCompleteCloseEquitySnapshot(Long credentialId, String symbol, Long orderId) {
-        Integer complete = jdbcTemplate.queryForObject("""
-            SELECT EXISTS (
-                SELECT 1
-                FROM quant_trade_close_equity
-                WHERE credential_id=? AND symbol=? AND exchange_order_id=?
-                  AND closing_equity IS NOT NULL AND wallet_balance IS NOT NULL
-            )
-            """, Integer.class, credentialId, symbol, orderId);
+        Integer complete = tradeNotificationQueryMapper.existsCompleteCloseEquity(credentialId, symbol, orderId);
         return complete != null && complete == 1;
     }
 
@@ -701,13 +814,11 @@ public class QuantTradeNotificationService {
                                                 Instant accountUpdateTransactionTime, Instant accountUpdateEventTime,
                                                 Instant accountUpdateReceivedAt) {
         if (credentialId == null || credential == null || symbol == null || orderId == null
-            || closeEventTime == null
-            || accountUpdateTransactionTime != null && (orderTransactionTime == null
-                || !orderTransactionTime.equals(accountUpdateTransactionTime))
-            || !withinCloseSnapshotWindow(closeEventTime)) {
+            || closeEventTime == null || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
-        if (!isVerifiedCloseOrder(credentialId, symbol, orderId, clientOrderId)) {
+        if (!isVerifiedCloseOrder(credentialId, credential, symbol, orderId, clientOrderId)
+            || !withinCloseSnapshotWindow(closeEventTime)) {
             return false;
         }
         if (hasCompleteCloseEquitySnapshot(credentialId, symbol, orderId)) {
@@ -727,7 +838,7 @@ public class QuantTradeNotificationService {
             return false;
         }
         boolean persisted = persistCloseEquitySnapshot(credentialId, symbol, orderId, account,
-            "REST_FALLBACK", closeEventTime, accountUpdateTransactionTime,
+            "REST_CLOSE_QUERY", closeEventTime, accountUpdateTransactionTime,
             accountUpdateEventTime, accountUpdateReceivedAt, restRequestStartedAt, restResponseReceivedAt);
         return persisted && hasCompleteCloseEquitySnapshot(credentialId, symbol, orderId);
     }
@@ -737,9 +848,7 @@ public class QuantTradeNotificationService {
                                                             Instant orderTransactionTime,
                                                             Instant accountUpdateTransactionTime,
                                                             Instant exchangeEventTime, Instant streamReceivedAt) {
-        if (credentialId == null || symbol == null || orderId == null || closeEventTime == null
-            || accountUpdateTransactionTime != null && (orderTransactionTime == null
-                || !orderTransactionTime.equals(accountUpdateTransactionTime))) {
+        if (credentialId == null || symbol == null || orderId == null || closeEventTime == null) {
             return null;
         }
         String taskKey = SNAPSHOT_TASK_PREFIX + symbol + ":" + orderId;
@@ -920,6 +1029,13 @@ public class QuantTradeNotificationService {
         }
     }
 
+    private void updateFactPendingTask(QuantNotification task) {
+        notificationMapper.updateById(task);
+        if (task.getId() != null && "SENT".equalsIgnoreCase(task.getStatus())) {
+            tradeNotificationQueryMapper.clearNotificationLastError(task.getId());
+        }
+    }
+
     private void markCloseFactSent(QuantNotification task) {
         if (task == null) {
             return;
@@ -928,7 +1044,7 @@ public class QuantTradeNotificationService {
         task.setSentAt(LocalDateTime.now());
         task.setNextRetryAt(null);
         task.setLastError(null);
-        notificationMapper.updateById(task);
+        updateFactPendingTask(task);
     }
 
     private void enqueuePendingOpenFact(QuantStrategy strategy, QuantCredential credential, String symbol, String direction, BigDecimal quantity,
@@ -1106,7 +1222,7 @@ public class QuantTradeNotificationService {
             }
             task.setOwnerToken(null);
             task.setLeaseUntil(null);
-            notificationMapper.updateById(task);
+            updateFactPendingTask(task);
         }
     }
 
@@ -1250,7 +1366,7 @@ public class QuantTradeNotificationService {
         java.util.LinkedHashSet<Long> recipients = new java.util.LinkedHashSet<>();
         if (credentialId != null) {
             try {
-                Long ownerId = jdbcTemplate.queryForObject("SELECT user_id FROM quant_credential WHERE id=? AND del_flag='0'", Long.class, credentialId);
+                Long ownerId = tradeNotificationQueryMapper.selectCredentialOwnerId(credentialId);
                 if (ownerId != null) {
                     recipients.add(ownerId);
                 }
@@ -1258,8 +1374,7 @@ public class QuantTradeNotificationService {
                 // 凭证不存在或已删除：交给管理员兜底
             }
         }
-        List<Long> admins = jdbcTemplate.query("SELECT DISTINCT ur.user_id FROM sys_user_role ur " + "JOIN sys_role r ON r.role_id=ur.role_id " + "JOIN sys_user u ON u" +
-            ".user_id=ur.user_id " + "WHERE r.role_key='admin' AND u.status='0' AND u.del_flag='0'", (rs, rowNum) -> rs.getLong(1));
+        List<Long> admins = tradeNotificationQueryMapper.selectActiveAdminUserIds();
         if (admins != null) {
             recipients.addAll(admins);
         }
@@ -1327,7 +1442,7 @@ public class QuantTradeNotificationService {
                 }
                 task.setOwnerToken(null);
                 task.setLeaseUntil(null);
-                notificationMapper.updateById(task);
+                updateFactPendingTask(task);
             });
         } catch (RuntimeException ex) {
             log.warn("开仓通知即时核验任务提交失败，等待后台补偿 notificationId={}", notificationId, ex);

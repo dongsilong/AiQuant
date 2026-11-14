@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.decision.mapper.TradeDecisionLogMapper">
+
+    <select id="selectByEventKey" resultType="java.util.HashMap" timeout="3">
+        SELECT * FROM quant_trade_decision_log WHERE event_key=#{eventKey}
+    </select>
+
+    <select id="selectCredentialInfo" resultType="java.util.HashMap" timeout="3">
+        SELECT account_name,run_mode FROM quant_credential WHERE id=#{credentialId}
+    </select>
+
+    <select id="selectExecutionRecord" resultType="java.util.HashMap" timeout="3">
+        SELECT * FROM quant_execution_record
+        WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+          AND operation_type IN ('OPEN','CLOSE')
+          AND (exchange_order_id=#{orderId} OR client_order_id=#{clientOrderId})
+        ORDER BY created_at DESC LIMIT 1
+    </select>
+
+    <select id="selectOrderForExecution" resultType="java.util.HashMap" timeout="3">
+        SELECT strategy_id,strategy_instance_id,reduce_only,position_side,status
+        FROM quant_order
+        WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND exchange_order_id=#{orderId}
+        LIMIT 1
+    </select>
+
+    <select id="selectProtectionForOrder" resultType="java.util.HashMap" timeout="3">
+        SELECT p.protection_type,p.position_side,p.stop_price,p.quantity,p.step_index,
+               s.instance_id,s.direction position_direction,s.entry_price,s.frozen_leverage,
+               s.highest_price_since_entry,s.lowest_price_since_entry,s.strategy_params_snapshot,
+               s.frozen_stop_loss_ratio,s.frozen_symbol_stop_loss_ratio,i.strategy_id
+        FROM quant_protection_order p
+        LEFT JOIN quant_strategy_position_state s ON s.position_id=p.position_id
+        LEFT JOIN quant_strategy_instance i ON i.id=s.instance_id
+        WHERE p.credential_id=#{credentialId} AND p.symbol=#{symbol}
+          AND (p.exchange_order_id=#{orderId} OR p.client_order_id=#{clientOrderId})
+        LIMIT 1
+    </select>
+
+    <select id="selectProtectionForClientOrder" resultType="java.util.HashMap" timeout="3">
+        SELECT p.protection_type,p.position_side,p.stop_price,p.quantity,p.step_index,
+               s.direction position_direction,s.entry_price,s.frozen_leverage,s.highest_price_since_entry,
+               s.lowest_price_since_entry,s.strategy_params_snapshot,s.frozen_stop_loss_ratio,
+               s.frozen_symbol_stop_loss_ratio,i.strategy_id,i.id instance_id
+        FROM quant_protection_order p
+        JOIN quant_strategy_position_state s ON s.position_id=p.position_id
+        JOIN quant_strategy_instance i ON i.id=s.instance_id
+        WHERE p.credential_id=#{credentialId} AND p.symbol=#{symbol}
+          AND p.client_order_id=#{clientOrderId}
+        LIMIT 1
+    </select>
+
+    <select id="selectStrategyName" resultType="java.util.HashMap" timeout="3">
+        SELECT strategy_name FROM quant_strategy WHERE id=#{strategyId}
+    </select>
+
+    <select id="selectOrderStatus" resultType="java.util.HashMap" timeout="3">
+        SELECT status FROM quant_order
+        WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND exchange_order_id=#{orderId}
+        LIMIT 1
+    </select>
+
+    <select id="selectFillTotals" resultType="java.util.HashMap" timeout="3">
+        SELECT SUM(quantity) qty,SUM(quantity*price) amount,MAX(trade_time) last_fill
+        FROM quant_trade_decision_log WHERE parent_key=#{parentKey} AND record_type='FILL'
+    </select>
+
+    <select id="selectFillRows" resultType="java.util.HashMap" timeout="3">
+        SELECT quantity,price,trade_time
+        FROM quant_trade_decision_log
+        WHERE parent_key=#{parentKey} AND record_type='FILL'
+        ORDER BY trade_time,id
+    </select>
+
+    <insert id="insertEvaluations" timeout="3">
+        INSERT INTO quant_trade_decision_log
+        (event_key,record_type,credential_id,account_name,run_mode,strategy_id,strategy_instance_id,strategy_name,
+         symbol,operation,direction,status,reason_code,reason,angle,threshold,kline_time,quantity,price,margin,
+         idempotency_key,order_id,client_order_id,event_time,trade_time,repeat_count,last_time)
+        VALUES
+        <foreach collection="rows" item="row" separator=",">
+            (#{row.eventKey},#{row.recordType},#{row.credentialId},#{row.accountName},#{row.runMode},
+             #{row.strategyId},#{row.strategyInstanceId},#{row.strategyName},#{row.symbol},#{row.operation},
+             #{row.direction},#{row.status},#{row.reasonCode},#{row.reason},#{row.angle},#{row.threshold},
+             #{row.klineTime},#{row.quantity},#{row.price},#{row.margin},#{row.idempotencyKey},#{row.orderId},
+             #{row.clientOrderId},#{row.firstTime},#{row.tradeTime},#{row.count},#{row.eventTime})
+        </foreach>
+        ON DUPLICATE KEY UPDATE repeat_count=repeat_count+VALUES(repeat_count),
+            last_time=GREATEST(last_time,VALUES(last_time)),price=VALUES(price),
+            angle=VALUES(angle),reason=VALUES(reason)
+    </insert>
+
+    <insert id="insertLog" parameterType="map" timeout="3">
+        INSERT INTO quant_trade_decision_log
+        (event_key,record_type,credential_id,account_name,run_mode,strategy_id,strategy_instance_id,strategy_name,
+         symbol,operation,direction,status,reason_code,reason,angle,threshold,kline_time,quantity,price,margin,
+         idempotency_key,order_id,client_order_id,event_time,trade_time,repeat_count,last_time)
+        VALUES
+        (#{row.eventKey},#{row.recordType},#{row.credentialId},#{row.accountName},#{row.runMode},
+         #{row.strategyId},#{row.strategyInstanceId},#{row.strategyName},#{row.symbol},#{row.operation},
+         #{row.direction},#{row.status},#{row.reasonCode},#{row.reason},#{row.angle},#{row.threshold},
+         #{row.klineTime},#{row.quantity},#{row.price},#{row.margin},#{row.idempotencyKey},#{row.orderId},
+         #{row.clientOrderId},#{row.eventTime},#{row.tradeTime},1,#{row.eventTime})
+    </insert>
+
+    <insert id="insertFill" parameterType="map" timeout="3">
+        INSERT INTO quant_trade_decision_log
+        (event_key,record_type,credential_id,account_name,run_mode,strategy_id,strategy_instance_id,strategy_name,
+         symbol,operation,direction,status,reason_code,reason,angle,threshold,kline_time,quantity,price,margin,
+         idempotency_key,order_id,client_order_id,event_time,trade_time,repeat_count,last_time,parent_key)
+        VALUES
+        (#{row.eventKey},#{row.recordType},#{row.credentialId},#{row.accountName},#{row.runMode},
+         #{row.strategyId},#{row.strategyInstanceId},#{row.strategyName},#{row.symbol},#{row.operation},
+         #{row.direction},#{row.status},#{row.reasonCode},#{row.reason},#{row.angle},#{row.threshold},
+         #{row.klineTime},#{row.quantity},#{row.price},#{row.margin},#{row.idempotencyKey},#{row.orderId},
+         #{row.clientOrderId},#{row.eventTime},#{row.tradeTime},1,#{row.eventTime},#{row.parentKey})
+        ON DUPLICATE KEY UPDATE parent_key=VALUES(parent_key)
+    </insert>
+
+    <update id="updateStrategyMetadata" timeout="3">
+        UPDATE quant_trade_decision_log
+        SET strategy_id=#{strategyId},strategy_instance_id=#{instanceId},strategy_name=#{strategyName},operation=#{operation}
+        WHERE event_key=#{eventKey}
+    </update>
+
+    <update id="updateDecisionLog" timeout="3">
+        UPDATE quant_trade_decision_log
+        SET status=#{status},reason=#{reason},reason_code=#{reasonCode},
+            order_id=COALESCE(#{orderId},order_id),client_order_id=COALESCE(#{clientOrderId},client_order_id),
+            quantity=#{quantity},price=#{price},trade_time=COALESCE(#{tradeTime},trade_time),
+            direction=COALESCE(#{direction},direction),margin=COALESCE(#{margin},margin),
+            last_time=GREATEST(last_time,#{eventTime})
+        WHERE event_key=#{eventKey}
+    </update>
+
+    <update id="updateFillParent" timeout="3">
+        UPDATE quant_trade_decision_log SET parent_key=#{target}
+        WHERE parent_key=#{source} AND record_type='FILL'
+    </update>
+
+    <delete id="deleteSourceOrder" timeout="3">
+        DELETE FROM quant_trade_decision_log WHERE event_key=#{source} AND record_type&lt;&gt;'FILL'
+    </delete>
+
+    <update id="updateAggregatedFill" timeout="3">
+        UPDATE quant_trade_decision_log
+        SET quantity=#{quantity},price=#{price},trade_time=#{tradeTime},
+            status=CASE WHEN status IN ('FILLED','CANCELED','EXPIRED','REJECTED','EXPIRED_IN_MATCH')
+                        THEN status ELSE #{status} END,
+            last_time=GREATEST(last_time,#{eventTime})
+        WHERE event_key=#{parentKey}
+          AND (trade_time IS NULL OR quantity IS NULL OR quantity&lt;=#{quantityLimit})
+    </update>
+
+    <sql id="decisionLogWhere">
+        WHERE record_type&lt;&gt;'FILL'
+        <if test="q.credentialId != null">AND credential_id=#{q.credentialId}</if>
+        <if test="q.strategyName != null and q.strategyName != ''">AND strategy_name LIKE CONCAT('%',#{q.strategyName},'%')</if>
+        <if test="q.strategyInstanceId != null">AND strategy_instance_id=#{q.strategyInstanceId}</if>
+        <if test="q.symbol != null and q.symbol != ''">AND symbol=#{q.symbol}</if>
+        <if test="q.runMode != null and q.runMode != ''">AND run_mode=#{q.runMode}</if>
+        <if test="q.operation != null and q.operation != ''">AND operation=#{q.operation}</if>
+        <if test="q.status != null and q.status != ''">AND status=#{q.status}</if>
+        <if test="q.reason != null and q.reason != ''">AND reason LIKE CONCAT('%',#{q.reason},'%')</if>
+        AND event_time&gt;=#{from} AND event_time&lt;=#{to}
+    </sql>
+
+    <select id="countLogs" resultType="java.lang.Long" timeout="3">
+        SELECT COUNT(*) FROM quant_trade_decision_log
+        <include refid="decisionLogWhere"/>
+    </select>
+
+    <select id="selectLogs" resultType="java.util.HashMap" timeout="3">
+        SELECT * FROM quant_trade_decision_log
+        <include refid="decisionLogWhere"/>
+        ORDER BY event_time DESC,id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="selectDetail" resultType="java.util.HashMap" timeout="3">
+        SELECT * FROM quant_trade_decision_log WHERE id=#{id} AND record_type&lt;&gt;'FILL'
+    </select>
+</mapper>

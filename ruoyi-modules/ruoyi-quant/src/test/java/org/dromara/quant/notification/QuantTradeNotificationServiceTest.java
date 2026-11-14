@@ -5,14 +5,13 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.notification.domain.QuantNotification;
 import org.dromara.quant.notification.mapper.QuantNotificationMapper;
+import org.dromara.quant.notification.mapper.QuantTradeNotificationQueryMapper;
 import org.dromara.quant.risk.mapper.QuantRiskConfigMapper;
 import org.dromara.system.api.MessageService;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.RowMapper;
 import org.springframework.core.task.TaskExecutor;
 
 import java.math.BigDecimal;
@@ -32,7 +31,7 @@ class QuantTradeNotificationServiceTest {
         var properties = new QuantProperties();
         properties.getNotification().setDefaultEmails("test@example.invalid");
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, properties,
-            mock(MessageService.class), mock(JdbcTemplate.class), mock(ExchangeGateway.class), mock(TaskExecutor.class));
+            mock(MessageService.class), mock(QuantTradeNotificationQueryMapper.class), mock(ExchangeGateway.class), mock(TaskExecutor.class));
         when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
             ((QuantNotification) invocation.getArgument(0)).setId((long) invocation.getArgument(0, QuantNotification.class).getChannel().hashCode());
             return 1;
@@ -61,7 +60,7 @@ class QuantTradeNotificationServiceTest {
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
-            mock(MessageService.class), mock(JdbcTemplate.class), gateway, mock(TaskExecutor.class));
+            mock(MessageService.class), mock(QuantTradeNotificationQueryMapper.class), gateway, mock(TaskExecutor.class));
         when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
             ((QuantNotification) invocation.getArgument(0)).setId(46L);
             return 1;
@@ -90,7 +89,7 @@ class QuantTradeNotificationServiceTest {
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-open-fill-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
         var messageService = mock(MessageService.class);
         var properties = new QuantProperties();
         properties.getNotification().setDefaultEmails("test@example.invalid");
@@ -133,8 +132,8 @@ class QuantTradeNotificationServiceTest {
             return 1;
         });
         when(mapper.claim(eq(48L), any(), any())).thenReturn(1);
-        when(jdbc.queryForObject(anyString(), eq(Long.class), any())).thenReturn(7L);
-        when(jdbc.query(anyString(), ArgumentMatchers.<RowMapper<Long>>any())).thenReturn(List.of(9L));
+        when(jdbc.selectCredentialOwnerId(any())).thenReturn(7L);
+        when(jdbc.selectActiveAdminUserIds()).thenReturn(List.of(9L));
 
         service.retryPendingCloseFacts();
 
@@ -150,7 +149,7 @@ class QuantTradeNotificationServiceTest {
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-retry-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
         var messageService = mock(MessageService.class);
         var properties = new QuantProperties();
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, properties,
@@ -160,8 +159,8 @@ class QuantTradeNotificationServiceTest {
             return 1;
         });
         when(mapper.claim(eq(42L), any(), any())).thenReturn(1);
-        when(jdbc.queryForObject(anyString(), eq(Long.class), any())).thenReturn(7L);
-        when(jdbc.query(anyString(), ArgumentMatchers.<RowMapper<Long>>any())).thenReturn(List.of(9L));
+        when(jdbc.selectCredentialOwnerId(any())).thenReturn(7L);
+        when(jdbc.selectActiveAdminUserIds()).thenReturn(List.of(9L));
         doThrow(new IllegalStateException("temporary message bus failure"))
             .when(messageService).publishMessage(anyList(), any());
 
@@ -185,7 +184,7 @@ class QuantTradeNotificationServiceTest {
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-fill-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
         var properties = new QuantProperties();
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, properties,
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
@@ -194,7 +193,7 @@ class QuantTradeNotificationServiceTest {
             return 1;
         });
         when(mapper.claim(eq(42L), any(), any())).thenReturn(1);
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any())).thenReturn(1);
         var credential = new QuantCredential();
         credential.setId(10L);
         credential.setAccountName("test-account");
@@ -228,20 +227,67 @@ class QuantTradeNotificationServiceTest {
         assertEquals("SENT", snapshotTask.getStatus());
         verify(mapper, atLeastOnce()).updateById(argThat(updated -> "SENT".equals(updated.getStatus())
             && "FACT_PENDING".equals(updated.getChannel())));
-        var snapshotWrite = ArgumentCaptor.forClass(Object[].class);
-        verify(jdbc).update(contains("UPDATE quant_trade_close_equity"), snapshotWrite.capture());
-        assertEquals("REST_FALLBACK", snapshotWrite.getValue()[3]);
-        assertTrue(snapshotWrite.getValue()[8] instanceof java.time.LocalDateTime);
-        assertTrue(snapshotWrite.getValue()[9] instanceof java.time.LocalDateTime);
+        verify(jdbc).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         assertTrue(content.contains("实际平仓均价: 102"));
         assertTrue(content.contains("最大回报率: 5.86351456%"));
         assertTrue(content.contains("交易所已实现盈亏（未扣手续费）: 3 USDT"));
         assertTrue(content.contains("手续费: 0.03 USDT"));
         assertTrue(content.contains("钱包余额: 1000 USDT"));
+        verify(gateway, times(1)).queryAccountFresh(any());
         assertTrue(content.contains("账户权益: 1003 USDT"));
         assertTrue(content.contains("可用余额: 900 USDT"));
     }
 
+
+    @Test
+    void closeNotificationQueriesAccountForEmailWhenAnotherWorkerOwnsSnapshot() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-close-snapshot-owned-elsewhere-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(43L);
+            return 1;
+        });
+        when(mapper.claim(eq(43L), any(), any())).thenReturn(0);
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any())).thenReturn(1);
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        credential.setAccountName("test-account");
+        credential.setApiKey("test-key");
+        credential.setSecretKey("test-secret");
+        credential.setSignatureType("HMAC");
+        credential.setRunMode("TESTNET");
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(99L), isNull())).thenReturn(
+            new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "client-close", "SELL", "MARKET", "FILLED",
+                BigDecimal.ZERO, BigDecimal.valueOf(2), BigDecimal.valueOf(2), Instant.now(), BigDecimal.valueOf(102)));
+        when(gateway.queryTradesByOrder(any(), eq("BTCUSDT"), eq(99L), any(), eq(1000L))).thenReturn(List.of(
+            new ExchangeGateway.TradeSnapshot("BTCUSDT", 1L, 99L, "SELL", BigDecimal.ONE, BigDecimal.valueOf(101),
+                new BigDecimal("0.01"), BigDecimal.ONE, Instant.now(), "USDT", "LONG"),
+            new ExchangeGateway.TradeSnapshot("BTCUSDT", 2L, 99L, "SELL", BigDecimal.ONE, BigDecimal.valueOf(103),
+                new BigDecimal("0.02"), BigDecimal.valueOf(2), Instant.now(), "USDT", "LONG")));
+
+        when(gateway.queryAccountFresh(any())).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
+        service.notifyCloseByOrder(null, credential, "BTCUSDT", "LONG", BigDecimal.valueOf(2), BigDecimal.valueOf(100),
+            99L, "USDT", new BigDecimal("5.86351456"), "MANUAL", "test close");
+
+        verify(gateway, times(1)).queryAccountFresh(any());
+        verify(jdbc, never()).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        var notifications = org.mockito.ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, atLeastOnce()).insert(notifications.capture());
+        String content = notifications.getAllValues().stream()
+            .filter(row -> "SYSTEM".equals(row.getChannel()))
+            .map(QuantNotification::getContent).findFirst().orElseThrow();
+        assertTrue(content.contains("钱包余额: 1000 USDT"));
+        assertTrue(content.contains("账户权益: 1003 USDT"));
+        assertTrue(content.contains("可用余额: 900 USDT"));
+    }
 
     @Test
     void canceledStrategyCloseWithPartialFillUsesConfirmedFillFacts() {
@@ -250,7 +296,7 @@ class QuantTradeNotificationServiceTest {
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
-            mock(MessageService.class), mock(JdbcTemplate.class), gateway, mock(TaskExecutor.class));
+            mock(MessageService.class), mock(QuantTradeNotificationQueryMapper.class), gateway, mock(TaskExecutor.class));
         when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
             ((QuantNotification) invocation.getArgument(0)).setId(43L);
             return 1;
@@ -293,7 +339,7 @@ class QuantTradeNotificationServiceTest {
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
-            mock(MessageService.class), mock(JdbcTemplate.class), gateway, mock(TaskExecutor.class));
+            mock(MessageService.class), mock(QuantTradeNotificationQueryMapper.class), gateway, mock(TaskExecutor.class));
         when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
             ((QuantNotification) invocation.getArgument(0)).setId(44L);
             return 1;
@@ -330,7 +376,7 @@ class QuantTradeNotificationServiceTest {
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-unresolved-child-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
-            mock(MessageService.class), mock(JdbcTemplate.class), mock(ExchangeGateway.class), mock(TaskExecutor.class));
+            mock(MessageService.class), mock(QuantTradeNotificationQueryMapper.class), mock(ExchangeGateway.class), mock(TaskExecutor.class));
         var intentMapper = mock(org.dromara.quant.execution.StrategyOrderIntentMapper.class);
         var intentMapperField = QuantTradeNotificationService.class.getDeclaredField("strategyOrderIntentMapper");
         intentMapperField.setAccessible(true);
@@ -366,7 +412,7 @@ class QuantTradeNotificationServiceTest {
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-close-stream-snapshot-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
@@ -382,9 +428,9 @@ class QuantTradeNotificationServiceTest {
             return 1;
         });
         when(mapper.claim(eq(901L), any(), any())).thenReturn(1);
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any()))
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any()))
             .thenReturn(1, 0, 1);
-        when(jdbc.update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(jdbc.updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
             new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
                 new BigDecimal("1003"), new BigDecimal("3")));
@@ -393,19 +439,7 @@ class QuantTradeNotificationServiceTest {
             new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(eventMillis), payload));
 
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
-        var values = ArgumentCaptor.forClass(Object[].class);
-        verify(jdbc, timeout(3000)).update(contains("UPDATE quant_trade_close_equity"), values.capture());
-        assertEquals(new BigDecimal("1003"), values.getValue()[0]);
-        assertEquals(new BigDecimal("1000"), values.getValue()[1]);
-        assertEquals("REST_FALLBACK", values.getValue()[3]);
-        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(closeMillis), java.time.ZoneOffset.UTC),
-            values.getValue()[4]);
-        assertNull(values.getValue()[5]);
-        assertEquals(java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(eventMillis), java.time.ZoneOffset.UTC),
-            values.getValue()[6]);
-        assertTrue(values.getValue()[7] instanceof java.time.LocalDateTime);
-        assertTrue(values.getValue()[8] instanceof java.time.LocalDateTime);
-        assertTrue(values.getValue()[9] instanceof java.time.LocalDateTime);
+        verify(jdbc, timeout(3000)).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
         assertEquals("SENT", taskUpdate.getValue().getStatus());
@@ -417,7 +451,7 @@ class QuantTradeNotificationServiceTest {
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-close-batch-snapshot-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
@@ -428,7 +462,7 @@ class QuantTradeNotificationServiceTest {
             return 1;
         });
         when(mapper.claim(anyLong(), any(), any())).thenReturn(1);
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any())).thenReturn(0);
 
         for (String[] order : List.<String[]>of(
             new String[]{"BTCUSDT", "99", "close-btc"},
@@ -447,7 +481,7 @@ class QuantTradeNotificationServiceTest {
         assertEquals(2, inserted.getAllValues().stream()
             .filter(task -> task.getRecipient().startsWith("SNAPSHOT:")).count());
         verify(gateway, never()).queryAccountFresh(any());
-        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+        verify(jdbc, never()).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -456,7 +490,7 @@ class QuantTradeNotificationServiceTest {
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-partial-close-snapshot-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
@@ -471,9 +505,9 @@ class QuantTradeNotificationServiceTest {
             return 1;
         });
         when(mapper.claim(eq(920L), any(), any())).thenReturn(1);
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any()))
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any()))
             .thenReturn(1, 0, 0);
-        when(jdbc.update(anyString(), ArgumentMatchers.<Object[]>any())).thenReturn(0);
+        when(jdbc.clearNotificationLastError(any())).thenReturn(0);
         when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
             new ExchangeGateway.AccountSnapshot(new BigDecimal("900"), new BigDecimal("900"), null, new BigDecimal("3")));
 
@@ -481,10 +515,86 @@ class QuantTradeNotificationServiceTest {
             new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
 
         verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
-        var insertValues = ArgumentCaptor.forClass(Object[].class);
-        verify(jdbc, timeout(3000)).update(contains("INSERT INTO quant_trade_close_equity"), insertValues.capture());
-        assertNull(insertValues.getValue()[3]);
-        assertEquals(new BigDecimal("900"), insertValues.getValue()[4]);
+        verify(jdbc, timeout(3000)).insertCloseEquityIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
+        assertEquals("RETRY", taskUpdate.getValue().getStatus());
+    }
+
+    @Test
+    void exchangeVerifiedHedgeCloseCanCaptureSnapshotBeforeLocalFillProjection() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-exchange-verified-close-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+        long closeMillis = System.currentTimeMillis();
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (closeMillis + 2)
+            + ",\"T\":" + (closeMillis + 1)
+            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"close-99\","
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(931L);
+            return 1;
+        });
+        when(mapper.claim(eq(931L), any(), any())).thenReturn(1);
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any()))
+            .thenReturn(0, 0, 1);
+        when(jdbc.updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1);
+        when(gateway.queryOrder(exchangeCredential, "BTCUSDT", 99L, null)).thenReturn(
+            new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "close-99", "SELL", "MARKET", "FILLED",
+                BigDecimal.ZERO, BigDecimal.valueOf(2), BigDecimal.valueOf(2), Instant.ofEpochMilli(closeMillis),
+                BigDecimal.valueOf(101), "LONG", false, Instant.ofEpochMilli(closeMillis - 1000), false));
+        when(gateway.queryAccountFresh(exchangeCredential)).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
+
+        verify(gateway, timeout(3000)).queryOrder(exchangeCredential, "BTCUSDT", 99L, null);
+        verify(gateway, timeout(3000)).queryAccountFresh(exchangeCredential);
+        verify(jdbc, timeout(3000)).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
+        assertEquals("SENT", taskUpdate.getValue().getStatus());
+    }
+
+    @Test
+    void exchangeVerifiedOpeningOrderCannotCaptureCloseSnapshot() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-exchange-opening-order-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+        long closeMillis = System.currentTimeMillis();
+        String payload = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":" + (closeMillis + 2)
+            + ",\"T\":" + (closeMillis + 1)
+            + ",\"o\":{\"s\":\"BTCUSDT\",\"i\":99,\"c\":\"open-99\","
+            + "\"x\":\"TRADE\",\"X\":\"FILLED\",\"z\":\"2\",\"T\":" + closeMillis + "}}";
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(932L);
+            return 1;
+        });
+        when(mapper.claim(eq(932L), any(), any())).thenReturn(1);
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any())).thenReturn(0);
+        when(gateway.queryOrder(exchangeCredential, "BTCUSDT", 99L, null)).thenReturn(
+            new ExchangeGateway.OrderSnapshot("BTCUSDT", 99L, "open-99", "BUY", "MARKET", "FILLED",
+                BigDecimal.ZERO, BigDecimal.valueOf(2), BigDecimal.valueOf(2), Instant.ofEpochMilli(closeMillis),
+                BigDecimal.valueOf(101), "LONG", false, Instant.ofEpochMilli(closeMillis - 1000), false));
+
+        service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
+            new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
+
+        verify(gateway, timeout(3000)).queryOrder(exchangeCredential, "BTCUSDT", 99L, null);
+        verify(gateway, never()).queryAccountFresh(any());
+        verify(jdbc, never()).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         var taskUpdate = ArgumentCaptor.forClass(QuantNotification.class);
         verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
         assertEquals("RETRY", taskUpdate.getValue().getStatus());
@@ -496,7 +606,7 @@ class QuantTradeNotificationServiceTest {
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-unverified-close-snapshot-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
         var exchangeCredential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
@@ -510,7 +620,7 @@ class QuantTradeNotificationServiceTest {
             return 1;
         });
         when(mapper.claim(eq(930L), any(), any())).thenReturn(1);
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any())).thenReturn(0);
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any())).thenReturn(0);
 
         service.captureCloseSnapshotFromUserDataEvent(10L, exchangeCredential,
             new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.ofEpochMilli(closeMillis + 2), payload));
@@ -519,7 +629,7 @@ class QuantTradeNotificationServiceTest {
         verify(mapper, timeout(3000)).updateById(taskUpdate.capture());
         assertEquals("RETRY", taskUpdate.getValue().getStatus());
         verify(gateway, never()).queryAccountFresh(any());
-        verify(jdbc, never()).update(anyString(), ArgumentMatchers.<Object[]>any());
+        verify(jdbc, never()).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -528,7 +638,7 @@ class QuantTradeNotificationServiceTest {
             new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-close-snapshot-restart-test"), QuantNotification.class);
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
-        var jdbc = mock(JdbcTemplate.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
         var credentials = mock(org.dromara.quant.credential.mapper.QuantCredentialMapper.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
             mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
@@ -567,9 +677,9 @@ class QuantTradeNotificationServiceTest {
         task.setNextRetryAt(java.time.LocalDateTime.now().minusSeconds(1));
         when(mapper.selectList(any())).thenReturn(List.of(task));
         when(mapper.claim(eq(940L), any(), any())).thenReturn(1);
-        when(jdbc.queryForObject(anyString(), eq(Integer.class), ArgumentMatchers.<Object[]>any()))
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any()))
             .thenReturn(1, 0, 1);
-        when(jdbc.update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any())).thenReturn(1);
+        when(jdbc.updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1);
         when(gateway.queryAccountFresh(any())).thenReturn(
             new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
                 new BigDecimal("1003"), new BigDecimal("3")));
@@ -577,7 +687,7 @@ class QuantTradeNotificationServiceTest {
         service.retryPendingCloseFacts();
 
         verify(gateway).queryAccountFresh(any());
-        verify(jdbc).update(contains("UPDATE quant_trade_close_equity"), ArgumentMatchers.<Object[]>any());
+        verify(jdbc).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         assertEquals("SENT", task.getStatus());
         assertNull(task.getNextRetryAt());
         verify(mapper).updateById(task);
@@ -590,7 +700,7 @@ class QuantTradeNotificationServiceTest {
         var mapper = mock(QuantNotificationMapper.class);
         var gateway = mock(ExchangeGateway.class);
         var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
-            mock(MessageService.class), mock(JdbcTemplate.class), gateway, mock(TaskExecutor.class));
+            mock(MessageService.class), mock(QuantTradeNotificationQueryMapper.class), gateway, mock(TaskExecutor.class));
         var intentMapper = mock(org.dromara.quant.execution.StrategyOrderIntentMapper.class);
         var intentMapperField = QuantTradeNotificationService.class.getDeclaredField("strategyOrderIntentMapper");
         intentMapperField.setAccessible(true);
@@ -621,5 +731,126 @@ class QuantTradeNotificationServiceTest {
         verify(intentMapper).findCloseOrderIdsByCycle(10L, "BTCUSDT", 21L, "cycle-abc", "LONG", "SELL", BigDecimal.ONE);
     }
 
+    @Test
+    void manualOrderTradeSyncSuccessQueuesOnlyTerminalSystemMessageWithResultCounts() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-manual-sync-success-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var executor = mock(TaskExecutor.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), mock(QuantTradeNotificationQueryMapper.class), mock(ExchangeGateway.class), executor);
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(701L);
+            return 1;
+        });
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        credential.setRunMode("LIVE");
+
+        service.notifyOrderTradeSyncResult(credential, null, 3, 27, 24);
+
+        var notification = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper).insert(notification.capture());
+        assertEquals("SYSTEM", notification.getValue().getChannel());
+        assertEquals("TERMINAL", notification.getValue().getRecipient());
+        assertEquals("PENDING", notification.getValue().getStatus());
+        assertEquals("订单与成交同步成功", notification.getValue().getSubject());
+        assertTrue(notification.getValue().getContent().contains("涉及交易对：3 个"));
+        assertTrue(notification.getValue().getContent().contains("处理订单数：27 笔"));
+        assertTrue(notification.getValue().getContent().contains("完整且已核实的成交数：24 笔"));
+        verify(executor).execute(any(Runnable.class));
+        verify(mapper, times(1)).insert(any(QuantNotification.class));
+    }
+
+    @Test
+    void manualOrderTradeSyncFailureQueuesSystemMessage() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-manual-sync-failure-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), mock(QuantTradeNotificationQueryMapper.class), mock(ExchangeGateway.class), mock(TaskExecutor.class));
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(702L);
+            return 1;
+        });
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        var failure = new IllegalStateException("JCTUSDT 历史成交同步失败");
+
+        assertDoesNotThrow(() -> service.notifyOrderTradeSyncFailure(credential, null, failure));
+
+        var notification = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper).insert(notification.capture());
+        assertEquals("SYSTEM", notification.getValue().getChannel());
+        assertEquals("TERMINAL", notification.getValue().getRecipient());
+        assertEquals("订单与成交同步未完成", notification.getValue().getSubject());
+        assertTrue(notification.getValue().getContent().contains("JCTUSDT 历史成交同步失败"));
+        assertTrue(notification.getValue().getContent().contains("失败前已完成的交易对数据可能已经保存"));
+    }
+
+    @Test
+    void manualOrderTradeSyncNotificationPersistenceFailureDoesNotPropagate() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-manual-sync-persist-failure-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var executor = mock(TaskExecutor.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), mock(QuantTradeNotificationQueryMapper.class), mock(ExchangeGateway.class), executor);
+        when(mapper.insert(any(QuantNotification.class))).thenThrow(new IllegalStateException("database unavailable"));
+        var credential = new QuantCredential();
+        credential.setId(10L);
+
+        assertDoesNotThrow(() -> service.notifyOrderTradeSyncResult(credential, null, 1, 5, 4));
+
+        verify(mapper).insert(any(QuantNotification.class));
+        verifyNoInteractions(executor);
+    }
+
+
+    @Test
+    void recentClosedCycleWithoutSnapshotCreatesImmediateRecoveryTask() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-recent-snapshot-recovery-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
+        var credentials = mock(org.dromara.quant.credential.mapper.QuantCredentialMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var credentialMapperField = QuantTradeNotificationService.class.getDeclaredField("credentialMapper");
+        credentialMapperField.setAccessible(true);
+        credentialMapperField.set(service, credentials);
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        credential.setApiKey("test-key");
+        credential.setSecretKey("test-secret");
+        credential.setSignatureType("HMAC");
+        credential.setRunMode("TESTNET");
+        when(credentials.selectById(10L)).thenReturn(credential);
+
+        String closeTime = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1)
+            .format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        when(jdbc.selectRecentCloseSnapshotCandidates(any())).thenReturn(List.of(java.util.Map.of(
+            "credential_id", 10L, "symbol", "BTCUSDT", "exchange_order_id", 99L, "close_time_utc", closeTime)));
+        when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
+            ((QuantNotification) invocation.getArgument(0)).setId(950L);
+            return 1;
+        });
+        when(mapper.claim(eq(950L), any(), any())).thenReturn(1);
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any())).thenReturn(1);
+        when(jdbc.clearNotificationLastError(any())).thenReturn(1);
+        when(gateway.queryAccountFresh(any())).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
+        service.recoverRecentCloseSnapshots(10L, new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "TESTNET"));
+
+        verify(gateway, timeout(3000)).queryAccountFresh(any());
+        var task = ArgumentCaptor.forClass(QuantNotification.class);
+        verify(mapper).insert(task.capture());
+        assertEquals("FACT_PENDING", task.getValue().getChannel());
+        assertEquals("SNAPSHOT:BTCUSDT:99", task.getValue().getRecipient());
+        verify(jdbc).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
 
 }
