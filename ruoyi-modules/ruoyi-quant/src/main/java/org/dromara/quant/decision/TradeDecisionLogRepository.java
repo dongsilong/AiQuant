@@ -3,6 +3,7 @@ package org.dromara.quant.decision;
 import org.dromara.common.core.domain.PageResult;
 import org.dromara.quant.decision.mapper.TradeDecisionLogMapper;
 import org.springframework.stereotype.Repository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +18,7 @@ import java.util.*;
  * 日志线程专用数据库访问；所有查询只读取交易系统已经取得的事实。
  */
 @Repository
+@Slf4j
 public class TradeDecisionLogRepository {
     private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
     private final TradeDecisionLogMapper mapper;
@@ -428,6 +430,11 @@ public class TradeDecisionLogRepository {
     private void aggregateFills(DecisionLogEvent e) {
         String parent = key(e.eventKey());
         var totals = mapper.selectFillTotals(parent);
+        if (totals == null) {
+            log.warn("成交事实聚合查询未返回结果，保留已写入的成交明细并等待后续重试 credentialId={} symbol={} orderId={}",
+                e.credentialId(), e.symbol(), e.orderId());
+            return;
+        }
         BigDecimal quantity = asDecimal(totals.get("qty"));
         BigDecimal amount = asDecimal(totals.get("amount"));
         if (quantity == null || amount == null || quantity.signum() <= 0) {
