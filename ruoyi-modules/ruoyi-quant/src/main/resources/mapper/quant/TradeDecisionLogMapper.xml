@@ -66,6 +66,13 @@
         FROM quant_trade_decision_log WHERE parent_key=#{parentKey} AND record_type='FILL'
     </select>
 
+    <select id="selectFillRows" resultType="java.util.HashMap" timeout="3">
+        SELECT quantity,price,trade_time
+        FROM quant_trade_decision_log
+        WHERE parent_key=#{parentKey} AND record_type='FILL'
+        ORDER BY trade_time,id
+    </select>
+
     <insert id="insertEvaluations" timeout="3">
         INSERT INTO quant_trade_decision_log
         (event_key,record_type,credential_id,account_name,run_mode,strategy_id,strategy_instance_id,strategy_name,
