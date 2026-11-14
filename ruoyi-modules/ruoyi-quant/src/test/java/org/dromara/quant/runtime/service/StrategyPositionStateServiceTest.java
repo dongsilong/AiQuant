@@ -29,6 +29,18 @@ class StrategyPositionStateServiceTest {
     }
 
     @Test
+    void closedProtectionCleanupQueryReturnsMapperResults() {
+        var pending = state("CLOSED", null, true, true);
+        pending.setPositionQty(BigDecimal.ZERO);
+        pending.setPositionId(7L);
+        pending.setPositionCycleKey("cycle");
+        when(mapper.selectList(any())).thenReturn(List.of(pending));
+
+        assertEquals(List.of(pending), service.findClosedProtectionCleanupPending());
+        verify(mapper).selectList(any());
+    }
+
+    @Test
     void flatSnapshotClosesOnlyCleanOpenState() {
         var cleanOpen = state("OPEN", null, false, false);
         var opening = state("OPEN_PENDING", "OPEN", false, false);
