@@ -287,7 +287,7 @@ class TradeDecisionRepositoryTest {
     }
 
     @Test
-    void nullFillTotalsDoNotAbortBatchAfterFillFactIsInserted() {
+    void emptyFillTotalsResultDoesNotAbortBatchAfterFillFactIsInserted() {
         TradeDecisionLogMapper mapper = org.mockito.Mockito.mock(TradeDecisionLogMapper.class);
         org.mockito.Mockito.when(mapper.selectByEventKey(org.mockito.ArgumentMatchers.anyString())).thenReturn(List.of());
         org.mockito.Mockito.when(mapper.selectCredentialInfo(1L)).thenReturn(List.of());
