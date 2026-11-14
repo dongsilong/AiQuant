@@ -430,16 +430,40 @@ public class TradeDecisionLogRepository {
     private void aggregateFills(DecisionLogEvent e) {
         String parent = key(e.eventKey());
         var rows = mapper.selectFillTotals(parent);
-        if (rows == null || rows.isEmpty()) {
-            log.warn("成交事实聚合查询未返回结果，成交明细已保留但主记录尚未聚合 parentKey={} credentialId={} symbol={} orderId={}",
-                parent, e.credentialId(), e.symbol(), e.orderId());
-            return;
+        BigDecimal quantity = null;
+        BigDecimal amount = null;
+        Object lastFill = null;
+        if (rows != null && !rows.isEmpty()) {
+            var totals = rows.getFirst();
+            quantity = asDecimal(totals.get("qty"));
+            amount = asDecimal(totals.get("amount"));
+            lastFill = totals.get("last_fill");
         }
-        var totals = rows.getFirst();
-        BigDecimal quantity = asDecimal(totals.get("qty"));
-        BigDecimal amount = asDecimal(totals.get("amount"));
         if (quantity == null || amount == null || quantity.signum() <= 0) {
-            return;
+            // 聚合查询异常返回空结果时，直接读取已持久化成交明细重算，避免主记录永久缺失成交数据。
+            var fills = mapper.selectFillRows(parent);
+            quantity = BigDecimal.ZERO;
+            amount = BigDecimal.ZERO;
+            for (var fill : fills) {
+                BigDecimal fillQuantity = asDecimal(fill.get("quantity"));
+                BigDecimal fillPrice = asDecimal(fill.get("price"));
+                if (fillQuantity == null || fillPrice == null || fillQuantity.signum() <= 0 || fillPrice.signum() <= 0) {
+                    continue;
+                }
+                quantity = quantity.add(fillQuantity);
+                amount = amount.add(fillQuantity.multiply(fillPrice));
+                Object fillTime = fill.get("trade_time");
+                if (fillTime != null && (lastFill == null || asTimestamp(fillTime).after(asTimestamp(lastFill)))) {
+                    lastFill = fillTime;
+                }
+            }
+            if (quantity.signum() <= 0 || amount.signum() <= 0) {
+                log.warn("成交事实聚合查询无有效结果，且未找到可用于重算的成交明细 parentKey={} credentialId={} symbol={} orderId={}",
+                    parent, e.credentialId(), e.symbol(), e.orderId());
+                return;
+            }
+            log.warn("成交事实聚合查询结果异常，已根据持久化成交明细完成重算 parentKey={} credentialId={} symbol={} orderId={} fillQuantity={}",
+                parent, e.credentialId(), e.symbol(), e.orderId(), quantity);
         }
         BigDecimal avg = amount.divide(quantity, 16, java.math.RoundingMode.HALF_UP);
         String status = "FILLED".equals(e.orderStatus()) ? "FILLED" : "PARTIALLY_FILLED";
@@ -450,7 +474,7 @@ public class TradeDecisionLogRepository {
                 status = "FILLED";
             }
         }
-        mapper.updateAggregatedFill(quantity, avg, totals.get("last_fill") == null ? null : asTimestamp(totals.get("last_fill")), status, timestamp(e.eventTime()), parent, quantity);
+        mapper.updateAggregatedFill(quantity, avg, lastFill == null ? null : asTimestamp(lastFill), status, timestamp(e.eventTime()), parent, quantity);
     }
 
     private Map<String, Object> parameters(DecisionLogEvent e) {
