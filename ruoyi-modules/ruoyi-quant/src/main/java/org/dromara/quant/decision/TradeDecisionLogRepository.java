@@ -332,8 +332,9 @@ public class TradeDecisionLogRepository {
         }
         if (strategy == null) {
             if (strategyId != null) {
-                var names = cached(lookupCache, List.of("STRATEGY", strategyId),
-                    () -> mapper.selectStrategyName(strategyId));
+                Long lookupStrategyId = strategyId;
+                var names = cached(lookupCache, List.of("STRATEGY", lookupStrategyId),
+                    () -> mapper.selectStrategyName(lookupStrategyId));
                 strategy = names.isEmpty() ? "策略已删除（" + strategyId + "）" : text(names.getFirst(), "strategy_name");
             } else {
                 strategy = executionKey != null ? "手动操作" : "外部交易／策略未确认";
