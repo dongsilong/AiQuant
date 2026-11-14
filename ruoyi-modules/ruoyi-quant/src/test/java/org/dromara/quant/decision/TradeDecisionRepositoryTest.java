@@ -335,8 +335,8 @@ class TradeDecisionRepositoryTest {
         org.mockito.Mockito.when(mapper.selectProtectionForOrder(1L, "BTCUSDT", 99L, null)).thenReturn(List.of());
         org.mockito.Mockito.when(mapper.selectFillTotals(org.mockito.ArgumentMatchers.anyString()))
             .thenReturn(java.util.Collections.singletonList(null));
-        org.mockito.Mockito.when(mapper.selectFillRows(org.mockito.ArgumentMatchers.anyString())).thenReturn(List.of(
-            java.util.Map.of("quantity", BigDecimal.ONE, "price", BigDecimal.TEN,
+        org.mockito.Mockito.when(mapper.selectFillRows(org.mockito.ArgumentMatchers.anyString())).thenReturn(java.util.Arrays.asList(
+            null, java.util.Map.of("quantity", BigDecimal.ONE, "price", BigDecimal.TEN,
                 "trade_time", java.sql.Timestamp.from(Instant.now()))));
         org.mockito.Mockito.when(mapper.selectOrderStatus(1L, "BTCUSDT", 99L)).thenReturn(null);
 
