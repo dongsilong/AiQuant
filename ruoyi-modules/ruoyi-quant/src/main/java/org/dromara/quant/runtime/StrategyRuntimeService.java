@@ -164,6 +164,8 @@ public class StrategyRuntimeService {
      * 当前 JVM 节点正在运行的策略实例上下文。
      */
     private final Map<Long, ActiveRuntime> activeRuntimes = new ConcurrentHashMap<>();
+    /** Prevents overlapping durable protection-cleanup recovery attempts for one strategy instance. */
+    private final Set<Long> protectionCleanupRecoveries = ConcurrentHashMap.newKeySet();
     /** 同一凭证/交易对的 REST 本地保护价格查询单飞门禁。 */
     private final Set<String> restProtectionPriceQueries = ConcurrentHashMap.newKeySet();
     /** 同一策略交易对的实例初始化与运行开关更新使用同一把锁。 */
@@ -453,6 +455,89 @@ public class StrategyRuntimeService {
             }
             return false;
         });
+        recoverClosedProtectionCleanup();
+    }
+
+    /**
+     * 已关闭周期的保护单清理不能依赖 ActiveRuntime；STOPPED 实例也必须能够从持久化状态恢复。
+     */
+    private void recoverClosedProtectionCleanup() {
+        for (QuantStrategyPositionState state : stateService.findClosedProtectionCleanupPending()) {
+            Long instanceId = state.getInstanceId();
+            if (instanceId == null || activeRuntimes.containsKey(instanceId) || !protectionCleanupRecoveries.add(instanceId)) {
+                continue;
+            }
+            try {
+                recoveryExecutor.execute(() -> {
+                    try {
+                        QuantStrategyPositionState latest = stateService.findByInstance(instanceId);
+                        if (latest == null || !Objects.equals(latest.getId(), state.getId())
+                            || !"CLOSED".equals(latest.getStatus())
+                            || latest.getPositionQty() == null || latest.getPositionQty().signum() != 0
+                            || latest.getPositionId() == null || latest.getPositionCycleKey() == null
+                            || latest.getPendingAction() != null
+                            || !Boolean.TRUE.equals(latest.getRecoveryRequired()) && !Boolean.TRUE.equals(latest.getUnsafeRecovery())) {
+                            return;
+                        }
+
+                        QuantStrategyInstance instance = instanceMapper.selectById(instanceId);
+                        if (instance == null || !"STOPPED".equals(instance.getStatus())) {
+                            return;
+                        }
+                        QuantCredential credential = credentialMapper.selectById(instance.getCredentialId());
+                        QuantStrategySymbol binding = strategySymbolMapper.selectById(instance.getStrategySymbolId());
+                        QuantSymbol symbol = binding == null ? null : symbolMapper.selectById(binding.getSymbolId());
+                        if (credential == null || symbol == null || credential.getId() == null) {
+                            return;
+                        }
+
+                        boolean live = !"PAPER".equalsIgnoreCase(credential.getRunMode());
+                        if (live) {
+                            List<ExchangeGateway.PositionSnapshot> snapshots =
+                                gateway.queryPositions(executionService.toCredential(credential), symbol.getSymbol());
+                            if (snapshots == null || snapshots.stream().anyMatch(snapshot ->
+                                snapshot == null || !symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())
+                                    || snapshot.quantity() == null || snapshot.quantity().signum() != 0)) {
+                                log.warn("已关闭周期保护清理暂缓：交易所空仓未得到完整确认 instanceId={} positionId={} symbol={}",
+                                    instanceId, latest.getPositionId(), symbol.getSymbol());
+                                return;
+                            }
+                        }
+
+                        boolean cleaned = protectionOrderService.cancelActiveProtectionOrders(
+                            credential.getId(), latest.getPositionId(), latest.getPositionCycleKey(), live);
+                        if (!cleaned) {
+                            log.warn("已关闭周期保护单撤销未全部确认，保留恢复标记 instanceId={} positionId={} cycle={}",
+                                instanceId, latest.getPositionId(), latest.getPositionCycleKey());
+                            return;
+                        }
+
+                        QuantStrategyPositionState confirmed = stateService.findByInstance(instanceId);
+                        if (confirmed == null || !Objects.equals(confirmed.getId(), latest.getId())
+                            || !Objects.equals(confirmed.getPositionId(), latest.getPositionId())
+                            || !Objects.equals(confirmed.getPositionCycleKey(), latest.getPositionCycleKey())
+                            || !"CLOSED".equals(confirmed.getStatus())
+                            || confirmed.getPositionQty() == null || confirmed.getPositionQty().signum() != 0
+                            || confirmed.getPendingAction() != null) {
+                            return;
+                        }
+                        confirmed.setRecoveryRequired(false);
+                        confirmed.setUnsafeRecovery(false);
+                        stateService.save(confirmed);
+                        log.info("已关闭周期保护单清理恢复完成 instanceId={} positionId={} cycle={}",
+                            instanceId, confirmed.getPositionId(), confirmed.getPositionCycleKey());
+                    } catch (RuntimeException ex) {
+                        log.warn("已关闭周期保护单清理恢复失败，保留恢复标记 instanceId={} errorType={}",
+                            instanceId, ex.getClass().getSimpleName());
+                    } finally {
+                        protectionCleanupRecoveries.remove(instanceId);
+                    }
+                });
+            } catch (RuntimeException ex) {
+                protectionCleanupRecoveries.remove(instanceId);
+                throw ex;
+            }
+        }
     }
 
     /**
