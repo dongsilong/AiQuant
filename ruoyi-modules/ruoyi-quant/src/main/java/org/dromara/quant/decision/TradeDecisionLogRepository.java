@@ -431,7 +431,7 @@ public class TradeDecisionLogRepository {
         String parent = key(e.eventKey());
         var totals = mapper.selectFillTotals(parent);
         if (totals == null) {
-            log.warn("成交事实聚合查询未返回结果，保留已写入的成交明细并等待后续重试 credentialId={} symbol={} orderId={}",
+            log.warn("成交事实聚合查询未返回结果，保留已写入的成交明细但主记录尚未聚合，请检查 Mapper 查询结果 credentialId={} symbol={} orderId={}",
                 e.credentialId(), e.symbol(), e.orderId());
             return;
         }
