@@ -429,12 +429,13 @@ public class TradeDecisionLogRepository {
 
     private void aggregateFills(DecisionLogEvent e) {
         String parent = key(e.eventKey());
-        var totals = mapper.selectFillTotals(parent);
-        if (totals == null) {
-            log.warn("成交事实聚合查询未返回结果，保留已写入的成交明细但主记录尚未聚合，请检查 Mapper 查询结果 credentialId={} symbol={} orderId={}",
-                e.credentialId(), e.symbol(), e.orderId());
+        var rows = mapper.selectFillTotals(parent);
+        if (rows == null || rows.isEmpty()) {
+            log.warn("成交事实聚合查询未返回结果，成交明细已保留但主记录尚未聚合 parentKey={} credentialId={} symbol={} orderId={}",
+                parent, e.credentialId(), e.symbol(), e.orderId());
             return;
         }
+        var totals = rows.getFirst();
         BigDecimal quantity = asDecimal(totals.get("qty"));
         BigDecimal amount = asDecimal(totals.get("amount"));
         if (quantity == null || amount == null || quantity.signum() <= 0) {
