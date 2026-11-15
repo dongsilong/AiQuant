@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,6 +34,19 @@ class MarketEventFreshnessTest {
         Instant receivedAt = localNow.minusMillis(40);
 
         assertFalse(MarketEventFreshness.isFresh(eventTime, receivedAt, localNow, localNow.minusMillis(2_979), 3_000));
+    }
+
+    @Test
+    void reportsDistinctFreshnessRejectionReasons() {
+        Instant localNow = Instant.parse("2026-10-17T07:21:33Z");
+        Instant exchangeNow = localNow.minusMillis(2_979);
+
+        assertEquals("EVENT_TIME_MISSING", MarketEventFreshness.rejectionReason(null, localNow, localNow, exchangeNow, 3_000));
+        assertEquals("RECEIVED_AT_MISSING", MarketEventFreshness.rejectionReason(localNow, null, localNow, exchangeNow, 3_000));
+        assertEquals("EXCHANGE_EVENT_STALE", MarketEventFreshness.rejectionReason(localNow.minusMillis(6_500), localNow, localNow, exchangeNow, 3_000));
+        assertEquals("EXCHANGE_TIME_FUTURE", MarketEventFreshness.rejectionReason(localNow.plusSeconds(2), localNow, localNow, exchangeNow, 3_000));
+        assertEquals("LOCAL_RECEIVE_STALE", MarketEventFreshness.rejectionReason(localNow.minusMillis(3_100), localNow.minusMillis(3_100), localNow, exchangeNow, 3_000));
+        assertEquals(null, MarketEventFreshness.rejectionReason(localNow.minusMillis(3_100), localNow.minusMillis(40), localNow, exchangeNow, 3_000));
     }
 
     @Test
