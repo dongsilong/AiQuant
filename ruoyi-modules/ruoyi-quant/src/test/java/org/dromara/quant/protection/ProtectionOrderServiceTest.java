@@ -1649,7 +1649,7 @@ class ProtectionOrderServiceTest {
         when(mapper.selectList(any())).thenReturn(List.of(local));
         when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(
             new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "BOTH",
-                "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), BigDecimal.ONE, true, false, 77L, new BigDecimal("99")));
+                "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), null, true, false, 77L, new BigDecimal("99")));
         when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(77L), isNull())).thenReturn(null);
         when(gateway.queryPositions(any(), eq("BTCUSDT"))).thenReturn(List.of());
         when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
