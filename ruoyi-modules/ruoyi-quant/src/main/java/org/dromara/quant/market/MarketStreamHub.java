@@ -286,7 +286,7 @@ public class MarketStreamHub {
                 }
                 do {
                     Instant from = cursor;
-                    List<ExchangeGateway.Kline> history = recoveryRead(attempt, () -> from == null ? history(null, 200) : history(from, 1000));
+                    List<ExchangeGateway.Kline> history = recoveryRead(attempt, "KLINE", () -> from == null ? history(null, 200) : history(from, 1000));
                     if (history == null || history.isEmpty()) {
                         throw new IllegalStateException("K线历史为空，不能确认行情已就绪");
                     }
@@ -451,18 +451,32 @@ public class MarketStreamHub {
         /**
          * 仅重试公共只读查询，绝不重试交易副作用。
          */
-        private <T> T recoveryRead(long attempt, java.util.function.Supplier<T> query) {
+        private <T> T recoveryRead(long attempt, String queryType, java.util.function.Supplier<T> query) {
             for (int retry = 0; ; retry++) {
                 if (closed || attempt != generation) {
                     throw new java.util.concurrent.CancellationException("行情恢复代次失效");
                 }
+                long waitStartedNanos = System.nanoTime();
+                int queuedReaders = recoveryReads.getQueueLength();
                 try {
                     recoveryReads.acquire();
+                    long acquiredAtNanos = System.nanoTime();
+                    long semaphoreWaitMillis = TimeUnit.NANOSECONDS.toMillis(acquiredAtNanos - waitStartedNanos);
                     try {
                         if (closed || attempt != generation) {
                             throw new java.util.concurrent.CancellationException("行情恢复代次失效");
                         }
-                        return query.get();
+                        long queryStartedNanos = System.nanoTime();
+                        try {
+                            return query.get();
+                        } finally {
+                            long restQueryMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queryStartedNanos);
+                            if (semaphoreWaitMillis >= 100L || restQueryMillis >= 1_000L) {
+                                log.warn("行情恢复REST读取耗时拆分: mode={} symbol={} interval={} queryType={} attempt={} retry={} semaphoreWaitMs={} restQueryMs={} queuedReaders={} queueLengthAfterAcquire={}",
+                                    key.runMode(), key.symbol(), key.interval(), queryType, attempt, retry, semaphoreWaitMillis, restQueryMillis,
+                                    queuedReaders, recoveryReads.getQueueLength());
+                            }
+                        }
                     } finally {
                         recoveryReads.release();
                     }
@@ -531,7 +545,7 @@ public class MarketStreamHub {
             }
             for (int page = 0; page < 100 && !closed && attempt == generation; page++) {
                 long fromId = lastTradeId + 1;
-                List<ExchangeGateway.MarketEvent> trades = recoveryRead(attempt, () -> "TESTNET".equals(key.runMode()) ? gateway.queryAggregateTradesFrom(key.runMode(),
+                List<ExchangeGateway.MarketEvent> trades = recoveryRead(attempt, "AGGREGATE_TRADES", () -> "TESTNET".equals(key.runMode()) ? gateway.queryAggregateTradesFrom(key.runMode(),
                     key.symbol(), key.interval(), fromId, 1000) : gateway.queryAggregateTradesFrom(key.symbol(), key.interval(), fromId, 1000));
                 if (trades == null || trades.isEmpty()) {
                     return;
