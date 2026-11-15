@@ -81,6 +81,34 @@ public interface QuantTradeNotificationQueryMapper {
                                   @Param("restResponseTime") LocalDateTime restResponseTime);
 
     @Select("""
+        SELECT DISTINCT c.credential_id
+        FROM quant_trade_cycle c
+        JOIN quant_trade_cycle_fill f
+          ON f.cycle_id = c.id AND f.fill_role = 'CLOSE'
+        WHERE c.status = 'CLOSED'
+          AND c.closed_at >= UTC_TIMESTAMP(3) - INTERVAL 2 MINUTE
+          AND NOT EXISTS (
+              SELECT 1 FROM quant_trade_cycle_fill newer
+              WHERE newer.cycle_id = f.cycle_id AND newer.fill_role = 'CLOSE'
+                AND (newer.trade_time > f.trade_time
+                     OR (newer.trade_time = f.trade_time AND newer.id > f.id))
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM quant_trade_close_equity s
+              WHERE s.credential_id = c.credential_id AND s.symbol = c.symbol
+                AND s.exchange_order_id = f.exchange_order_id
+                AND s.closing_equity IS NOT NULL AND s.wallet_balance IS NOT NULL
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM quant_notification n
+              WHERE n.credential_id = c.credential_id AND n.channel = 'FACT_PENDING'
+                AND n.recipient = CONCAT('SNAPSHOT:', c.symbol, ':', f.exchange_order_id)
+          )
+        LIMIT 100
+        """)
+    List<Long> selectRecentCloseSnapshotCredentialIds();
+
+    @Select("""
         SELECT c.credential_id, c.symbol, f.exchange_order_id,
                DATE_FORMAT(f.trade_time, '%Y-%m-%dT%H:%i:%s.%f') AS close_time_utc
         FROM quant_trade_cycle c
