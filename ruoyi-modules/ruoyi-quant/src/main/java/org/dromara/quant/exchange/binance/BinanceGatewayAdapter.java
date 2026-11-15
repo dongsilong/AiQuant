@@ -1343,7 +1343,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         // 超出该窗口的已撤销/过期无成交 Algo 单可能已被 Binance 清理，必须保持 UNKNOWN。
         long intentStartTime = intentCreatedAtEpochMillis == null ? -1L : intentCreatedAtEpochMillis + exchangeOffsetMillis;
         boolean absenceCanBeProven = isProtectionHistoryAbsenceProvable(intentStartTime, endTime);
-        long startTime = absenceCanBeProven ? intentStartTime : recentStartTime;
+        long startTime = intentStartTime > recentStartTime && intentStartTime <= endTime ? intentStartTime : recentStartTime;
         AlgoHistoryResult result = collectCompleteAlgoHistory(startTime, endTime, (from, to) -> {
             var response = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
                 client -> client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), null, from, to,
