@@ -204,4 +204,32 @@ class UserDataStreamHubTest {
             hub.destroy();
         }
     }
+
+    @Test
+    void testnetHealthCheckRecoversRecentCloseSnapshots() {
+        var gateway = mock(ExchangeGateway.class);
+        var execution = mock(TradeExecutionApplicationService.class);
+        var credential = new QuantCredential();
+        credential.setId(74L);
+        credential.setRunMode("TESTNET");
+        var exchange = new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET");
+        var session = mock(ExchangeGateway.UserDataStreamSession.class);
+        when(execution.toCredential(credential)).thenReturn(exchange);
+        when(gateway.subscribeUserData(eq(exchange), any())).thenReturn(session);
+        when(session.isConnected()).thenReturn(true);
+        var tradeNotifications = mock(org.dromara.quant.notification.QuantTradeNotificationService.class);
+        var hub = new UserDataStreamHub(gateway, execution, mock(AccountPositionCache.class),
+            mock(AccountBalanceCache.class), mock(org.dromara.quant.execution.TradingPreparationService.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(hub, "tradeNotifications", tradeNotifications);
+        try {
+            hub.subscribe(credential, ignored -> {
+            });
+
+            hub.healthCheck();
+
+            verify(tradeNotifications).recoverRecentCloseSnapshots(74L, exchange);
+        } finally {
+            hub.destroy();
+        }
+    }
 }
