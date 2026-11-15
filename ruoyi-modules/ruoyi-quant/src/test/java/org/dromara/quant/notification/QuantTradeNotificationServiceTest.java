@@ -853,4 +853,31 @@ class QuantTradeNotificationServiceTest {
         verify(jdbc).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
+
+    @Test
+    void independentSnapshotRecoveryScansTestnetCredentialsWithoutUserStreams() throws Exception {
+        var notificationMapper = mock(QuantNotificationMapper.class);
+        var queryMapper = mock(QuantTradeNotificationQueryMapper.class);
+        var credentialMapper = mock(org.dromara.quant.credential.mapper.QuantCredentialMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), notificationMapper,
+            new QuantProperties(), mock(MessageService.class), queryMapper, mock(ExchangeGateway.class), mock(TaskExecutor.class));
+        var field = QuantTradeNotificationService.class.getDeclaredField("credentialMapper");
+        field.setAccessible(true);
+        field.set(service, credentialMapper);
+
+        var credential = new QuantCredential();
+        credential.setId(10L);
+        credential.setApiKey("test-key");
+        credential.setSecretKey("test-secret");
+        credential.setSignatureType("HMAC");
+        credential.setRunMode("TESTNET");
+        when(queryMapper.selectRecentCloseSnapshotCredentialIds()).thenReturn(List.of(10L));
+        when(credentialMapper.selectById(10L)).thenReturn(credential);
+        when(queryMapper.selectRecentCloseSnapshotCandidates(10L)).thenReturn(List.of());
+
+        service.recoverRecentCloseSnapshotsWithoutUserStream();
+
+        verify(credentialMapper).selectById(10L);
+        verify(queryMapper).selectRecentCloseSnapshotCandidates(10L);
+    }
 }
