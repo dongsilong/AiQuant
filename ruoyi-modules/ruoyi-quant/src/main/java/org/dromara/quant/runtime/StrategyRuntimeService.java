@@ -281,6 +281,15 @@ public class StrategyRuntimeService {
     }
 
     /**
+     * 判断是否启用 1 分钟 MA5/MA7 开仓方向过滤；未显式配置时保持插件默认启用。
+     */
+    private static boolean entryMaDirectionFilterEnabled(StrategyPlugin plugin, Map<String, Object> params) {
+        if (!(plugin instanceof KlineSlopeRateStrategy)) return false;
+        Object value = params == null ? null : params.get("entryMaDirectionFilterEnabled");
+        return value == null || Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    /**
      * 读取正整数配置，非法时使用默认值。
      */
     private static int positiveInt(Object value, int fallback) {
@@ -1214,6 +1223,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 current.protectionOnly = protectionOnly;
                     current.leaseValid = true;
             }
+            configureEntryMaMarket(current);
             prepareTrading(current);
             resumeRecoveryIfNeeded(current);
             return true;
@@ -1271,6 +1281,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 }
                 runtime.subscription = marketStreamHub.subscribe(credential.getRunMode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), event -> onMarketEvent(runtime,
             event), ready -> runtime.marketStreamReady = ready);
+                configureEntryMaMarket(runtime);
                 if (!"PAPER".equalsIgnoreCase(credential.getRunMode())) {
                     runtime.userSubscription = userDataStreamHub.subscribe(credential, event -> {
                         if (event != null) {
@@ -1363,6 +1374,62 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     static boolean shouldRestoreMarketHealth(boolean marketStreamReady, boolean replay, String eventType) {
         return marketStreamReady && !replay && eventType != null
             && ("TRADE".equalsIgnoreCase(eventType) || "KLINE".equalsIgnoreCase(eventType));
+    }
+
+    /**
+     * 根据策略参数独立订阅并维护 1 分钟均线行情。
+     */
+    private void configureEntryMaMarket(ActiveRuntime runtime) {
+        boolean required = entryMaDirectionFilterEnabled(runtime.plugin, runtime.params);
+        if (!required) {
+            if (runtime.entryMaSubscription != null) {
+                try { runtime.entryMaSubscription.close(); } catch (Exception ignored) { }
+                runtime.entryMaSubscription = null;
+            }
+            runtime.entryMaStreamReady = false;
+            runtime.entryMaLastEventTime = null;
+            runtime.entryMaLastReceivedAt = null;
+            return;
+        }
+        if (!runtime.entryMaInitialized) {
+            runtime.entryMaMarket.copyFrom(loadInitialMarket(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m", runtime.params, false));
+            runtime.entryMaInitialized = true;
+        }
+        if (runtime.entryMaSubscription == null) {
+            runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
+                event -> onEntryMaMarketEvent(runtime, event), ready -> runtime.entryMaStreamReady = ready);
+        }
+    }
+
+    /** 只更新 1 分钟均线行情，不驱动策略开平仓。 */
+    private void onEntryMaMarketEvent(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
+        if (runtime == null || event == null) return;
+        synchronized (runtime) {
+            if (runtime.closed) return;
+            if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
+                runtime.entryMaStreamReady = false;
+                runtime.entryMaLastEventTime = null;
+                runtime.entryMaLastReceivedAt = null;
+                return;
+            }
+            if (event.kline() != null) {
+                runtime.entryMaMarket.updateKline(event.kline());
+                if (!event.replay() && "KLINE".equalsIgnoreCase(event.type())) {
+                    runtime.entryMaLastEventTime = event.eventTime();
+                    runtime.entryMaLastReceivedAt = event.receivedAt();
+                }
+            }
+        }
+    }
+
+    /** 只有 1 分钟流已恢复、数据新鲜且 MA5/MA7 可计算时才允许通过均线过滤。 */
+    private boolean entryMaMarketReady(ActiveRuntime runtime) {
+        if (!runtime.entryMaStreamReady || runtime.entryMaMarket.movingAverage(5) == null || runtime.entryMaMarket.movingAverage(7) == null
+            || runtime.entryMaLastEventTime == null || runtime.entryMaLastReceivedAt == null) return false;
+        Instant now = Instant.now();
+        Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
+        return org.dromara.quant.market.MarketEventFreshness.isFresh(runtime.entryMaLastEventTime, runtime.entryMaLastReceivedAt, now, exchangeNow,
+            Math.max(1, properties.getMarket().getMaxEventAgeMillis()));
     }
 
     /**
@@ -1908,9 +1975,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return;
         }
         Optional<EntrySignal> signal;
-        if (runtime.plugin instanceof KlineSlopeRateStrategy slopeStrategy
-            && "1m".equalsIgnoreCase(runtime.strategySymbol.getIntervalCode())) {
-            signal = slopeStrategy.evaluateEntry(context, runtime.params, runtime.market.movingAverage(5), runtime.market.movingAverage(7));
+        if (entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) {
+            if (!entryMaMarketReady(runtime)) {
+                logEntryDecision(runtime, context, "ENTRY_MA_MARKET_UNREADY", "1分钟均线行情未就绪、数据过期或历史K线不足，禁止开仓");
+                return;
+            }
+            KlineSlopeRateStrategy slopeStrategy = (KlineSlopeRateStrategy) runtime.plugin;
+            signal = slopeStrategy.evaluateEntry(context, runtime.params, runtime.entryMaMarket.movingAverage(5), runtime.entryMaMarket.movingAverage(7));
         } else {
             signal = runtime.plugin.evaluateEntry(context, runtime.params);
         }
@@ -4945,6 +5016,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 }
                 runtime.subscription = null;
             }
+            if (runtime.entryMaSubscription != null) {
+                try { runtime.entryMaSubscription.close(); } catch (Exception ignored) { }
+                runtime.entryMaSubscription = null;
+            }
             if (runtime.userSubscription != null) {
                 try {
                     runtime.userSubscription.close();
@@ -5096,6 +5171,16 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final Deque<BigDecimal> closedKlineCloses = new ArrayDeque<>();
         private Instant lastClosedKlineOpenTime;
 
+        /** 从独立历史快照复制均线计算所需的行情状态。 */
+        private void copyFrom(MarketRuntime source) {
+            closedKlineCloses.clear();
+            closedKlineCloses.addAll(source.closedKlineCloses);
+            lastClosedKlineOpenTime = source.lastClosedKlineOpenTime;
+            currentKline = source.currentKline;
+            previousClosedClose = source.previousClosedClose;
+            lastKlineEventAt = source.lastKlineEventAt;
+        }
+
         /**
          * 更新对应业务状态。
          */
@@ -5197,6 +5282,12 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
          * 当前策略 Runtime 的实时市场状态。
          */
         private final MarketRuntime market = new MarketRuntime();
+        /** 独立维护 1 分钟已收盘 K 线，供开仓 MA5/MA7 过滤使用。 */
+        private final MarketRuntime entryMaMarket = new MarketRuntime();
+        private volatile boolean entryMaInitialized;
+        private volatile boolean entryMaStreamReady;
+        private volatile Instant entryMaLastEventTime;
+        private volatile Instant entryMaLastReceivedAt;
         private final AtomicBoolean protectionSyncing = new AtomicBoolean();
         private final AtomicBoolean exitCoordinating = new AtomicBoolean();
         private final AtomicBoolean protectionRequested = new AtomicBoolean();
@@ -5254,6 +5345,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
          * 当前 Runtime 持有的行情订阅句柄。
          */
         private volatile AutoCloseable subscription;
+        private volatile AutoCloseable entryMaSubscription;
         private volatile AutoCloseable userSubscription;
         private volatile java.util.concurrent.Future<?> protectionTask;
         private long nextPreparationNoticeAt;
@@ -5351,6 +5443,10 @@ StrategyPlugin plugin, Map<String, Object> params) {
             this.market.lastClosedKlineOpenTime = initial.lastClosedKlineOpenTime;
             this.market.currentKline = initial.currentKline;
             this.market.lastKlineEventAt = initial.lastKlineEventAt;
+            if (entryMaDirectionFilterEnabled(plugin, params)) {
+                this.entryMaMarket.copyFrom(loadInitialMarket(credential.getRunMode(), symbol.getSymbol(), "1m", params, false));
+                this.entryMaInitialized = true;
+            }
         }
 
         /**
