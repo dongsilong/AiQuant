@@ -1381,22 +1381,25 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      */
     private void configureEntryMaMarket(ActiveRuntime runtime) {
         synchronized (runtime) {
-        boolean required = entryMaDirectionFilterEnabled(runtime.plugin, runtime.params);
-        if (!required) {
-            if (runtime.entryMaSubscription != null) {
-                try { runtime.entryMaSubscription.close(); } catch (Exception ignored) { }
-                runtime.entryMaSubscription = null;
+            boolean required = entryMaDirectionFilterEnabled(runtime.plugin, runtime.params);
+            if (!required) {
+                if (runtime.entryMaSubscription != null) {
+                    try {
+                        runtime.entryMaSubscription.close();
+                    } catch (Exception ignored) {
+                    }
+                    runtime.entryMaSubscription = null;
+                }
+                runtime.entryMaStreamReady = false;
+                runtime.entryMaLastEventTime = null;
+                runtime.entryMaLastReceivedAt = null;
+                runtime.entryMaMarket.clear();
+                return;
             }
-            runtime.entryMaStreamReady = false;
-            runtime.entryMaLastEventTime = null;
-            runtime.entryMaLastReceivedAt = null;
-            runtime.entryMaMarket.clear();
-            return;
-        }
-        if (runtime.entryMaSubscription == null) {
-            runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
-                event -> onEntryMaMarketEvent(runtime, event), ready -> runtime.entryMaStreamReady = ready);
-        }
+            if (runtime.entryMaSubscription == null) {
+                runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
+                    event -> onEntryMaMarketEvent(runtime, event), ready -> runtime.entryMaStreamReady = ready);
+            }
         }
     }
 
