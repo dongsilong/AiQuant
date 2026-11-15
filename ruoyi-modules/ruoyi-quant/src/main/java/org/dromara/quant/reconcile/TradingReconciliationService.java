@@ -11,6 +11,7 @@ import org.dromara.quant.account.mapper.TradeHistoryMapper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.AccountPositionSnapshotQuery;
 import org.dromara.quant.exchange.ExchangeHistoryCollector;
 import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.dromara.quant.execution.StrictBinanceTradeCollector;
@@ -68,6 +69,7 @@ public class TradingReconciliationService {
      * 交易所统一网关。
      */
     private final ExchangeGateway gateway;
+    private final AccountPositionSnapshotQuery positionSnapshotQuery;
     /**
      * 账户快照 Mapper。
      */
@@ -140,7 +142,7 @@ public class TradingReconciliationService {
     /**
      * 创建 TradingReconciliationService 实例并初始化其依赖。
      */
-    public TradingReconciliationService(ExchangeGateway gateway, QuantAccountSnapshotMapper accountSnapshotMapper, QuantPositionMapper positionMapper,
+    public TradingReconciliationService(ExchangeGateway gateway, AccountPositionSnapshotQuery positionSnapshotQuery, QuantAccountSnapshotMapper accountSnapshotMapper, QuantPositionMapper positionMapper,
                                         QuantOrderMapper orderMapper, QuantTradeMapper tradeMapper, QuantProtectionOrderMapper protectionOrderMapper,
                                         QuantFinancialEventMapper financialEventMapper, QuantReconcileRecordMapper reconcileMapper, ReconciliationFailureRecorder failureRecorder
         , StrategyPositionStateService strategyPositionStateService, PlatformTransactionManager transactionManager, StrictBinanceTradeCollector tradeCollector,
@@ -148,6 +150,7 @@ public class TradingReconciliationService {
                                         FinancialEventSyncCursorMapper incomeSyncCursors, FinancialEventSyncCursorService incomeSyncCursorService,
                                         TradeLedgerRecoveryMapper tradeLedgerRecoveryMapper) {
         this.gateway = gateway;
+        this.positionSnapshotQuery = positionSnapshotQuery;
         this.accountSnapshotMapper = accountSnapshotMapper;
         this.positionMapper = positionMapper;
         this.orderMapper = orderMapper;
@@ -610,7 +613,7 @@ public class TradingReconciliationService {
                 credential.getRunMode());
             // Network I/O stays outside the account write lock and database transaction.
             var account = java.util.Objects.requireNonNull(gateway.queryAccountForPosition(exchangeCredential), "Binance account snapshot missing");
-            var snapshots = List.copyOf(java.util.Objects.requireNonNull(gateway.queryPositions(exchangeCredential, null), "Binance full position snapshot missing"));
+            var snapshots = positionSnapshotQuery.query(credentialId, exchangeCredential);
             commitPositionSnapshot(credential, account, snapshots, fetchStartedAt, generation, runtimeGeneration, trigger);
             synchronized (positionRetryTasks) {
                 positionRetryAttempts.remove(credentialId);
