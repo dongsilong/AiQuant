@@ -27,6 +27,7 @@ import org.dromara.quant.reconcile.TradingReconciliationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.web.bind.annotation.*;
@@ -119,12 +120,12 @@ public class QuantAccountQueryController {
             return ResponseEntity.ok(R.ok(gateway.queryPositions(credential(credentialId), symbol)));
         } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
             long retryAfterMillis = deferred.retryAfterMillis();
-            ResponseEntity.BodyBuilder response = ResponseEntity.status(503);
+            ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE);
             if (retryAfterMillis > 0L) {
                 long retryAfterSeconds = Math.max(1L, (retryAfterMillis + 999L) / 1_000L);
                 response.header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
             }
-            return response.body(R.fail(503, "交易所查询请求暂被本地调度器延后，请稍后重试"));
+            return response.body(R.fail(HttpStatus.SERVICE_UNAVAILABLE.value(), "交易所查询请求暂被本地调度器延后，请稍后重试"));
         }
     }
 
