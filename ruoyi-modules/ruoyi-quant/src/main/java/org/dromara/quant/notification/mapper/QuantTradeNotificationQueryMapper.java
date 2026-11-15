@@ -103,6 +103,7 @@ public interface QuantTradeNotificationQueryMapper {
               SELECT 1 FROM quant_notification n
               WHERE n.credential_id = c.credential_id AND n.channel = 'FACT_PENDING'
                 AND n.recipient = CONCAT('SNAPSHOT:', c.symbol, ':', f.exchange_order_id)
+                AND n.status NOT IN ('FAILED', 'SENT')
           )
         LIMIT 100
         """)
@@ -133,11 +134,32 @@ public interface QuantTradeNotificationQueryMapper {
               SELECT 1 FROM quant_notification n
               WHERE n.credential_id = c.credential_id AND n.channel = 'FACT_PENDING'
                 AND n.recipient = CONCAT('SNAPSHOT:', c.symbol, ':', f.exchange_order_id)
+                AND n.status NOT IN ('FAILED', 'SENT')
           )
         ORDER BY c.closed_at ASC
         LIMIT 50
         """)
     List<Map<String, Object>> selectRecentCloseSnapshotCandidates(@Param("credentialId") Long credentialId);
+
+    @Update("""
+        UPDATE quant_notification n
+        SET n.status = 'RETRY', n.retry_count = 0, n.next_retry_at = UTC_TIMESTAMP(3),
+            n.owner_token = NULL, n.lease_until = NULL,
+            n.last_error = '快照缺失，重新进入即时采集队列'
+        WHERE n.credential_id = #{credentialId}
+          AND n.channel = 'FACT_PENDING'
+          AND n.recipient = CONCAT('SNAPSHOT:', #{symbol}, ':', #{orderId})
+          AND n.status IN ('FAILED', 'SENT')
+          AND NOT EXISTS (
+              SELECT 1 FROM quant_trade_close_equity s
+              WHERE s.credential_id = n.credential_id AND s.symbol = #{symbol}
+                AND s.exchange_order_id = #{orderId}
+                AND s.closing_equity IS NOT NULL AND s.wallet_balance IS NOT NULL
+          )
+        """)
+    int reactivateIncompleteCloseSnapshotTask(@Param("credentialId") Long credentialId,
+                                              @Param("symbol") String symbol,
+                                              @Param("orderId") Long orderId);
 
     @Select("""
         SELECT EXISTS (
