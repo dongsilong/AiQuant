@@ -171,6 +171,8 @@ public class ProtectionOrderService {
                     active.credentialId(), active.symbol(), active.dispatchKey());
             }
             return recovered;
+        } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException | org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException ex) {
+            throw ex;
         } catch (RuntimeException ex) {
             log.warn("配置派发未知状态核实失败，继续保持启动阻断 accountId={} symbol={} dispatchKey={} errorType={}",
                 active.credentialId(), active.symbol(), active.dispatchKey(), ex.getClass().getSimpleName());
@@ -209,11 +211,15 @@ public class ProtectionOrderService {
                         active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), terminalAlgoId);
                 }
                 return recovered;
+            } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException | org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException ex) {
+                throw ex;
             } catch (RuntimeException ex) {
                 log.warn("保护单触发后的实际子订单尚未完成严格核验，继续保持调度阻断 accountId={} symbol={} dispatchKey={} clientAlgoId={} errorType={}",
                     active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), ex.getClass().getSimpleName());
                 return false;
             }
+        } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException | org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException ex) {
+            throw ex;
         } catch (RuntimeException ex) {
             log.warn("策略启动前保护创建事实核实失败，保持启动阻断 accountId={} symbol={} clientAlgoId={} errorType={}", active.credentialId(), active.symbol(),
                 active.clientOrderId(), ex.getClass().getSimpleName());
@@ -259,14 +265,59 @@ public class ProtectionOrderService {
     public boolean recheckProtectionDispatch(Long credentialId, String symbol, String dispatchKey, String clientOrderId) {
         if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank()
             || dispatchKey == null || dispatchKey.isBlank() || clientOrderId == null || clientOrderId.isBlank()) {
-            throw new IllegalArgumentException("保护派发核查缺少完整票据身份");
+            throw new IllegalArgumentException("派发核查缺少完整票据身份");
         }
         LiveOrderDispatcher.ActiveDispatch active = requireLiveDispatcher().activeDispatch(credentialId, symbol);
-        if (active == null || !dispatchKey.equals(active.dispatchKey()) || !clientOrderId.equals(active.clientOrderId())
-            || !Set.of("PROTECT_CREATE", "PROTECT_CANCEL").contains(active.operationType())) {
+        if (active == null || !dispatchKey.equals(active.dispatchKey()) || !clientOrderId.equals(active.clientOrderId())) {
             return false;
         }
-        return recoverProtectionDispatch(active);
+        if ("CONFIG_SETTINGS".equals(active.operationType())) {
+            if (!"CONFIG_APPLIED".equals(active.dispatchStatus())) {
+                throw new IllegalStateException("账户配置派发仍处于 " + active.dispatchStatus()
+                    + " 状态，无法证明原配置请求已结束。仅查询到当前配置相同不足以排除延迟生效的远端请求，派发阻断保持不变。");
+            }
+            return retryDeferredManualRecheck(() -> recoverConfigurationSettings(active));
+        }
+        if (!Set.of("PROTECT_CREATE", "PROTECT_CANCEL").contains(active.operationType())) {
+            return false;
+        }
+        return retryDeferredManualRecheck(() -> recoverProtectionDispatch(active));
+    }
+
+    /**
+     * 只对本地调度器明确判定“尚未发送”的只读核验做一次有界退避重试。
+     * Binance 已返回 418/429 时不在这里重试，继续遵守交易所 Retry-After。
+     */
+    private boolean retryDeferredManualRecheck(java.util.function.BooleanSupplier action) {
+        try {
+            return action.getAsBoolean();
+        } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
+            long retryAfterMillis = deferred.retryAfterMillis();
+            if (retryAfterMillis <= 0L || retryAfterMillis > 15_000L) {
+                throw new IllegalStateException(manualRecheckDeferredMessage(deferred), deferred);
+            }
+            try {
+                Thread.sleep(retryAfterMillis + 100L);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("等待 Binance REST 冷却结束时被中断，派发阻断保持不变。", ex);
+            }
+            try {
+                return action.getAsBoolean();
+            } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException retryDeferred) {
+                throw new IllegalStateException(manualRecheckDeferredMessage(retryDeferred), retryDeferred);
+            }
+        } catch (org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException rateLimited) {
+            throw new IllegalStateException("Binance 已返回 REST 限流响应，本次核验未完成；请遵守交易所冷却时间后重试，派发阻断保持不变。", rateLimited);
+        }
+    }
+
+    private String manualRecheckDeferredMessage(org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
+        if (deferred.retryAfterMillis() <= 0L) {
+            return "Binance REST 当前处于人工封禁状态（" + deferred.reason() + "），需要运维确认并恢复 REST 请求后再核查；派发阻断保持不变。";
+        }
+        return "Binance REST 请求尚未发送，当前调度原因：" + deferred.reason() + "，预计 " + ((deferred.retryAfterMillis() + 999L) / 1000L)
+            + " 秒后可重试；本次未释放派发阻断。";
     }
 
     /** 判断账户交易对是否仍有必须通过精确交易所查询恢复的保护派发票据。 */
@@ -340,6 +391,8 @@ public class ProtectionOrderService {
                     active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), terminalAlgoId);
             }
             return recovered;
+        } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException | org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException ex) {
+            throw ex;
         } catch (RuntimeException ex) {
             String errorMessage = Objects.toString(ex.getMessage(), "");
             if (errorMessage.length() > 1200) {
