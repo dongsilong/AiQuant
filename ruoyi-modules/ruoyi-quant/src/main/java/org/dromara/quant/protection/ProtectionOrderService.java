@@ -259,8 +259,12 @@ public class ProtectionOrderService {
             } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException | org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException ex) {
                 throw ex;
             } catch (RuntimeException ex) {
-                log.warn("保护单触发后的实际子订单尚未完成严格核验，继续保持调度阻断 accountId={} symbol={} dispatchKey={} clientAlgoId={} errorType={}",
-                    active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), ex.getClass().getSimpleName());
+                String errorMessage = Objects.toString(ex.getMessage(), "");
+                if (errorMessage.length() > 1000) {
+                    errorMessage = errorMessage.substring(0, 1000);
+                }
+                log.warn("保护单触发后的实际子订单尚未完成严格核验，继续保持调度阻断 accountId={} symbol={} dispatchKey={} clientAlgoId={} errorType={} errorMessage={}",
+                    active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), ex.getClass().getSimpleName(), errorMessage);
                 return false;
             }
         } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException | org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException ex) {
