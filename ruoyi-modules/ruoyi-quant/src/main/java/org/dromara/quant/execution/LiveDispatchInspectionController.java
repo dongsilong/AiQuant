@@ -48,8 +48,8 @@ public class LiveDispatchInspectionController {
     }
 
     /**
-     * 按页面提交的完整票据身份，人工触发一次保护单 Binance 事实核验。
-     * 只允许 PROTECT_CREATE / PROTECT_CANCEL；核验失败时不释放派发门禁。
+     * 按页面提交的完整票据身份，人工触发一次派发事实核验。
+     * 保护单核验仅允许 PROTECT_CREATE / PROTECT_CANCEL；配置派发仅允许核实 CONFIG_APPLIED，UNKNOWN 不得仅凭配置快照解锁。
      */
     @PostMapping("/recheck")
     @SaCheckRole(SystemConstants.SUPER_ADMIN_ROLE_KEY)
