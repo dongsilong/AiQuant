@@ -216,6 +216,28 @@ public class LiveOrderDispatcher {
     }
 
     /**
+     * Release an obsolete protection-create ticket only after the protection service
+     * has independently verified the local cycle and exchange account are flat and idle.
+     * This records business obsolescence, not a claim that Binance rejected or canceled it.
+     */
+    public boolean supersedeProtectionCreate(Long credentialId, String symbol, String key, String clientOrderId) {
+        if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank()
+            || key == null || key.isBlank() || clientOrderId == null || clientOrderId.isBlank()) {
+            throw new IllegalArgumentException("Cannot supersede a protection ticket without exact identity");
+        }
+        String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (mapper.supersedeProtectionCreate(credentialId, normalizedSymbol, key, clientOrderId) != 1) {
+                return false;
+            }
+            if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                throw new IllegalStateException("Superseded protection ticket but durable dispatch guard mismatch");
+            }
+            return true;
+        }));
+    }
+
+    /**
      * Reserved for a provably NOT-SENT result. All timeouts are UNKNOWN instead.
      */
     public void notSent(Ticket ticket) {
