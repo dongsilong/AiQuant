@@ -221,6 +221,23 @@ class StrategyRuntimeSafetyTest {
 
             ReflectionTestUtils.setField(f.runtime, "entryMaStreamReady", true);
             assertTrue((boolean) ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketReady", f.runtime));
+
+            KlineSlopeRateStrategy slopePlugin = org.mockito.Mockito.spy(new KlineSlopeRateStrategy());
+            ReflectionTestUtils.setField(f.runtime, "plugin", slopePlugin);
+            ReflectionTestUtils.setField(f.runtime, "params", Map.of("entryAngleDegrees", 30));
+            ((QuantStrategySymbol) ReflectionTestUtils.getField(f.runtime, "strategySymbol")).setIntervalCode("15m");
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setStatus("CLOSED");
+            state.setPositionQty(BigDecimal.ZERO);
+            Instant decisionTime = Instant.now();
+            var context = new org.dromara.quant.strategy.StrategyContext("BTCUSDT", null, null, BigDecimal.ONE, null,
+                new BigDecimal("100"), decisionTime, false, decisionTime, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                10, null, null, false, 0);
+
+            ReflectionTestUtils.invokeMethod(f.service, "evaluateEntryLocked", f.runtime, context);
+
+            verify(slopePlugin).evaluateEntry(eq(context), eq(Map.of("entryAngleDegrees", 30)), any(BigDecimal.class), any(BigDecimal.class));
         } finally {
             f.service.destroy();
         }
