@@ -306,6 +306,8 @@ public class ProtectionOrderService {
                 return action.getAsBoolean();
             } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException retryDeferred) {
                 throw new IllegalStateException(manualRecheckDeferredMessage(retryDeferred), retryDeferred);
+            } catch (org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException rateLimited) {
+                throw new IllegalStateException("Binance 已返回 REST 限流响应，本次核验未完成；请遵守交易所冷却时间后重试，派发阻断保持不变。", rateLimited);
             }
         } catch (org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException rateLimited) {
             throw new IllegalStateException("Binance 已返回 REST 限流响应，本次核验未完成；请遵守交易所冷却时间后重试，派发阻断保持不变。", rateLimited);
