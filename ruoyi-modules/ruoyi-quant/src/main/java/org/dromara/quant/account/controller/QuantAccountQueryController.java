@@ -26,6 +26,8 @@ import org.dromara.quant.notification.QuantTradeNotificationService;
 import org.dromara.quant.reconcile.TradingReconciliationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.web.bind.annotation.*;
 
@@ -112,8 +114,18 @@ public class QuantAccountQueryController {
      */
     @SaCheckPermission(value = {"quant:position:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/position/{credentialId}")
-    public R<List<ExchangeGateway.PositionSnapshot>> positions(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
-        return R.ok(gateway.queryPositions(credential(credentialId), symbol));
+    public ResponseEntity<R<List<ExchangeGateway.PositionSnapshot>>> positions(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
+        try {
+            return ResponseEntity.ok(R.ok(gateway.queryPositions(credential(credentialId), symbol)));
+        } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
+            long retryAfterMillis = deferred.retryAfterMillis();
+            ResponseEntity.BodyBuilder response = ResponseEntity.status(503);
+            if (retryAfterMillis > 0L) {
+                long retryAfterSeconds = Math.max(1L, (retryAfterMillis + 999L) / 1_000L);
+                response.header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
+            }
+            return response.body(R.fail(503, "交易所查询请求暂被本地调度器延后，请稍后重试"));
+        }
     }
 
     /**
