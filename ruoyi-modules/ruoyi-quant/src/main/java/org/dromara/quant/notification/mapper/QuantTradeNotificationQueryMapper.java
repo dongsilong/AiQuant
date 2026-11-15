@@ -142,14 +142,14 @@ public interface QuantTradeNotificationQueryMapper {
     List<Map<String, Object>> selectRecentCloseSnapshotCandidates(@Param("credentialId") Long credentialId);
 
     @Update("""
-        UPDATE quant_notification n
-        SET n.status = 'RETRY', n.retry_count = 0, n.next_retry_at = UTC_TIMESTAMP(3),
-            n.owner_token = NULL, n.lease_until = NULL,
-            n.last_error = '快照缺失，重新进入即时采集队列'
-        WHERE n.credential_id = #{credentialId}
-          AND n.channel = 'FACT_PENDING'
-          AND n.recipient = CONCAT('SNAPSHOT:', #{symbol}, ':', #{orderId})
-          AND n.status IN ('FAILED', 'SENT')
+        UPDATE quant_notification
+        SET status = 'RETRY', retry_count = 0, next_retry_at = UTC_TIMESTAMP(3),
+            owner_token = NULL, lease_until = NULL,
+            last_error = '快照缺失，重新进入即时采集队列'
+        WHERE credential_id = #{credentialId}
+          AND channel = 'FACT_PENDING'
+          AND recipient = CONCAT('SNAPSHOT:', #{symbol}, ':', #{orderId})
+          AND status IN ('FAILED', 'SENT')
           AND NOT EXISTS (
               SELECT 1 FROM quant_trade_close_equity s
               WHERE s.credential_id = n.credential_id AND s.symbol = #{symbol}
