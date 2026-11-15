@@ -2887,6 +2887,59 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void entryMaBlockReasonIdentifiesStreamWarmupAndStaleData() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "plugin", new KlineSlopeRateStrategy());
+            Object market = ReflectionTestUtils.getField(f.runtime, "entryMaMarket");
+
+            assertEquals("STREAM_NOT_READY", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason", f.runtime));
+
+            ReflectionTestUtils.setField(f.runtime, "entryMaStreamReady", true);
+            @SuppressWarnings("unchecked")
+            Deque<BigDecimal> closes = (Deque<BigDecimal>) ReflectionTestUtils.getField(market, "closedKlineCloses");
+            for (int i = 1; i <= 6; i++) {
+                closes.addLast(BigDecimal.valueOf(i));
+            }
+            assertEquals("INSUFFICIENT_CLOSED_KLINES", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason", f.runtime));
+
+            closes.addLast(BigDecimal.valueOf(7));
+            ReflectionTestUtils.setField(f.runtime, "entryMaLastEventTime", null);
+            ReflectionTestUtils.setField(f.runtime, "entryMaLastReceivedAt", Instant.now());
+            assertEquals("EVENT_TIME_MISSING", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason", f.runtime));
+
+            Instant now = Instant.now();
+            ReflectionTestUtils.setField(f.runtime, "entryMaLastEventTime", now.minusSeconds(60));
+            ReflectionTestUtils.setField(f.runtime, "entryMaLastReceivedAt", now);
+            assertEquals("STALE_EVENT", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason", f.runtime));
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
+    void cleanupReturningFalseDoesNotEstablishEntryProtectionProof() throws Exception {
+        Fixture f = fixture();
+        try {
+            ReflectionTestUtils.setField(f.runtime, "plugin", new KlineSlopeRateStrategy());
+            ReflectionTestUtils.setField(f.runtime, "position", null);
+            ReflectionTestUtils.setField(f.runtime, "positionFactsReady", true);
+            var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
+            when(lease.requireCurrentEpoch(any(), any(), any())).thenReturn(1L);
+            when(f.protection.prepareEntryProtectionCleanup(3L, "BTCUSDT", true)).thenReturn(false);
+
+            assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "entryProtectionReady", f.runtime));
+            ((java.util.concurrent.Future<?>) ReflectionTestUtils.getField(f.runtime, "entryProtectionCleanupTask")).get(3, java.util.concurrent.TimeUnit.SECONDS);
+
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "entryProtectionCleanupReady"));
+            assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "entryProtectionCleanupRunning"));
+            verify(f.protection).prepareEntryProtectionCleanup(3L, "BTCUSDT", true);
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void cleanupCompletionRequiresAnExchangeEventStrictlyAfterItsProof() throws Exception {
         Fixture f = fixture();
         try {
