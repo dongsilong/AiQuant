@@ -61,6 +61,10 @@ public interface LiveOrderDispatchMapper {
     int recoverConfiguration(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key,
                              @Param("clientOrderId") String clientOrderId, @Param("marginMode") String marginMode, @Param("leverage") int leverage);
 
+    /** Close a stale protection-create ticket only after its cycle is verified flat and idle. */
+    int supersedeProtectionCreate(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key,
+                                  @Param("clientOrderId") String clientOrderId);
+
     int notSent(@Param("credentialId") Long credentialId, @Param("key") String key);
 
     int unknown(@Param("credentialId") Long credentialId, @Param("key") String key);
