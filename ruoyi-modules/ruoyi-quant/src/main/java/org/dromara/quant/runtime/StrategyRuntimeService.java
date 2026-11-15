@@ -1380,6 +1380,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      * 根据策略参数独立订阅并维护 1 分钟均线行情。
      */
     private void configureEntryMaMarket(ActiveRuntime runtime) {
+        synchronized (runtime) {
         boolean required = entryMaDirectionFilterEnabled(runtime.plugin, runtime.params);
         if (!required) {
             if (runtime.entryMaSubscription != null) {
@@ -1396,13 +1397,14 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
                 event -> onEntryMaMarketEvent(runtime, event), ready -> runtime.entryMaStreamReady = ready);
         }
+        }
     }
 
     /** 只更新 1 分钟均线行情，不驱动策略开平仓。 */
     private void onEntryMaMarketEvent(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
         if (runtime == null || event == null) return;
         synchronized (runtime) {
-            if (runtime.closed) return;
+            if (runtime.closed || !entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) return;
             if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
                 runtime.entryMaStreamReady = false;
                 runtime.entryMaLastEventTime = null;
@@ -5167,7 +5169,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
          * 最近一次收到 K 线事件的时间。
          */
         private Instant lastKlineEventAt;
-        /** 最近 7 根已收盘 K 线的收盘价，用于 1 分钟 5MA/7MA 入场方向过滤。 */
+        /** 最近 7 根已收盘 K 线的收盘价，用于移动平均计算。 */
         private final Deque<BigDecimal> closedKlineCloses = new ArrayDeque<>();
         private Instant lastClosedKlineOpenTime;
 
@@ -5181,16 +5183,6 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             lastKlineEventAt = null;
             closedKlineCloses.clear();
             lastClosedKlineOpenTime = null;
-        }
-
-        /** 从独立历史快照复制均线计算所需的行情状态。 */
-        private void copyFrom(MarketRuntime source) {
-            closedKlineCloses.clear();
-            closedKlineCloses.addAll(source.closedKlineCloses);
-            lastClosedKlineOpenTime = source.lastClosedKlineOpenTime;
-            currentKline = source.currentKline;
-            previousClosedClose = source.previousClosedClose;
-            lastKlineEventAt = source.lastKlineEventAt;
         }
 
         /**
