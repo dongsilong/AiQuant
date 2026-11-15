@@ -503,11 +503,12 @@ public class MarketStreamHub {
         }
 
         /**
-         * 最多保留当前及前三根K线，不另发REST，也不回放交易信号。
+         * 保留当前K线及最近7根已收盘K线，供晚加入的订阅者计算MA7等指标；
+         * 不另发REST，也不回放交易信号。
          */
         private void rememberReference(ExchangeGateway.Kline kline) {
             referenceKlines.put(kline.openTime(), kline);
-            while (referenceKlines.size() > 4) {
+            while (referenceKlines.size() > 8) {
                 referenceKlines.pollFirstEntry();
             }
         }
