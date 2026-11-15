@@ -7,6 +7,7 @@ import org.dromara.quant.exchange.QuantityNormalizer;
 import org.dromara.quant.execution.LiveOrderDispatcher;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.position.domain.QuantPosition;
+import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.protection.domain.QuantProtectionOrder;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
 import org.dromara.quant.strategy.ProtectionSignal;
@@ -50,6 +51,7 @@ public class ProtectionOrderService {
     @Autowired
     private org.dromara.quant.decision.TradeDecisionLogService decisionLogs;
     private volatile LiveOrderDispatcher liveOrderDispatcher;
+    private volatile QuantPositionMapper positionMapper;
     @Autowired
     private ProtectionOrderJournalService protectionJournal;
     /**
@@ -72,6 +74,11 @@ public class ProtectionOrderService {
     @Autowired
     public void setLiveOrderDispatcher(LiveOrderDispatcher dispatcher) {
         this.liveOrderDispatcher = java.util.Objects.requireNonNull(dispatcher);
+    }
+
+    @Autowired
+    public void setQuantPositionMapper(QuantPositionMapper mapper) {
+        this.positionMapper = java.util.Objects.requireNonNull(mapper);
     }
 
     private LiveOrderDispatcher requireLiveDispatcher() {
@@ -229,9 +236,15 @@ public class ProtectionOrderService {
                 log.warn("策略启动前保护创建票据仍未恢复，保持启动阻断 accountId={} symbol={} clientAlgoId={}", active.credentialId(), active.symbol(), active.clientOrderId());
             }
             return recovered;
+        } catch (ProtectionConfirmationPendingException pending) {
+            // An inconclusive historical lookup is not proof of rejection or cancellation.
+            // Retire only when both local and exchange state prove this exact cycle is flat and idle.
+            return supersedeInactiveProtectionCreate(active, local);
         } catch (ProtectionExecutionPendingException pending) {
-            // Algo FINISHED alone is not enough. Re-query the exact Algo and child order,
-            // persist only a fully-filled child fact, then release the matching dispatch ticket.
+            if (supersedeInactiveProtectionCreate(active, local)) {
+                return true;
+            }
+            // Algo FINISHED alone is not enough. Verify the exact child order before recording a fill.
             try {
                 ExchangeGateway.Credential credential = executionApplicationService.toCredential(
                     executionApplicationService.requireCredential(active.credentialId()));
@@ -255,6 +268,74 @@ public class ProtectionOrderService {
         } catch (RuntimeException ex) {
             log.warn("策略启动前保护创建事实核实失败，保持启动阻断 accountId={} symbol={} clientAlgoId={} errorType={}", active.credentialId(), active.symbol(),
                 active.clientOrderId(), ex.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    /**
+     * A protection create no longer needs to occupy the account-symbol slot when
+     * its exact local position cycle is closed and every exchange open-state query is complete and empty.
+     * SUPERSEDED deliberately does not claim the historical Algo request was rejected or canceled.
+     */
+    private boolean supersedeInactiveProtectionCreate(LiveOrderDispatcher.ActiveDispatch active, QuantProtectionOrder local) {
+        QuantPositionMapper positions = positionMapper;
+        if (active == null || local == null || positions == null
+            || !"PROTECT_CREATE".equals(active.operationType()) || !"UNKNOWN".equals(active.dispatchStatus())
+            || local.getPositionId() == null || local.getPositionCycleKey() == null
+            || local.getExchangeOrderId() != null || local.getExecutedQuantity() == null
+            || local.getExecutedQuantity().signum() != 0
+            || !Set.of("UNKNOWN", "SUPERSEDED").contains(local.getStatus())) {
+            return false;
+        }
+        try {
+            QuantPosition position = positions.selectById(local.getPositionId());
+            if (position == null || !Objects.equals(position.getCredentialId(), active.credentialId())
+                || position.getSymbol() == null || !position.getSymbol().equalsIgnoreCase(active.symbol())
+                || position.getQuantity() == null || position.getQuantity().signum() != 0) {
+                return false;
+            }
+            List<QuantProtectionOrder> cycleOrders = mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
+                .eq(QuantProtectionOrder::getCredentialId, active.credentialId())
+                .eq(QuantProtectionOrder::getPositionId, local.getPositionId())
+                .eq(QuantProtectionOrder::getPositionCycleKey, local.getPositionCycleKey()));
+            if (cycleOrders == null || cycleOrders.stream().anyMatch(order -> !Objects.equals(order.getId(), local.getId())
+                && ACTIVE_STATUSES.contains(order.getStatus()))) {
+                return false;
+            }
+            ExchangeGateway.Credential credential = executionApplicationService.toCredential(
+                executionApplicationService.requireCredential(active.credentialId()));
+            List<ExchangeGateway.PositionSnapshot> exchangePositions = gateway.queryPositions(credential, active.symbol());
+            List<ExchangeGateway.OrderSnapshot> exchangeOrders = gateway.queryOrders(credential, active.symbol());
+            List<ExchangeGateway.ProtectionOrderSnapshot> exchangeProtections = gateway.queryProtectionOrders(credential, active.symbol());
+            if (exchangePositions == null || !exchangePositions.isEmpty()
+                || exchangeOrders == null || !exchangeOrders.isEmpty()
+                || exchangeProtections == null || !exchangeProtections.isEmpty()) {
+                return false;
+            }
+            if ("UNKNOWN".equals(local.getStatus())) {
+                QuantProtectionOrder update = new QuantProtectionOrder();
+                update.setStatus("SUPERSEDED");
+                if (mapper.update(update, new LambdaQueryWrapper<QuantProtectionOrder>()
+                    .eq(QuantProtectionOrder::getId, local.getId())
+                    .eq(QuantProtectionOrder::getStatus, "UNKNOWN")
+                    .isNull(QuantProtectionOrder::getExchangeOrderId)
+                    .eq(QuantProtectionOrder::getExecutedQuantity, BigDecimal.ZERO)) != 1) {
+                    return false;
+                }
+                local.setStatus("SUPERSEDED");
+            }
+            boolean superseded = requireLiveDispatcher().supersedeProtectionCreate(active.credentialId(), active.symbol(),
+                active.dispatchKey(), active.clientOrderId());
+            if (superseded) {
+                log.info("已结束持仓周期的保护创建票据按本地与交易所空闲事实终结，未将历史结果伪装为已成交/已撤销 accountId={} symbol={} dispatchKey={} clientAlgoId={}",
+                    active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId());
+            }
+            return superseded;
+        } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException | org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            log.warn("保护创建票据当前空闲状态核验失败，继续保持调度阻断 accountId={} symbol={} dispatchKey={} errorType={}",
+                active.credentialId(), active.symbol(), active.dispatchKey(), ex.getClass().getSimpleName());
             return false;
         }
     }
