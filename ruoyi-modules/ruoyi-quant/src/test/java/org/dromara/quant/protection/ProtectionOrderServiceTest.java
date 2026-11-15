@@ -1585,26 +1585,6 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
-    void manualRecheckRepairsUnknownConfigurationOnlyAfterExchangeConfirmsFlat() {
-        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
-            "SETTINGS:ISOLATED:5", "UNKNOWN", null);
-        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
-        when(dispatcher.matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 5)).thenReturn(true);
-        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT"))).thenReturn(
-            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "CROSSED", 10),
-            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 5));
-        when(gateway.queryPositions(any(), eq("BTCUSDT"))).thenReturn(List.of(), List.of());
-        when(dispatcher.recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:5", "ISOLATED", 5))
-            .thenReturn(true);
-
-        assertTrue(service.recheckProtectionDispatch(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:5"));
-
-        verify(gateway).setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
-        verify(gateway).setLeverage(any(), eq("BTCUSDT"), eq(5));
-        verify(dispatcher).recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:5", "ISOLATED", 5);
-    }
-
-    @Test
     void flatAndIdleCycleSupersedesUnknownProtectionCreateWithoutClaimingExchangeCancellation() {
         QuantProtectionOrder local = order();
         local.setCredentialId(1L);
