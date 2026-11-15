@@ -279,7 +279,7 @@ public class ProtectionOrderService {
     /**
      * A protection create no longer needs to occupy the account-symbol slot when
      * its exact local position cycle is closed and every exchange open-state query is complete and empty.
-     * SUPERSEDED deliberately does not claim the historical Algo request was rejected or canceled.
+     * SUPERSEDED means no current exposure or active order remains; it does not claim the historical Algo was rejected, canceled, or unfilled.
      */
     private boolean supersedeInactiveProtectionCreate(LiveOrderDispatcher.ActiveDispatch active, QuantProtectionOrder local) {
         QuantPositionMapper positions = positionMapper;
