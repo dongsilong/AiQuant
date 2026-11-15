@@ -946,10 +946,19 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * Every returned LONG/SHORT/BOTH row must agree. Missing getters, empty
      * data or conflicting facts fail closed rather than acknowledging settings.
      */
+    static boolean isValidTradingSymbol(String symbol) {
+        if (symbol == null || symbol.isBlank()) {
+            return false;
+        }
+        String normalized = symbol.trim();
+        int length = normalized.codePointCount(0, normalized.length());
+        return length >= 2 && length <= 32;
+    }
+
     @Override
     public org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings querySymbolTradingSettings(Credential credential, String symbol) {
         requireCredential(credential);
-        if (symbol == null || !symbol.matches("[a-zA-Z0-9]{2,32}")) {
+        if (!isValidTradingSymbol(symbol)) {
             throw new IllegalArgumentException("Binance 交易设置回查缺少有效交易对");
         }
         var rows = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
