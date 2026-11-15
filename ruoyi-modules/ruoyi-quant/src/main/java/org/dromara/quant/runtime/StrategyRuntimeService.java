@@ -1427,14 +1427,39 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
     }
 
-    /** 只有 1 分钟流已恢复、数据新鲜且 MA5/MA7 可计算时才允许通过均线过滤。 */
-    private boolean entryMaMarketReady(ActiveRuntime runtime) {
-        if (!runtime.entryMaStreamReady || runtime.entryMaMarket.movingAverage(5) == null || runtime.entryMaMarket.movingAverage(7) == null
-            || runtime.entryMaLastEventTime == null || runtime.entryMaLastReceivedAt == null) return false;
+    /** 返回 1 分钟均线行情门禁的具体阻断原因；不改变原有 fail-closed 条件。 */
+    private String entryMaMarketBlockReason(ActiveRuntime runtime) {
+        if (!runtime.entryMaStreamReady) {
+            return "STREAM_NOT_READY";
+        }
+        if (runtime.entryMaMarket.movingAverage(5) == null || runtime.entryMaMarket.movingAverage(7) == null) {
+            return "INSUFFICIENT_CLOSED_KLINES";
+        }
+        if (runtime.entryMaLastEventTime == null) {
+            return "EVENT_TIME_MISSING";
+        }
+        if (runtime.entryMaLastReceivedAt == null) {
+            return "RECEIVED_AT_MISSING";
+        }
         Instant now = Instant.now();
         Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
         return org.dromara.quant.market.MarketEventFreshness.isFresh(runtime.entryMaLastEventTime, runtime.entryMaLastReceivedAt, now, exchangeNow,
-            Math.max(1, properties.getMarket().getMaxEventAgeMillis()));
+            Math.max(1, properties.getMarket().getMaxEventAgeMillis())) ? null : "STALE_EVENT";
+    }
+
+    /** 将均线阻断原因与行情快照写入决策日志，便于区分订阅、预热和时效问题。 */
+    private String entryMaMarketDiagnostic(ActiveRuntime runtime, String blockReason) {
+        Instant now = Instant.now();
+        Instant eventTime = runtime.entryMaLastEventTime;
+        Instant receivedAt = runtime.entryMaLastReceivedAt;
+        return "1分钟均线行情不可用，禁止开仓；原因=" + blockReason
+            + "；streamReady=" + runtime.entryMaStreamReady
+            + "；closedKlines=" + runtime.entryMaMarket.closedKlineCloses.size() + "/7"
+            + "；eventTime=" + eventTime
+            + "；receivedAt=" + receivedAt
+            + "；eventAgeMillis=" + (eventTime == null ? null : java.time.Duration.between(eventTime, now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()))).toMillis())
+            + "；queueWaitMillis=" + (receivedAt == null ? null : java.time.Duration.between(receivedAt, now).toMillis())
+            + "；maxEventAgeMillis=" + Math.max(1, properties.getMarket().getMaxEventAgeMillis());
     }
 
     /**
@@ -1857,15 +1882,27 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             long generation = runtime.entryProtectionCleanupGeneration.get();
             String cycle = runtime.state == null ? null : runtime.state.getPositionCycleKey();
             runtime.entryProtectionCleanupTask = recoveryExecutor.submit(() -> {
+                long startedAt = System.nanoTime();
+                boolean leaseAcquired = false;
+                boolean cleaned = false;
+                boolean proofEstablished = false;
+                String result = "NOT_STARTED";
+                String errorType = null;
                 try {
                     if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+                        result = "LEASE_NOT_ACQUIRED";
                         return;
                     }
+                    leaseAcquired = true;
                     long epoch = leaseService.requireCurrentEpoch(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
-                    boolean cleaned = protectionOrderService.prepareEntryProtectionCleanup(runtime.credential.getId(), runtime.symbol.getSymbol(),
+                    cleaned = protectionOrderService.prepareEntryProtectionCleanup(runtime.credential.getId(), runtime.symbol.getSymbol(),
                         !"PAPER".equalsIgnoreCase(runtime.credential.getRunMode()));
+                    if (!cleaned) {
+                        result = "CLEANUP_NOT_CONFIRMED";
+                        return;
+                    }
                     synchronized (runtime) {
-                        if (cleaned && !runtime.closed && runtime.position == null && !runtime.hasPendingAction() && runtime.positionFactsReady
+                        if (!runtime.closed && runtime.position == null && !runtime.hasPendingAction() && runtime.positionFactsReady
                             && generation == runtime.entryProtectionCleanupGeneration.get()
                             && Objects.equals(cycle, runtime.state == null ? null : runtime.state.getPositionCycleKey())
                             && epoch == leaseService.requireCurrentEpoch(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
@@ -1873,14 +1910,27 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             runtime.entryProtectionCleanupProofGeneration = generation;
                             runtime.entryProtectionCleanupConfirmedAt = Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
                             runtime.entryProtectionCleanupReady = true;
+                            proofEstablished = true;
+                            result = "PROOF_ESTABLISHED";
+                        } else {
+                            result = "PROOF_NOT_ESTABLISHED";
                         }
                     }
                 } catch (RuntimeException ex) {
-                    log.warn("开仓前保护清理尚未确认 instanceId={} symbol={} errorType={}", runtime.instance.getId(), runtime.symbol.getSymbol(), ex.getClass().getSimpleName());
+                    result = "EXCEPTION";
+                    errorType = ex.getClass().getSimpleName();
                 } finally {
                     synchronized (runtime) {
                         runtime.nextEntryProtectionCleanupAt = System.currentTimeMillis() + 2000L;
                         runtime.entryProtectionCleanupRunning = false;
+                    }
+                    long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+                    if (proofEstablished) {
+                        log.info("开仓前保护清理完成 instanceId={} symbol={} generation={} leaseAcquired={} cleanupResult={} proofEstablished={} elapsedMs={}",
+                            runtime.instance.getId(), runtime.symbol.getSymbol(), generation, leaseAcquired, cleaned, true, elapsedMs);
+                    } else {
+                        log.warn("开仓前保护清理未建立有效证明 instanceId={} symbol={} generation={} leaseAcquired={} cleanupResult={} proofEstablished={} result={} errorType={} elapsedMs={}",
+                            runtime.instance.getId(), runtime.symbol.getSymbol(), generation, leaseAcquired, cleaned, false, result, errorType, elapsedMs);
                     }
                 }
             });
@@ -1981,8 +2031,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         Optional<EntrySignal> signal;
         if (entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) {
-            if (!entryMaMarketReady(runtime)) {
-                logEntryDecision(runtime, context, "ENTRY_MA_MARKET_UNREADY", "1分钟均线行情未就绪、数据过期或历史K线不足，禁止开仓");
+            String entryMaBlockReason = entryMaMarketBlockReason(runtime);
+            if (entryMaBlockReason != null) {
+                logEntryDecision(runtime, context, "ENTRY_MA_" + entryMaBlockReason, entryMaMarketDiagnostic(runtime, entryMaBlockReason));
                 return;
             }
             KlineSlopeRateStrategy slopeStrategy = (KlineSlopeRateStrategy) runtime.plugin;
