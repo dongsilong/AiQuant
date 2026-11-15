@@ -916,7 +916,7 @@ public class MarketStreamHub {
             nextQuietCheckAt = System.currentTimeMillis() + 60_000L;
             quietCheckTask = recoveryExecutor.submit(() -> {
                 try {
-                    List<ExchangeGateway.Kline> history = recoveryRead(attempt, () -> history(expectedOpen, 1000));
+                    List<ExchangeGateway.Kline> history = recoveryRead(attempt, "KLINE", () -> history(expectedOpen, 1000));
                     Instant exchangeNow = exchangeNow();
                     synchronized (this) {
                         if (closed || attempt != generation || recovering || !expectedOpen.equals(lastKlineOpen) || !java.util.Objects.equals(expectedReceived, lastReceived.get(
