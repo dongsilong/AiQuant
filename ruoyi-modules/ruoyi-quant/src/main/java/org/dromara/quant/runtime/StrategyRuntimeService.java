@@ -1390,12 +1390,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             runtime.entryMaLastEventTime = null;
             runtime.entryMaLastReceivedAt = null;
             runtime.entryMaMarket.clear();
-            runtime.entryMaInitialized = false;
             return;
-        }
-        if (!runtime.entryMaInitialized) {
-            runtime.entryMaMarket.copyFrom(loadInitialMarket(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m", runtime.params, false));
-            runtime.entryMaInitialized = true;
         }
         if (runtime.entryMaSubscription == null) {
             runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
@@ -1414,7 +1409,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.entryMaLastReceivedAt = null;
                 if ("CONNECTING".equals(event.type())) {
                     runtime.entryMaMarket.clear();
-                    runtime.entryMaInitialized = true;
                 }
                 return;
             }
@@ -5302,7 +5296,6 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final MarketRuntime market = new MarketRuntime();
         /** 独立维护 1 分钟已收盘 K 线，供开仓 MA5/MA7 过滤使用。 */
         private final MarketRuntime entryMaMarket = new MarketRuntime();
-        private volatile boolean entryMaInitialized;
         private volatile boolean entryMaStreamReady;
         private volatile Instant entryMaLastEventTime;
         private volatile Instant entryMaLastReceivedAt;
@@ -5461,10 +5454,6 @@ StrategyPlugin plugin, Map<String, Object> params) {
             this.market.lastClosedKlineOpenTime = initial.lastClosedKlineOpenTime;
             this.market.currentKline = initial.currentKline;
             this.market.lastKlineEventAt = initial.lastKlineEventAt;
-            if (entryMaDirectionFilterEnabled(plugin, params)) {
-                this.entryMaMarket.copyFrom(loadInitialMarket(credential.getRunMode(), symbol.getSymbol(), "1m", params, false));
-                this.entryMaInitialized = true;
-            }
         }
 
         /**
