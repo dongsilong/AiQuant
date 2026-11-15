@@ -20,7 +20,6 @@ import java.util.function.BooleanSupplier;
  * 开仓容量检查使用的账户持仓事实，不用于估值或替代订单恢复账本。
  * 完整快照初始化后由私有流增量维护；未知状态禁止新开仓。
  */
-@RequiredArgsConstructor
 @Component
 @Slf4j
 public class AccountPositionCache {
