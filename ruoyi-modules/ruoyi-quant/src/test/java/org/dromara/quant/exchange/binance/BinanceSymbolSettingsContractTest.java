@@ -11,6 +11,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @Tag("dev")
 class BinanceSymbolSettingsContractTest {
     @Test
+    void acceptsNativeUnicodeTradingSymbolsAndRejectsInvalidLengths() {
+        assertEquals(true, BinanceGatewayAdapter.isValidTradingSymbol("牛来USDT"));
+        assertEquals(true, BinanceGatewayAdapter.isValidTradingSymbol("BTCUSDT"));
+        assertEquals(false, BinanceGatewayAdapter.isValidTradingSymbol(null));
+        assertEquals(false, BinanceGatewayAdapter.isValidTradingSymbol("  "));
+        assertEquals(false, BinanceGatewayAdapter.isValidTradingSymbol("A"));
+        assertEquals(false, BinanceGatewayAdapter.isValidTradingSymbol("123456789012345678901234567890123"));
+    }
+
+    @Test
     void readsExactLeverageAndMarginEvenForZeroQuantityRiskRows() {
         var actual = BinanceGatewayAdapter.parseSymbolTradingSettings("BTCUSDT", List.of(new PositionRiskDto("BTCUSDT", true, "10")));
         assertEquals("BTCUSDT", actual.symbol());
