@@ -1472,9 +1472,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         long callbackStartedNanos = System.nanoTime();
         String freshnessFailure = marketEventFreshnessFailure(runtime, event);
         if (freshnessFailure != null) {
-            reportExpiredMarketEvent(runtime, event, freshnessFailure, "STRATEGY_ENTRY", callbackStartedNanos, -1L);
+            reportExpiredMarketEvent(runtime, event, freshnessFailure, "STRATEGY_ENTRY", callbackStartedNanos, -1L, -1L);
             return;
         }
+        long runtimeLockRequestedNanos = System.nanoTime();
         synchronized (runtime) {
             long runtimeLockAcquiredNanos = System.nanoTime();
             if (runtime.closed) {
@@ -1558,7 +1559,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 if (runtime.position != null && !runtime.exitCoordinating.get() && "PAPER".equalsIgnoreCase(runtime.credential.getRunMode()) && event.price() != null) {
                     paperTradingService.updateMarkPrice(runtime.position, event.price());
                 }
-                evaluate(runtime, event, callbackStartedNanos, runtimeLockAcquiredNanos);
+                evaluate(runtime, event, callbackStartedNanos, runtimeLockRequestedNanos, runtimeLockAcquiredNanos);
             }
         }
     }
@@ -1566,7 +1567,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     /**
      * 基于最新行情、持仓和策略状态执行一次决策。
      */
-    private void evaluate(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, long callbackStartedNanos, long runtimeLockAcquiredNanos) {
+    private void evaluate(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, long callbackStartedNanos, long runtimeLockRequestedNanos, long runtimeLockAcquiredNanos) {
         long nowMillis = System.currentTimeMillis();
         long exchangeOffsetMillis = gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode());
         Instant localNow = Instant.now();
@@ -1619,7 +1620,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         String freshnessFailure = org.dromara.quant.market.MarketEventFreshness.rejectionReason(event.eventTime(), event.receivedAt(), decisionAt, exchangeNow, maxEventAgeMillis);
         if (freshnessFailure != null) {
-            reportExpiredMarketEvent(runtime, event, freshnessFailure, "EVALUATE", callbackStartedNanos, runtimeLockAcquiredNanos);
+            reportExpiredMarketEvent(runtime, event, freshnessFailure, "EVALUATE", callbackStartedNanos, runtimeLockRequestedNanos, runtimeLockAcquiredNanos);
             return;
         }
         // 策略开平仓判断使用成交价或 K 线价；MARK 价格不直接触发策略开平仓。
@@ -1835,24 +1836,27 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     private void reportExpiredMarketEvent(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, String reason, String stage, long callbackStartedNanos,
-                                          long runtimeLockAcquiredNanos) {
+                                          long runtimeLockRequestedNanos, long runtimeLockAcquiredNanos) {
         long now = System.currentTimeMillis();
         if (now < runtime.nextExpiredMarketLogAt) {
             return;
         }
         runtime.nextExpiredMarketLogAt = now + 10_000L;
+        long observedNanos = System.nanoTime();
+        Instant observedAt = Instant.now();
+        long offsetMillis = gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode());
+        Instant observedExchangeTime = observedAt.plusMillis(offsetMillis);
+        long callbackElapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(observedNanos - callbackStartedNanos);
+        Long runtimeLockWaitMillis = runtimeLockRequestedNanos < 0 ? null
+            : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(runtimeLockAcquiredNanos - runtimeLockRequestedNanos);
+        Long preEvaluateMillis = runtimeLockAcquiredNanos < 0 ? null
+            : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(observedNanos - runtimeLockAcquiredNanos);
         synchronized (runtime) {
             if (runtime.closed) {
                 return;
             }
             logUnavailableEntry(runtime, event, "STALE_MARKET", "行情事件过期或时间异常，已丢弃本次决策；原因=" + reason);
         }
-        long offsetMillis = gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode());
-        Instant observedAt = Instant.now();
-        Instant observedExchangeTime = observedAt.plusMillis(offsetMillis);
-        long callbackElapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - callbackStartedNanos);
-        Long runtimeLockWaitMillis = runtimeLockAcquiredNanos < 0 ? null : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(runtimeLockAcquiredNanos - callbackStartedNanos);
-        Long preEvaluateMillis = runtimeLockAcquiredNanos < 0 ? null : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - runtimeLockAcquiredNanos);
         log.warn("策略丢弃过期或时间异常行情，未更新本地行情状态 instanceId={} mode={} symbol={} eventType={} stage={} reason={} eventTime={} receivedAt={} observedAt={} exchangeOffsetMillis={} exchangeNow={} eventAgeMillis={} localReceiveAgeMillis={} callbackElapsedMillis={} runtimeLockWaitMillis={} preEvaluateMillis={} maxEventAgeMillis={}",
             runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), stage, reason, event.eventTime(), event.receivedAt(), observedAt,
             offsetMillis, observedExchangeTime, event.eventTime() == null ? null : java.time.Duration.between(event.eventTime(), observedExchangeTime).toMillis(),
