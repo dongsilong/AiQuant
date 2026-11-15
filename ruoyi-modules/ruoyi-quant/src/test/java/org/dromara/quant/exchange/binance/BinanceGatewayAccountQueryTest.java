@@ -229,10 +229,10 @@ class BinanceGatewayAccountQueryTest {
             String path = exchange.getRequestURI().getPath();
             String body;
             if (path.endsWith("/time")) {
-                body = "{\\"serverTime\\":" + System.currentTimeMillis() + "}";
+                body = "{\"serverTime\":" + System.currentTimeMillis() + "}";
             } else {
                 rawQuery.set(exchange.getRequestURI().getRawQuery());
-                body = "[{\\"symbol\\":\\"牛来USDT\\",\\"leverage\\":\\"5\\",\\"isolated\\":true}]";
+                body = "[{\"symbol\":\"牛来USDT\",\"leverage\":\"5\",\"isolated\":true}]";
             }
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, bytes.length);
