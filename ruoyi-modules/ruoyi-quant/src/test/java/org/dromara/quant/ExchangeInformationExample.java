@@ -58,6 +58,7 @@ public class ExchangeInformationExample {
         System.out.println("========================================================================================================================");
 
         for (ExchangeInformationResponseSymbolsInner s : symbols) {
+            System.out.println(s.toJson());
             if (!"TRADING".equals(s.getStatus())) {
                 continue;
             }
@@ -85,9 +86,9 @@ public class ExchangeInformationExample {
                 }
             }
 
-            System.out.printf("%-18s | tick: %-14s | step: %-14s | mktStep: %-14s | minNotional: %-12s | 类型:" + " %-12s | 基础: %-6s | 计价: %-6s | 状态: %s%n", s.getSymbol(),
-                tickSize, stepSize, marketStepSize, minNotional, s.getContractType() != null ? s.getContractType() : "N/A", s.getBaseAsset() != null ? s.getBaseAsset() : "N/A",
-                s.getQuoteAsset() != null ? s.getQuoteAsset() : "N/A", s.getStatus());
+//            System.out.printf("%-18s | tick: %-14s | step: %-14s | mktStep: %-14s | minNotional: %-12s | 类型:" + " %-12s | 基础: %-6s | 计价: %-6s | 状态: %s%n", s.getSymbol(),
+//                tickSize, stepSize, marketStepSize, minNotional, s.getContractType() != null ? s.getContractType() : "N/A", s.getBaseAsset() != null ? s.getBaseAsset() : "N/A",
+//                s.getQuoteAsset() != null ? s.getQuoteAsset() : "N/A", s.getStatus());
         }
 
         System.out.println("========================================================================================================================");

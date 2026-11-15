@@ -92,7 +92,6 @@ class StrategyOrderIntentMapperTest {
         assertEquals(0, mapper.countExactRecoveredBinding(localId, 10L, "BTCUSDT", orderId, clientOrderId,
             20L, 30L, positionSide, false));
     }
-    }
 
     private void insertOrder(JdbcTemplate jdbc, long id, String positionSide) {
         jdbc.update("""

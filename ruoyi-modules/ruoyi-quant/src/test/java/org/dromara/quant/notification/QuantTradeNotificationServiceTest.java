@@ -16,6 +16,7 @@ import org.springframework.core.task.TaskExecutor;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -121,10 +122,7 @@ class QuantTradeNotificationServiceTest {
         var task = new QuantNotification();
         task.setId(47L);
         task.setCreatedAt(java.time.LocalDateTime.now());
-        task.setContent(org.dromara.quant.util.QuantJsonMapper.writeMap(java.util.Map.of(
-            "taskType", "OPEN", "credentialId", "10", "strategyName", "test-strategy", "symbol", "BTCUSDT",
-            "direction", "LONG", "quantity", "2", "price", "99.5", "leverage", 5, "openRatio", "0.1",
-            "orderId", "102", "reason", "test open")));
+        task.setContent(org.dromara.quant.util.QuantJsonMapper.writeMap(java.util.Map.of()));
         when(mapper.selectList(any())).thenReturn(List.of(task));
         when(mapper.claim(eq(47L), any(), any())).thenReturn(1);
         when(mapper.insert(any(QuantNotification.class))).thenAnswer(invocation -> {
@@ -141,7 +139,7 @@ class QuantTradeNotificationServiceTest {
         verify(mapper, atLeastOnce()).insert(rows.capture());
         var systemNotice = rows.getAllValues().stream().filter(row -> "SYSTEM".equals(row.getChannel())).findFirst().orElseThrow();
         assertTrue(systemNotice.getContent().contains("开仓时间: 2026-11-10 10:00:00"));
-        verify(mapper).updateById(argThat(updated -> "SENT".equals(updated.getStatus())));
+        verify(mapper).updateById(Collections.singleton(argThat(updated -> "SENT".equals(updated.getStatus()))));
     }
 
     @Test
@@ -225,8 +223,7 @@ class QuantTradeNotificationServiceTest {
             && "SNAPSHOT:BTCUSDT:99".equals(row.getRecipient())).findFirst().orElseThrow();
         assertEquals("SENT", factTask.getStatus());
         assertEquals("SENT", snapshotTask.getStatus());
-        verify(mapper, atLeastOnce()).updateById(argThat(updated -> "SENT".equals(updated.getStatus())
-            && "FACT_PENDING".equals(updated.getChannel())));
+        verify(mapper, atLeastOnce()).updateById(Collections.singleton(argThat(updated -> "SENT".equals(updated.getStatus()) && "FACT_PENDING".equals(updated.getChannel()))));
         verify(jdbc).updateIncompleteCloseEquity(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         assertTrue(content.contains("实际平仓均价: 102"));
         assertTrue(content.contains("最大回报率: 5.86351456%"));

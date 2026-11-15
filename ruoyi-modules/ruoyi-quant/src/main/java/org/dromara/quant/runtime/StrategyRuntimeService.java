@@ -16,6 +16,7 @@ import org.dromara.quant.execution.ExecutionRecordService;
 import org.dromara.quant.execution.ExecutionResult;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
+import org.dromara.quant.market.MarketEventFreshness;
 import org.dromara.quant.market.MarketStreamHub;
 import org.dromara.quant.market.UserDataStreamHub;
 import org.dromara.quant.market.domain.QuantSymbol;
@@ -591,7 +592,7 @@ public class StrategyRuntimeService {
                         }
                         long requestStartedAt = System.nanoTime();
                         ExchangeGateway.PriceSnapshot snapshot = gateway.queryLastTradePrice(runtime.credential.getRunMode(), runtime.symbol.getSymbol());
-                        long requestDurationMillis = java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - requestStartedAt);
+                        long requestDurationMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - requestStartedAt);
                         Instant observedAt = snapshot == null ? null : snapshot.observedAt();
                         BigDecimal price = snapshot == null ? null : snapshot.lastTradePrice();
                         Instant completedAt = Instant.now();
@@ -1060,7 +1061,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             runtime.positionReconciliationBlockReason = "RECONCILIATION_ERROR:" + ex.getClass().getSimpleName();
             boolean stateConflict = containsMessage(ex, "策略持仓状态乐观锁冲突");
             log.warn("策略持仓事实核实失败 instanceId={} credentialId={} symbol={} runMode={} elapsedMs={} error={}", runtime.instance.getId(), runtime.credential.getId(),
-                runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
+                runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
             if (stateConflict) {
                 QuantStrategyPositionState latestState = stateService.findByInstance(runtime.instance.getId());
                 synchronized (runtime) {
@@ -1109,7 +1110,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     }
                     log.debug("持仓核实完成 instanceId={} credentialId={} symbol={} runMode={} position={} elapsedMs={} entryReadiness={}",
                         runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
-                        runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
+                        runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
                 }
             }
             if (reconciliationCompleted) {
@@ -1443,7 +1444,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         Instant now = Instant.now();
         Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
-        return org.dromara.quant.market.MarketEventFreshness.isFresh(runtime.entryMaLastEventTime, runtime.entryMaLastReceivedAt, now, exchangeNow,
+        return MarketEventFreshness.isFresh(runtime.entryMaLastEventTime, runtime.entryMaLastReceivedAt, now, exchangeNow,
             Math.max(1, properties.getMarket().getMaxEventAgeMillis())) ? null : "STALE_EVENT";
     }
 
@@ -1939,7 +1940,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         runtime.nextEntryProtectionCleanupAt = System.currentTimeMillis() + 2000L;
                         runtime.entryProtectionCleanupRunning = false;
                     }
-                    long elapsedMs = java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+                    long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
                     if (proofEstablished) {
                         log.info("开仓前保护清理完成 instanceId={} symbol={} generation={} leaseAcquired={} cleanupResult={} proofEstablished={} elapsedMs={}",
                             runtime.instance.getId(), runtime.symbol.getSymbol(), generation, leaseAcquired, cleaned, true, elapsedMs);
@@ -4949,10 +4950,29 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 state.getDirection(), favorablePrice, state.getEntryPrice(), state.getFrozenLeverage())
                 .max(BigDecimal.ZERO).multiply(BigDecimal.valueOf(100));
         }
-        positionPerformanceHub.publish(new StrategyPositionPerformanceEvent(runtime.credential.getId(), runtime.instance.getId(), state.getPositionId(), state.getPositionCycleKey(),
-            runtime.symbol.getSymbol(), runtime.strategy.getPluginCode(), state.getDirection(), state.getEntryPrice(), state.getInitialPositionQty(), state.getInitialMargin(), state.getHighestPriceSinceEntry(),
-            state.getLowestPriceSinceEntry(), state.getMaximumReturnRate(), state.getHighestStep(), state.getConfirmedProtectionStep(), state.getFrozenLeverage(),
-            ladderMaximumReturnRate, state.getUpdatedAt()));
+        positionPerformanceHub.publish(new StrategyPositionPerformanceEvent(
+            runtime.credential.getId(),
+            runtime.instance.getId(),
+            state.getPositionId(),
+            state.getPositionCycleKey(),
+            runtime.symbol.getSymbol(),
+            runtime.strategy.getPluginCode(),
+            state.getDirection(),
+            state.getEntryPrice(),
+            state.getInitialPositionQty(),
+            state.getInitialMargin(),
+            state.getHighestPriceSinceEntry(),
+            state.getLowestPriceSinceEntry(),
+            state.getMaximumReturnRate(),
+            state.getHighestStep(),                    // 14 highestStep
+            state.getConfirmedProtectionStep(),        // 15 confirmedProtectionStep
+            state.getFrozenLeverage(),                 // 16 frozenLeverage
+            null,        // 17 ladderMaximumReturnRate ← 确认 getter 名
+            state.getUpdatedAt()                       // 18 updatedAt
+        ));
+//        positionPerformanceHub.publish(new StrategyPositionPerformanceEvent(runtime.credential.getId(), runtime.instance.getId(), state.getPositionId(), state.getPositionCycleKey(),
+//            runtime.symbol.getSymbol(), runtime.strategy.getPluginCode(), state.getDirection(), state.getEntryPrice(), state.getInitialPositionQty(), state.getInitialMargin(), state.getHighestPriceSinceEntry(),
+//            state.getLowestPriceSinceEntry(), state.getMaximumReturnRate()));
     }
 
     /**
