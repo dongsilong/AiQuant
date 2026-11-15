@@ -591,7 +591,7 @@ public class StrategyRuntimeService {
                         }
                         long requestStartedAt = System.nanoTime();
                         ExchangeGateway.PriceSnapshot snapshot = gateway.queryLastTradePrice(runtime.credential.getRunMode(), runtime.symbol.getSymbol());
-                        long requestDurationMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - requestStartedAt);
+                        long requestDurationMillis = java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - requestStartedAt);
                         Instant observedAt = snapshot == null ? null : snapshot.observedAt();
                         BigDecimal price = snapshot == null ? null : snapshot.lastTradePrice();
                         Instant completedAt = Instant.now();
@@ -1060,7 +1060,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             runtime.positionReconciliationBlockReason = "RECONCILIATION_ERROR:" + ex.getClass().getSimpleName();
             boolean stateConflict = containsMessage(ex, "策略持仓状态乐观锁冲突");
             log.warn("策略持仓事实核实失败 instanceId={} credentialId={} symbol={} runMode={} elapsedMs={} error={}", runtime.instance.getId(), runtime.credential.getId(),
-                runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
+                runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
             if (stateConflict) {
                 QuantStrategyPositionState latestState = stateService.findByInstance(runtime.instance.getId());
                 synchronized (runtime) {
@@ -1109,7 +1109,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     }
                     log.debug("持仓核实完成 instanceId={} credentialId={} symbol={} runMode={} position={} elapsedMs={} entryReadiness={}",
                         runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
-                        runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
+                        runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
                 }
             }
             if (reconciliationCompleted) {
@@ -1850,9 +1850,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         long offsetMillis = gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode());
         Instant observedAt = Instant.now();
         Instant observedExchangeTime = observedAt.plusMillis(offsetMillis);
-        long callbackElapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - callbackStartedNanos);
-        Long runtimeLockWaitMillis = runtimeLockAcquiredNanos < 0 ? null : TimeUnit.NANOSECONDS.toMillis(runtimeLockAcquiredNanos - callbackStartedNanos);
-        Long preEvaluateMillis = runtimeLockAcquiredNanos < 0 ? null : TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - runtimeLockAcquiredNanos);
+        long callbackElapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - callbackStartedNanos);
+        Long runtimeLockWaitMillis = runtimeLockAcquiredNanos < 0 ? null : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(runtimeLockAcquiredNanos - callbackStartedNanos);
+        Long preEvaluateMillis = runtimeLockAcquiredNanos < 0 ? null : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - runtimeLockAcquiredNanos);
         log.warn("策略丢弃过期或时间异常行情，未更新本地行情状态 instanceId={} mode={} symbol={} eventType={} stage={} reason={} eventTime={} receivedAt={} observedAt={} exchangeOffsetMillis={} exchangeNow={} eventAgeMillis={} localReceiveAgeMillis={} callbackElapsedMillis={} runtimeLockWaitMillis={} preEvaluateMillis={} maxEventAgeMillis={}",
             runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), stage, reason, event.eventTime(), event.receivedAt(), observedAt,
             offsetMillis, observedExchangeTime, event.eventTime() == null ? null : java.time.Duration.between(event.eventTime(), observedExchangeTime).toMillis(),
@@ -1935,7 +1935,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         runtime.nextEntryProtectionCleanupAt = System.currentTimeMillis() + 2000L;
                         runtime.entryProtectionCleanupRunning = false;
                     }
-                    long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+                    long elapsedMs = java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
                     if (proofEstablished) {
                         log.info("开仓前保护清理完成 instanceId={} symbol={} generation={} leaseAcquired={} cleanupResult={} proofEstablished={} elapsedMs={}",
                             runtime.instance.getId(), runtime.symbol.getSymbol(), generation, leaseAcquired, cleaned, true, elapsedMs);
