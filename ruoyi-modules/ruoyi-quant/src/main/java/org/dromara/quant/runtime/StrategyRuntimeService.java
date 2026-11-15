@@ -1389,6 +1389,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             runtime.entryMaStreamReady = false;
             runtime.entryMaLastEventTime = null;
             runtime.entryMaLastReceivedAt = null;
+            runtime.entryMaMarket.clear();
+            runtime.entryMaInitialized = false;
             return;
         }
         if (!runtime.entryMaInitialized) {
@@ -1410,6 +1412,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.entryMaStreamReady = false;
                 runtime.entryMaLastEventTime = null;
                 runtime.entryMaLastReceivedAt = null;
+                if ("CONNECTING".equals(event.type())) {
+                    runtime.entryMaMarket.clear();
+                    runtime.entryMaInitialized = true;
+                }
                 return;
             }
             if (event.kline() != null) {
@@ -5170,6 +5176,18 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /** 最近 7 根已收盘 K 线的收盘价，用于 1 分钟 5MA/7MA 入场方向过滤。 */
         private final Deque<BigDecimal> closedKlineCloses = new ArrayDeque<>();
         private Instant lastClosedKlineOpenTime;
+
+        /** 清空行情状态，等待订阅恢复后的历史回放重新预热。 */
+        private void clear() {
+            currentKline = null;
+            previousClosedClose = null;
+            previousKlineOpen = null;
+            secondPreviousKlineOpen = null;
+            thirdPreviousKlineOpen = null;
+            lastKlineEventAt = null;
+            closedKlineCloses.clear();
+            lastClosedKlineOpenTime = null;
+        }
 
         /** 从独立历史快照复制均线计算所需的行情状态。 */
         private void copyFrom(MarketRuntime source) {
