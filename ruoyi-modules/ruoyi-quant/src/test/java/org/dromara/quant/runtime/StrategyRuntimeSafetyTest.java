@@ -200,6 +200,9 @@ class StrategyRuntimeSafetyTest {
             ((QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential")).setRunMode("LIVE");
             ExchangeGateway gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
             when(gateway.exchangeTimeOffsetMillis("LIVE")).thenReturn(0L);
+            KlineSlopeRateStrategy slopePlugin = org.mockito.Mockito.spy(new KlineSlopeRateStrategy());
+            ReflectionTestUtils.setField(f.runtime, "plugin", slopePlugin);
+            ReflectionTestUtils.setField(f.runtime, "params", Map.of("entryAngleDegrees", 30));
 
             Instant firstOpen = Instant.now().minusSeconds(7 * 60L);
             for (int i = 1; i <= 7; i++) {
@@ -229,9 +232,6 @@ class StrategyRuntimeSafetyTest {
             ReflectionTestUtils.setField(f.runtime, "entryMaStreamReady", true);
             assertTrue((boolean) ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketReady", f.runtime));
 
-            KlineSlopeRateStrategy slopePlugin = org.mockito.Mockito.spy(new KlineSlopeRateStrategy());
-            ReflectionTestUtils.setField(f.runtime, "plugin", slopePlugin);
-            ReflectionTestUtils.setField(f.runtime, "params", Map.of("entryAngleDegrees", 30));
             ((QuantStrategySymbol) ReflectionTestUtils.getField(f.runtime, "strategySymbol")).setIntervalCode("15m");
             ReflectionTestUtils.setField(f.runtime, "position", null);
             var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
