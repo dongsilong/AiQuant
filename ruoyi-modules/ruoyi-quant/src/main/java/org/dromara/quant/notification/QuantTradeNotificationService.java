@@ -757,6 +757,33 @@ public class QuantTradeNotificationService {
         }
     }
 
+    /**
+     * 独立于 WebSocket 用户数据流补偿近期缺失的平仓资金快照任务。
+     * 仅扫描两分钟即时采样窗口内、尚无完整快照且尚无对应任务的已平仓周期。
+     */
+    @Scheduled(fixedDelay = 30000L, initialDelay = 30000L)
+    public void recoverRecentCloseSnapshotsWithoutUserStream() {
+        List<Long> credentialIds = tradeNotificationQueryMapper.selectRecentCloseSnapshotCredentialIds();
+        for (Long credentialId : credentialIds) {
+            if (credentialId == null) {
+                continue;
+            }
+            try {
+                QuantCredential credential = credentialMapper.selectById(credentialId);
+                if (credential == null || !("LIVE".equalsIgnoreCase(credential.getRunMode())
+                    || "TESTNET".equalsIgnoreCase(credential.getRunMode()))) {
+                    continue;
+                }
+                ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(
+                    credential.getApiKey(), credential.getSecretKey(),
+                    credential.getSignatureType(), credential.getRunMode());
+                recoverRecentCloseSnapshots(credentialId, exchangeCredential);
+            } catch (RuntimeException ex) {
+                log.warn("独立平仓资金快照补偿扫描失败 credentialId={}", credentialId, ex);
+            }
+        }
+    }
+
     private boolean isVerifiedCloseOrder(Long credentialId, ExchangeGateway.Credential credential,
                                           String symbol, Long orderId, String clientOrderId) {
         Integer matched = tradeNotificationQueryMapper.existsVerifiedCloseOrder(
