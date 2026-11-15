@@ -152,7 +152,7 @@ public interface QuantTradeNotificationQueryMapper {
           AND status IN ('FAILED', 'SENT')
           AND NOT EXISTS (
               SELECT 1 FROM quant_trade_close_equity s
-              WHERE s.credential_id = n.credential_id AND s.symbol = #{symbol}
+              WHERE s.credential_id = quant_notification.credential_id AND s.symbol = #{symbol}
                 AND s.exchange_order_id = #{orderId}
                 AND s.closing_equity IS NOT NULL AND s.wallet_balance IS NOT NULL
           )
