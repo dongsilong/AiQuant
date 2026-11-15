@@ -880,4 +880,46 @@ class QuantTradeNotificationServiceTest {
         verify(credentialMapper).selectById(10L);
         verify(queryMapper).selectRecentCloseSnapshotCandidates(10L);
     }
+
+    @Test
+    void recentCloseSnapshotRecoveryReactivatesFailedTaskWhenSnapshotIsMissing() throws Exception {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "notification-failed-snapshot-recovery-test"), QuantNotification.class);
+        var mapper = mock(QuantNotificationMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var jdbc = mock(QuantTradeNotificationQueryMapper.class);
+        var service = new QuantTradeNotificationService(mock(QuantRiskConfigMapper.class), mapper, new QuantProperties(),
+            mock(MessageService.class), jdbc, gateway, mock(TaskExecutor.class));
+        var failedTask = new QuantNotification();
+        failedTask.setId(951L);
+        failedTask.setCredentialId(10L);
+        failedTask.setChannel("FACT_PENDING");
+        failedTask.setRecipient("SNAPSHOT:BTCUSDT:100");
+        failedTask.setStatus("FAILED");
+        var retryTask = new QuantNotification();
+        retryTask.setId(951L);
+        retryTask.setCredentialId(10L);
+        retryTask.setChannel("FACT_PENDING");
+        retryTask.setRecipient("SNAPSHOT:BTCUSDT:100");
+        retryTask.setStatus("RETRY");
+        var closeTime = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1)
+            .format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        when(jdbc.selectRecentCloseSnapshotCandidates(10L)).thenReturn(List.of(java.util.Map.of(
+            "credential_id", 10L, "symbol", "BTCUSDT", "exchange_order_id", 100L, "close_time_utc", closeTime)));
+        when(mapper.selectOne(any())).thenReturn(failedTask);
+        when(jdbc.reactivateIncompleteCloseSnapshotTask(10L, "BTCUSDT", 100L)).thenReturn(1);
+        when(mapper.selectById(951L)).thenReturn(retryTask);
+        when(mapper.claim(eq(951L), any(), any())).thenReturn(1);
+        when(jdbc.existsVerifiedCloseOrder(any(), any(), any(), any())).thenReturn(1);
+        when(gateway.queryAccountFresh(any())).thenReturn(
+            new ExchangeGateway.AccountSnapshot(new BigDecimal("1000"), new BigDecimal("900"),
+                new BigDecimal("1003"), new BigDecimal("3")));
+
+        service.recoverRecentCloseSnapshots(10L,
+            new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "TESTNET"));
+
+        verify(jdbc).reactivateIncompleteCloseSnapshotTask(10L, "BTCUSDT", 100L);
+        verify(gateway, timeout(3000)).queryAccountFresh(any());
+        verify(mapper, never()).insert(any(QuantNotification.class));
+    }
 }
