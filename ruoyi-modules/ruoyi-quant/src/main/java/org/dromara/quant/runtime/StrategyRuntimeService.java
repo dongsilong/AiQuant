@@ -1413,9 +1413,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.entryMaStreamReady = false;
                 runtime.entryMaLastEventTime = null;
                 runtime.entryMaLastReceivedAt = null;
-                if ("CONNECTING".equals(event.type())) {
-                    runtime.entryMaMarket.clear();
-                }
+                // 已收盘K线在行情流恢复期间仍然有效；恢复补偿从现有游标继续，
+                // 不会重新回放此前的7根K线，因此不能在这里清空MA预热缓存。
                 return;
             }
             if (event.kline() != null) {
