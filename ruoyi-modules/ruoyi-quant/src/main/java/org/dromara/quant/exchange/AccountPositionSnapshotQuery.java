@@ -34,7 +34,7 @@ public class AccountPositionSnapshotQuery {
                 java.util.Objects.requireNonNull(snapshots, "Binance full position snapshot missing"));
             created.complete(result);
             return result;
-        } catch (RuntimeException failure) {
+        } catch (RuntimeException | Error failure) {
             created.completeExceptionally(failure);
             throw failure;
         } finally {
