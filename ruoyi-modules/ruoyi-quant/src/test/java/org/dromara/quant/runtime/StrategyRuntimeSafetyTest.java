@@ -194,6 +194,39 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void oneMinuteMaFeedMaintainsIndependentClosedCandlesAndRequiresReadyFreshStream() throws Exception {
+        Fixture f = fixture();
+        try {
+            ((QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential")).setRunMode("LIVE");
+            ExchangeGateway gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            when(gateway.exchangeTimeOffsetMillis("LIVE")).thenReturn(0L);
+
+            Instant firstOpen = Instant.now().minusSeconds(7 * 60L);
+            for (int i = 1; i <= 7; i++) {
+                Instant open = firstOpen.plusSeconds((i - 1L) * 60L);
+                Instant now = Instant.now();
+                var kline = new ExchangeGateway.Kline(open, open.plusSeconds(59), BigDecimal.ONE, BigDecimal.TEN,
+                    BigDecimal.ZERO, BigDecimal.valueOf(i), BigDecimal.ONE, true);
+                var event = new ExchangeGateway.MarketEvent("KLINE", "BTCUSDT", "1m", null, kline, now, null, now, false);
+                ReflectionTestUtils.invokeMethod(f.service, "onEntryMaMarketEvent", f.runtime, event);
+            }
+
+            Object maMarket = ReflectionTestUtils.getField(f.runtime, "entryMaMarket");
+            assertEquals(0, new BigDecimal("5").compareTo((BigDecimal) ReflectionTestUtils.invokeMethod(maMarket, "movingAverage", 5)));
+            assertEquals(0, new BigDecimal("4").compareTo((BigDecimal) ReflectionTestUtils.invokeMethod(maMarket, "movingAverage", 7)));
+            assertNull(ReflectionTestUtils.invokeMethod(ReflectionTestUtils.getField(f.runtime, "market"), "movingAverage", 7),
+                "1m candles must not be mixed into the strategy's primary interval market state");
+            assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketReady", f.runtime),
+                "the MA feed must remain blocked until the stream recovery callback marks it ready");
+
+            ReflectionTestUtils.setField(f.runtime, "entryMaStreamReady", true);
+            assertTrue((boolean) ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketReady", f.runtime));
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void unverifiedPositionFactsBlockNewEntryEvaluation() throws Exception {
         Fixture f = fixture();
         try {
