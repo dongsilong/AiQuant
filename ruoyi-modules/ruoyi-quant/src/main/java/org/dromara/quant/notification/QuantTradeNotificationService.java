@@ -745,7 +745,16 @@ public class QuantTradeNotificationService {
                         credentialId, symbol, orderId);
                     continue;
                 }
-                log.warn("发现近期已平仓周期缺少账户快照，已创建补偿任务 credentialId={} symbol={} orderId={}",
+                if ("FAILED".equalsIgnoreCase(task.getStatus()) || "SENT".equalsIgnoreCase(task.getStatus())) {
+                    tradeNotificationQueryMapper.reactivateIncompleteCloseSnapshotTask(
+                        candidateCredentialId, symbol, orderId);
+                    task = notificationMapper.selectById(task.getId());
+                    if (task == null || !"RETRY".equalsIgnoreCase(task.getStatus())) {
+                        activeStreamCloseCaptures.remove(captureKey);
+                        continue;
+                    }
+                }
+                log.warn("发现近期已平仓周期缺少账户快照，已创建或恢复补偿任务 credentialId={} symbol={} orderId={}",
                     credentialId, symbol, orderId);
                 dispatchCloseSnapshotCapture(candidateCredentialId, exchangeCredential, symbol, orderId,
                     null, closeTime, null, task, captureKey);
@@ -917,6 +926,14 @@ public class QuantTradeNotificationService {
                 credentialId, symbol, orderId, exchangeEventTime);
             return pending;
         } catch (RuntimeException ex) {
+            QuantNotification existing = notificationMapper.selectOne(new LambdaQueryWrapper<QuantNotification>()
+                .eq(QuantNotification::getCredentialId, credentialId)
+                .eq(QuantNotification::getChannel, "FACT_PENDING")
+                .eq(QuantNotification::getRecipient, taskKey)
+                .last("LIMIT 1"));
+            if (existing != null) {
+                return existing;
+            }
             log.error("平仓账户资金快照重试任务持久化失败 credentialId={} symbol={} orderId={}",
                 credentialId, symbol, orderId, ex);
             return null;
