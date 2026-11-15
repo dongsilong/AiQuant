@@ -211,6 +211,13 @@ class StrategyRuntimeSafetyTest {
                 ReflectionTestUtils.invokeMethod(f.service, "onEntryMaMarketEvent", f.runtime, event);
             }
 
+            Instant currentOpen = firstOpen.plusSeconds(7 * 60L);
+            Instant currentEventTime = Instant.now();
+            var formingKline = new ExchangeGateway.Kline(currentOpen, currentOpen.plusSeconds(59), BigDecimal.ONE, BigDecimal.TEN,
+                BigDecimal.ZERO, new BigDecimal("100"), BigDecimal.ONE, false);
+            ReflectionTestUtils.invokeMethod(f.service, "onEntryMaMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("KLINE", "BTCUSDT", "1m", null, formingKline, currentEventTime, null, currentEventTime, false));
+
             Object maMarket = ReflectionTestUtils.getField(f.runtime, "entryMaMarket");
             assertEquals(0, new BigDecimal("5").compareTo((BigDecimal) ReflectionTestUtils.invokeMethod(maMarket, "movingAverage", 5)));
             assertEquals(0, new BigDecimal("4").compareTo((BigDecimal) ReflectionTestUtils.invokeMethod(maMarket, "movingAverage", 7)));
