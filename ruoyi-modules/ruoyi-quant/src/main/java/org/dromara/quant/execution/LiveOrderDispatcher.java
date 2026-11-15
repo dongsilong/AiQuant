@@ -176,9 +176,24 @@ public class LiveOrderDispatcher {
     }
 
     /**
-     * Recover a CONFIG_SETTINGS ticket only after an independent exchange query
-     * proves that both persisted desired settings are already active. The exact
-     * durable intent, synthetic ticket identity and active guard must all match.
+     * Check the immutable account-symbol configuration intent before issuing any
+     * recovery write to Binance. A ticket alone is not authorization to change settings.
+     */
+    public boolean matchesConfigurationIntent(Long credentialId, String symbol, String marginMode, int leverage) {
+        String normalizedSymbol = symbol == null ? null : symbol.toUpperCase(Locale.ROOT);
+        String normalizedMode = marginMode == null ? null : marginMode.toUpperCase(Locale.ROOT);
+        if (credentialId == null || credentialId <= 0 || normalizedSymbol == null || normalizedSymbol.isBlank()
+            || normalizedMode == null || !java.util.Set.of("ISOLATED", "CROSSED").contains(normalizedMode)
+            || leverage < 1 || leverage > 125) {
+            return false;
+        }
+        return mapper.matchingSettingsIntent(credentialId, normalizedSymbol, normalizedMode, leverage) == 1L;
+    }
+
+    /**
+     * Complete a CONFIG_SETTINGS ticket only after the caller has reconciled and
+     * independently verified both persisted desired settings. The exact durable
+     * intent, synthetic ticket identity and active guard must all match.
      */
     public boolean recoveredConfigurationFromExchange(Long credentialId, String symbol, String key, String clientOrderId, String marginMode, int leverage) {
         String normalizedSymbol = symbol == null ? null : symbol.toUpperCase(Locale.ROOT);

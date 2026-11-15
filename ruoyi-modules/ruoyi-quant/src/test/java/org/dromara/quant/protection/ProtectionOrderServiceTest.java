@@ -1405,42 +1405,12 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
-    void manualRecheckMustNotReleaseUnknownConfigurationFromMatchingSnapshotAlone() {
-        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
-            "SETTINGS:ISOLATED:10", "UNKNOWN", null);
-        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
-
-        var failure = assertThrows(IllegalStateException.class,
-            () -> service.recheckProtectionDispatch(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10"));
-
-        assertTrue(failure.getMessage().contains("无法证明原配置请求已结束"));
-        verify(gateway, never()).querySymbolTradingSettings(any(), any());
-        verify(dispatcher, never()).recoveredConfigurationFromExchange(any(), any(), any(), any(), any(), anyInt());
-    }
-
-    @Test
     void manualRecheckRecoversConfigAppliedTicketOnlyAfterExactExchangeSettingsMatch() {
         var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
             "SETTINGS:ISOLATED:10", "CONFIG_APPLIED", null);
         when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(dispatcher.matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 10)).thenReturn(true);
         when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
-            .thenReturn(new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10));
-        when(dispatcher.recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10", "ISOLATED", 10))
-            .thenReturn(true);
-
-        assertTrue(service.recheckProtectionDispatch(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10"));
-
-        verify(gateway).querySymbolTradingSettings(any(), eq("BTCUSDT"));
-        verify(dispatcher).recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10", "ISOLATED", 10);
-    }
-
-    @Test
-    void manualRecheckRetriesOnceAfterSchedulerConfirmsReadWasNotSent() {
-        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
-            "SETTINGS:ISOLATED:10", "CONFIG_APPLIED", null);
-        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
-        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
-            .thenThrow(new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException(1L))
             .thenReturn(new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10));
         when(dispatcher.recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10", "ISOLATED", 10))
             .thenReturn(true);
@@ -1449,6 +1419,100 @@ class ProtectionOrderServiceTest {
 
         verify(gateway, times(2)).querySymbolTradingSettings(any(), eq("BTCUSDT"));
         verify(dispatcher).recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10", "ISOLATED", 10);
+    }
+
+    @Test
+    void manualRecheckRetriesOnceAfterSchedulerConfirmsReadWasNotSent() {
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
+            "SETTINGS:ISOLATED:10", "CONFIG_APPLIED", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(dispatcher.matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 10)).thenReturn(true);
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
+            .thenThrow(new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException(1L))
+            .thenReturn(new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10));
+        when(dispatcher.recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10", "ISOLATED", 10))
+            .thenReturn(true);
+
+        assertTrue(service.recheckProtectionDispatch(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10"));
+
+        verify(gateway, times(3)).querySymbolTradingSettings(any(), eq("BTCUSDT"));
+        verify(dispatcher).recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10", "ISOLATED", 10);
+    }
+
+    @Test
+    void manualRecheckDoesNotChangeSettingsWhileExchangePositionExists() {
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
+            "SETTINGS:ISOLATED:10", "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(dispatcher.matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 10)).thenReturn(true);
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
+            .thenReturn(new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "CROSSED", 5));
+        when(gateway.queryPositions(any(), eq("BTCUSDT"))).thenReturn(List.of(
+            new ExchangeGateway.PositionSnapshot("BTCUSDT", "LONG", BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 5, null, null, Instant.now())));
+
+        assertFalse(service.recheckProtectionDispatch(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10"));
+
+        verify(gateway, never()).setMarginType(any(), any(), any());
+        verify(gateway, never()).setLeverage(any(), any(), anyInt());
+        verify(dispatcher, never()).recoveredConfigurationFromExchange(any(), any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void manualRecheckDoesNotWriteWhenTicketTargetDiffersFromDurableConfigurationIntent() {
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
+            "SETTINGS:ISOLATED:10", "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(dispatcher.matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 10)).thenReturn(false);
+
+        assertFalse(service.recheckProtectionDispatch(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10"));
+
+        verify(gateway, never()).querySymbolTradingSettings(any(), any());
+        verify(gateway, never()).setMarginType(any(), any(), any());
+        verify(gateway, never()).setLeverage(any(), any(), anyInt());
+        verify(dispatcher, never()).recoveredConfigurationFromExchange(any(), any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void manualRecheckConvergesUnknownConfigurationToThePersistedTargetBeforeReleasingGuard() {
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
+            "SETTINGS:ISOLATED:10", "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(dispatcher.matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 10)).thenReturn(true);
+        when(gateway.queryPositions(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
+            .thenReturn(new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "CROSSED", 5),
+                new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10));
+        when(dispatcher.recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10)).thenReturn(true);
+
+        assertTrue(service.recheckProtectionDispatch(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10"));
+
+        var sequence = inOrder(gateway, dispatcher);
+        sequence.verify(gateway).querySymbolTradingSettings(any(), eq("BTCUSDT"));
+        sequence.verify(gateway).setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
+        sequence.verify(gateway).setLeverage(any(), eq("BTCUSDT"), eq(10));
+        sequence.verify(gateway).querySymbolTradingSettings(any(), eq("BTCUSDT"));
+        sequence.verify(dispatcher).recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-key",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10);
+    }
+
+    @Test
+    void manualRecheckKeepsUnknownConfigurationBlockedWhenFinalExchangeReadDoesNotMatch() {
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
+            "SETTINGS:ISOLATED:10", "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(dispatcher.matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 10)).thenReturn(true);
+        when(gateway.queryPositions(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT")))
+            .thenReturn(new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "CROSSED", 5),
+                new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "CROSSED", 5));
+
+        assertFalse(service.recheckProtectionDispatch(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10"));
+
+        verify(gateway).setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
+        verify(gateway).setLeverage(any(), eq("BTCUSDT"), eq(10));
+        verify(dispatcher, never()).recoveredConfigurationFromExchange(any(), any(), any(), any(), any(), anyInt());
     }
 
     @Test
