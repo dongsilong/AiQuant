@@ -196,6 +196,44 @@ class MarketStreamHubRecoveryTest {
     }
 
     @Test
+    void lateSubscriberReceivesSevenClosedCandlesForMovingAverage() throws Exception {
+        java.util.List<ExchangeGateway.Kline> history = new java.util.ArrayList<>();
+        for (int i = 8; i >= 1; i--) {
+            history.add(candle(open.minusSeconds(i * 60L), true));
+        }
+        history.add(candle(open, false));
+        MarketStreamHub hub = hub(history);
+        CountDownLatch firstReady = new CountDownLatch(1), secondReady = new CountDownLatch(1);
+        java.util.List<Instant> references = new CopyOnWriteArrayList<>();
+        try {
+            hub.subscribe("BTCUSDT", "1m", event -> {
+                if ("CONNECTED".equals(event.type())) {
+                    firstReady.countDown();
+                }
+            });
+            send("MARK");
+            send("KLINE");
+            assertTrue(firstReady.await(2, TimeUnit.SECONDS));
+            hub.subscribe("BTCUSDT", "1m", event -> {
+                if (event.replay() && event.kline() != null) {
+                    references.add(event.kline().openTime());
+                }
+                if ("CONNECTED".equals(event.type())) {
+                    secondReady.countDown();
+                }
+            });
+            assertTrue(secondReady.await(2, TimeUnit.SECONDS));
+            assertEquals(8, references.size(), "MA7 subscriber needs seven closed candles plus the current candle");
+            assertEquals(open.minusSeconds(7 * 60L), references.get(0));
+            assertEquals(open, references.get(7));
+            verify(gateway, times(1)).subscribeMarket(any(), any(), any());
+        } finally {
+            hub.close();
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
     void lateSubscriberReceivesReferenceCandlesBeforeReady() throws Exception {
         MarketStreamHub hub = hub(List.of(candle(open.minusSeconds(60), true), candle(open, false)));
         CountDownLatch firstReady = new CountDownLatch(1), secondReady = new CountDownLatch(1);
