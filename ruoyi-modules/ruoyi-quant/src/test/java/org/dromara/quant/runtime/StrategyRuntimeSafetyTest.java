@@ -244,7 +244,9 @@ class StrategyRuntimeSafetyTest {
 
             ReflectionTestUtils.invokeMethod(f.service, "evaluateEntryLocked", f.runtime, context);
 
-            verify(slopePlugin).evaluateEntry(eq(context), eq(Map.of("entryAngleDegrees", 30)), any(BigDecimal.class), any(BigDecimal.class));
+            verify(slopePlugin).evaluateEntry(eq(context), eq(Map.of("entryAngleDegrees", 30)),
+                argThat((BigDecimal ma5) -> ma5 != null && ma5.compareTo(new BigDecimal("5")) == 0),
+                argThat((BigDecimal ma7) -> ma7 != null && ma7.compareTo(new BigDecimal("4")) == 0));
         } finally {
             f.service.destroy();
         }
