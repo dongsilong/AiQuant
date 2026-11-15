@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -29,7 +30,19 @@ class AccountPositionSnapshotQueryTest {
         try (var executor = Executors.newFixedThreadPool(2)) {
             var first = executor.submit(() -> query.query(10L, credential));
             assertTrue(started.await(1, TimeUnit.SECONDS));
-            var second = executor.submit(() -> query.query(10L, credential));
+            var secondStarted = new CountDownLatch(1);
+            var secondThread = new AtomicReference<Thread>();
+            var second = executor.submit(() -> {
+                secondThread.set(Thread.currentThread());
+                secondStarted.countDown();
+                return query.query(10L, credential);
+            });
+            assertTrue(secondStarted.await(1, TimeUnit.SECONDS));
+            long waitDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+            while (secondThread.get().getState() != Thread.State.WAITING && System.nanoTime() < waitDeadline) {
+                Thread.onSpinWait();
+            }
+            assertEquals(Thread.State.WAITING, secondThread.get().getState());
             release.countDown();
             assertSame(snapshots.getFirst(), first.get(2, TimeUnit.SECONDS).getFirst());
             assertSame(snapshots.getFirst(), second.get(2, TimeUnit.SECONDS).getFirst());
