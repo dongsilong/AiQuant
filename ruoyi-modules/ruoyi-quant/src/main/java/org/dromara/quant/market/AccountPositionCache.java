@@ -1,11 +1,11 @@
 package org.dromara.quant.market;
 
 import lombok.extern.slf4j.Slf4j;
-import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.AccountPositionSnapshotQuery;
 import org.dromara.quant.risk.OpenCapacityService;
 import org.dromara.quant.util.QuantJsonMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -28,6 +28,15 @@ public class AccountPositionCache {
     private static final long MAX_SNAPSHOT_AGE = TimeUnit.SECONDS.toNanos(90);
     private final AccountPositionSnapshotQuery positionSnapshotQuery;
     private final Map<Long, Account> accounts = new ConcurrentHashMap<>();
+
+    @Autowired
+    public AccountPositionCache(AccountPositionSnapshotQuery positionSnapshotQuery) {
+        this.positionSnapshotQuery = positionSnapshotQuery;
+    }
+
+    AccountPositionCache(ExchangeGateway gateway) {
+        this(new AccountPositionSnapshotQuery(gateway));
+    }
 
     private static void seedTimes(Account account, Collection<ExchangeGateway.PositionSnapshot> positions) {
         for (var position : positions) {
