@@ -3,6 +3,7 @@ package org.dromara.quant.market;
 import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.AccountPositionSnapshotQuery;
 import org.dromara.quant.risk.OpenCapacityService;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -25,7 +26,7 @@ import java.util.function.BooleanSupplier;
 public class AccountPositionCache {
     private static final long AUDIT_INTERVAL = TimeUnit.SECONDS.toNanos(30);
     private static final long MAX_SNAPSHOT_AGE = TimeUnit.SECONDS.toNanos(90);
-    private final ExchangeGateway gateway;
+    private final AccountPositionSnapshotQuery positionSnapshotQuery;
     private final Map<Long, Account> accounts = new ConcurrentHashMap<>();
 
     private static void seedTimes(Account account, Collection<ExchangeGateway.PositionSnapshot> positions) {
@@ -228,7 +229,7 @@ public class AccountPositionCache {
             account.loading = loading;
             Thread.ofVirtual().name("quant-position-snapshot").start(() -> {
                 try {
-                    var snapshots = gateway.queryPositions(account.credential, null);
+                    var snapshots = positionSnapshotQuery.query(credentialId, account.credential);
                     if (snapshots == null) {
                         throw new IllegalStateException("持仓快照为空响应");
                     }
