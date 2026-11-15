@@ -5,6 +5,7 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.LiveOrderDispatcher;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.position.domain.QuantPosition;
+import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.protection.domain.QuantProtectionOrder;
 import org.dromara.quant.protection.mapper.QuantProtectionOrderMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +24,7 @@ class ProtectionOrderServiceTest {
     private final ExchangeGateway gateway = mock(ExchangeGateway.class);
     private final QuantProtectionOrderMapper mapper = mock(QuantProtectionOrderMapper.class);
     private final TradeExecutionApplicationService execution = mock(TradeExecutionApplicationService.class);
+    private final QuantPositionMapper positionMapper = mock(QuantPositionMapper.class);
     private final ProtectionOrderService service = new ProtectionOrderService(gateway, mapper, execution);
     private final LiveOrderDispatcher dispatcher = mock(LiveOrderDispatcher.class);
     private final QuantPosition position = new QuantPosition();
@@ -31,6 +33,7 @@ class ProtectionOrderServiceTest {
     @BeforeEach
     void setup() {
         service.setLiveOrderDispatcher(dispatcher);
+        service.setQuantPositionMapper(positionMapper);
         when(dispatcher.begin(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.<Long>nullable(Long.class),
             org.mockito.ArgumentMatchers.<Long>nullable(Long.class))).thenAnswer(call -> new LiveOrderDispatcher.Ticket(call.getArgument(0), call.getArgument(1),
             call.getArgument(2)));
@@ -1561,6 +1564,37 @@ class ProtectionOrderServiceTest {
         assertFalse(service.recheckProtectionDispatch(1L, "BTCUSDT", "create-key", local.getClientOrderId()));
 
         verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void flatAndIdleCycleSupersedesUnknownProtectionCreateWithoutClaimingExchangeCancellation() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        local.setPositionCycleKey("closed-cycle");
+        local.setStatus("UNKNOWN");
+        local.setExchangeOrderId(null);
+        local.setExecutedQuantity(BigDecimal.ZERO);
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "create-key", "PROTECT_CREATE", local.getClientOrderId(), "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(null);
+        when(gateway.queryPositions(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        QuantPosition closed = new QuantPosition();
+        closed.setId(10L);
+        closed.setCredentialId(1L);
+        closed.setSymbol("BTCUSDT");
+        closed.setQuantity(BigDecimal.ZERO);
+        when(positionMapper.selectById(10L)).thenReturn(closed);
+        when(dispatcher.supersedeProtectionCreate(1L, "BTCUSDT", "create-key", local.getClientOrderId())).thenReturn(true);
+
+        assertTrue(service.recheckProtectionDispatch(1L, "BTCUSDT", "create-key", local.getClientOrderId()));
+        assertEquals("SUPERSEDED", local.getStatus());
+        verify(dispatcher).supersedeProtectionCreate(1L, "BTCUSDT", "create-key", local.getClientOrderId());
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+        verify(gateway, never()).placeProtectionOrder(any());
     }
 
     @Test
