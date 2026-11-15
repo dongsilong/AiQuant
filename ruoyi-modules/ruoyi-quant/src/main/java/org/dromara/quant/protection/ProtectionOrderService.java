@@ -285,7 +285,7 @@ public class ProtectionOrderService {
     }
 
     /**
-     * 只对本地调度器明确判定“尚未发送”的只读核验做一次有界退避重试。
+     * 只对本地调度器明确判定“尚未发送”的请求做一次有界退避重试；重放时仍使用原派发票据和原客户端标识。
      * Binance 已返回 418/429 时不在这里重试，继续遵守交易所 Retry-After。
      */
     private boolean retryDeferredManualRecheck(java.util.function.BooleanSupplier action) {
