@@ -1691,9 +1691,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 try {
                     restScheduler.acquire(kind);
                 } catch (ExchangeMarketPort.RequestDeferredException deferred) {
-                    log.warn("Binance REST 请求延期 kind={} reason={} queueSize={} queueSizes={} waitedMs={} retryAfterMs={}",
-                        deferred.kind(), deferred.reason(), deferred.queueSize(), java.util.Arrays.toString(deferred.queueSizes()),
-                        deferred.waitedMillis(), deferred.retryAfterMillis());
+                    log.warn("Binance REST 请求延期 method={} path={} kind={} reason={} queueSize={} queueSizes={} waitedMs={} retryAfterMs={}",
+                        chain.request().method(), chain.request().url().encodedPath(), deferred.kind(), deferred.reason(), deferred.queueSize(),
+                        java.util.Arrays.toString(deferred.queueSizes()), deferred.waitedMillis(), deferred.retryAfterMillis());
                     throw deferred;
                 }
                 long queueMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted);
@@ -1728,8 +1728,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                             log.error("Binance REST HTTP 418 has no trustworthy expiry; REST is latched closed until operator restart.");
                         } else {
                             restScheduler.deferFor(retryAfterMillis);
-                            log.warn("Binance REST 触发限流，已延后后续请求 status={} kind={} retryAfterMs={}",
-                                response.code(), kind, retryAfterMillis);
+                            log.warn("Binance REST 触发限流，已延后后续请求 status={} method={} path={} kind={} usedWeight1m={} retryAfterMs={}",
+                                response.code(), response.request().method(), response.request().url().encodedPath(), kind,
+                                response.header("X-MBX-USED-WEIGHT-1M"), retryAfterMillis);
                         }
                     }
                 }
