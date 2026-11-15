@@ -160,9 +160,11 @@ public class UserDataStreamHub {
                 }
             }
             stream.checkHealth();
-            if ("LIVE".equalsIgnoreCase(stream.credential.getRunMode()) && tradeNotifications != null) {
+            String runMode = stream.credential.getRunMode();
+            if (tradeNotifications != null
+                && ("LIVE".equalsIgnoreCase(runMode) || "TESTNET".equalsIgnoreCase(runMode))) {
                 try {
-                    if (ownsLiveStream(id)) {
+                    if (!"LIVE".equalsIgnoreCase(runMode) || ownsLiveStream(id)) {
                         tradeNotifications.recoverRecentCloseSnapshots(id, executionService.toCredential(stream.credential));
                     }
                 } catch (RuntimeException ex) {
