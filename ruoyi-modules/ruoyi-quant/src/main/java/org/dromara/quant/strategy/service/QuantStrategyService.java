@@ -212,7 +212,18 @@ public class QuantStrategyService {
                 errors.add("策略账户不存在或无权访问: " + binding.getCredentialId());
                 continue;
             }
-            accounts.add(java.util.Map.of("credentialId", credential.getId(), "accountName", credential.getAccountName()));
+            String accountName = credential.getAccountName() == null || credential.getAccountName().isBlank()
+                ? String.valueOf(credential.getId()) : credential.getAccountName();
+            if (!"0".equals(credential.getStatus())) {
+                errors.add("策略账户【" + accountName + "】已禁用，请先启用账户");
+            }
+            String runMode = credential.getRunMode();
+            String expectedConnectionStatus = "PAPER".equalsIgnoreCase(runMode) ? "PAPER" : "NORMAL";
+            if (!expectedConnectionStatus.equalsIgnoreCase(
+                credential.getConnectionStatus() == null ? "" : credential.getConnectionStatus())) {
+                errors.add("策略账户【" + accountName + "】凭证连接状态异常或尚未验证，请先验证交易凭证");
+            }
+            accounts.add(java.util.Map.of("credentialId", credential.getId(), "accountName", accountName));
         }
         if (accounts.isEmpty()) {
             errors.add("至少配置一个策略账户");
