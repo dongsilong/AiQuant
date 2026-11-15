@@ -1598,6 +1598,40 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void triggeredProtectionWithMissingChildIsSupersededOnlyWhenCycleAndExchangeAreFlatAndIdle() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        local.setPositionCycleKey("closed-cycle");
+        local.setStatus("UNKNOWN");
+        local.setExchangeOrderId(null);
+        local.setExecutedQuantity(BigDecimal.ZERO);
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "create-key", "PROTECT_CREATE", local.getClientOrderId(), "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(
+            new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "BOTH",
+                "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), BigDecimal.ONE, true, false, 77L, new BigDecimal("99")));
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(77L), isNull())).thenReturn(null);
+        when(gateway.queryPositions(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        QuantPosition closed = new QuantPosition();
+        closed.setId(10L);
+        closed.setCredentialId(1L);
+        closed.setSymbol("BTCUSDT");
+        closed.setQuantity(BigDecimal.ZERO);
+        when(positionMapper.selectById(10L)).thenReturn(closed);
+        when(dispatcher.supersedeProtectionCreate(1L, "BTCUSDT", "create-key", local.getClientOrderId())).thenReturn(true);
+
+        assertTrue(service.recheckProtectionDispatch(1L, "BTCUSDT", "create-key", local.getClientOrderId()));
+        assertEquals("SUPERSEDED", local.getStatus());
+        verify(dispatcher).supersedeProtectionCreate(1L, "BTCUSDT", "create-key", local.getClientOrderId());
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+        verify(gateway, never()).placeProtectionOrder(any());
+    }
+
+    @Test
     void firstProfitFinishingBetweenFactReadAndActiveLookupDoesNotCreateSecondIntent() {
         var old = scopedStop("FIRST_TP", "101");
         old.setOrderType("TAKE_PROFIT_MARKET");
