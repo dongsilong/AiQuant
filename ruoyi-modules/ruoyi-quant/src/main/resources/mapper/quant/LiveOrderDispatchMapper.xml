@@ -70,6 +70,16 @@ WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
     WHERE i.credential_id=#{credentialId} AND i.symbol=#{symbol}
       AND i.margin_mode=#{marginMode} AND i.leverage=#{leverage}
   )]]></update>
+    <update id="supersedeProtectionCreate" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='SUPERSEDED', updated_at=UTC_TIMESTAMP()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND idempotency_key=#{key}
+  AND client_order_id=#{clientOrderId} AND operation_type='PROTECT_CREATE'
+  AND dispatch_status='UNKNOWN' AND exchange_order_id IS NULL
+  AND EXISTS (
+    SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key}
+  )]]></update>
     <update id="notSent" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
 SET dispatch_status='FAILED_NOT_SENT', updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
