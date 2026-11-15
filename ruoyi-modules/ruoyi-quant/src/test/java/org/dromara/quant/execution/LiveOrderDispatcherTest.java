@@ -191,6 +191,20 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
+    void supersedeOnlyExactUnknownProtectionCreateAndReleaseItsGuardAtomically() throws Exception {
+        var f = fixture();
+        var ticket = f.first().begin(1L, "BTCUSDT", "obsolete-protection", "PROTECT_CREATE", "QFTP_test", null, null);
+        f.first().unknown(ticket);
+
+        assertFalse(f.other().supersedeProtectionCreate(1L, "BTCUSDT", "obsolete-protection", "wrong-client"));
+        assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "obsolete-protection"));
+        assertTrue(f.other().supersedeProtectionCreate(1L, "BTCUSDT", "obsolete-protection", "QFTP_test"));
+        assertEquals("SUPERSEDED", f.mapper().ticketStatus(1L, "obsolete-protection"));
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+        assertFalse(f.other().supersedeProtectionCreate(1L, "BTCUSDT", "obsolete-protection", "QFTP_test"));
+    }
+
+    @Test
     void exactVerifiedExchangeFactReleasesUnknownAndRejectsWrongClientId() throws Exception {
         var f = fixture();
         var ticket = f.first().begin(1L, "BTCUSDT", "uncertain", "OPEN", "cid-correct", null, null);
