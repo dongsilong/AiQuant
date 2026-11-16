@@ -1422,13 +1422,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return;
         }
         if ("KLINE_READY".equals(event.type())) {
-            EntryMaSnapshot previous = runtime.entryMa.snapshot();
             runtime.entryMa.setHistoryReady(true);
             EntryMaSnapshot current = runtime.entryMa.snapshot();
-            if (!previous.ready() && current.ready()) {
-                log.info("策略1分钟MA K线恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7",
-                    runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), current.closedKlines());
-            }
+            log.info("策略1分钟MA K线历史恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7 liveKlineSeen={}",
+                runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), current.closedKlines(),
+                current.eventTime() != null && current.receivedAt() != null);
             return;
         }
         if (event.kline() != null) {
