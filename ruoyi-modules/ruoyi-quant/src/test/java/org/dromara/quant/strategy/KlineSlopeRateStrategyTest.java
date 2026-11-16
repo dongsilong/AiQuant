@@ -48,6 +48,18 @@ class KlineSlopeRateStrategyTest {
         assertEquals(EntrySignal.Direction.SHORT, signal.direction());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "LONG,101.2,101.2",
+        "SHORT,99.0,99.0",
+        "SHORT,99.2,99.0"
+    })
+    void oneMinuteMaDirectionFilterRejectsEqualOrOppositeAlignment(String direction, String ma5, String ma7) {
+        StrategyContext c = context(null, null, new BigDecimal("100"),
+            "LONG".equals(direction) ? new BigDecimal("102") : new BigDecimal("98"), false, null, null);
+        assertTrue(strategy.evaluateEntry(c, Map.of(), new BigDecimal(ma5), new BigDecimal(ma7)).isEmpty());
+    }
+
     @Test
     void oneMinuteMaDirectionFilterWaitsForSevenClosedCandlesUnlessDisabled() {
         StrategyContext c = context(null, null, new BigDecimal("100"), new BigDecimal("102"), false, null, null);
