@@ -1915,7 +1915,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             long generation = runtime.entryProtectionCleanupGeneration.get();
             String cycle = runtime.state == null ? null : runtime.state.getPositionCycleKey();
             long submittedAt = System.nanoTime();
-            runtime.entryProtectionCleanupQueuedAtNanos = submittedAt;
             runtime.entryProtectionPostCleanupEventWaitLogged = false;
             runtime.entryProtectionCleanupTask = recoveryExecutor.submit(() -> {
                 long startedAt = System.nanoTime();
@@ -2104,9 +2103,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         long strategyEvaluationMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - strategyEvaluationStartedAt);
         long metricNow = System.currentTimeMillis();
-        if (metricNow >= runtime.nextEntryProtectionMetricLogAt) {
+        if (strategyEvaluationMs >= 50L) {
+            log.warn("策略开仓条件评估耗时偏高 instanceId={} credentialId={} symbol={} eventTime={} strategyEvaluationMs={} signalPresent={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.eventTime(), strategyEvaluationMs, signal.isPresent());
+        } else if (log.isDebugEnabled() && metricNow >= runtime.nextEntryProtectionMetricLogAt) {
             runtime.nextEntryProtectionMetricLogAt = metricNow + 5_000L;
-            log.info("策略开仓条件评估耗时 instanceId={} credentialId={} symbol={} eventTime={} strategyEvaluationMs={} signalPresent={}",
+            log.debug("策略开仓条件评估耗时 instanceId={} credentialId={} symbol={} eventTime={} strategyEvaluationMs={} signalPresent={}",
                 runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.eventTime(), strategyEvaluationMs, signal.isPresent());
         }
         if (signal.isEmpty()) {
@@ -5567,7 +5569,6 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private Instant entryProtectionCleanupConfirmedAt;
         private long nextEntryProtectionCleanupAt;
         private java.util.concurrent.Future<?> entryProtectionCleanupTask;
-        private volatile long entryProtectionCleanupQueuedAtNanos;
         private volatile long entryProtectionCleanupConfirmedAtNanos;
         private boolean entryProtectionPostCleanupEventWaitLogged;
         private long nextEntryProtectionMetricLogAt;
