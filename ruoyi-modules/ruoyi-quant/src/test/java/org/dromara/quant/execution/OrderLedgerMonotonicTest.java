@@ -97,6 +97,22 @@ class OrderLedgerMonotonicTest {
     }
 
     @Test
+    void existingOrderSnapshotBackfillsMissingExchangeCreationTime() throws Exception {
+        var f = fixture();
+        var createTime = java.time.Instant.parse("2026-10-07T15:51:00Z");
+        var snapshot = new org.dromara.quant.exchange.ExchangeGateway.OrderSnapshot(
+            "BTCUSDT", 99L, "cid-99", "BUY", "LIMIT", "PARTIALLY_FILLED",
+            BigDecimal.ONE, BigDecimal.ONE, new BigDecimal("0.7"), java.time.Instant.now(),
+            BigDecimal.ONE, "BOTH", false, createTime, false);
+
+        var persisted = new OrderLedgerService(f.mapper()).syncSnapshot(1L, "BTCUSDT", snapshot);
+
+        assertEquals(LocalDateTime.ofInstant(createTime, java.time.ZoneOffset.UTC), persisted.getExchangeCreatedAt());
+        assertEquals(LocalDateTime.ofInstant(createTime, java.time.ZoneOffset.UTC),
+            f.jdbc().queryForObject("SELECT exchange_created_at FROM quant_order WHERE id=1", LocalDateTime.class));
+    }
+
+    @Test
     void staleNewFactCannotDecreasePartiallyFilledQuantity() throws Exception {
         var f = fixture();
         assertEquals(0, f.mapper().mergeExchangeFactIfMonotonic(fact("NEW", "0")));
