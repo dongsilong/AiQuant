@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
  * 同一交易对和周期共享上游流，独立隔离每个下游订阅。
@@ -60,11 +61,19 @@ public class MarketStreamHub {
      * 按环境隔离上游、参考K线和恢复游标；PAPER沿用正式网公开行情。
      */
     public AutoCloseable subscribe(String runMode, String symbol, String interval, Consumer<ExchangeGateway.MarketEvent> listener, Consumer<Boolean> health) {
+        return subscribe(runMode, symbol, interval, listener, health, ignored -> true);
+    }
+
+    /**
+     * 订阅级过滤在事件进入独立消费者队列前执行，避免无关事件占用下游队列。
+     */
+    public AutoCloseable subscribe(String runMode, String symbol, String interval, Consumer<ExchangeGateway.MarketEvent> listener,
+                                   Consumer<Boolean> health, Predicate<ExchangeGateway.MarketEvent> filter) {
         Key key = new Key("TESTNET".equalsIgnoreCase(runMode) ? "TESTNET" : "LIVE", symbol.trim().toUpperCase(java.util.Locale.ROOT), interval.trim());
         UUID id = UUID.randomUUID();
         streams.compute(key, (ignored, current) -> {
             SharedStream stream = current == null ? new SharedStream(key) : current;
-            stream.add(id, listener, health);
+            stream.add(id, listener, health, filter);
             return stream;
         });
         return () -> streams.computeIfPresent(key, (ignored, stream) -> {
@@ -104,6 +113,7 @@ public class MarketStreamHub {
     private final class SharedStream {
         private final Key key;
         private final Map<UUID, StreamEventConsumer<Incoming>> listeners = new ConcurrentHashMap<>();
+        private final Map<UUID, Predicate<ExchangeGateway.MarketEvent>> listenerFilters = new ConcurrentHashMap<>();
         private final Map<UUID, Long> consumedTradeIds = new ConcurrentHashMap<>();
         private final Map<UUID, Instant> consumedKlineOpens = new ConcurrentHashMap<>();
         private final StreamEventConsumer<Incoming> ingress;
@@ -155,8 +165,10 @@ public class MarketStreamHub {
             }, ex -> disconnect(ex), () -> scheduleDisconnect("上游消费队列溢出，行情存在缺口"));
         }
 
-        private synchronized void add(UUID id, Consumer<ExchangeGateway.MarketEvent> listener, Consumer<Boolean> health) {
+        private synchronized void add(UUID id, Consumer<ExchangeGateway.MarketEvent> listener, Consumer<Boolean> health,
+                                      Predicate<ExchangeGateway.MarketEvent> filter) {
             healthListeners.put(id, health);
+            listenerFilters.put(id, filter);
             health.accept(false);
             StreamEventConsumer<Incoming> consumer = new StreamEventConsumer<>(properties.getMarket().getQueueCapacity(), delivery -> {
                 if (closed || delivery.generation() != generation) {
@@ -205,10 +217,16 @@ public class MarketStreamHub {
             } else {
                 // 持有共享流锁，保证参考回放先于该订阅者的实时事件和就绪通知入队。
                 for (ExchangeGateway.Kline kline : referenceKlines.values()) {
-                    consumer.accept(new Incoming(generation, new ExchangeGateway.MarketEvent("KLINE", key.symbol(), key.interval(), null, kline, Instant.now(), null,
-                        Instant.now(), true)));
+                    ExchangeGateway.MarketEvent event = new ExchangeGateway.MarketEvent("KLINE", key.symbol(), key.interval(), null, kline, Instant.now(), null,
+                        Instant.now(), true);
+                    if (filter.test(event)) {
+                        consumer.accept(new Incoming(generation, event));
+                    }
                 }
-                consumer.accept(new Incoming(generation, status(terminalFailure ? "ERROR" : connected ? "CONNECTED" : "CONNECTING")));
+                ExchangeGateway.MarketEvent statusEvent = status(terminalFailure ? "ERROR" : connected ? "CONNECTED" : "CONNECTING");
+                if (filter.test(statusEvent)) {
+                    consumer.accept(new Incoming(generation, statusEvent));
+                }
             }
         }
 
@@ -231,6 +249,7 @@ public class MarketStreamHub {
                 listener.close();
             }
             healthListeners.remove(id);
+            listenerFilters.remove(id);
             consumedTradeIds.remove(id);
             consumedKlineOpens.remove(id);
         }
@@ -506,6 +525,10 @@ public class MarketStreamHub {
                 return;
             }
             listeners.forEach((id, consumer) -> {
+                Predicate<ExchangeGateway.MarketEvent> filter = listenerFilters.get(id);
+                if (filter == null || !filter.test(event)) {
+                    return;
+                }
                 if (event.kline() != null) {
                     consumedKlineOpens.putIfAbsent(id, event.kline().openTime());
                 }
@@ -799,6 +822,10 @@ public class MarketStreamHub {
          */
         private void publish(ExchangeGateway.MarketEvent event) {
             listeners.forEach((id, listener) -> {
+                Predicate<ExchangeGateway.MarketEvent> filter = listenerFilters.get(id);
+                if (filter == null || !filter.test(event)) {
+                    return;
+                }
                 if ("TRADE".equals(event.type()) && event.sequenceId() != null) {
                     consumedTradeIds.putIfAbsent(id, event.sequenceId() - 1);
                 }
