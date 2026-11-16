@@ -675,7 +675,9 @@ public class StrategyRuntimeService {
     public void renewActiveRuntimeLeases() {
         for (ActiveRuntime runtime : activeRuntimes.values()) {
             if (runtime == null || runtime.closed || "PAPER".equalsIgnoreCase(runtime.credential.getRunMode())
-                || !runtime.leaseRenewing.compareAndSet(false, true)) continue;
+                || !runtime.leaseRenewing.compareAndSet(false, true)) {
+                continue;
+            }
             try {
                 leaseRenewalExecutor.execute(() -> {
                     try {
@@ -691,9 +693,10 @@ public class StrategyRuntimeService {
                         } finally {
                             runtime.leaseOperationLock.unlock();
                         }
-                        if (snapshot == null && !runtime.closed) log.error(
-                            "策略运行租约续期未能确认 epoch，缓存仅保持至原有效期 instanceId={} credentialId={} symbol={}",
-                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                        if (snapshot == null && !runtime.closed) {
+                            log.error("策略运行租约续期未能确认 epoch，缓存仅保持至原有效期 instanceId={} credentialId={} symbol={}",
+                                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                        }
                     } catch (RuntimeException ex) {
                         log.error("策略运行租约续期异常，缓存仅保持至原有效期 instanceId={} credentialId={} symbol={}",
                             runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), ex);
@@ -1374,6 +1377,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     private boolean ensureEventLease(ActiveRuntime runtime) {
+        // 行情回调只读取本地验证过的租约快照；最终派单仍实时核验数据库所有权。
         return "PAPER".equalsIgnoreCase(runtime.credential.getRunMode()) || hasValidLeaseSnapshot(runtime);
     }
 
@@ -5496,7 +5500,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final Object entryDispatchLock = new Object();
         /** 单个交易对运行开关；关闭时只禁止新开仓，不停止已有持仓管理。 */
         private volatile boolean runtimeEnabled = true;
-        /** Updated only by startup/independent lease supervision; false fails closed. */
+        /** 仅保存经数据库核验的租约 epoch 和保守有效期；行情路径只读该快照。 */
         private volatile StrategyRuntimeLeaseService.LeaseSnapshot leaseSnapshot;
         /**
          * FIXED: 仅保护模式；策略/凭证/交易对停用但仍有未平仓持仓时为 true。
