@@ -1080,9 +1080,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             if (response == null || response.getData() == null) {
                 throw new IllegalStateException("Binance 活动订单响应缺少数据载荷，无法确认查询完整性");
             }
+            long missingCreateTimeCount = response.getData().stream().filter(item -> item.getTime() == null).count();
+            if (missingCreateTimeCount > 0) {
+                log.warn("Binance 活动订单响应缺少创建时间 symbol={} orderCount={} missingCreateTimeCount={}",
+                    symbol, response.getData().size(), missingCreateTimeCount);
+            }
             return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
                 item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
-                "getAvgPrice")), string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(number(item, "getTime")),
+                "getAvgPrice")), string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(item.getTime()),
                 nullableBoolean(item, "getClosePosition"))).toList();
         });
     }
@@ -1265,9 +1270,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (data == null) {
             throw new IllegalStateException("Binance 历史订单响应缺少数据载荷，无法确认查询完整性");
         }
+        long missingCreateTimeCount = data.stream().filter(item -> item.getTime() == null).count();
+        if (missingCreateTimeCount > 0) {
+            log.warn("Binance 历史订单响应缺少创建时间 symbol={} orderCount={} missingCreateTimeCount={} startTime={} endTime={}",
+                querySymbol, data.size(), missingCreateTimeCount, start, end);
+        }
         return data.stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(), item.getStatus(),
             decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item, "getAvgPrice")),
-            string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(number(item, "getTime")),
+            string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(item.getTime()),
             nullableBoolean(item, "getClosePosition"))).toList();
     }
 
