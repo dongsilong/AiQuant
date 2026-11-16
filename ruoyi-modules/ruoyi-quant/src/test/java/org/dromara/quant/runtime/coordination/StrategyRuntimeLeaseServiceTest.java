@@ -58,9 +58,9 @@ class StrategyRuntimeLeaseServiceTest {
 
         long before = System.nanoTime();
         var snapshot = service.acquireOrRenewSnapshot(1L, 2L, "btcusdt");
+        assertNotNull(snapshot);
         long remainingNanos = snapshot.validUntilNanos() - System.nanoTime();
 
-        assertNotNull(snapshot);
         assertEquals(9L, snapshot.epoch());
         assertTrue(snapshot.validUntilNanos() > before);
         assertTrue(remainingNanos > 0L);
