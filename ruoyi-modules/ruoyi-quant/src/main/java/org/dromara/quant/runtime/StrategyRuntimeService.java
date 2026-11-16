@@ -838,7 +838,7 @@ public class StrategyRuntimeService {
         try {
             phaseStartedAt = System.nanoTime();
             boolean pendingExecution = reconcilePendingExecution(runtime);
-            pendingExecutionMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            pendingExecutionMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             if (pendingExecution) {
                 synchronized (runtime) {
                     runtime.positionReconciliationBlockReason = "PENDING_EXECUTION";
@@ -857,7 +857,7 @@ public class StrategyRuntimeService {
             }
             phaseStartedAt = System.nanoTime();
             boolean protectionCleanupPending = retryProtectionCleanupIfNeeded(runtime);
-            protectionCleanupMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            protectionCleanupMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             if (protectionCleanupPending) {
                 runtime.positionReconciliationBlockReason = "PROTECTION_CLEANUP_PENDING";
                 return;
@@ -885,7 +885,7 @@ public class StrategyRuntimeService {
             }
             phaseStartedAt = System.nanoTime();
             boolean leaseAcquired = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
-            leaseAcquireMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            leaseAcquireMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             if (!leaseAcquired) {
                 runtime.positionReconciliationBlockReason = "STRATEGY_LEASE_NOT_HELD";
                 runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
@@ -902,12 +902,12 @@ public class StrategyRuntimeService {
                 BeanUtils.copyProperties(position, copy);
                 return copy;
             }).toList();
-            baselineQueryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            baselineQueryMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             phaseStartedAt = System.nanoTime();
             List<ExchangeGateway.PositionSnapshot> snapshots = "PAPER".equalsIgnoreCase(runtime.credential.getRunMode()) ? null :
                 reconciliationService.runtimePositionSnapshot(runtime.credential).stream()
                     .filter(snapshot -> snapshot != null && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())).toList();
-            accountSnapshotMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            accountSnapshotMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             synchronized (runtime) {
                 if (runtime.closed) {
                     return;
@@ -921,7 +921,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             phaseStartedAt = System.nanoTime();
             QuantStrategyPositionState latestState = stateService.findByInstance(runtime.instance.getId());
-            stateQueryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            stateQueryMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             if (hasStateVersionChanged(expectedState, latestState)) {
                 synchronized (runtime) {
                     if (!runtime.closed) {
@@ -943,7 +943,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 refreshed.setProtectionCycleKey(expectedState.getPositionCycleKey());
                 phaseStartedAt = System.nanoTime();
                 firstExecuted = protectionOrderService.firstTakeProfitExecutedQuantity(runtime.credential.getId(), refreshed);
-                firstTakeProfitQueryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+                firstTakeProfitQueryMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             }
             if (firstExecuted != null && expectedState.getInitialPositionQty() != null && refreshed.getQuantity().compareTo(expectedState.getInitialPositionQty().subtract(firstExecuted).subtract(expectedState.getFirstTakeProfitLocalExecutedQty() == null ? BigDecimal.ZERO : expectedState.getFirstTakeProfitLocalExecutedQty()).max(BigDecimal.ZERO)) > 0) {
                 throw new ProtectionOrderService.ProtectionExecutionPendingException();
@@ -953,7 +953,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             BigDecimal.ZERO : expectedState.getFirstTakeProfitLocalExecutedQty()).compareTo(expectedState.getFirstTakeProfitTargetQty()) >= 0;
             phaseStartedAt = System.nanoTime();
             boolean leaseHeld = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
-            finalLeaseCheckMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            finalLeaseCheckMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             synchronized (runtime) {
                 if (runtime.exitCoordinating.get() || runtime.state != expectedState || runtime.hasPendingAction() != expectedPending || !Objects.equals(expectedPendingIdentity, runtime.state == null ?
 List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosition || runtime.position != null && !Objects.equals(runtime.position.getQuantity(), expectedQuantity)) {
@@ -1087,7 +1087,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             runtime.positionReconciliationBlockReason = "RECONCILIATION_ERROR:" + ex.getClass().getSimpleName();
             boolean stateConflict = containsMessage(ex, "策略持仓状态乐观锁冲突");
             log.warn("策略持仓事实核实失败 instanceId={} credentialId={} symbol={} runMode={} elapsedMs={} error={}", runtime.instance.getId(), runtime.credential.getId(),
-                runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
+                runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
             if (stateConflict) {
                 QuantStrategyPositionState latestState = stateService.findByInstance(runtime.instance.getId());
                 synchronized (runtime) {
@@ -1136,10 +1136,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     }
                     log.debug("持仓核实完成 instanceId={} credentialId={} symbol={} runMode={} position={} elapsedMs={} entryReadiness={}",
                         runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
-                        runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
+                        runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
                 }
             }
-            long totalElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt);
+            long totalElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt);
             if (totalElapsedMs >= 1_000L) {
                 log.warn("策略持仓核实阶段耗时偏高 instanceId={} credentialId={} symbol={} runMode={} totalMs={} pendingExecutionMs={} protectionCleanupMs={} leaseAcquireMs={} baselineQueryMs={} accountSnapshotMs={} stateQueryMs={} firstTakeProfitQueryMs={} finalLeaseCheckMs={} completed={} blockReason={} positionFactsReady={}",
                     runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(), totalElapsedMs,
