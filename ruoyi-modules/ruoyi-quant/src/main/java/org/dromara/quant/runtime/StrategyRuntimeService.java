@@ -819,6 +819,15 @@ public class StrategyRuntimeService {
         boolean reconciliationCompleted = false;
         long reconcileStartedAt = System.nanoTime();
         long positionFactsInvalidationGeneration = runtime.positionFactsInvalidationGeneration.get();
+        long pendingExecutionMs = 0L;
+        long protectionCleanupMs = 0L;
+        long leaseAcquireMs = 0L;
+        long baselineQueryMs = 0L;
+        long accountSnapshotMs = 0L;
+        long stateQueryMs = 0L;
+        long firstTakeProfitQueryMs = 0L;
+        long finalLeaseCheckMs = 0L;
+        long phaseStartedAt;
         synchronized (runtime) {
             if (runtime.closed || runtime.exitCoordinating.get()) {
                 return;
@@ -827,7 +836,10 @@ public class StrategyRuntimeService {
             runtime.positionReconciliationBlockReason = "IN_PROGRESS";
         }
         try {
-            if (reconcilePendingExecution(runtime)) {
+            phaseStartedAt = System.nanoTime();
+            boolean pendingExecution = reconcilePendingExecution(runtime);
+            pendingExecutionMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            if (pendingExecution) {
                 synchronized (runtime) {
                     runtime.positionReconciliationBlockReason = "PENDING_EXECUTION";
                     if (!runtime.closed && runtime.position != null) {
@@ -843,7 +855,10 @@ public class StrategyRuntimeService {
                 }
                 return;
             }
-            if (retryProtectionCleanupIfNeeded(runtime)) {
+            phaseStartedAt = System.nanoTime();
+            boolean protectionCleanupPending = retryProtectionCleanupIfNeeded(runtime);
+            protectionCleanupMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            if (protectionCleanupPending) {
                 runtime.positionReconciliationBlockReason = "PROTECTION_CLEANUP_PENDING";
                 return;
             }
@@ -868,7 +883,10 @@ public class StrategyRuntimeService {
                 expectedPosition = runtime.position;
                 expectedQuantity = expectedPosition == null ? null : expectedPosition.getQuantity();
             }
-            if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol())) {
+            phaseStartedAt = System.nanoTime();
+            boolean leaseAcquired = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+            leaseAcquireMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            if (!leaseAcquired) {
                 runtime.positionReconciliationBlockReason = "STRATEGY_LEASE_NOT_HELD";
                 runtime.nextReconcileAt = System.currentTimeMillis() + 5_000L;
                 log.warn("策略持仓核验因租约未确认而延期 instanceId={} credentialId={} symbol={} retryAfterSeconds=5",
@@ -876,6 +894,7 @@ public class StrategyRuntimeService {
                 return;
             }
             // 在REST前捕获数据库基线；慢查询或并发平仓后只能条件更新，不能覆盖新账本。
+            phaseStartedAt = System.nanoTime();
             List<QuantPosition> baseline =
         positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPosition::getCredentialId, runtime.credential.getId()).eq(QuantPosition::getSymbol,
             runtime.symbol.getSymbol())).stream().map(position -> {
@@ -883,9 +902,12 @@ public class StrategyRuntimeService {
                 BeanUtils.copyProperties(position, copy);
                 return copy;
             }).toList();
+            baselineQueryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            phaseStartedAt = System.nanoTime();
             List<ExchangeGateway.PositionSnapshot> snapshots = "PAPER".equalsIgnoreCase(runtime.credential.getRunMode()) ? null :
                 reconciliationService.runtimePositionSnapshot(runtime.credential).stream()
                     .filter(snapshot -> snapshot != null && runtime.symbol.getSymbol().equalsIgnoreCase(snapshot.symbol())).toList();
+            accountSnapshotMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             synchronized (runtime) {
                 if (runtime.closed) {
                     return;
@@ -897,7 +919,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     return;
                 }
             }
+            phaseStartedAt = System.nanoTime();
             QuantStrategyPositionState latestState = stateService.findByInstance(runtime.instance.getId());
+            stateQueryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             if (hasStateVersionChanged(expectedState, latestState)) {
                 synchronized (runtime) {
                     if (!runtime.closed) {
@@ -917,7 +941,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             BigDecimal firstExecuted = null;
             if (refreshed != null && expectedState != null && expectedState.getPositionCycleKey() != null && !Boolean.TRUE.equals(expectedState.getFirstTakeProfitTriggered()) && !"PAPER".equalsIgnoreCase(runtime.credential.getRunMode())) {
                 refreshed.setProtectionCycleKey(expectedState.getPositionCycleKey());
+                phaseStartedAt = System.nanoTime();
                 firstExecuted = protectionOrderService.firstTakeProfitExecutedQuantity(runtime.credential.getId(), refreshed);
+                firstTakeProfitQueryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             }
             if (firstExecuted != null && expectedState.getInitialPositionQty() != null && refreshed.getQuantity().compareTo(expectedState.getInitialPositionQty().subtract(firstExecuted).subtract(expectedState.getFirstTakeProfitLocalExecutedQty() == null ? BigDecimal.ZERO : expectedState.getFirstTakeProfitLocalExecutedQty()).max(BigDecimal.ZERO)) > 0) {
                 throw new ProtectionOrderService.ProtectionExecutionPendingException();
@@ -925,7 +951,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             boolean firstTpFilled =
              firstExecuted != null && expectedState.getFirstTakeProfitTargetQty() != null && firstExecuted.add(expectedState.getFirstTakeProfitLocalExecutedQty() == null ?
             BigDecimal.ZERO : expectedState.getFirstTakeProfitLocalExecutedQty()).compareTo(expectedState.getFirstTakeProfitTargetQty()) >= 0;
+            phaseStartedAt = System.nanoTime();
             boolean leaseHeld = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+            finalLeaseCheckMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             synchronized (runtime) {
                 if (runtime.exitCoordinating.get() || runtime.state != expectedState || runtime.hasPendingAction() != expectedPending || !Objects.equals(expectedPendingIdentity, runtime.state == null ?
 List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosition || runtime.position != null && !Objects.equals(runtime.position.getQuantity(), expectedQuantity)) {
@@ -1110,6 +1138,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
                         runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
                 }
+            }
+            long totalElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt);
+            if (totalElapsedMs >= 1_000L) {
+                log.warn("策略持仓核实阶段耗时偏高 instanceId={} credentialId={} symbol={} runMode={} totalMs={} pendingExecutionMs={} protectionCleanupMs={} leaseAcquireMs={} baselineQueryMs={} accountSnapshotMs={} stateQueryMs={} firstTakeProfitQueryMs={} finalLeaseCheckMs={} completed={} blockReason={} positionFactsReady={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(), totalElapsedMs,
+                    pendingExecutionMs, protectionCleanupMs, leaseAcquireMs, baselineQueryMs, accountSnapshotMs, stateQueryMs,
+                    firstTakeProfitQueryMs, finalLeaseCheckMs, reconciliationCompleted, runtime.positionReconciliationBlockReason, runtime.positionFactsReady);
             }
             if (reconciliationCompleted) {
                 schedulePositionFactsRefresh(runtime, runtime.positionFactsVerifiedAt);
