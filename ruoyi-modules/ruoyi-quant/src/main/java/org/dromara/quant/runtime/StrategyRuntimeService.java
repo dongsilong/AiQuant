@@ -1358,17 +1358,19 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      * 处理实时事件前确认当前节点仍持有有效租约。
      */
     private static void updateLeaseSnapshot(ActiveRuntime runtime, StrategyRuntimeLeaseService.LeaseSnapshot snapshot) {
-        runtime.leaseEpoch = snapshot == null ? 0L : snapshot.epoch();
-        runtime.leaseValidUntilNanos = snapshot == null ? 0L : snapshot.validUntilNanos();
+        runtime.leaseSnapshot = snapshot;
     }
 
     private static void invalidateLeaseSnapshot(ActiveRuntime runtime) {
-        runtime.leaseEpoch = 0L;
-        runtime.leaseValidUntilNanos = 0L;
+        runtime.leaseSnapshot = null;
+    }
+
+    private static boolean isLeaseSnapshotValid(StrategyRuntimeLeaseService.LeaseSnapshot snapshot) {
+        return snapshot != null && snapshot.epoch() > 0L && System.nanoTime() - snapshot.validUntilNanos() < 0L;
     }
 
     private static boolean hasValidLeaseSnapshot(ActiveRuntime runtime) {
-        return runtime.leaseEpoch > 0L && System.nanoTime() - runtime.leaseValidUntilNanos < 0L;
+        return isLeaseSnapshotValid(runtime.leaseSnapshot);
     }
 
     private boolean ensureEventLease(ActiveRuntime runtime) {
@@ -1897,8 +1899,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (runtime.closed || runtime.position != null || runtime.hasPendingAction() || !runtime.positionFactsReady) {
                 return false;
             }
+            StrategyRuntimeLeaseService.LeaseSnapshot leaseSnapshot = runtime.leaseSnapshot;
             if (runtime.entryProtectionCleanupReady && runtime.entryProtectionCleanupProofGeneration == runtime.entryProtectionCleanupGeneration.get()
-                && hasValidLeaseSnapshot(runtime) && runtime.entryProtectionCleanupEpoch == runtime.leaseEpoch) return true;
+                && isLeaseSnapshotValid(leaseSnapshot) && runtime.entryProtectionCleanupEpoch == leaseSnapshot.epoch()) return true;
             if (System.currentTimeMillis() < runtime.nextEntryProtectionCleanupAt || runtime.entryProtectionCleanupRunning) {
                 return false;
             }
@@ -5494,8 +5497,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /** 单个交易对运行开关；关闭时只禁止新开仓，不停止已有持仓管理。 */
         private volatile boolean runtimeEnabled = true;
         /** Updated only by startup/independent lease supervision; false fails closed. */
-        private volatile long leaseEpoch;
-        private volatile long leaseValidUntilNanos;
+        private volatile StrategyRuntimeLeaseService.LeaseSnapshot leaseSnapshot;
         /**
          * FIXED: 仅保护模式；策略/凭证/交易对停用但仍有未平仓持仓时为 true。
          */
