@@ -1383,6 +1383,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     private void configureEntryMaMarket(ActiveRuntime runtime) {
         synchronized (runtime) {
             boolean required = entryMaDirectionFilterEnabled(runtime.plugin, runtime.params);
+            runtime.entryMaEnabled = required;
             if (!required) {
                 if (runtime.entryMaSubscription != null) {
                     try {
@@ -1413,7 +1414,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
 
     /** 只更新 1 分钟均线行情，不驱动策略开平仓。 */
     private void onEntryMaMarketEvent(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
-        if (runtime == null || event == null || runtime.closed || !entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) return;
+        if (runtime == null || event == null || runtime.closed || !runtime.entryMaEnabled) return;
         if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
             EntryMaSnapshot previous = runtime.entryMa.snapshot();
             runtime.entryMa.markUnready();
@@ -5428,6 +5429,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final MarketRuntime market = new MarketRuntime();
         /** 独立维护 1 分钟 MA 状态，不参与 ActiveRuntime 主锁。 */
         private final EntryMaState entryMa = new EntryMaState();
+        private volatile boolean entryMaEnabled;
         private final AtomicBoolean protectionSyncing = new AtomicBoolean();
         private final AtomicBoolean exitCoordinating = new AtomicBoolean();
         private final AtomicBoolean protectionRequested = new AtomicBoolean();
