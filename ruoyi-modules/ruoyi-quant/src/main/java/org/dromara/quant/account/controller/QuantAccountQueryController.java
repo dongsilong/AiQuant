@@ -161,12 +161,26 @@ public class QuantAccountQueryController {
         String normalizedSide = StringUtils.isBlank(side) ? null : side.trim().toUpperCase(java.util.Locale.ROOT);
         String normalizedStatus = StringUtils.isBlank(status) ? null : status.trim().toUpperCase(java.util.Locale.ROOT);
         LambdaQueryWrapper<QuantOrder> orderQuery = new LambdaQueryWrapper<QuantOrder>()
-            .and(scope -> credentials.forEach(credential -> scope.or(account -> {
-                account.eq(QuantOrder::getCredentialId, credential.getId());
-                if (credential.getEffectiveTime() != null) {
-                    account.apply("COALESCE(exchange_created_at, created_at) >= {0}", credential.getEffectiveTime());
+            .and(scope -> {
+                for (int i = 0; i < credentials.size(); i++) {
+                    QuantCredential credential = credentials.get(i);
+                    if (i == 0) {
+                        scope.nested(account -> {
+                            account.eq(QuantOrder::getCredentialId, credential.getId());
+                            if (credential.getEffectiveTime() != null) {
+                                account.apply("COALESCE(exchange_created_at, created_at) >= {0}", credential.getEffectiveTime());
+                            }
+                        });
+                    } else {
+                        scope.or(account -> {
+                            account.eq(QuantOrder::getCredentialId, credential.getId());
+                            if (credential.getEffectiveTime() != null) {
+                                account.apply("COALESCE(exchange_created_at, created_at) >= {0}", credential.getEffectiveTime());
+                            }
+                        });
+                    }
                 }
-            })))
+            })
             .eq(normalizedSymbol != null, QuantOrder::getSymbol, normalizedSymbol)
             .eq(normalizedSide != null, QuantOrder::getSide, normalizedSide)
             .eq(normalizedStatus != null, QuantOrder::getStatus, normalizedStatus)
@@ -273,10 +287,22 @@ public class QuantAccountQueryController {
         Map<Long, QuantCredential> credentialById = credentials.stream()
             .collect(Collectors.toMap(QuantCredential::getId, Function.identity()));
         LambdaQueryWrapper<QuantTrade> tradeQuery = new LambdaQueryWrapper<QuantTrade>()
-            .and(scope -> credentials.forEach(credential -> scope.or(account -> {
-                account.eq(QuantTrade::getCredentialId, credential.getId());
-                if (credential.getEffectiveTime() != null) account.ge(QuantTrade::getTradeTime, credential.getEffectiveTime());
-            })))
+            .and(scope -> {
+                for (int i = 0; i < credentials.size(); i++) {
+                    QuantCredential credential = credentials.get(i);
+                    if (i == 0) {
+                        scope.nested(account -> {
+                            account.eq(QuantTrade::getCredentialId, credential.getId());
+                            if (credential.getEffectiveTime() != null) account.ge(QuantTrade::getTradeTime, credential.getEffectiveTime());
+                        });
+                    } else {
+                        scope.or(account -> {
+                            account.eq(QuantTrade::getCredentialId, credential.getId());
+                            if (credential.getEffectiveTime() != null) account.ge(QuantTrade::getTradeTime, credential.getEffectiveTime());
+                        });
+                    }
+                }
+            })
             .eq(StringUtils.isNotBlank(symbol), QuantTrade::getSymbol, symbol)
             .eq(StringUtils.isNotBlank(side), QuantTrade::getSide, side)
             .eq(orderId != null, QuantTrade::getExchangeOrderId, orderId)
