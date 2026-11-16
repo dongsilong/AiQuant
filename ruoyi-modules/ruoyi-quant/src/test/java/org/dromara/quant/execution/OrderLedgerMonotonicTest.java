@@ -35,7 +35,7 @@ class OrderLedgerMonotonicTest {
               average_price DECIMAL(30,12), leverage_snapshot INT, price_tick_size_snapshot DECIMAL(32,16),
               post_fill_wallet_balance DECIMAL(32,16), post_fill_balance_at TIMESTAMP,
               post_fill_balance_requested_at TIMESTAMP, idempotency_key VARCHAR(128) NOT NULL,
-              created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP,
+              exchange_created_at TIMESTAMP, created_at TIMESTAMP NOT NULL, updated_at TIMESTAMP,
               UNIQUE (credential_id, idempotency_key),
               UNIQUE (credential_id, symbol, exchange_order_id)
             )
@@ -93,6 +93,7 @@ class OrderLedgerMonotonicTest {
         assertEquals("autoclose-same-client-id", persisted.getClientOrderId());
         assertEquals("EXCHANGE_ORDER:BTCUSDT:100", persisted.getIdempotencyKey());
         assertEquals(false, persisted.getReduceOnly());
+        assertEquals(java.time.LocalDateTime.ofInstant(liquidation.createTime(), java.time.ZoneOffset.UTC), persisted.getExchangeCreatedAt());
     }
 
     @Test
