@@ -1399,7 +1399,15 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             if (runtime.entryMaSubscription == null) {
                 runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
-                    event -> onEntryMaMarketEvent(runtime, event), ready -> runtime.entryMaStreamReady = ready);
+                    event -> onEntryMaMarketEvent(runtime, event), ready -> {
+                        boolean previous = runtime.entryMaStreamReady;
+                        runtime.entryMaStreamReady = ready;
+                        if (previous != ready) {
+                            log.info("策略1分钟MA行情健康状态变化 instanceId={} mode={} symbol={} ready={} closedKlines={}/7",
+                                runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), ready,
+                                runtime.entryMaMarket.closedKlineCloses.size());
+                        }
+                    });
             }
         }
     }
@@ -1410,6 +1418,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         synchronized (runtime) {
             if (runtime.closed || !entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) return;
             if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
+                if (runtime.entryMaStreamReady) {
+                    log.warn("策略1分钟MA状态事件关闭行情门禁 instanceId={} mode={} symbol={} eventType={} eventReplay={} closedKlines={}/7",
+                        runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(),
+                        runtime.entryMaMarket.closedKlineCloses.size());
+                }
                 runtime.entryMaStreamReady = false;
                 runtime.entryMaLastEventTime = null;
                 runtime.entryMaLastReceivedAt = null;
@@ -1422,6 +1435,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 if (!event.replay() && "KLINE".equalsIgnoreCase(event.type())) {
                     runtime.entryMaLastEventTime = event.eventTime();
                     runtime.entryMaLastReceivedAt = event.receivedAt();
+                    log.info("策略1分钟MA收到实时K线 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
+                        runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
+                        event.receivedAt(), event.kline().closed(), runtime.entryMaMarket.closedKlineCloses.size(), runtime.entryMaStreamReady);
                 }
             }
         }
