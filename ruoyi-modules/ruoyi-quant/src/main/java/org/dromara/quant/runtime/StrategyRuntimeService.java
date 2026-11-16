@@ -454,6 +454,14 @@ public class StrategyRuntimeService {
                 if (ensureRuntime(instance)) {
                     activeIds.add(instance.getId());
                 }
+            } catch (TradingReconciliationService.SnapshotSupersededException ex) {
+                // 快照被更新的私有流事实作废时，协调服务已安排只读重试；这不是策略执行故障。
+                // 已存在的 Runtime 保持运行，尚未创建的 Runtime 留待下一轮监督重新初始化。
+                if (activeRuntimes.containsKey(instance.getId())) {
+                    activeIds.add(instance.getId());
+                }
+                log.warn("账户持仓快照已被更新事件覆盖，等待只读重试 instanceId={} credentialId={} message={}",
+                    instance.getId(), instance.getCredentialId(), ex.getMessage());
             } catch (RuntimeException ex) {
                 recordError(instance, ex);
             }
