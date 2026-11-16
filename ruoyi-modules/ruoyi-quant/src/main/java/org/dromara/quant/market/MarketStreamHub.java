@@ -114,6 +114,7 @@ public class MarketStreamHub {
         private final Key key;
         private final Map<UUID, StreamEventConsumer<Incoming>> listeners = new ConcurrentHashMap<>();
         private final Map<UUID, Predicate<ExchangeGateway.MarketEvent>> listenerFilters = new ConcurrentHashMap<>();
+        private final Map<UUID, Long> nextSubscriberDiagnosticAt = new ConcurrentHashMap<>();
         private final Map<UUID, Long> consumedTradeIds = new ConcurrentHashMap<>();
         private final Map<UUID, Instant> consumedKlineOpens = new ConcurrentHashMap<>();
         private final StreamEventConsumer<Incoming> ingress;
@@ -183,6 +184,8 @@ public class MarketStreamHub {
                         health.accept(true);
                     }
                 }
+                long subscriberQueueWaitMs = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - delivery.enqueuedAtNanos()));
+                long listenerStartedNanos = System.nanoTime();
                 try {
                     listener.accept(event);
                 } catch (RuntimeException ex) {
@@ -190,6 +193,17 @@ public class MarketStreamHub {
                         return;
                     }
                     throw ex;
+                } finally {
+                    long listenerProcessingMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - listenerStartedNanos);
+                    if (subscriberQueueWaitMs >= 1_000L || listenerProcessingMs >= 1_000L) {
+                        long now = System.currentTimeMillis();
+                        Long nextLogAt = nextSubscriberDiagnosticAt.get(id);
+                        if (nextLogAt == null || now >= nextLogAt) {
+                            nextSubscriberDiagnosticAt.put(id, now + 10_000L);
+                            log.warn("下游行情消费者延迟拆分 mode={} symbol={} interval={} listenerId={} type={} subscriberQueueWaitMs={} listenerProcessingMs={}",
+                                key.runMode(), key.symbol(), key.interval(), id, event.type(), subscriberQueueWaitMs, listenerProcessingMs);
+                        }
+                    }
                 }
                 if (delivery.generation() != generation) {
                     return;
@@ -250,6 +264,7 @@ public class MarketStreamHub {
             }
             healthListeners.remove(id);
             listenerFilters.remove(id);
+            nextSubscriberDiagnosticAt.remove(id);
             consumedTradeIds.remove(id);
             consumedKlineOpens.remove(id);
         }
