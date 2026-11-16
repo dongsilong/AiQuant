@@ -202,6 +202,8 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
         WHERE c.credential_id IN
         <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
         <if test="symbol != null">AND c.symbol=#{symbol}</if>
+        AND (c.opened_at IS NOT NULL AND c.opened_at &gt;= COALESCE(
+            (SELECT qc.effective_time FROM quant_credential qc WHERE qc.id=c.credential_id), c.opened_at))
         <if test="from != null">AND c.opened_at&gt;=#{from}</if>
         <if test="to != null">AND c.opened_at&lt;#{to}</if>
     </select>
@@ -261,6 +263,7 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
         WHERE c.credential_id IN
         <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
         <if test="symbol != null">AND c.symbol=#{symbol}</if>
+        AND (c.opened_at IS NOT NULL AND c.opened_at &gt;= COALESCE(q.effective_time,c.opened_at))
         <if test="from != null">AND c.opened_at&gt;=#{from}</if>
         <if test="to != null">AND c.opened_at&lt;#{to}</if>
         ORDER BY
@@ -292,6 +295,8 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
         WHERE c.credential_id IN
         <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
         AND c.reconstruction_source='INFERRED'
+        AND (c.opened_at IS NOT NULL AND c.opened_at &gt;= COALESCE(
+            (SELECT qc.effective_time FROM quant_credential qc WHERE qc.id=c.credential_id), c.opened_at))
         <if test="symbol != null">AND c.symbol=#{symbol}</if>
         <if test="from != null">AND c.opened_at&gt;=#{from}</if>
         <if test="to != null">AND c.opened_at&lt;#{to}</if>

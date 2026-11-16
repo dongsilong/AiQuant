@@ -82,6 +82,7 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setUserId(LoginHelper.getUserId());
         }
         entity.setSecretKey(bo.getSecretKey());
+        entity.setEffectiveTime(toUtc(bo.getEffectiveTime()));
         validateSingleBoundUser(entity.getUserId());
         applyDefaults(entity);
         validateCredential(entity);
@@ -104,6 +105,7 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         // Bound principal is immutable on ordinary edit. Ownership transfer
         // requires an explicitly authorized, audited workflow.
         entity.setUserId(bo.getUserId());
+        entity.setEffectiveTime(toUtc(bo.getEffectiveTime()));
         entity.setStatus(current.getStatus());
         if (StringUtils.isBlank(entity.getRunMode())) {
             entity.setRunMode(current.getRunMode());
@@ -233,7 +235,18 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
     private QuantCredentialVo toVo(QuantCredential entity) {
         QuantCredentialVo vo = MapstructUtils.convert(entity, QuantCredentialVo.class);
         vo.setMaskedApiKey(CredentialMasker.maskApiKey(entity.getApiKey()));
+        vo.setEffectiveTime(toBeijing(entity.getEffectiveTime()));
         return vo;
+    }
+
+    private static LocalDateTime toUtc(LocalDateTime beijingTime) {
+        return beijingTime == null ? null : beijingTime.atZone(java.time.ZoneId.of("Asia/Shanghai"))
+            .withZoneSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
+    }
+
+    private static LocalDateTime toBeijing(LocalDateTime utcTime) {
+        return utcTime == null ? null : utcTime.atZone(java.time.ZoneOffset.UTC)
+            .withZoneSameInstant(java.time.ZoneId.of("Asia/Shanghai")).toLocalDateTime();
     }
 
     private void applyUserScope(LambdaQueryWrapper<QuantCredential> wrapper) {

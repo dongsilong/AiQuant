@@ -57,6 +57,8 @@ public class QuantCredential extends BaseEntity {
      * 运行模式：PAPER、TESTNET 或 LIVE。
      */
     private String runMode;
+    /** 记录查询有效时间（UTC）。 */
+    private java.time.LocalDateTime effectiveTime;
     /**
      * 当前状态。
      */

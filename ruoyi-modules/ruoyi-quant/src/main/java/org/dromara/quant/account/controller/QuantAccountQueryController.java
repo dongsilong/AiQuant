@@ -151,7 +151,7 @@ public class QuantAccountQueryController {
             credentials = List.of(credentialEntity(credentialId));
         } else {
             LambdaQueryWrapper<QuantCredential> credentialQuery = new LambdaQueryWrapper<QuantCredential>()
-                .select(QuantCredential::getId, QuantCredential::getUserId, QuantCredential::getAccountName);
+                .select(QuantCredential::getId, QuantCredential::getUserId, QuantCredential::getAccountName, QuantCredential::getEffectiveTime);
             if (!LoginHelper.isSuperAdmin(LoginHelper.getUserId())) credentialQuery.eq(QuantCredential::getUserId, LoginHelper.getUserId());
             credentials = credentialMapper.selectList(credentialQuery);
         }
@@ -161,7 +161,10 @@ public class QuantAccountQueryController {
         String normalizedSide = StringUtils.isBlank(side) ? null : side.trim().toUpperCase(java.util.Locale.ROOT);
         String normalizedStatus = StringUtils.isBlank(status) ? null : status.trim().toUpperCase(java.util.Locale.ROOT);
         LambdaQueryWrapper<QuantOrder> orderQuery = new LambdaQueryWrapper<QuantOrder>()
-            .in(QuantOrder::getCredentialId, credentialIds)
+            .and(scope -> credentials.forEach(credential -> scope.or(account -> {
+                account.eq(QuantOrder::getCredentialId, credential.getId());
+                if (credential.getEffectiveTime() != null) account.ge(QuantOrder::getCreatedAt, credential.getEffectiveTime());
+            })))
             .eq(normalizedSymbol != null, QuantOrder::getSymbol, normalizedSymbol)
             .eq(normalizedSide != null, QuantOrder::getSide, normalizedSide)
             .eq(normalizedStatus != null, QuantOrder::getStatus, normalizedStatus)
@@ -225,6 +228,7 @@ public class QuantAccountQueryController {
         QuantCredential credential = credentialEntity(credentialId);
         LambdaQueryWrapper<QuantTrade> lqw = new LambdaQueryWrapper<QuantTrade>();
         lqw.eq(QuantTrade::getCredentialId, credentialId);
+        lqw.ge(credential.getEffectiveTime() != null, QuantTrade::getTradeTime, credential.getEffectiveTime());
         lqw.eq(StringUtils.isNotBlank(symbol), QuantTrade::getSymbol, symbol);
         lqw.eq(orderId != null, QuantTrade::getExchangeOrderId, orderId);
         lqw.eq(StringUtils.isNotBlank(side), QuantTrade::getSide, side);
@@ -253,7 +257,7 @@ public class QuantAccountQueryController {
             credentials = List.of(credentialEntity(credentialId));
         } else {
             LambdaQueryWrapper<QuantCredential> credentialQuery = new LambdaQueryWrapper<QuantCredential>()
-                .select(QuantCredential::getId, QuantCredential::getUserId, QuantCredential::getAccountName);
+                .select(QuantCredential::getId, QuantCredential::getUserId, QuantCredential::getAccountName, QuantCredential::getEffectiveTime);
             if (!LoginHelper.isSuperAdmin(LoginHelper.getUserId())) {
                 credentialQuery.eq(QuantCredential::getUserId, LoginHelper.getUserId());
             }
@@ -267,7 +271,10 @@ public class QuantAccountQueryController {
         Map<Long, QuantCredential> credentialById = credentials.stream()
             .collect(Collectors.toMap(QuantCredential::getId, Function.identity()));
         LambdaQueryWrapper<QuantTrade> tradeQuery = new LambdaQueryWrapper<QuantTrade>()
-            .in(QuantTrade::getCredentialId, credentialIds)
+            .and(scope -> credentials.forEach(credential -> scope.or(account -> {
+                account.eq(QuantTrade::getCredentialId, credential.getId());
+                if (credential.getEffectiveTime() != null) account.ge(QuantTrade::getTradeTime, credential.getEffectiveTime());
+            })))
             .eq(StringUtils.isNotBlank(symbol), QuantTrade::getSymbol, symbol)
             .eq(StringUtils.isNotBlank(side), QuantTrade::getSide, side)
             .eq(orderId != null, QuantTrade::getExchangeOrderId, orderId)

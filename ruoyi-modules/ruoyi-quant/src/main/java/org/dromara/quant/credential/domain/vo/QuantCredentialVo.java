@@ -53,6 +53,8 @@ public class QuantCredentialVo implements Serializable {
      * 运行模式：PAPER、TESTNET 或 LIVE。
      */
     private String runMode;
+    /** 记录查询有效时间（北京时间）。 */
+    private LocalDateTime effectiveTime;
     /**
      * 当前状态。
      */
