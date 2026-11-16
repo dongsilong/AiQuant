@@ -27,7 +27,7 @@ public class MarketStreamHub {
     private final ExchangeGateway gateway;
     private final ScheduledExecutorService scheduler;
     private final QuantProperties properties;
-    private final java.util.concurrent.Semaphore recoveryReads = new java.util.concurrent.Semaphore(1, true);
+    private final java.util.concurrent.Semaphore recoveryReads;
     private final Map<Key, SharedStream> streams = new ConcurrentHashMap<>();
     private final java.util.concurrent.ExecutorService recoveryExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
@@ -40,6 +40,9 @@ public class MarketStreamHub {
         this.gateway = gateway;
         this.scheduler = scheduler;
         this.properties = properties;
+        int recoveryReadConcurrency = Math.max(1, properties.getMarket().getRecoveryReadConcurrency());
+        this.recoveryReads = new java.util.concurrent.Semaphore(recoveryReadConcurrency, true);
+        log.info("行情恢复REST读取并发配置: concurrency={}", recoveryReadConcurrency);
     }
 
     /**
