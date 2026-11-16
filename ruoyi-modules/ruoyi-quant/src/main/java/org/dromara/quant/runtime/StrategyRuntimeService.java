@@ -1897,9 +1897,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (runtime.closed || runtime.position != null || runtime.hasPendingAction() || !runtime.positionFactsReady) {
                 return false;
             }
-            try {
-                if (runtime.entryProtectionCleanupReady && runtime.entryProtectionCleanupProofGeneration == runtime.entryProtectionCleanupGeneration.get()
-                    && hasValidLeaseSnapshot(runtime) && runtime.entryProtectionCleanupEpoch == runtime.leaseEpoch) return true;
+            if (runtime.entryProtectionCleanupReady && runtime.entryProtectionCleanupProofGeneration == runtime.entryProtectionCleanupGeneration.get()
+                && hasValidLeaseSnapshot(runtime) && runtime.entryProtectionCleanupEpoch == runtime.leaseEpoch) return true;
             if (System.currentTimeMillis() < runtime.nextEntryProtectionCleanupAt || runtime.entryProtectionCleanupRunning) {
                 return false;
             }
