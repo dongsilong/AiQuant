@@ -1998,8 +1998,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (!runtime.entryProtectionPostCleanupEventWaitLogged && runtime.entryProtectionCleanupConfirmedAtNanos > 0L) {
                 runtime.entryProtectionPostCleanupEventWaitLogged = true;
                 long waitMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - runtime.entryProtectionCleanupConfirmedAtNanos);
-                log.info("保护清理后收到首个有效行情 instanceId={} credentialId={} symbol={} eventTime={} eventType={} marketWaitMs={}",
-                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.eventTime(), context.eventType(), waitMs);
+                log.info("保护清理后收到首个有效行情 instanceId={} credentialId={} symbol={} eventTime={} marketWaitMs={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.eventTime(), waitMs);
             }
         }
         return true;
