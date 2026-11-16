@@ -51,6 +51,28 @@ public class StrategyRuntimeLeaseService {
     }
 
     /**
+     * 获取或续期租约并读取数据库 fencing epoch。有效期从 SQL 操作开始计时，
+     * 扣除安全余量，避免数据库响应耗时被错误计入本地缓存有效期。
+     */
+    public LeaseSnapshot acquireOrRenewSnapshot(Long instanceId, Long credentialId, String symbol) {
+        long startedAtNanos = System.nanoTime();
+        if (!acquireOrRenew(instanceId, credentialId, symbol)) {
+            return null;
+        }
+        try {
+            long epoch = requireCurrentEpoch(instanceId, credentialId, symbol);
+            long leaseNanos = java.util.concurrent.TimeUnit.SECONDS.toNanos(
+                Math.max(1, Math.max(15, properties.getRuntime().getLeaseSeconds()) - 2));
+            return new LeaseSnapshot(epoch, startedAtNanos + leaseNanos);
+        } catch (RuntimeException ex) {
+            return null;
+        }
+    }
+
+    public record LeaseSnapshot(long epoch, long validUntilNanos) {
+    }
+
+    /**
      * Required at the final outbound strategy order boundary.
      * A missing/expired/mismatched owner always blocks the order; database errors fail closed.
      * This does NOT provide an atomic fence between the SQL read and a remote Binance request.
