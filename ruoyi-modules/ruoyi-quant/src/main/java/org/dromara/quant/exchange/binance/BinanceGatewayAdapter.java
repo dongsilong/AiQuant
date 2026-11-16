@@ -1137,9 +1137,13 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (type == null || type.isBlank()) {
             type = "UNKNOWN";
         }
+        Long createTime = number(data, "getTime");
+        if (createTime == null) {
+            log.warn("Binance 精确订单响应缺少创建时间 symbol={} orderId={}", actualSymbol, actualOrderId);
+        }
         return new OrderSnapshot(actualSymbol, actualOrderId, actualClientOrderId, string(data, "getSide"), type, status, decimal(string(data, "getPrice")), decimal(string(data,
             "getOrigQty")), decimal(string(data, "getExecutedQty")), instant(number(data, "getUpdateTime")), decimal(string(data, "getAvgPrice")), string(data, "getPositionSide"),
-            nullableBoolean(data, "getReduceOnly"), instantNullable(number(data, "getTime")), nullableBoolean(data, "getClosePosition"));
+            nullableBoolean(data, "getReduceOnly"), instantNullable(createTime), nullableBoolean(data, "getClosePosition"));
     }
 
     /**
