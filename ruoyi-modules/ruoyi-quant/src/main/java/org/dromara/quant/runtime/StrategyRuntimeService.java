@@ -1914,8 +1914,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             runtime.entryProtectionCleanupRunning = true;
             long generation = runtime.entryProtectionCleanupGeneration.get();
             String cycle = runtime.state == null ? null : runtime.state.getPositionCycleKey();
+            long submittedAt = System.nanoTime();
+            runtime.entryProtectionCleanupQueuedAtNanos = submittedAt;
+            runtime.entryProtectionPostCleanupEventWaitLogged = false;
             runtime.entryProtectionCleanupTask = recoveryExecutor.submit(() -> {
                 long startedAt = System.nanoTime();
+                long cleanupStartedAt = 0L;
+                long cleanupElapsedMs = -1L;
                 boolean leaseAcquired = false;
                 boolean cleaned = false;
                 boolean proofEstablished = false;
@@ -1928,8 +1933,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     }
                     leaseAcquired = true;
                     long epoch = leaseService.requireCurrentEpoch(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                    cleanupStartedAt = System.nanoTime();
                     cleaned = protectionOrderService.prepareEntryProtectionCleanup(runtime.credential.getId(), runtime.symbol.getSymbol(),
                         !"PAPER".equalsIgnoreCase(runtime.credential.getRunMode()));
+                    cleanupElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - cleanupStartedAt);
                     if (!cleaned) {
                         result = "CLEANUP_NOT_CONFIRMED";
                         return;
@@ -1942,6 +1949,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             runtime.entryProtectionCleanupEpoch = epoch;
                             runtime.entryProtectionCleanupProofGeneration = generation;
                             runtime.entryProtectionCleanupConfirmedAt = Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
+                            runtime.entryProtectionCleanupConfirmedAtNanos = System.nanoTime();
                             runtime.entryProtectionCleanupReady = true;
                             proofEstablished = true;
                             result = "PROOF_ESTABLISHED";
@@ -1957,13 +1965,19 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         runtime.nextEntryProtectionCleanupAt = System.currentTimeMillis() + 2000L;
                         runtime.entryProtectionCleanupRunning = false;
                     }
-                    long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+                    long finishedAt = System.nanoTime();
+                    long queueWaitMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(startedAt - submittedAt);
+                    long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(finishedAt - startedAt);
+                    long leaseWaitMs = cleanupStartedAt == 0L
+                        ? elapsedMs : java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(cleanupStartedAt - startedAt);
                     if (proofEstablished) {
-                        log.info("开仓前保护清理完成 instanceId={} symbol={} generation={} leaseAcquired={} cleanupResult={} proofEstablished={} elapsedMs={}",
-                            runtime.instance.getId(), runtime.symbol.getSymbol(), generation, leaseAcquired, cleaned, true, elapsedMs);
+                        log.info("开仓前保护清理完成 instanceId={} credentialId={} symbol={} cycle={} generation={} leaseAcquired={} cleanupResult={} proofEstablished={} executorQueueWaitMs={} leaseWaitMs={} cleanupExecutionMs={} totalExecutionMs={}",
+                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), cycle, generation, leaseAcquired, cleaned, true,
+                            queueWaitMs, leaseWaitMs, cleanupElapsedMs, elapsedMs);
                     } else {
-                        log.warn("开仓前保护清理未建立有效证明 instanceId={} symbol={} generation={} leaseAcquired={} cleanupResult={} proofEstablished={} result={} errorType={} elapsedMs={}",
-                            runtime.instance.getId(), runtime.symbol.getSymbol(), generation, leaseAcquired, cleaned, false, result, errorType, elapsedMs);
+                        log.warn("开仓前保护清理未建立有效证明 instanceId={} credentialId={} symbol={} cycle={} generation={} leaseAcquired={} cleanupResult={} proofEstablished={} result={} errorType={} executorQueueWaitMs={} leaseWaitMs={} cleanupExecutionMs={} totalExecutionMs={}",
+                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), cycle, generation, leaseAcquired, cleaned, false, result, errorType,
+                            queueWaitMs, leaseWaitMs, cleanupElapsedMs, elapsedMs);
                     }
                 }
             });
@@ -1976,8 +1990,19 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
             return true;
         }
-        return entryProtectionReady(runtime) && runtime.entryProtectionCleanupConfirmedAt != null
-            && context.eventTime() != null && context.eventTime().isAfter(runtime.entryProtectionCleanupConfirmedAt);
+        if (!entryProtectionReady(runtime) || runtime.entryProtectionCleanupConfirmedAt == null
+            || context.eventTime() == null || !context.eventTime().isAfter(runtime.entryProtectionCleanupConfirmedAt)) {
+            return false;
+        }
+        synchronized (runtime) {
+            if (!runtime.entryProtectionPostCleanupEventWaitLogged && runtime.entryProtectionCleanupConfirmedAtNanos > 0L) {
+                runtime.entryProtectionPostCleanupEventWaitLogged = true;
+                long waitMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - runtime.entryProtectionCleanupConfirmedAtNanos);
+                log.info("保护清理后收到首个有效行情 instanceId={} credentialId={} symbol={} eventTime={} eventType={} marketWaitMs={}",
+                    runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.eventTime(), context.eventType(), waitMs);
+            }
+        }
+        return true;
     }
 
     /** 返回历史保护清理门禁的具体阻塞原因；仅读取本地状态，不触发 REST 或状态变更。 */
@@ -2062,6 +2087,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             logEntryDecision(runtime, context, "PROTECTION_UNCONFIRMED", "当前持仓保护单未全部确认，禁止开仓");
             return;
         }
+        long strategyEvaluationStartedAt = System.nanoTime();
         Optional<EntrySignal> signal;
         if (entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) {
             EntryMaSnapshot entryMaSnapshot = runtime.entryMa.snapshot();
@@ -2075,6 +2101,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             signal = slopeStrategy.evaluateEntry(context, runtime.params, entryMaSnapshot.ma5(), entryMaSnapshot.ma7());
         } else {
             signal = runtime.plugin.evaluateEntry(context, runtime.params);
+        }
+        long strategyEvaluationMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - strategyEvaluationStartedAt);
+        long metricNow = System.currentTimeMillis();
+        if (metricNow >= runtime.nextEntryProtectionMetricLogAt) {
+            runtime.nextEntryProtectionMetricLogAt = metricNow + 5_000L;
+            log.info("策略开仓条件评估耗时 instanceId={} credentialId={} symbol={} eventTime={} strategyEvaluationMs={} signalPresent={}",
+                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), context.eventTime(), strategyEvaluationMs, signal.isPresent());
         }
         if (signal.isEmpty()) {
             return;
@@ -5534,6 +5567,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private Instant entryProtectionCleanupConfirmedAt;
         private long nextEntryProtectionCleanupAt;
         private java.util.concurrent.Future<?> entryProtectionCleanupTask;
+        private volatile long entryProtectionCleanupQueuedAtNanos;
+        private volatile long entryProtectionCleanupConfirmedAtNanos;
+        private boolean entryProtectionPostCleanupEventWaitLogged;
+        private long nextEntryProtectionMetricLogAt;
         private boolean hardStopConfirmed;
         private long hardStopUnprotectedSince;
         private boolean hardStopConfirmationPending;
