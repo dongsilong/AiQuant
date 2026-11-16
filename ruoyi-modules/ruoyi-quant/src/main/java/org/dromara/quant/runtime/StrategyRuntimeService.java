@@ -1960,16 +1960,16 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 String result = "NOT_STARTED";
                 String errorType = null;
                 try {
-                    StrategyRuntimeLeaseService.LeaseSnapshot leaseSnapshot = leaseService.acquireOrRenewSnapshot(
+                    StrategyRuntimeLeaseService.LeaseSnapshot cleanupLeaseSnapshot = leaseService.acquireOrRenewSnapshot(
                         runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
-                    if (leaseSnapshot == null) {
+                    if (cleanupLeaseSnapshot == null) {
                         result = "LEASE_NOT_ACQUIRED";
                         return;
                     }
                     leaseAcquired = true;
-                    long epoch = leaseSnapshot.epoch();
+                    long epoch = cleanupLeaseSnapshot.epoch();
                     synchronized (runtime) {
-                        if (!runtime.closed) updateLeaseSnapshot(runtime, leaseSnapshot);
+                        if (!runtime.closed) updateLeaseSnapshot(runtime, cleanupLeaseSnapshot);
                     }
                     cleanupStartedAt = System.nanoTime();
                     cleaned = protectionOrderService.prepareEntryProtectionCleanup(runtime.credential.getId(), runtime.symbol.getSymbol(),
