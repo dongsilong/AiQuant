@@ -1391,90 +1391,80 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     }
                     runtime.entryMaSubscription = null;
                 }
-                runtime.entryMaStreamReady = false;
-                runtime.entryMaLastEventTime = null;
-                runtime.entryMaLastReceivedAt = null;
-                runtime.entryMaMarket.clear();
+                runtime.entryMa.clear();
                 return;
             }
             if (runtime.entryMaSubscription == null) {
                 runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
                     event -> onEntryMaMarketEvent(runtime, event), ready -> {
-                        boolean previous = runtime.entryMaStreamReady;
-                        runtime.entryMaStreamReady = ready;
-                        if (previous != ready) {
+                        EntryMaSnapshot previous = runtime.entryMa.snapshot();
+                        runtime.entryMa.setReady(ready);
+                        if (previous.ready() != ready) {
                             log.info("策略1分钟MA行情健康状态变化 instanceId={} mode={} symbol={} ready={} closedKlines={}/7",
                                 runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), ready,
-                                runtime.entryMaMarket.closedKlineCloses.size());
+                                runtime.entryMa.snapshot().closedKlines());
                         }
-                    });
+                    }, event -> event != null && ("KLINE".equalsIgnoreCase(event.type())
+                        || "CONNECTED".equals(event.type()) || "CONNECTING".equals(event.type())
+                        || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())));
             }
         }
     }
 
     /** 只更新 1 分钟均线行情，不驱动策略开平仓。 */
     private void onEntryMaMarketEvent(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
-        if (runtime == null || event == null) return;
-        synchronized (runtime) {
-            if (runtime.closed || !entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) return;
-            if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
-                if (runtime.entryMaStreamReady) {
-                    log.warn("策略1分钟MA状态事件关闭行情门禁 instanceId={} mode={} symbol={} eventType={} eventReplay={} closedKlines={}/7",
-                        runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(),
-                        runtime.entryMaMarket.closedKlineCloses.size());
-                }
-                runtime.entryMaStreamReady = false;
-                runtime.entryMaLastEventTime = null;
-                runtime.entryMaLastReceivedAt = null;
-                // 已收盘K线在行情流恢复期间仍然有效；恢复补偿从现有游标继续，
-                // 不会重新回放此前的7根K线，因此不能在这里清空MA预热缓存。
-                return;
+        if (runtime == null || event == null || runtime.closed || !entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) return;
+        if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
+            EntryMaSnapshot previous = runtime.entryMa.snapshot();
+            runtime.entryMa.markUnready();
+            if (previous.ready()) {
+                log.warn("策略1分钟MA状态事件关闭行情门禁 instanceId={} mode={} symbol={} eventType={} eventReplay={} closedKlines={}/7",
+                    runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(),
+                    previous.closedKlines());
             }
-            if (event.kline() != null) {
-                runtime.entryMaMarket.updateKline(event.kline());
-                if (!event.replay() && "KLINE".equalsIgnoreCase(event.type())) {
-                    runtime.entryMaLastEventTime = event.eventTime();
-                    runtime.entryMaLastReceivedAt = event.receivedAt();
-                    log.info("策略1分钟MA收到实时K线 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
-                        runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
-                        event.receivedAt(), event.kline().closed(), runtime.entryMaMarket.closedKlineCloses.size(), runtime.entryMaStreamReady);
-                }
+            // 保留已收盘K线缓存，恢复期间继续从当前游标补偿。
+            return;
+        }
+        if (event.kline() != null) {
+            EntryMaSnapshot snapshot = runtime.entryMa.update(event.kline(), event);
+            if (!event.replay() && "KLINE".equalsIgnoreCase(event.type())) {
+                log.info("策略1分钟MA收到实时K线 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
+                    runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
+                    event.receivedAt(), event.kline().closed(), snapshot.closedKlines(), snapshot.ready());
             }
         }
     }
 
     /** 返回 1 分钟均线行情门禁的具体阻断原因；不改变原有 fail-closed 条件。 */
-    private String entryMaMarketBlockReason(ActiveRuntime runtime) {
-        if (!runtime.entryMaStreamReady) {
+    private String entryMaMarketBlockReason(ActiveRuntime runtime, EntryMaSnapshot snapshot) {
+        if (!snapshot.ready()) {
             return "STREAM_NOT_READY";
         }
-        if (runtime.entryMaMarket.movingAverage(5) == null || runtime.entryMaMarket.movingAverage(7) == null) {
+        if (snapshot.ma5() == null || snapshot.ma7() == null) {
             return "INSUFFICIENT_CLOSED_KLINES";
         }
-        if (runtime.entryMaLastEventTime == null) {
+        if (snapshot.eventTime() == null) {
             return "EVENT_TIME_MISSING";
         }
-        if (runtime.entryMaLastReceivedAt == null) {
+        if (snapshot.receivedAt() == null) {
             return "RECEIVED_AT_MISSING";
         }
         Instant now = Instant.now();
         Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
-        return MarketEventFreshness.isFresh(runtime.entryMaLastEventTime, runtime.entryMaLastReceivedAt, now, exchangeNow,
+        return MarketEventFreshness.isFresh(snapshot.eventTime(), snapshot.receivedAt(), now, exchangeNow,
             Math.max(1, properties.getMarket().getMaxEventAgeMillis())) ? null : "STALE_EVENT";
     }
 
-    /** 将均线阻断原因与行情快照写入决策日志，便于区分订阅、预热和时效问题。 */
-    private String entryMaMarketDiagnostic(ActiveRuntime runtime, String blockReason) {
+    /** 将均线阻断原因与同一版本的行情快照写入决策日志。 */
+    private String entryMaMarketDiagnostic(ActiveRuntime runtime, EntryMaSnapshot snapshot, String blockReason) {
         Instant now = Instant.now();
-        Instant eventTime = runtime.entryMaLastEventTime;
-        Instant receivedAt = runtime.entryMaLastReceivedAt;
         return "1分钟均线行情不可用，禁止开仓；原因=" + blockReason
-            + "；streamReady=" + runtime.entryMaStreamReady
-            + "；closedKlines=" + runtime.entryMaMarket.closedKlineCloses.size() + "/7"
-            + "；eventTime=" + eventTime
-            + "；receivedAt=" + receivedAt
-            + "；eventAgeMillis=" + (eventTime == null ? null : java.time.Duration.between(eventTime, now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()))).toMillis())
-            + "；queueWaitMillis=" + (receivedAt == null ? null : java.time.Duration.between(receivedAt, now).toMillis())
+            + "；streamReady=" + snapshot.ready()
+            + "；closedKlines=" + snapshot.closedKlines() + "/7"
+            + "；eventTime=" + snapshot.eventTime()
+            + "；receivedAt=" + snapshot.receivedAt()
+            + "；eventAgeMillis=" + (snapshot.eventTime() == null ? null : java.time.Duration.between(snapshot.eventTime(), now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()))).toMillis())
+            + "；queueWaitMillis=" + (snapshot.receivedAt() == null ? null : java.time.Duration.between(snapshot.receivedAt(), now).toMillis())
             + "；maxEventAgeMillis=" + Math.max(1, properties.getMarket().getMaxEventAgeMillis());
     }
 
@@ -2062,13 +2052,15 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         Optional<EntrySignal> signal;
         if (entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) {
-            String entryMaBlockReason = entryMaMarketBlockReason(runtime);
+            EntryMaSnapshot entryMaSnapshot = runtime.entryMa.snapshot();
+            String entryMaBlockReason = entryMaMarketBlockReason(runtime, entryMaSnapshot);
             if (entryMaBlockReason != null) {
-                logEntryDecision(runtime, context, "ENTRY_MA_" + entryMaBlockReason, entryMaMarketDiagnostic(runtime, entryMaBlockReason));
+                logEntryDecision(runtime, context, "ENTRY_MA_" + entryMaBlockReason,
+                    entryMaMarketDiagnostic(runtime, entryMaSnapshot, entryMaBlockReason));
                 return;
             }
             KlineSlopeRateStrategy slopeStrategy = (KlineSlopeRateStrategy) runtime.plugin;
-            signal = slopeStrategy.evaluateEntry(context, runtime.params, runtime.entryMaMarket.movingAverage(5), runtime.entryMaMarket.movingAverage(7));
+            signal = slopeStrategy.evaluateEntry(context, runtime.params, entryMaSnapshot.ma5(), entryMaSnapshot.ma7());
         } else {
             signal = runtime.plugin.evaluateEntry(context, runtime.params);
         }
@@ -5245,6 +5237,50 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private record QuantExecutionRecordStatus(String value) {
     }
 
+    private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines) {
+    }
+
+    /**
+     * MA行情状态独立于ActiveRuntime主锁，更新和读取通过同一监视器形成一致快照。
+     */
+    private static final class EntryMaState {
+        private final MarketRuntime market = new MarketRuntime();
+        private boolean ready;
+        private Instant eventTime;
+        private Instant receivedAt;
+
+        private synchronized void setReady(boolean value) {
+            ready = value;
+        }
+
+        private synchronized void markUnready() {
+            ready = false;
+            eventTime = null;
+            receivedAt = null;
+        }
+
+        private synchronized void clear() {
+            ready = false;
+            eventTime = null;
+            receivedAt = null;
+            market.clear();
+        }
+
+        private synchronized EntryMaSnapshot update(ExchangeGateway.Kline kline, ExchangeGateway.MarketEvent event) {
+            market.updateKline(kline);
+            if (!event.replay() && "KLINE".equalsIgnoreCase(event.type())) {
+                eventTime = event.eventTime();
+                receivedAt = event.receivedAt();
+            }
+            return snapshot();
+        }
+
+        private synchronized EntryMaSnapshot snapshot() {
+            return new EntryMaSnapshot(ready, market.movingAverage(5), market.movingAverage(7), eventTime, receivedAt,
+                market.closedKlineCloses.size());
+        }
+    }
+
     /**
      * 单个策略 Runtime 维护的实时市场状态缓存。
      */
@@ -5390,11 +5426,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
          * 当前策略 Runtime 的实时市场状态。
          */
         private final MarketRuntime market = new MarketRuntime();
-        /** 独立维护 1 分钟已收盘 K 线，供开仓 MA5/MA7 过滤使用。 */
-        private final MarketRuntime entryMaMarket = new MarketRuntime();
-        private volatile boolean entryMaStreamReady;
-        private volatile Instant entryMaLastEventTime;
-        private volatile Instant entryMaLastReceivedAt;
+        /** 独立维护 1 分钟 MA 状态，不参与 ActiveRuntime 主锁。 */
+        private final EntryMaState entryMa = new EntryMaState();
         private final AtomicBoolean protectionSyncing = new AtomicBoolean();
         private final AtomicBoolean exitCoordinating = new AtomicBoolean();
         private final AtomicBoolean protectionRequested = new AtomicBoolean();
