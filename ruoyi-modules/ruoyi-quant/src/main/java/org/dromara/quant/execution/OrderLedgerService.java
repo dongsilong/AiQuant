@@ -79,6 +79,9 @@ public class OrderLedgerService {
         // EXCHANGE:<id> placeholder; leaving the old value on the entity prevents
         // mergeExchangeFactIfMonotonic from enriching that identity.
         entity.setClientOrderId(clientOrderId);
+        if (snapshot.createTime() != null) {
+            entity.setExchangeCreatedAt(LocalDateTime.ofInstant(snapshot.createTime(), ZoneOffset.UTC));
+        }
         entity.setSymbol(snapshot.symbol());
         entity.setExchangeOrderId(snapshot.orderId());
         entity.setSide(snapshot.side());
