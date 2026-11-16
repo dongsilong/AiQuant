@@ -196,6 +196,10 @@ public class QuantProperties {
          */
         private int queueCapacity = 2048;
         /**
+         * 全局行情恢复REST只读请求并发数；所有交易对和周期共享，避免启动恢复完全串行。
+         */
+        private int recoveryReadConcurrency = 3;
+        /**
          * Binance事件产生至策略决策允许的最大年龄（毫秒）。
          */
         private long maxEventAgeMillis = 3000;
