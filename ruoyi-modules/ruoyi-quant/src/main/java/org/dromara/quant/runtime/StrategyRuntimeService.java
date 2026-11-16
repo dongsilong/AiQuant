@@ -1398,16 +1398,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (runtime.entryMaSubscription == null) {
                 runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
                     event -> onEntryMaMarketEvent(runtime, event), ready -> {
-                        EntryMaSnapshot previous = runtime.entryMa.snapshot();
-                        runtime.entryMa.setReady(ready);
-                        if (previous.ready() != ready) {
-                            log.info("策略1分钟MA行情健康状态变化 instanceId={} mode={} symbol={} ready={} closedKlines={}/7",
-                                runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), ready,
-                                runtime.entryMa.snapshot().closedKlines());
-                        }
+                        // MA 就绪由独立的 K 线恢复状态和实时 K 线事件决定，不依赖共享流的 MARK 健康状态。
                     }, event -> event != null && ("KLINE".equalsIgnoreCase(event.type())
-                        || "CONNECTED".equals(event.type()) || "CONNECTING".equals(event.type())
-                        || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())));
+                        || "KLINE_READY".equals(event.type()) || "CONNECTED".equals(event.type())
+                        || "CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
+                        || "ERROR".equals(event.type())));
             }
         }
     }
@@ -1419,11 +1414,21 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             EntryMaSnapshot previous = runtime.entryMa.snapshot();
             runtime.entryMa.markUnready();
             if (previous.ready()) {
-                log.warn("策略1分钟MA状态事件关闭行情门禁 instanceId={} mode={} symbol={} eventType={} eventReplay={} closedKlines={}/7",
+                log.warn("策略1分钟MA K线恢复状态关闭行情门禁 instanceId={} mode={} symbol={} eventType={} eventReplay={} closedKlines={}/7",
                     runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(),
                     previous.closedKlines());
             }
             // 保留已收盘K线缓存，恢复期间继续从当前游标补偿。
+            return;
+        }
+        if ("KLINE_READY".equals(event.type())) {
+            EntryMaSnapshot previous = runtime.entryMa.snapshot();
+            runtime.entryMa.setHistoryReady(true);
+            EntryMaSnapshot current = runtime.entryMa.snapshot();
+            if (!previous.ready() && current.ready()) {
+                log.info("策略1分钟MA K线恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7",
+                    runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), current.closedKlines());
+            }
             return;
         }
         if (event.kline() != null) {
@@ -5246,22 +5251,22 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
      */
     private static final class EntryMaState {
         private final MarketRuntime market = new MarketRuntime();
-        private boolean ready;
+        private boolean historyReady;
         private Instant eventTime;
         private Instant receivedAt;
 
-        private synchronized void setReady(boolean value) {
-            ready = value;
+        private synchronized void setHistoryReady(boolean value) {
+            historyReady = value;
         }
 
         private synchronized void markUnready() {
-            ready = false;
+            historyReady = false;
             eventTime = null;
             receivedAt = null;
         }
 
         private synchronized void clear() {
-            ready = false;
+            historyReady = false;
             eventTime = null;
             receivedAt = null;
             market.clear();
@@ -5277,6 +5282,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         }
 
         private synchronized EntryMaSnapshot snapshot() {
+            boolean ready = historyReady && eventTime != null && receivedAt != null;
             return new EntryMaSnapshot(ready, market.movingAverage(5), market.movingAverage(7), eventTime, receivedAt,
                 market.closedKlineCloses.size());
         }
