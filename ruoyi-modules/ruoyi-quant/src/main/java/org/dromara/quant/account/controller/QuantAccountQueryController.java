@@ -163,7 +163,9 @@ public class QuantAccountQueryController {
         LambdaQueryWrapper<QuantOrder> orderQuery = new LambdaQueryWrapper<QuantOrder>()
             .and(scope -> credentials.forEach(credential -> scope.or(account -> {
                 account.eq(QuantOrder::getCredentialId, credential.getId());
-                if (credential.getEffectiveTime() != null) account.ge(QuantOrder::getCreatedAt, credential.getEffectiveTime());
+                if (credential.getEffectiveTime() != null) {
+                    account.apply("COALESCE(exchange_created_at, created_at) >= {0}", credential.getEffectiveTime());
+                }
             })))
             .eq(normalizedSymbol != null, QuantOrder::getSymbol, normalizedSymbol)
             .eq(normalizedSide != null, QuantOrder::getSide, normalizedSide)

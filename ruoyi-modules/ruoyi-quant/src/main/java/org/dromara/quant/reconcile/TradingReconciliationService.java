@@ -1206,6 +1206,9 @@ public class TradingReconciliationService {
                 entity.setIdempotencyKey("EXCHANGE_ORDER:" + s.symbol() + ":" + s.orderId());
             }
             entity.setClientOrderId(clientOrderId);
+            if (s.createTime() != null) {
+                entity.setExchangeCreatedAt(LocalDateTime.ofInstant(s.createTime(), ZoneOffset.UTC));
+            }
             entity.setSymbol(s.symbol());
             entity.setExchangeOrderId(s.orderId());
             entity.setSide(s.side());
