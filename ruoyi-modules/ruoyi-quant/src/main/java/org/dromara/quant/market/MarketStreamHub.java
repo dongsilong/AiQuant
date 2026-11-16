@@ -241,6 +241,12 @@ public class MarketStreamHub {
                 if (filter.test(statusEvent)) {
                     consumer.accept(new Incoming(generation, statusEvent));
                 }
+                if (!terminalFailure && !recovering && lastKlineOpen != null && !lastKlineClosed) {
+                    ExchangeGateway.MarketEvent klineReadyEvent = status("KLINE_READY");
+                    if (filter.test(klineReadyEvent)) {
+                        consumer.accept(new Incoming(generation, klineReadyEvent));
+                    }
+                }
             }
         }
 
@@ -391,6 +397,9 @@ public class MarketStreamHub {
                         long recoveryBufferWaitNanos = Math.max(0L, System.nanoTime() - buffered.dequeuedAtNanos());
                         onEvent(buffered.generation(), buffered.event(), buffered.enqueuedAtNanos(), buffered.dequeuedAtNanos(),
                             recoveryBufferWaitNanos, replayExchangeOffsetMillis);
+                    }
+                    if (!closed && attempt == generation && !recovering && lastKlineOpen != null && !lastKlineClosed) {
+                        publish(status("KLINE_READY"));
                     }
                 }
                 log.info("行情历史恢复完成，等待当前周期K线有效和新鲜MARK: symbol={}, interval={}, lastOpen={}", key.symbol(), key.interval(), lastKlineOpen);
