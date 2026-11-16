@@ -1,5 +1,7 @@
 package org.dromara.quant.credential.domain;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
@@ -57,7 +59,8 @@ public class QuantCredential extends BaseEntity {
      * 运行模式：PAPER、TESTNET 或 LIVE。
      */
     private String runMode;
-    /** 记录查询有效时间（UTC）。 */
+    /** 记录查询有效时间（UTC）；更新时允许显式写入 NULL 以清除限制。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private java.time.LocalDateTime effectiveTime;
     /**
      * 当前状态。
