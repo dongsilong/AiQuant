@@ -168,14 +168,14 @@ public class QuantAccountQueryController {
                         scope.nested(account -> {
                             account.eq(QuantOrder::getCredentialId, credential.getId());
                             if (credential.getEffectiveTime() != null) {
-                                account.apply("COALESCE(exchange_created_at, created_at) >= {0}", credential.getEffectiveTime());
+                                account.apply("(exchange_created_at >= {0} OR (exchange_created_at IS NULL AND idempotency_key NOT LIKE 'EXCHANGE_ORDER:%' AND created_at >= {0}))", credential.getEffectiveTime());
                             }
                         });
                     } else {
                         scope.or(account -> {
                             account.eq(QuantOrder::getCredentialId, credential.getId());
                             if (credential.getEffectiveTime() != null) {
-                                account.apply("COALESCE(exchange_created_at, created_at) >= {0}", credential.getEffectiveTime());
+                                account.apply("(exchange_created_at >= {0} OR (exchange_created_at IS NULL AND idempotency_key NOT LIKE 'EXCHANGE_ORDER:%' AND created_at >= {0}))", credential.getEffectiveTime());
                             }
                         });
                     }
