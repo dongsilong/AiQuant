@@ -13,6 +13,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BinanceGatewayAdapterTest {
     @Test
+    void preservesMissingExchangeOrderCreateTimeAsNull() {
+        assertNull(BinanceGatewayAdapter.instantNullable(null));
+        Instant createTime = Instant.parse("2026-10-07T15:51:00Z");
+        assertEquals(createTime, BinanceGatewayAdapter.instantNullable(createTime.toEpochMilli()));
+    }
+
+    @Test
     void usesCachedClockOffsetDuringTheThirtySecondToFiveMinuteRefreshWindow() {
         long now = 1_800_000_000_000L;
 
