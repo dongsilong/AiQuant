@@ -50,6 +50,35 @@ class StrategyRuntimeLeaseServiceTest {
     }
 
     @Test
+    void acquireOrRenewSnapshotReturnsVerifiedEpochWithConservativeExpiry() {
+        StrategyRuntimeLeaseMapper mapper = mock(StrategyRuntimeLeaseMapper.class);
+        var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
+        when(mapper.acquireOrRenew(eq(1L), eq(2L), eq("BTCUSDT"), anyString(), anyInt())).thenReturn(1);
+        when(mapper.currentEpoch(eq(1L), eq(2L), eq("BTCUSDT"), anyString())).thenReturn(9L);
+
+        long before = System.nanoTime();
+        var snapshot = service.acquireOrRenewSnapshot(1L, 2L, "btcusdt");
+        long remainingNanos = snapshot.validUntilNanos() - System.nanoTime();
+
+        assertNotNull(snapshot);
+        assertEquals(9L, snapshot.epoch());
+        assertTrue(snapshot.validUntilNanos() > before);
+        assertTrue(remainingNanos > 0L);
+        assertTrue(remainingNanos <= java.util.concurrent.TimeUnit.SECONDS.toNanos(28));
+        verify(mapper).currentEpoch(eq(1L), eq(2L), eq("BTCUSDT"), anyString());
+    }
+
+    @Test
+    void acquireOrRenewSnapshotFailsClosedWhenEpochCannotBeVerified() {
+        StrategyRuntimeLeaseMapper mapper = mock(StrategyRuntimeLeaseMapper.class);
+        var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
+        when(mapper.acquireOrRenew(eq(1L), eq(2L), eq("BTCUSDT"), anyString(), anyInt())).thenReturn(1);
+        when(mapper.currentEpoch(eq(1L), eq(2L), eq("BTCUSDT"), anyString())).thenReturn(null);
+
+        assertNull(service.acquireOrRenewSnapshot(1L, 2L, "BTCUSDT"));
+    }
+
+    @Test
     void finalOwnerCheckUsesSameTokenAndRejectsExpiredOrStolenLease() {
         var mapper = mock(StrategyRuntimeLeaseMapper.class);
         var service = new StrategyRuntimeLeaseService(mapper, new QuantProperties());
