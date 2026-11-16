@@ -82,7 +82,8 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setUserId(LoginHelper.getUserId());
         }
         entity.setSecretKey(bo.getSecretKey());
-        entity.setEffectiveTime(toUtc(bo.getEffectiveTime()));
+        entity.setEffectiveTime(LoginHelper.isSuperAdmin(LoginHelper.getUserId()) && "TESTNET".equalsIgnoreCase(entity.getRunMode())
+            ? toUtc(bo.getEffectiveTime()) : null);
         validateSingleBoundUser(entity.getUserId());
         applyDefaults(entity);
         validateCredential(entity);
@@ -105,7 +106,11 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         // Bound principal is immutable on ordinary edit. Ownership transfer
         // requires an explicitly authorized, audited workflow.
         entity.setUserId(bo.getUserId());
-        entity.setEffectiveTime(toUtc(bo.getEffectiveTime()));
+        // 记录有效时间仅允许超级用户在 TESTNET 模式下设置；普通用户不能通过直接请求修改该字段。
+        entity.setEffectiveTime(LoginHelper.isSuperAdmin(LoginHelper.getUserId())
+            ? ("TESTNET".equalsIgnoreCase(bo.getRunMode() == null ? current.getRunMode() : bo.getRunMode())
+                ? toUtc(bo.getEffectiveTime()) : null)
+            : current.getEffectiveTime());
         entity.setStatus(current.getStatus());
         if (StringUtils.isBlank(entity.getRunMode())) {
             entity.setRunMode(current.getRunMode());
