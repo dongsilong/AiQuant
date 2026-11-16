@@ -1087,7 +1087,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             runtime.positionReconciliationBlockReason = "RECONCILIATION_ERROR:" + ex.getClass().getSimpleName();
             boolean stateConflict = containsMessage(ex, "策略持仓状态乐观锁冲突");
             log.warn("策略持仓事实核实失败 instanceId={} credentialId={} symbol={} runMode={} elapsedMs={} error={}", runtime.instance.getId(), runtime.credential.getId(),
-                runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
+                runtime.symbol.getSymbol(), runtime.credential.getRunMode(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), ex.getMessage());
             if (stateConflict) {
                 QuantStrategyPositionState latestState = stateService.findByInstance(runtime.instance.getId());
                 synchronized (runtime) {
@@ -1136,7 +1136,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     }
                     log.debug("持仓核实完成 instanceId={} credentialId={} symbol={} runMode={} position={} elapsedMs={} entryReadiness={}",
                         runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(),
-                        runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
+                        runtime.position == null ? "FLAT" : runtime.position.getQuantity(), java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt), entryReadiness);
                 }
             }
             long totalElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - reconcileStartedAt);
