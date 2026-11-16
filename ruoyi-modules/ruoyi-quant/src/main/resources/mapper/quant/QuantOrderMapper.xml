@@ -35,6 +35,7 @@ SET exchange_order_id=COALESCE(exchange_order_id, #{fact.exchangeOrderId}),
         WHEN reduce_only_source='LEGACY_UNKNOWN' AND #{fact.reduceOnlySource}='UNAVAILABLE' THEN 'UNAVAILABLE'
         ELSE COALESCE(reduce_only_source, #{fact.reduceOnlySource}) END,
     close_position=COALESCE(#{fact.closePosition}, close_position),
+    exchange_created_at=COALESCE(exchange_created_at, #{fact.exchangeCreatedAt}),
     updated_at=#{fact.updatedAt}
 WHERE id=#{fact.id} AND credential_id=#{fact.credentialId}
   AND (exchange_order_id IS NULL OR #{fact.exchangeOrderId} IS NULL
