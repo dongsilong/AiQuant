@@ -167,6 +167,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return value == null ? Instant.EPOCH : Instant.ofEpochMilli(value);
     }
 
+    static Instant instantNullable(Long value) {
+        return value == null ? null : Instant.ofEpochMilli(value);
+    }
+
     /**
      * 读取必需数据，不满足条件时抛出异常。
      */
@@ -1078,7 +1082,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             }
             return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
                 item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
-                "getAvgPrice")), string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instant(number(item, "getTime")),
+                "getAvgPrice")), string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(number(item, "getTime")),
                 nullableBoolean(item, "getClosePosition"))).toList();
         });
     }
@@ -1130,7 +1134,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         return new OrderSnapshot(actualSymbol, actualOrderId, actualClientOrderId, string(data, "getSide"), type, status, decimal(string(data, "getPrice")), decimal(string(data,
             "getOrigQty")), decimal(string(data, "getExecutedQty")), instant(number(data, "getUpdateTime")), decimal(string(data, "getAvgPrice")), string(data, "getPositionSide"),
-            nullableBoolean(data, "getReduceOnly"), instant(number(data, "getTime")), nullableBoolean(data, "getClosePosition"));
+            nullableBoolean(data, "getReduceOnly"), instantNullable(number(data, "getTime")), nullableBoolean(data, "getClosePosition"));
     }
 
     /**
@@ -1263,7 +1267,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         return data.stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(), item.getStatus(),
             decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item, "getAvgPrice")),
-            string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instant(number(item, "getTime")),
+            string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(number(item, "getTime")),
             nullableBoolean(item, "getClosePosition"))).toList();
     }
 
