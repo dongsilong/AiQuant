@@ -241,7 +241,7 @@ public class MarketStreamHub {
                 if (filter.test(statusEvent)) {
                     consumer.accept(new Incoming(generation, statusEvent));
                 }
-                if (!terminalFailure && !recovering && lastKlineOpen != null && !lastKlineClosed) {
+                if (!terminalFailure && !recovering && lastKlineOpen != null) {
                     ExchangeGateway.MarketEvent klineReadyEvent = status("KLINE_READY");
                     if (filter.test(klineReadyEvent)) {
                         consumer.accept(new Incoming(generation, klineReadyEvent));
@@ -398,7 +398,7 @@ public class MarketStreamHub {
                         onEvent(buffered.generation(), buffered.event(), buffered.enqueuedAtNanos(), buffered.dequeuedAtNanos(),
                             recoveryBufferWaitNanos, replayExchangeOffsetMillis);
                     }
-                    if (!closed && attempt == generation && !recovering && lastKlineOpen != null && !lastKlineClosed) {
+                    if (!closed && attempt == generation && !recovering && lastKlineOpen != null) {
                         publish(status("KLINE_READY"));
                     }
                 }
