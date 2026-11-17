@@ -154,6 +154,68 @@ class MarketStreamHubIsolationTest {
     }
 
     @Test
+    void sameSymbolDifferentIntervalsShareConcurrentAggregateTradeRecoveryPage() throws Exception {
+        ExchangeGateway gateway = mock(ExchangeGateway.class);
+        when(gateway.queryKlines(any(), any(), anyInt())).thenAnswer(i -> history(i.getArgument(1)));
+        when(gateway.queryKlinesFrom(any(), any(), any(), anyInt())).thenAnswer(i -> history(i.getArgument(1)));
+        var scheduler = Executors.newScheduledThreadPool(2);
+        var callbacks = new java.util.concurrent.ConcurrentHashMap<String, Consumer<ExchangeGateway.MarketEvent>>();
+        when(gateway.subscribeMarket(any(), any(), any())).thenAnswer(invocation -> {
+            callbacks.put(invocation.getArgument(1), invocation.getArgument(2));
+            return mock(ExchangeGateway.MarketStreamSession.class);
+        });
+        var aggregateQueryEntered = new CountDownLatch(1);
+        var releaseAggregateQuery = new CountDownLatch(1);
+        when(gateway.queryAggregateTradesFrom(any(), any(), anyLong(), anyInt())).thenAnswer(invocation -> {
+            aggregateQueryEntered.countDown();
+            assertDoesNotThrow(() -> assertTrue(releaseAggregateQuery.await(5, TimeUnit.SECONDS)));
+            return java.util.List.of(
+                new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", invocation.getArgument(1), BigDecimal.ONE, null, Instant.now(), 11L, Instant.now(), true),
+                new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", invocation.getArgument(1), BigDecimal.ONE, null, Instant.now(), 12L, Instant.now(), true));
+        });
+        var hub = new MarketStreamHub(gateway, scheduler, new QuantProperties());
+        var recoveryDone = new CountDownLatch(2);
+        try {
+            hub.subscribe("LIVE", "BTCUSDT", "1m", event -> {
+                if (event.replay() && "TRADE".equals(event.type()) && event.sequenceId() == 12L) {
+                    recoveryDone.countDown();
+                }
+            }, ignored -> { });
+            hub.subscribe("LIVE", "BTCUSDT", "5m", event -> {
+                if (event.replay() && "TRADE".equals(event.type()) && event.sequenceId() == 12L) {
+                    recoveryDone.countDown();
+                }
+            }, ignored -> { });
+            long readyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while ((callbacks.size() < 2) && System.nanoTime() < readyDeadline) {
+                Thread.sleep(5L);
+            }
+            assertEquals(2, callbacks.size());
+            for (String interval : java.util.List.of("1m", "5m")) {
+                Consumer<ExchangeGateway.MarketEvent> callback = callbacks.get(interval);
+                callback.accept(new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", interval, BigDecimal.ONE, null, Instant.now(), 10L, Instant.now(), false));
+                callback.accept(new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", interval, BigDecimal.ONE, null, Instant.now(), 12L, Instant.now(), false));
+            }
+            assertTrue(aggregateQueryEntered.await(3, TimeUnit.SECONDS));
+            long shareDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (System.nanoTime() < shareDeadline) {
+                var reads = (Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(hub, "aggregateTradeReads");
+                if (reads != null && reads.size() == 1) {
+                    Thread.sleep(100L);
+                    break;
+                }
+            }
+            releaseAggregateQuery.countDown();
+            assertTrue(recoveryDone.await(5, TimeUnit.SECONDS), "both intervals should replay the shared aggregate-trade page");
+            verify(gateway, times(1)).queryAggregateTradesFrom(any(), any(), anyLong(), anyInt());
+        } finally {
+            releaseAggregateQuery.countDown();
+            hub.close();
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
     void consumerFailureDoesNotDisconnectOtherConsumers() throws Exception {
         ExchangeGateway gateway = mock(ExchangeGateway.class);
         when(gateway.queryKlines(any(), any(), anyInt())).thenAnswer(i -> history(i.getArgument(1)));
