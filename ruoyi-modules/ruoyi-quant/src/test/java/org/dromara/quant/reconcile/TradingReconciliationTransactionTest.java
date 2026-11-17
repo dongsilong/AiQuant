@@ -97,6 +97,29 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void olderFullSnapshotIsClassifiedAsSupersededWhenNewerSymbolSnapshotWonFence() {
+        TradingReconciliationService reconciliation = service();
+        try {
+            var capacity = mock(org.dromara.quant.risk.mapper.OpenCapacityMapper.class);
+            var fence = mock(org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper.class);
+            when(capacity.lockCredential(1L)).thenReturn(List.of(1L));
+            var fetchStartedAt = java.time.LocalDateTime.now().minusSeconds(1);
+            when(fence.lockAndRead(1L)).thenReturn(fetchStartedAt.plusNanos(1));
+            org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "openCapacityMapper", capacity);
+            org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "snapshotFence", fence);
+
+            assertThrows(TradingReconciliationService.SnapshotSupersededException.class, () ->
+                org.springframework.test.util.ReflectionTestUtils.invokeMethod(reconciliation, "commitPositionSnapshot",
+                    credential(), new ExchangeGateway.AccountSnapshot(BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ZERO),
+                    List.of(), fetchStartedAt, 0L, 0L, "test"));
+
+            verifyNoInteractions(accounts);
+        } finally {
+            reconciliation.shutdownPositionSnapshotRetries();
+        }
+    }
+
+    @Test
     void deferredPositionSnapshotSchedulesOneCoalescedReadOnlyRetry() {
         TradingReconciliationService reconciliation = service();
         try {
