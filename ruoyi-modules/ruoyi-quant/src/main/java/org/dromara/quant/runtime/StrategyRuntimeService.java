@@ -5259,7 +5259,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             state.getHighestStep(),                    // 14 highestStep
             state.getConfirmedProtectionStep(),        // 15 confirmedProtectionStep
             state.getFrozenLeverage(),                 // 16 frozenLeverage
-            null,        // 17 ladderMaximumReturnRate ← 确认 getter 名
+            ladderMaximumReturnRate, // 17 ladderMaximumReturnRate
             state.getUpdatedAt()                       // 18 updatedAt
         ));
 //        positionPerformanceHub.publish(new StrategyPositionPerformanceEvent(runtime.credential.getId(), runtime.instance.getId(), state.getPositionId(), state.getPositionCycleKey(),
