@@ -24,6 +24,21 @@ class TradingReconciliationSchedulerTest {
     }
 
     @Test
+    void retriesTransientNetworkFailuresButNotInterruptedThreads() {
+        assertEquals(true, TradingReconciliationScheduler.isTransientNetworkFailure(
+            new IllegalStateException("timeout", new java.io.InterruptedIOException("timeout"))));
+        assertEquals(false, TradingReconciliationScheduler.isTransientNetworkFailure(
+            new IllegalStateException("invalid response")));
+        Thread.currentThread().interrupt();
+        try {
+            assertEquals(false, TradingReconciliationScheduler.isTransientNetworkFailure(
+                new java.io.InterruptedIOException("timeout")));
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
     void deferredRetriesUseTheServerDelayAndBoundedExponentialBackoff() {
         assertEquals(2_000L, TradingReconciliationScheduler.retryDelayMillis(2_000L, 1));
         assertEquals(4_000L, TradingReconciliationScheduler.retryDelayMillis(0L, 3));
