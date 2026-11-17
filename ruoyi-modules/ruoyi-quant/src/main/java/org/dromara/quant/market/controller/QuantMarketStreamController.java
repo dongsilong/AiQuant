@@ -102,12 +102,21 @@ public class QuantMarketStreamController {
         delivery.start();
         try {
             subscription.set(hub.subscribe(runMode, symbol, interval, event -> {
-                replayBuffer.publish(event, item -> delivery.offer("quant.market", item));
+                replayBuffer.publish(event, item -> {
+                    String coalesceKey = null;
+                    if ("TRADE".equals(item.type())) {
+                        coalesceKey = item.symbol() + ":" + item.interval() + ":TRADE";
+                    } else if ("KLINE".equals(item.type()) && !item.replay() && item.kline() != null) {
+                        coalesceKey = item.symbol() + ":" + item.interval() + ":KLINE:" + item.kline().openTime();
+                    }
+                    if (coalesceKey == null) delivery.offer("quant.market", item);
+                    else delivery.offerLatest(coalesceKey, "quant.market", item);
+                });
             }, ignored -> { }));
         } catch (RuntimeException ex) {
             cleanup.run();
             try {
-                emitter.send(SseEmitter.event().name("quant.market").data(java.util.Map.of("type", "ERROR", "message", "行情订阅失败")));
+                delivery.offer("quant.market", java.util.Map.of("type", "ERROR", "message", "行情订阅失败"));
             } catch (IOException ignored) {
                 // SSE 已无法继续发送。
             }
@@ -181,7 +190,7 @@ public class QuantMarketStreamController {
                 addSubscription(subscriptions, closed, subscription);
             } catch (RuntimeException ex) {
                 try {
-                    emitter.send(SseEmitter.event().name("quant.market").data(java.util.Map.of("type", "ERROR", "symbol", symbol, "interval", interval, "message", "行情订阅失败")));
+                    delivery.offer("quant.market", java.util.Map.of("type", "ERROR", "symbol", symbol, "interval", interval, "message", "行情订阅失败"));
                 } catch (IOException | RuntimeException sendError) {
                     cleanup.run();
                 }
