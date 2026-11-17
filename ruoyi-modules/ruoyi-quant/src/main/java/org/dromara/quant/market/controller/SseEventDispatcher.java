@@ -5,23 +5,34 @@ import org.springframework.web.context.request.async.AsyncRequestNotUsableExcept
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** 将异步响应写入移出事件生产线程；慢客户端满队列后断开并通过重连恢复状态。 */
+/** 将异步响应写入移出事件生产线程；可靠事件保序，状态事件按键合并，慢客户端满队列后断开。 */
 @Slf4j
 final class SseEventDispatcher implements AutoCloseable {
-    private record Pending(String eventName, Object data, String coalesceKey, long queuedAtNanos) { }
+    private static final int RELIABLE_QUEUE_CAPACITY = 256;
+    private static final int LATEST_STATE_CAPACITY = 256;
+
+    private record Pending(String eventName, Object data, String coalesceKey, String comment, long queuedAtNanos) { }
 
     private final SseEmitter emitter;
     private final SseResponseReadyGate responseReady;
     private final Runnable failure;
-    private final ArrayBlockingQueue<Pending> queue = new ArrayBlockingQueue<>(256);
+    private final Object queueLock = new Object();
+    private final ArrayBlockingQueue<Pending> reliableQueue = new ArrayBlockingQueue<>(RELIABLE_QUEUE_CAPACITY);
+    private final LinkedHashMap<String, Pending> latestStateQueue = new LinkedHashMap<>();
+    private final Semaphore available = new Semaphore(0);
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean failureNotified = new AtomicBoolean();
     private final AtomicLong nextDelayWarningAt = new AtomicLong();
+    private final AtomicLong coalescedCount = new AtomicLong();
     private Thread worker;
 
     SseEventDispatcher(SseEmitter emitter, SseResponseReadyGate responseReady, Runnable failure) {
@@ -39,62 +50,130 @@ final class SseEventDispatcher implements AutoCloseable {
         long startedAt = System.nanoTime();
         boolean accepted;
         int queueSize;
-        synchronized (this) {
-            accepted = enqueue(new Pending(eventName, data, null, System.nanoTime()));
-            queueSize = queue.size();
+        synchronized (queueLock) {
+            accepted = !closed.get() && reliableQueue.offer(new Pending(eventName, data, null, null, System.nanoTime()));
+            if (accepted) available.release();
+            queueSize = queueSize();
         }
         if (!accepted && !closed.get()) notifyFailureAsync(eventName, queueSize);
-        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
-        if (elapsedMs >= 100) {
-            log.warn("SSE 事件入队耗时异常 eventName={} elapsedMs={} queueSize={} accepted={} thread={}",
-                eventName, elapsedMs, queueSize, accepted, Thread.currentThread().getName());
-        }
+        logEnqueueDelay("SSE 事件", eventName, startedAt, queueSize, accepted);
         return accepted;
     }
 
-    /** Replace an unsent event with the newest state for the same key. */
+    /** 保留同一业务键尚未发送的最新状态；不同业务键相互独立。 */
     boolean offerLatest(String coalesceKey, String eventName, Object data) {
         long startedAt = System.nanoTime();
         boolean accepted;
         int queueSize;
-        synchronized (this) {
+        synchronized (queueLock) {
             if (closed.get()) return false;
-            queue.removeIf(pending -> coalesceKey.equals(pending.coalesceKey()));
-            accepted = enqueue(new Pending(eventName, data, coalesceKey, System.nanoTime()));
-            queueSize = queue.size();
+            Pending replaced = latestStateQueue.remove(coalesceKey);
+            if (replaced == null && latestStateQueue.size() >= LATEST_STATE_CAPACITY) {
+                accepted = false;
+            } else {
+                latestStateQueue.put(coalesceKey, new Pending(eventName, data, coalesceKey, null, System.nanoTime()));
+                accepted = true;
+                if (replaced == null) available.release();
+                else coalescedCount.incrementAndGet();
+            }
+            queueSize = queueSize();
         }
         if (!accepted && !closed.get()) notifyFailureAsync(eventName, queueSize);
-        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
-        if (elapsedMs >= 100) {
-            log.warn("SSE 最新状态入队耗时异常 eventName={} elapsedMs={} queueSize={} accepted={} thread={}",
-                eventName, elapsedMs, queueSize, accepted, Thread.currentThread().getName());
-        }
+        logEnqueueDelay("SSE 最新状态", eventName, startedAt, queueSize, accepted);
         return accepted;
     }
 
-    private boolean enqueue(Pending pending) {
-        return !closed.get() && queue.offer(pending);
+    /** 心跳使用状态队列，同一连接最多保留一条待发送心跳。 */
+    boolean offerComment(String key, String comment) {
+        long startedAt = System.nanoTime();
+        boolean accepted;
+        int queueSize;
+        synchronized (queueLock) {
+            if (closed.get()) return false;
+            Pending replaced = latestStateQueue.remove(key);
+            if (replaced == null && latestStateQueue.size() >= LATEST_STATE_CAPACITY) {
+                accepted = false;
+            } else {
+                latestStateQueue.put(key, new Pending(null, null, key, comment, System.nanoTime()));
+                accepted = true;
+                if (replaced == null) available.release();
+                else coalescedCount.incrementAndGet();
+            }
+            queueSize = queueSize();
+        }
+        if (!accepted && !closed.get()) notifyFailureAsync("comment", queueSize);
+        logEnqueueDelay("SSE 心跳", "comment", startedAt, queueSize, accepted);
+        return accepted;
+    }
+
+    private int queueSize() {
+        return reliableQueue.size() + latestStateQueue.size();
+    }
+
+    private void logEnqueueDelay(String label, String eventName, long startedAt, int queueSize, boolean accepted) {
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        if (elapsedMs >= 100) {
+            log.warn("{}入队耗时异常 eventName={} elapsedMs={} queueSize={} accepted={} thread={}",
+                label, eventName, elapsedMs, queueSize, accepted, Thread.currentThread().getName());
+        }
     }
 
     private void notifyFailureAsync(String eventName, int queueSize) {
         if (failureNotified.compareAndSet(false, true)) {
-            log.warn("SSE发送队列已满，关闭慢客户端连接 eventName={} queueSize={}", eventName, queueSize);
+            log.warn("SSE发送队列已满，关闭慢客户端连接 eventName={} queueSize={} reliableCapacity={} latestStateCapacity={}",
+                eventName, queueSize, RELIABLE_QUEUE_CAPACITY, LATEST_STATE_CAPACITY);
             Thread.ofVirtual().name("quant-sse-failure").start(this::notifyFailure);
+        }
+    }
+
+    private Pending takeNext() throws InterruptedException {
+        available.acquire();
+        synchronized (queueLock) {
+            Pending pending = reliableQueue.poll();
+            if (pending != null) return pending;
+            Iterator<Map.Entry<String, Pending>> iterator = latestStateQueue.entrySet().iterator();
+            if (iterator.hasNext()) {
+                Pending latest = iterator.next().getValue();
+                iterator.remove();
+                return latest;
+            }
+            return null;
         }
     }
 
     private void writeLoop() {
         while (!closed.get()) {
             try {
-                Pending pending = queue.take();
+                Pending pending = takeNext();
+                if (pending == null) continue;
                 long queueDelayMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pending.queuedAtNanos());
+                int reliableSize;
+                int latestSize;
+                long oldestEventAgeMs;
+                synchronized (queueLock) {
+                    reliableSize = reliableQueue.size();
+                    latestSize = latestStateQueue.size();
+                    oldestEventAgeMs = oldestEventAgeMillis();
+                }
                 long now = System.currentTimeMillis();
                 long nextWarningAt = nextDelayWarningAt.get();
                 if (queueDelayMillis >= 1_000 && now >= nextWarningAt && nextDelayWarningAt.compareAndSet(nextWarningAt, now + 10_000L)) {
-                    log.warn("SSE 下游发送排队延迟 eventName={} queueDelayMs={} queueSize={}", pending.eventName(), queueDelayMillis, queue.size());
+                    log.warn("SSE 下游发送排队延迟 eventName={} eventType={} queueDelayMs={} sendDurationMs=pending reliableQueueSize={} latestStateQueueSize={} queueSize={} oldestEventAgeMs={} coalescedCount={}",
+                        pending.eventName(), eventType(pending), queueDelayMillis, reliableSize, latestSize,
+                        reliableSize + latestSize, oldestEventAgeMs, coalescedCount.get());
                 }
                 if (!responseReady.awaitReady()) return;
-                emitter.send(SseEmitter.event().name(pending.eventName()).data(pending.data()));
+                long sendStartedAt = System.nanoTime();
+                if (pending.comment() != null) {
+                    emitter.send(SseEmitter.event().comment(pending.comment()));
+                } else {
+                    emitter.send(SseEmitter.event().name(pending.eventName()).data(pending.data()));
+                }
+                long sendDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - sendStartedAt);
+                if (sendDurationMs >= 500) {
+                    log.warn("SSE 下游写出耗时偏高 eventName={} eventType={} sendDurationMs={} reliableQueueSize={} latestStateQueueSize={}",
+                        pending.eventName(), eventType(pending), sendDurationMs, reliableQueue.size(), latestStateQueue.size());
+                }
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 return;
@@ -102,6 +181,30 @@ final class SseEventDispatcher implements AutoCloseable {
                 notifyFailure();
                 return;
             }
+        }
+    }
+
+    private long oldestEventAgeMillis() {
+        long oldest = Long.MAX_VALUE;
+        Pending reliable = reliableQueue.peek();
+        if (reliable != null) oldest = Math.min(oldest, reliable.queuedAtNanos());
+        for (Pending pending : latestStateQueue.values()) {
+            oldest = Math.min(oldest, pending.queuedAtNanos());
+        }
+        return oldest == Long.MAX_VALUE ? 0L : TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - oldest);
+    }
+
+    private static String eventType(Pending pending) {
+        if (pending.comment() != null) return "COMMENT";
+        if (pending.data() instanceof Map<?, ?> data) {
+            Object type = data.get("type");
+            if (type != null) return String.valueOf(type);
+        }
+        try {
+            Object type = pending.data().getClass().getMethod("type").invoke(pending.data());
+            return String.valueOf(type);
+        } catch (ReflectiveOperationException ignored) {
+            return pending.data() == null ? "UNKNOWN" : pending.data().getClass().getSimpleName();
         }
     }
 
@@ -127,7 +230,11 @@ final class SseEventDispatcher implements AutoCloseable {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
-            queue.clear();
+            synchronized (queueLock) {
+                reliableQueue.clear();
+                latestStateQueue.clear();
+            }
+            available.release();
             Thread current = worker;
             if (current != null) current.interrupt();
         }
