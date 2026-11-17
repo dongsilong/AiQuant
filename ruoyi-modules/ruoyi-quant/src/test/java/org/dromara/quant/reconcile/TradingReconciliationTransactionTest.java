@@ -52,6 +52,8 @@ class TradingReconciliationTransactionTest {
     private final StrategyFillJournalService fillJournal = mock(StrategyFillJournalService.class);
     private final StrategyFillSyncCursorMapper fillCursors = mock(StrategyFillSyncCursorMapper.class);
     private final TradeLedgerRecoveryMapper tradeLedgerRecovery = mock(TradeLedgerRecoveryMapper.class);
+    private final TradeHistoryCollectionLeaseService historyLeases = mock(TradeHistoryCollectionLeaseService.class);
+    private final TradeHistoryCollectionLeaseService.Lease historyLease = mock(TradeHistoryCollectionLeaseService.Lease.class);
     private final StrategyFillSyncCursorService fillCursorService = mock(StrategyFillSyncCursorService.class);
     private final FinancialEventSyncCursorMapper incomeCursors = mock(FinancialEventSyncCursorMapper.class);
     private final FinancialEventSyncCursorService incomeCursorService = mock(FinancialEventSyncCursorService.class);
@@ -62,7 +64,8 @@ class TradingReconciliationTransactionTest {
         var source = new DriverManagerDataSource("jdbc:h2:mem:reconciliation_" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         var reconciliation = new TradingReconciliationService(gateway, accounts, positions, orders, trades, protection, finance, records, errors, state,
             new DataSourceTransactionManager(source), new StrictBinanceTradeCollector(gateway), new StrictBinanceIncomeCollector(gateway), fillJournal,
-            fillCursors, fillCursorService, incomeCursors, incomeCursorService, tradeLedgerRecovery);
+            fillCursors, fillCursorService, incomeCursors, incomeCursorService, tradeLedgerRecovery, historyLeases);
+        when(historyLeases.acquire(anyLong(), anyString())).thenReturn(historyLease);
         org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "tradeHistoryMapper", tradeHistory);
         org.springframework.test.util.ReflectionTestUtils.setField(reconciliation, "tradeCycleProjectionService", tradeCycleProjection);
         return reconciliation;
