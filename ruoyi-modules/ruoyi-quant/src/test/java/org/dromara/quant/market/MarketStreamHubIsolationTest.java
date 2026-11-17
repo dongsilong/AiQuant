@@ -198,13 +198,19 @@ class MarketStreamHubIsolationTest {
             }
             assertTrue(aggregateQueryEntered.await(3, TimeUnit.SECONDS));
             long shareDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            boolean sharedWaiterJoined = false;
             while (System.nanoTime() < shareDeadline) {
                 var reads = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(hub, "aggregateTradeReads");
                 if (reads != null && reads.size() == 1) {
-                    Thread.sleep(100L);
-                    break;
+                    var future = (java.util.concurrent.CompletableFuture<?>) reads.values().iterator().next();
+                    if (future.getNumberOfDependents() > 0) {
+                        sharedWaiterJoined = true;
+                        break;
+                    }
                 }
+                Thread.sleep(5L);
             }
+            org.junit.jupiter.api.Assertions.assertTrue(sharedWaiterJoined, "second interval did not join the in-flight aggregate-trade request");
             releaseAggregateQuery.countDown();
             assertTrue(recoveryDone.await(5, TimeUnit.SECONDS), "both intervals should replay the shared aggregate-trade page");
             verify(gateway, times(1)).queryAggregateTradesFrom(any(), any(), anyLong(), anyInt());
