@@ -24,6 +24,8 @@ class BinanceGatewayAdapterTest {
             .url("https://fapi.binance.com/fapi/v3/positionRisk").build()));
         assertEquals(1, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
             .url("https://fapi.binance.com/fapi/v1/order").build()));
+        assertEquals(20, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/aggTrades?symbol=BTCUSDT").build()));
     }
 
     @Test
