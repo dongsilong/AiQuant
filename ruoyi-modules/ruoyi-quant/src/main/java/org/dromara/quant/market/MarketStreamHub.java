@@ -29,6 +29,7 @@ public class MarketStreamHub {
     private final QuantProperties properties;
     private final java.util.concurrent.Semaphore recoveryReads;
     private final Map<Key, SharedStream> streams = new ConcurrentHashMap<>();
+    private final Map<AggregateTradeKey, CompletableFuture<List<ExchangeGateway.MarketEvent>>> aggregateTradeReads = new ConcurrentHashMap<>();
     private final java.util.concurrent.ExecutorService recoveryExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
     static long reconnectDelayMillis(int reconnectDelaySeconds, long jitterMillis) {
@@ -103,6 +104,33 @@ public class MarketStreamHub {
         recoveryExecutor.shutdownNow();
     }
 
+    private List<ExchangeGateway.MarketEvent> queryAggregateTradesShared(Key key, long fromId, int limit,
+                                                                             java.util.function.Supplier<List<ExchangeGateway.MarketEvent>> query) {
+        AggregateTradeKey queryKey = new AggregateTradeKey(key.runMode(), key.symbol(), fromId, limit);
+        CompletableFuture<List<ExchangeGateway.MarketEvent>> created = new CompletableFuture<>();
+        CompletableFuture<List<ExchangeGateway.MarketEvent>> existing = aggregateTradeReads.putIfAbsent(queryKey, created);
+        if (existing != null) {
+            try {
+                return existing.join();
+            } catch (CompletionException ex) {
+                if (ex.getCause() instanceof RuntimeException runtimeException) {
+                    throw runtimeException;
+                }
+                throw ex;
+            }
+        }
+        try {
+            List<ExchangeGateway.MarketEvent> result = List.copyOf(query.get());
+            created.complete(result);
+            return result;
+        } catch (RuntimeException ex) {
+            created.completeExceptionally(ex);
+            throw ex;
+        } finally {
+            aggregateTradeReads.remove(queryKey, created);
+        }
+    }
+
     private void logStreamSnapshot(String action) {
         Map<String, Long> streamsByMode = streams.keySet().stream()
             .collect(java.util.stream.Collectors.groupingBy(Key::runMode, java.util.stream.Collectors.counting()));
@@ -119,6 +147,9 @@ public class MarketStreamHub {
     }
 
     private record Key(String runMode, String symbol, String interval) {
+    }
+
+    private record AggregateTradeKey(String runMode, String symbol, long fromId, int limit) {
     }
 
     private record Incoming(long generation, ExchangeGateway.MarketEvent event, long enqueuedAtNanos, long dequeuedAtNanos) {
@@ -609,8 +640,12 @@ public class MarketStreamHub {
             }
             for (int page = 0; page < 100 && !closed && attempt == generation; page++) {
                 long fromId = lastTradeId + 1;
-                List<ExchangeGateway.MarketEvent> trades = recoveryRead(attempt, "AGGREGATE_TRADES", () -> "TESTNET".equals(key.runMode()) ? gateway.queryAggregateTradesFrom(key.runMode(),
-                    key.symbol(), key.interval(), fromId, 1000) : gateway.queryAggregateTradesFrom(key.symbol(), key.interval(), fromId, 1000));
+                List<ExchangeGateway.MarketEvent> trades = queryAggregateTradesShared(key, fromId, 1000,
+                    () -> recoveryRead(attempt, "AGGREGATE_TRADES", () -> "TESTNET".equals(key.runMode())
+                        ? gateway.queryAggregateTradesFrom(key.runMode(), key.symbol(), key.interval(), fromId, 1000)
+                        : gateway.queryAggregateTradesFrom(key.symbol(), key.interval(), fromId, 1000)));
+                trades = trades.stream().map(trade -> new ExchangeGateway.MarketEvent(trade.type(), trade.symbol(), key.interval(),
+                    trade.price(), trade.kline(), trade.eventTime(), trade.sequenceId(), trade.receivedAt(), trade.replay())).toList();
                 if (trades == null || trades.isEmpty()) {
                     return;
                 }
