@@ -20,6 +20,7 @@ final class SseEventDispatcher implements AutoCloseable {
     private final Runnable failure;
     private final ArrayBlockingQueue<Pending> queue = new ArrayBlockingQueue<>(256);
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean failureNotified = new AtomicBoolean();
     private final AtomicLong nextDelayWarningAt = new AtomicLong();
     private Thread worker;
 
@@ -42,6 +43,7 @@ final class SseEventDispatcher implements AutoCloseable {
             accepted = enqueue(new Pending(eventName, data, null, System.nanoTime()));
             queueSize = queue.size();
         }
+        if (!accepted && !closed.get()) notifyFailureAsync();
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
         if (elapsedMs >= 100) {
             log.warn("SSE 事件入队耗时异常 eventName={} elapsedMs={} queueSize={} accepted={} thread={}",
@@ -61,6 +63,7 @@ final class SseEventDispatcher implements AutoCloseable {
             accepted = enqueue(new Pending(eventName, data, coalesceKey, System.nanoTime()));
             queueSize = queue.size();
         }
+        if (!accepted && !closed.get()) notifyFailureAsync();
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
         if (elapsedMs >= 100) {
             log.warn("SSE 最新状态入队耗时异常 eventName={} elapsedMs={} queueSize={} accepted={} thread={}",
@@ -70,10 +73,13 @@ final class SseEventDispatcher implements AutoCloseable {
     }
 
     private boolean enqueue(Pending pending) {
-        if (closed.get()) return false;
-        if (queue.offer(pending)) return true;
-        notifyFailure();
-        return false;
+        return !closed.get() && queue.offer(pending);
+    }
+
+    private void notifyFailureAsync() {
+        if (failureNotified.compareAndSet(false, true)) {
+            Thread.ofVirtual().name("quant-sse-failure").start(this::notifyFailure);
+        }
     }
 
     private void writeLoop() {

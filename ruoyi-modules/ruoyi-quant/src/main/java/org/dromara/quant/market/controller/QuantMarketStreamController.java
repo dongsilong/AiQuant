@@ -167,7 +167,16 @@ public class QuantMarketStreamController {
             try {
                 SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
                 AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
-                    if (!closed.get()) replayBuffer.publish(event, item -> delivery.offer("quant.market", item));
+                    if (!closed.get()) replayBuffer.publish(event, item -> {
+                        String coalesceKey = null;
+                        if ("TRADE".equals(item.type())) {
+                            coalesceKey = item.symbol() + ":" + item.interval() + ":TRADE";
+                        } else if ("KLINE".equals(item.type()) && !item.replay() && item.kline() != null) {
+                            coalesceKey = item.symbol() + ":" + item.interval() + ":KLINE:" + item.kline().openTime();
+                        }
+                        if (coalesceKey == null) delivery.offer("quant.market", item);
+                        else delivery.offerLatest(coalesceKey, "quant.market", item);
+                    });
                 }, ignored -> { });
                 addSubscription(subscriptions, closed, subscription);
             } catch (RuntimeException ex) {
