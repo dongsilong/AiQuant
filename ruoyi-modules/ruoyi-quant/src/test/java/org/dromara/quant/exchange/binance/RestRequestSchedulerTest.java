@@ -17,7 +17,7 @@ class RestRequestSchedulerTest {
         assertEquals("MANUAL_BLOCK", failure.reason());
         assertEquals("POSITION_VERIFY", failure.kind());
         assertEquals(0L, failure.retryAfterMillis());
-        assertEquals(4, failure.queueSizes().length);
+        assertEquals(5, failure.queueSizes().length);
     }
 
     @Test
@@ -37,8 +37,9 @@ class RestRequestSchedulerTest {
     @Test
     void queueKindsKeepPositionVerificationAheadOfInformationalReads() {
         assertEquals(0, RestRequestScheduler.Kind.TRADE.ordinal());
-        assertEquals(1, RestRequestScheduler.Kind.POSITION_VERIFY.ordinal());
-        assertEquals(2, RestRequestScheduler.Kind.ACCOUNT.ordinal());
-        assertEquals(3, RestRequestScheduler.Kind.BACKGROUND.ordinal());
+        assertEquals(1, RestRequestScheduler.Kind.PROTECTION_VERIFY.ordinal());
+        assertEquals(2, RestRequestScheduler.Kind.POSITION_VERIFY.ordinal());
+        assertEquals(3, RestRequestScheduler.Kind.ACCOUNT.ordinal());
+        assertEquals(4, RestRequestScheduler.Kind.BACKGROUND.ordinal());
     }
 }
