@@ -246,9 +246,9 @@ public class TradingReconciliationService {
             String symbol = entry.getKey();
             List<ExchangeGateway.OrderSnapshot> orders = entry.getValue();
             try {
-                List<ExchangeGateway.TradeSnapshot> trades = tradeCollector.collectByOrders(
-                    exchangeCredential, symbol, orders, historyStart, historyEnd);
-                log.info("手动订单关联成交获取完成 credentialId={} symbol={} orderCount={} tradeCount={}",
+                List<ExchangeGateway.TradeSnapshot> trades = tradeCollector.collect(
+                    exchangeCredential, symbol, historyStart, historyEnd);
+                log.info("手动账户级成交历史获取完成 credentialId={} symbol={} orderCount={} tradeCount={}",
                     credential.getId(), symbol, orders.size(), trades.size());
 
                 int acceptedTradeCount = transaction.execute(status -> {
