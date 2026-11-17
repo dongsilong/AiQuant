@@ -993,14 +993,23 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         // intentionally filters zero-quantity rows, so an empty list means the requested symbol
         // (or the whole account when symbol == null) was successfully verified flat. Transport,
         // rate-limit, decoding, and API errors must throw instead of being converted to empty.
+        long v3StartedAt = System.nanoTime();
         var response = client.positionInformationV3(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData();
+        long v3ElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - v3StartedAt);
         var positions =
             response.stream().filter(item -> symbol == null || symbol.equalsIgnoreCase(item.getSymbol())).filter(item -> decimal(item.getPositionAmt()).signum() != 0).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
         if (positions.isEmpty()) {
+            log.info("Binance 持仓快照查询完成 symbol={} v3ElapsedMs={} v3RowCount={} openPositionCount=0 v2ElapsedMs=0 v2RowCount=0",
+                symbol, v3ElapsedMs, response.size());
             return List.of();
         }
+        long v2StartedAt = System.nanoTime();
+        var leverageRows = client.positionInformationV2(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData();
+        long v2ElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - v2StartedAt);
+        log.info("Binance 持仓快照查询完成 symbol={} v3ElapsedMs={} v3RowCount={} openPositionCount={} v2ElapsedMs={} v2RowCount={}",
+            symbol, v3ElapsedMs, response.size(), positions.size(), v2ElapsedMs, leverageRows.size());
         var leverageByPosition =
-            client.positionInformationV2(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData().stream().collect(java.util.stream.Collectors.toMap(item -> item.getSymbol() + ":" + item.getPositionSide(), item -> Integer.valueOf(item.getLeverage()), (first, second) -> first));
+            leverageRows.stream().collect(java.util.stream.Collectors.toMap(item -> item.getSymbol() + ":" + item.getPositionSide(), item -> Integer.valueOf(item.getLeverage()), (first, second) -> first));
         return positions.stream().map(item -> new PositionSnapshot(item.getSymbol(), item.getPositionSide(), decimal(item.getPositionAmt()), decimal(item.getEntryPrice()),
             decimal(item.getMarkPrice()), decimal(item.getUnRealizedProfit()), decimal(item.getLiquidationPrice()), decimal(item.getPositionInitialMargin()),
             leverageByPosition.get(item.getSymbol() + ":" + item.getPositionSide()), null, null,
