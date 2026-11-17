@@ -240,6 +240,10 @@ public class ProtectionOrderService {
                 log.warn("策略启动前保护创建票据仍未恢复，保持启动阻断 accountId={} symbol={} clientAlgoId={}", active.credentialId(), active.symbol(), active.clientOrderId());
             }
             return recovered;
+        } catch (ProtectionOrderDefinitelyAbsentException absent) {
+            // An exact absence proof is not a rejection fact. Retire only when this exact cycle
+            // and every exchange open-state query independently prove that no exposure or order remains.
+            return supersedeInactiveProtectionCreate(active, local);
         } catch (ProtectionConfirmationPendingException pending) {
             // An inconclusive historical lookup is not proof of rejection or cancellation.
             // Retire only when both local and exchange state prove this exact cycle is flat and idle.
@@ -1463,7 +1467,7 @@ public class ProtectionOrderService {
                 throw new ProtectionConfirmationPendingException();
             }
             if ("PENDING".equals(local.getStatus()) || "UNKNOWN".equals(local.getStatus()) || "DISPATCHING".equals(local.getStatus())) {
-                throw new IllegalStateException("保护单提交结果未知，保留原意图等待精确查询: " + local.getClientOrderId());
+                throw new ProtectionOrderDefinitelyAbsentException();
             }
             local.setStatus("MISSING");
             mapper.updateById(local);
@@ -1539,9 +1543,7 @@ public class ProtectionOrderService {
             }
             return false;
         }
-        boolean matching =
-            actual.type() != null && sameTarget(local, actual.type(), actual.quantity(), actual.triggerPrice()) && ("SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" :
-                "SELL").equalsIgnoreCase(actual.side()) && ("BOTH".equalsIgnoreCase(actual.positionSide()) || local.getPositionSide().equalsIgnoreCase(actual.positionSide()));
+        boolean matching = matchesProtectionIdentity(local, actual);
         if (!matching) {
             throw new IllegalStateException("Binance 保护单字段与持久化意图不一致");
         }
@@ -2254,6 +2256,15 @@ public class ProtectionOrderService {
 
         protected ProtectionExecutionPendingException(String message) {
             super(message);
+        }
+    }
+
+    /**
+     * 精确查询及完整历史查询已证明该 Client Algo ID 不存在；是否终结意图仍需核验持仓周期与交易所空闲状态。
+     */
+    public static final class ProtectionOrderDefinitelyAbsentException extends IllegalStateException {
+        public ProtectionOrderDefinitelyAbsentException() {
+            super("交易所已明确证明保护单不存在，等待持仓周期与交易所空闲状态核验");
         }
     }
 
