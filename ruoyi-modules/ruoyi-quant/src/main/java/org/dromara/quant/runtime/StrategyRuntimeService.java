@@ -2533,7 +2533,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 marginReserved = true;
             }
             executionResult = executionService.openByRuntime(runtime.credential.getId(), runtime.strategy.getId(), runtime.instance.getId(), runtime.symbol.getSymbol(), side,
-             null, quantity, context.currentPrice(), leverage, effectiveMarginMode(runtime), idempotencyKey, context.eventTime());
+             null, quantity, context.currentPrice(), leverage, effectiveMarginMode(runtime), idempotencyKey, context.eventTime(),
+             runtime.credential.getCredentialRuntimeVersion());
             recordTradeDecision(runtime, context, "OPEN", direction, quantity, margin, idempotencyKey, "ACCEPTED", "EXECUTION_RESULT", signal.get().reason(), executionResult,
              false);
             runtime.entryRetryGate.reset();
@@ -3122,7 +3123,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
         ExecutionResult executionResult = null;
         try {
             executionResult = executionService.closeByRuntime(runtime.credential.getId(), runtime.strategy.getId(), runtime.instance.getId(), runtime.symbol.getSymbol(), side,
-             direction, quantity, idempotencyKey);
+             direction, quantity, idempotencyKey, runtime.credential.getCredentialRuntimeVersion());
             recordTradeDecision(runtime, context, "CLOSE", direction, quantity, null, idempotencyKey, "ACCEPTED", "EXECUTION_RESULT", exit.reason(), executionResult, false);
             state.setPendingOrderId(executionResult.orderId());
             state.setPendingClientOrderId(executionResult.clientOrderId());
