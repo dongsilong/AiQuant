@@ -76,7 +76,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     /**
      * 当前线程正在执行的精确条件单查询诊断上下文，仅统计该查询触发的 REST 请求。
      */
-    private static final ThreadLocal<ProtectionQueryTiming> protectionQueryTiming = new ThreadLocal<>();
+    private static final ThreadLocal<QueryProtectionTiming> protectionQueryTiming = new ThreadLocal<>();
     /**
      * 同一环境只允许一个服务器时间刷新，其他线程复用结果。
      */
@@ -1024,7 +1024,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                     throw ex;
                 }
                 clockRetried = true;
-                ProtectionQueryTiming timing = protectionQueryTiming.get();
+                QueryProtectionTiming timing = protectionQueryTiming.get();
                 if (timing != null) {
                     timing.clockRetryCount++;
                 }
@@ -1043,7 +1043,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 if (attempt >= MAX_NETWORK_RETRIES || !isTransientNetworkFailure(ex)) {
                     throw ex;
                 }
-                ProtectionQueryTiming timing = protectionQueryTiming.get();
+                QueryProtectionTiming timing = protectionQueryTiming.get();
                 if (timing != null) {
                     timing.networkRetryCount++;
                 }
