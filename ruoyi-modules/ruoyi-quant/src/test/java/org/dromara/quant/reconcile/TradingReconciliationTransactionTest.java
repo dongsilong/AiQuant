@@ -530,6 +530,33 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void concurrentAccountSnapshotReadsShareOneInFlightRequest() throws Exception {
+        var reconciliation = service();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        when(gateway.queryAccountForPosition(any())).thenAnswer(invocation -> {
+            entered.countDown();
+            assertTrue(release.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            return new ExchangeGateway.AccountSnapshot(BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ZERO);
+        });
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                reconciliation, "queryAccountSnapshotShared", credential()));
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            var second = executor.submit(() -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                reconciliation, "queryAccountSnapshotShared", credential()));
+            release.countDown();
+            assertEquals(first.get(5, java.util.concurrent.TimeUnit.SECONDS), second.get(5, java.util.concurrent.TimeUnit.SECONDS));
+            verify(gateway, times(1)).queryAccountForPosition(any());
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            reconciliation.shutdownPositionSnapshotRetries();
+        }
+    }
+
+    @Test
     void positionSnapshotAndCapacityReservationUseSameCredentialRowLock() {
         stubCommonFacts();
         var reconciliation = service();
