@@ -196,6 +196,17 @@ class RestRequestSchedulerTest {
     }
 
     @Test
+    void diagnosticsExposeSharedBudgetAndPerEnvironmentQueueState() {
+        var scheduler = new RestRequestScheduler(50);
+
+        String diagnostics = scheduler.diagnostics();
+
+        assertTrue(diagnostics.contains("availableTokens=40.00"));
+        assertTrue(diagnostics.contains("ACCOUNT_LIVE=0(oldestWaitMs=0)"));
+        assertTrue(diagnostics.contains("BACKGROUND_TESTNET=0(oldestWaitMs=0)"));
+    }
+
+    @Test
     void queueKindsKeepPositionVerificationAheadOfInformationalReads() {
         assertEquals(0, RestRequestScheduler.Kind.TRADE.ordinal());
         assertEquals(1, RestRequestScheduler.Kind.PROTECTION_VERIFY.ordinal());
