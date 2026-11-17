@@ -8,7 +8,7 @@ import org.springframework.web.context.request.async.AsyncRequestNotUsableExcept
 
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.BlockingQueue;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -131,10 +131,11 @@ class SseEventDispatcherTest {
             assertTrue(firstWriteStarted.await(1, TimeUnit.SECONDS));
             assertTrue(dispatcher.offerLatest("peak", "quant.account", "old"));
             assertTrue(dispatcher.offerLatest("peak", "quant.account", "latest"));
-            BlockingQueue<?> queue = (BlockingQueue<?>) ReflectionTestUtils.getField(dispatcher, "queue");
-            assertTrue(queue != null && queue.size() == 1);
-            Object pending = queue.peek();
-            assertTrue(pending != null && "latest".equals(ReflectionTestUtils.getField(pending, "data")));
+            Map<?, ?> latestStateQueue = (Map<?, ?>) ReflectionTestUtils.getField(dispatcher, "latestStateQueue");
+            assertTrue(latestStateQueue != null && latestStateQueue.size() == 1);
+            Object pending = latestStateQueue.values().iterator().next();
+            assertTrue("latest".equals(ReflectionTestUtils.getField(pending, "data")));
+            assertTrue(ReflectionTestUtils.getField(dispatcher, "coalescedCount").equals(new java.util.concurrent.atomic.AtomicLong(1)));
         } finally {
             releaseFirstWrite.countDown();
             dispatcher.close();
