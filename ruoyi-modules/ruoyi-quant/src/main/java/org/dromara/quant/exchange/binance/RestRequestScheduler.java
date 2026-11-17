@@ -85,7 +85,7 @@ final class RestRequestScheduler {
                 }
                 refillTokens(now);
                 Ticket selected = selectEligibleTicket(now);
-                if (selected == ticket) {
+                if (selected != null && selected.kind() == kind && selected.environment() == environment && queue.peekFirst() == ticket) {
                     queue.removeFirst();
                     availableTokens -= requestWeight;
                     cursor = selected.rotationIndex() + 1;
