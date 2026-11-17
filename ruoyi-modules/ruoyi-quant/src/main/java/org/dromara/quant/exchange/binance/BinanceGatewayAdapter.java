@@ -83,6 +83,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     private final Map<String, Object> clockOffsetRefreshLocks = new ConcurrentHashMap<>();
     private final Map<String, Long> clockOffsetWarningTimes = new ConcurrentHashMap<>();
     private final Map<String, java.util.concurrent.atomic.AtomicBoolean> clockOffsetRefreshInFlight = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<ProtectionQueryKey, java.util.concurrent.CompletableFuture<ProtectionOrderSnapshot>> protectionQueries =
+        new ConcurrentHashMap<>();
     private final Map<String, Long> clockOffsetRefreshAttempts = new ConcurrentHashMap<>();
     private final java.util.concurrent.ExecutorService clockOffsetRefreshExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
     private final Map<String, TradingRules> tradingRules = new ConcurrentHashMap<>();
@@ -1339,6 +1341,29 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     @Override
     public ProtectionOrderSnapshot queryProtectionOrder(Credential credential, Long orderId, String clientOrderId, String symbol, Long intentCreatedAtEpochMillis) {
         requireCredential(credential);
+        if ((orderId == null || orderId <= 0) && (clientOrderId == null || clientOrderId.isBlank())) {
+            return queryProtectionOrderUnshared(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+        }
+        ProtectionQueryKey key = new ProtectionQueryKey(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+        var created = new java.util.concurrent.CompletableFuture<ProtectionOrderSnapshot>();
+        var existing = protectionQueries.putIfAbsent(key, created);
+        if (existing != null) {
+            return awaitProtectionQuery(existing);
+        }
+        try {
+            ProtectionOrderSnapshot snapshot = queryProtectionOrderUnshared(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+            created.complete(snapshot);
+            return snapshot;
+        } catch (RuntimeException | Error failure) {
+            created.completeExceptionally(failure);
+            throw failure;
+        } finally {
+            protectionQueries.remove(key, created);
+        }
+    }
+
+    private ProtectionOrderSnapshot queryProtectionOrderUnshared(Credential credential, Long orderId, String clientOrderId, String symbol,
+                                                                   Long intentCreatedAtEpochMillis) {
         QueryProtectionTiming timing = new QueryProtectionTiming();
         QueryProtectionTiming previousTiming = protectionQueryTiming.get();
         protectionQueryTiming.set(timing);
@@ -1388,6 +1413,24 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 protectionQueryTiming.set(previousTiming);
             }
         }
+    }
+
+    private ProtectionOrderSnapshot awaitProtectionQuery(java.util.concurrent.CompletableFuture<ProtectionOrderSnapshot> future) {
+        try {
+            return future.join();
+        } catch (java.util.concurrent.CompletionException failure) {
+            if (failure.getCause() instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (failure.getCause() instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
+    private record ProtectionQueryKey(Credential credential, Long orderId, String clientOrderId, String symbol,
+                                      Long intentCreatedAtEpochMillis) {
     }
 
     private ProtectionOrderSnapshot queryProtectionOrderHistoryTimed(Credential credential, Long orderId, String clientOrderId, String symbol,
