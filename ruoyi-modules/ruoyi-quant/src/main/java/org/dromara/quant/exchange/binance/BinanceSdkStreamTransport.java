@@ -148,8 +148,12 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
     }
 
     private static void stop(StreamConnectionInterface connection) {
+        stop(connection, true);
+    }
+
+    private static void stop(StreamConnectionInterface connection, boolean intentional) {
         try {
-            if (connection instanceof MarketStreamConnectionWrapper wrapper) {
+            if (intentional && connection instanceof MarketStreamConnectionWrapper wrapper) {
                 wrapper.markIntentionalClose();
             }
             connection.stop();
@@ -227,7 +231,7 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
     private void fail() {
         if (closed.compareAndSet(false, true)) {
             connected.set(false);
-            stop(connection);
+            stop(connection, false);
             try {
                 disconnected.run();
             } catch (RuntimeException ex) {
