@@ -609,12 +609,22 @@ public class TradingReconciliationService {
                 }
             }
             LocalDateTime fetchStartedAt = LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
+            long snapshotStartedAt = System.nanoTime();
             ExchangeGateway.Credential exchangeCredential = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(),
                 credential.getRunMode());
             // Network I/O stays outside the account write lock and database transaction.
+            long accountQueryStartedAt = System.nanoTime();
             var account = java.util.Objects.requireNonNull(gateway.queryAccountForPosition(exchangeCredential), "Binance account snapshot missing");
+            long accountQueryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - accountQueryStartedAt);
+            long positionQueryStartedAt = System.nanoTime();
             var snapshots = positionSnapshotQuery.query(credentialId, exchangeCredential);
+            long positionQueryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - positionQueryStartedAt);
+            long commitStartedAt = System.nanoTime();
             commitPositionSnapshot(credential, account, snapshots, fetchStartedAt, generation, runtimeGeneration, trigger);
+            long commitMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - commitStartedAt);
+            log.info("账户级持仓快照耗时拆分 credentialId={} runMode={} trigger={} accountQueryMs={} positionQueryMs={} commitMs={} totalMs={}",
+                credentialId, credential.getRunMode(), trigger, accountQueryMs, positionQueryMs, commitMs,
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - snapshotStartedAt));
             synchronized (positionRetryTasks) {
                 positionRetryAttempts.remove(credentialId);
             }
