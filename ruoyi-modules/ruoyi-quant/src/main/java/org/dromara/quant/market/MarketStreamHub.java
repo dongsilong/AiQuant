@@ -120,7 +120,8 @@ public class MarketStreamHub {
             }
         }
         try {
-            List<ExchangeGateway.MarketEvent> result = List.copyOf(query.get());
+            List<ExchangeGateway.MarketEvent> queried = query.get();
+            List<ExchangeGateway.MarketEvent> result = queried == null ? List.of() : List.copyOf(queried);
             created.complete(result);
             return result;
         } catch (RuntimeException ex) {
@@ -644,11 +645,11 @@ public class MarketStreamHub {
                     () -> recoveryRead(attempt, "AGGREGATE_TRADES", () -> "TESTNET".equals(key.runMode())
                         ? gateway.queryAggregateTradesFrom(key.runMode(), key.symbol(), key.interval(), fromId, 1000)
                         : gateway.queryAggregateTradesFrom(key.symbol(), key.interval(), fromId, 1000)));
-                trades = trades.stream().map(trade -> new ExchangeGateway.MarketEvent(trade.type(), trade.symbol(), key.interval(),
-                    trade.price(), trade.kline(), trade.eventTime(), trade.sequenceId(), trade.receivedAt(), trade.replay())).toList();
-                if (trades == null || trades.isEmpty()) {
+                if (trades.isEmpty()) {
                     return;
                 }
+                trades = trades.stream().map(trade -> new ExchangeGateway.MarketEvent(trade.type(), trade.symbol(), key.interval(),
+                    trade.price(), trade.kline(), trade.eventTime(), trade.sequenceId(), trade.receivedAt(), trade.replay())).toList();
                 for (ExchangeGateway.MarketEvent trade : trades) {
                     if (trade.sequenceId() == null || trade.sequenceId() != lastTradeId + 1) {
                         throw new IllegalStateException("REST 成交补偿仍存在序号缺口");
