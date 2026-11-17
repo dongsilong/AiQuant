@@ -540,12 +540,24 @@ class TradingReconciliationTransactionTest {
             return new ExchangeGateway.AccountSnapshot(BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.ZERO);
         });
         var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        var secondThread = new java.util.concurrent.atomic.AtomicReference<Thread>();
+        var secondStarted = new java.util.concurrent.CountDownLatch(1);
         try {
             var first = executor.submit(() -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(
                 reconciliation, "queryAccountSnapshotShared", credential()));
             assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
-            var second = executor.submit(() -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(
-                reconciliation, "queryAccountSnapshotShared", credential()));
+            var second = executor.submit(() -> {
+                secondThread.set(Thread.currentThread());
+                secondStarted.countDown();
+                return org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    reconciliation, "queryAccountSnapshotShared", credential());
+            });
+            assertTrue(secondStarted.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (secondThread.get().getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+                Thread.sleep(1L);
+            }
+            assertEquals(Thread.State.WAITING, secondThread.get().getState(), "second request did not join the in-flight account read");
             release.countDown();
             assertEquals(first.get(5, java.util.concurrent.TimeUnit.SECONDS), second.get(5, java.util.concurrent.TimeUnit.SECONDS));
             verify(gateway, times(1)).queryAccountForPosition(any());
