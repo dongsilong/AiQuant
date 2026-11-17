@@ -185,7 +185,8 @@ final class RestRequestScheduler {
 
     private static int effectivePriority(Ticket ticket, long now) {
         long waited = Math.max(0L, now - ticket.enqueuedAtNanos());
-        int aging = (int) Math.min(priority(ticket.kind()), waited / AGING_INTERVAL_NANOS);
+        int minimumPriority = ticket.kind() == Kind.PROTECTION_VERIFY ? 0 : 1;
+        int aging = (int) Math.min(priority(ticket.kind()) - minimumPriority, waited / AGING_INTERVAL_NANOS);
         return priority(ticket.kind()) - aging;
     }
 
