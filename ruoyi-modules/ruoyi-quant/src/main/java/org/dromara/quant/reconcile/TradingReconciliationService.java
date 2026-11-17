@@ -30,7 +30,6 @@ import org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
 import org.dromara.quant.reconcile.mapper.TradeLedgerRecoveryMapper;
-import org.dromara.quant.reconcile.mapper.TradeHistoryCollectionLeaseMapper;
 import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
