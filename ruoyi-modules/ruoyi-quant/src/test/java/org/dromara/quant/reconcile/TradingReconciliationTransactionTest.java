@@ -141,6 +141,26 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void incomeHistoryBackfillAdvancesAtMostSixDaysPerReconciliation() {
+        stubCommonFacts();
+        TradingReconciliationService reconciliation = service();
+        try {
+            reconciliation.reconcileCredential(credential(), 24);
+
+            var range = org.mockito.ArgumentCaptor.forClass(ExchangeGateway.TimeRange.class);
+            verify(gateway).queryIncomeHistory(any(), isNull(), isNull(), range.capture(), anyLong());
+            assertEquals(java.time.Duration.ofDays(6),
+                java.time.Duration.between(range.getValue().from(), range.getValue().to()));
+
+            var cursor = org.mockito.ArgumentCaptor.forClass(java.time.LocalDateTime.class);
+            verify(incomeCursorService).advance(eq(1L), cursor.capture());
+            assertEquals(java.time.LocalDateTime.ofInstant(range.getValue().to(), java.time.ZoneOffset.UTC), cursor.getValue());
+        } finally {
+            reconciliation.shutdownPositionSnapshotRetries();
+        }
+    }
+
+    @Test
     void completeIncomeHistoryAdvancesItsCursorInsideThePersistenceTransaction() {
         stubCommonFacts();
         doAnswer(invocation -> {
