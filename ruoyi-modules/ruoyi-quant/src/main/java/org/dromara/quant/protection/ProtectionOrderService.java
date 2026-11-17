@@ -605,11 +605,7 @@ public class ProtectionOrderService {
         BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), live);
         BigDecimal stopPrice = normalizeProtectionPrice(credentialId, position, hardStopPrice(position, marginLossRatio), "STOP_MARKET", live);
         QuantProtectionOrder existing = findActive(credentialId, position, "HARD_STOP");
-        ExchangeGateway.ProtectionOrderSnapshot verifiedFirstProfit = existing == null || firstFacts == null
-            ? null : firstFacts.workingOrders().get(existing.getId());
-        boolean working = existing != null && (!live || (verifiedFirstProfit == null
-            ? confirmOnExchange(credentialId, existing, true, position.getQuantity())
-            : confirmVerifiedActiveProtection(credentialId, existing, verifiedFirstProfit)));
+        boolean working = existing != null && (!live || confirmOnExchange(credentialId, existing, true, position.getQuantity()));
         // 固定保护价在该持仓生命周期内冻结，保证金波动不能驱动撤单重挂。
         if (working && existing.getStopPrice() != null) {
             stopPrice = existing.getStopPrice();
@@ -858,7 +854,11 @@ public class ProtectionOrderService {
             // 查询时仍活动的首平突然离开活动集合，可能刚成交；下一轮重核终态，绝不能创建第二份意图。
             throw new ProtectionExecutionPendingException();
         }
-        boolean working = existing != null && (!live || confirmOnExchange(credentialId, existing, true, position.getQuantity()));
+        ExchangeGateway.ProtectionOrderSnapshot verifiedFirstProfit = existing == null || firstFacts == null
+            ? null : firstFacts.workingOrders().get(existing.getId());
+        boolean working = existing != null && (!live || (verifiedFirstProfit == null
+            ? confirmOnExchange(credentialId, existing, true, position.getQuantity())
+            : confirmVerifiedActiveProtection(credentialId, existing, verifiedFirstProfit)));
         if (working && existing.getStopPrice() != null && (signal.orderType() == null || signal.orderType().equalsIgnoreCase(existing.getOrderType()))) {
             if (!"STEP_TP".equals(signal.type())) {
                 triggerPrice = existing.getStopPrice();
@@ -1753,7 +1753,8 @@ public class ProtectionOrderService {
         if (mapper.updateById(local) != 1) {
             throw new IllegalStateException("首止盈保护单已生效但本地账本更新失败，保持调度占用");
         }
-        if (!"PAPER".equalsIgnoreCase(executionApplicationService.requireCredential(credentialId).getRunMode())) {
+        if (!"PAPER".equalsIgnoreCase(executionApplicationService.toCredential(
+            executionApplicationService.requireCredential(credentialId)).runMode())) {
             requireLiveDispatcher().recoverVerifiedProtection(credentialId, local.getSymbol(), local.getClientOrderId(), "PROTECT_CREATE", actual.algoId());
         }
         if (newlyConfirmed) {
