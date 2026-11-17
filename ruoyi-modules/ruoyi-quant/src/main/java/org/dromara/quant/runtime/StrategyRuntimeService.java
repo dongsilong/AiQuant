@@ -758,7 +758,7 @@ public class StrategyRuntimeService {
                         runtime.leaseOperationLock.lock();
                         try {
                             if (!runtime.closed) snapshot = leaseService.acquireOrRenewSnapshot(
-                                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime());
                             synchronized (runtime) {
                                 if (runtime.closed) invalidateLeaseSnapshot(runtime);
                                 else if (snapshot != null) updateLeaseSnapshot(runtime, snapshot);
@@ -2034,7 +2034,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 String errorType = null;
                 try {
                     StrategyRuntimeLeaseService.LeaseSnapshot cleanupLeaseSnapshot = leaseService.acquireOrRenewSnapshot(
-                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol());
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime());
                     if (cleanupLeaseSnapshot == null) {
                         result = "LEASE_NOT_ACQUIRED";
                         return;
@@ -4518,7 +4518,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                     throw work.signalFailure();
                                 }
                                 if (work.dynamic() && !runtime.closed && leaseHeld.get() && leaseService.acquireOrRenew(runtime.instance.getId(), work.credentialId(),
-                                 work.position().getSymbol())) {
+                                 work.position().getSymbol(), runtime.credential.getUpdateTime())) {
                                     // 硬止损价可能已冻结；跨类型覆盖必须由保护服务精确核实实际委托，不能用重算价格提前过滤。
                                     List<ProtectionSignal> exchangeSignals = deduplicateExchangeProtectionSignals(work.signals(), work.position(), work.initialQuantity(),
                                      null, runtime.protectionRule, work.state() != null && work.state().getFrozenLeverage() != null ?
