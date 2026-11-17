@@ -1910,6 +1910,10 @@ public class ProtectionOrderService {
         boolean working = false;
         Map<Long, ExchangeGateway.ProtectionOrderSnapshot> workingOrders = new HashMap<>();
         for (QuantProtectionOrder order : orders) {
+            if ("MISSING".equals(order.getStatus())) {
+                total = total.add(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity());
+                continue;
+            }
             if (recoverNeverSentIntent(credentialId, order)
                 || Set.of("NOT_SENT", "REJECTED").contains(order.getStatus()) && order.getExchangeOrderId() == null
                     && (order.getExecutedQuantity() == null || order.getExecutedQuantity().signum() == 0)) {
