@@ -1830,7 +1830,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 int requestWeight = restRequestWeight(request);
                 long queueStarted = System.nanoTime();
                 try {
-                    restScheduler.acquire(kind, requestWeight);
+                    restScheduler.acquire(request.url().host(), kind, requestWeight);
                 } catch (ExchangeMarketPort.RequestDeferredException deferred) {
                     QueryProtectionTiming protectionTiming = protectionQueryTiming.get();
                     if (protectionTiming != null) {
