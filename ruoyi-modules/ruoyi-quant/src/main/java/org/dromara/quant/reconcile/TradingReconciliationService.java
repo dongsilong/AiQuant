@@ -30,6 +30,7 @@ import org.dromara.quant.reconcile.mapper.LivePositionSnapshotFenceMapper;
 import org.dromara.quant.reconcile.mapper.QuantReconcileRecordMapper;
 import org.dromara.quant.reconcile.mapper.StrategyFillSyncCursorMapper;
 import org.dromara.quant.reconcile.mapper.TradeLedgerRecoveryMapper;
+import org.dromara.quant.reconcile.mapper.TradeHistoryCollectionLeaseMapper;
 import org.dromara.quant.reconcile.mapper.FinancialEventSyncCursorMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.service.StrategyPositionStateService;
@@ -129,6 +130,7 @@ public class TradingReconciliationService {
     private final StrategyFillJournalService fillJournal;
     private final StrategyFillSyncCursorMapper fillSyncCursors;
     private final TradeLedgerRecoveryMapper tradeLedgerRecoveryMapper;
+    private final TradeHistoryCollectionLeaseService tradeHistoryCollectionLeaseService;
     private final StrategyFillSyncCursorService fillSyncCursorService;
     private final FinancialEventSyncCursorMapper incomeSyncCursors;
     private final FinancialEventSyncCursorService incomeSyncCursorService;
@@ -151,7 +153,8 @@ public class TradingReconciliationService {
         , StrategyPositionStateService strategyPositionStateService, PlatformTransactionManager transactionManager, StrictBinanceTradeCollector tradeCollector,
                                         org.dromara.quant.execution.StrictBinanceIncomeCollector incomeCollector, StrategyFillJournalService fillJournal, StrategyFillSyncCursorMapper fillSyncCursors, StrategyFillSyncCursorService fillSyncCursorService,
                                         FinancialEventSyncCursorMapper incomeSyncCursors, FinancialEventSyncCursorService incomeSyncCursorService,
-                                        TradeLedgerRecoveryMapper tradeLedgerRecoveryMapper) {
+                                        TradeLedgerRecoveryMapper tradeLedgerRecoveryMapper,
+                                        TradeHistoryCollectionLeaseService tradeHistoryCollectionLeaseService) {
         this.gateway = gateway;
         this.positionSnapshotQuery = positionSnapshotQuery;
         this.accountSnapshotMapper = accountSnapshotMapper;
@@ -171,6 +174,7 @@ public class TradingReconciliationService {
         this.incomeSyncCursors = incomeSyncCursors;
         this.incomeSyncCursorService = incomeSyncCursorService;
         this.tradeLedgerRecoveryMapper = tradeLedgerRecoveryMapper;
+        this.tradeHistoryCollectionLeaseService = tradeHistoryCollectionLeaseService;
         this.transaction = new TransactionTemplate(transactionManager);
         this.transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -245,7 +249,10 @@ public class TradingReconciliationService {
         for (Map.Entry<String, List<ExchangeGateway.OrderSnapshot>> entry : ordersBySymbol.entrySet()) {
             String symbol = entry.getKey();
             List<ExchangeGateway.OrderSnapshot> orders = entry.getValue();
-            try {
+            try (TradeHistoryCollectionLeaseService.Lease lease = tradeHistoryCollectionLeaseService.acquire(credential.getId(), symbol)) {
+                if (lease == null) {
+                    throw new IllegalStateException("该交易对已有成交历史同步任务正在执行，请稍后重试");
+                }
                 long perOrderQueryEstimate = 0L;
                 for (ExchangeGateway.OrderSnapshot order : orders) {
                     boolean mayHaveFills = order.executedQuantity() != null && order.executedQuantity().signum() > 0
@@ -277,6 +284,7 @@ public class TradingReconciliationService {
                     perOrderQueryEstimate, accountQueryEstimate);
 
                 int acceptedTradeCount = transaction.execute(status -> {
+                    lease.assertOwnedForCommit();
                     syncOrders(credential, orders);
                     int accepted = syncTrades(credential, trades);
                     if (useAccountWideTradeHistory) {
@@ -1045,6 +1053,13 @@ public class TradingReconciliationService {
 
         int fillHistoryBacklogSymbols = 0;
         for (String symbol : symbols) {
+            TradeHistoryCollectionLeaseService.Lease lease = tradeHistoryCollectionLeaseService.acquire(credential.getId(), symbol);
+            if (lease == null) {
+                fillHistoryBacklogSymbols++;
+                log.info("周期成交历史采集跳过：其他节点或手动同步正在处理 credentialId={} symbol={}", credential.getId(), symbol);
+                continue;
+            }
+            try (lease) {
             LocalDateTime storedCursor = fillSyncCursors.selectLastCompleteTo(credential.getId(), symbol);
             Instant from = storedCursor == null ? range.from() : storedCursor.toInstant(ZoneOffset.UTC);
             if (from.isBefore(range.from())) {
@@ -1073,6 +1088,7 @@ public class TradingReconciliationService {
             long collectionStartedAt = System.nanoTime();
 
             transaction.executeWithoutResult(status -> {
+                lease.assertOwnedForCommit();
                 syncOrders(credential, symbolHistory);
                 syncOrders(credential, symbolOpenOrders);
                 syncTrades(credential, trades);
@@ -1091,6 +1107,7 @@ public class TradingReconciliationService {
             log.info("周期交易对订单/成交事实已提交 credentialId={} symbol={} orderCount={} tradeCount={} from={} to={} hasBacklog={} elapsedMs={}",
                 credential.getId(), symbol, symbolHistory.size() + symbolOpenOrders.size(), trades.size(), collectedFrom, collectedTo,
                 hasBacklog, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - collectionStartedAt));
+            }
         }
         return fillHistoryBacklogSymbols;
     }
