@@ -28,7 +28,7 @@ public interface StrategyRuntimeLeaseMapper {
      * Monotonic fencing epoch. This value is never reset on release or takeover.
      * Missing/expired/foreign ownership returns null; callers must fail closed.
      */
-    Long currentEpoch(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken);
+    Long currentEpoch(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken, @Param("credentialUpdateTime") LocalDateTime credentialUpdateTime);
 
     int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken);
 }
