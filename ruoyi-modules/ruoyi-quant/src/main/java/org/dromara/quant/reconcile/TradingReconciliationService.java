@@ -457,7 +457,7 @@ public class TradingReconciliationService {
                     snapshotFence.ensure(credential.getId());
                     LocalDateTime previous = snapshotFence.lockAndRead(credential.getId());
                     if (previous != null && previous.isAfter(fetchStartedAt)) {
-                        throw new IllegalStateException("Binance position snapshot superseded by another node");
+                        throw new SnapshotSupersededException("Binance position snapshot superseded by a newer account or symbol snapshot");
                     }
                 }
                 if (positionFreshness != null && positionFreshness.generation(credential.getId()) != eventGeneration) {
@@ -764,7 +764,9 @@ public class TradingReconciliationService {
                     throw new IllegalStateException("Symbol position snapshot fence advance failed");
                 }
             });
-            runtimeSnapshotGenerations.computeIfAbsent(credential.getId(), ignored -> new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
+            // A symbol snapshot is a partial account fact. Invalidate the cached full snapshot,
+            // but do not advance its generation: the persisted snapshot fence rejects an older
+            // in-flight full snapshot without invalidating unrelated account-wide refreshes.
             runtimePositionSnapshots.remove(credential.getId());
         } finally {
             accountLock.unlock();
