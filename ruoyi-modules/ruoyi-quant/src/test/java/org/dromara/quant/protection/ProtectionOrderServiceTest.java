@@ -797,6 +797,37 @@ class ProtectionOrderServiceTest {
         assertEquals(0, new BigDecimal("0.5").compareTo(service.firstTakeProfitExecutedQuantity(1L, position)));
     }
 
+    @Test
+    void concurrentFirstProfitChecksShareOneExchangeQuery() throws Exception {
+        position.setProtectionCycleKey("cycle");
+        QuantProtectionOrder local = order();
+        local.setExecutedQuantity(BigDecimal.ZERO);
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        var queryStarted = new java.util.concurrent.CountDownLatch(1);
+        var releaseQuery = new java.util.concurrent.CountDownLatch(1);
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenAnswer(call -> {
+            queryStarted.countDown();
+            assertTrue(releaseQuery.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            return snapshot(55L, call.getArgument(2), BigDecimal.ONE, "NEW", BigDecimal.ZERO);
+        });
+
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> service.firstTakeProfitExecutedQuantity(1L, position));
+            assertTrue(queryStarted.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            var second = executor.submit(() -> service.firstTakeProfitExecutedQuantity(1L, position));
+            releaseQuery.countDown();
+
+            assertEquals(0, BigDecimal.ZERO.compareTo(first.get(3, java.util.concurrent.TimeUnit.SECONDS)));
+            assertEquals(0, BigDecimal.ZERO.compareTo(second.get(3, java.util.concurrent.TimeUnit.SECONDS)));
+            verify(mapper, times(1)).selectList(any());
+            verify(gateway, times(1)).queryProtectionOrder(any(), any(), any(), any(), any());
+        } finally {
+            releaseQuery.countDown();
+            executor.shutdownNow();
+        }
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"NOT_SENT", "PREPARED", "REJECTED"})
     void firstProfitNeverSentIntentsContributeZeroWithoutExchangeLookup(String status) {
