@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit;
  */
 final class RestRequestScheduler {
     private final ArrayDeque<Object>[] queues;
-    private final int[] rotation = {0, 1, 0, 2, 0, 0, 3, 0, 4};
+    private final int[] rotation = {0, 1, 0, 2, 0, 0, 1, 3, 0, 4};
     private final long interval;
     private long nextStart;
     private long blockedUntil;
@@ -111,7 +111,7 @@ final class RestRequestScheduler {
     }
 
     /**
-     * REST 请求优先级：交易请求 > 首次止盈保护核验 > 持仓事实核验 > 账户余额校准 > 后台补偿查询。
+     * REST 请求加权份额：交易请求 5/10、保护单核查 2/10、持仓事实核验 1/10、账户查询 1/10、后台补偿 1/10；所有类别共享全局请求间隔。
      */
     enum Kind {TRADE, PROTECTION_VERIFY, POSITION_VERIFY, ACCOUNT, BACKGROUND}
 }
