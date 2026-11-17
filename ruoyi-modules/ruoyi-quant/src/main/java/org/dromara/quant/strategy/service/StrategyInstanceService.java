@@ -8,6 +8,10 @@ import org.dromara.quant.strategy.domain.QuantStrategySymbol;
 import org.dromara.quant.strategy.mapper.QuantStrategyAccountMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyInstanceMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
+import org.dromara.quant.runtime.StrategyRuntimeService;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -30,10 +34,12 @@ public class StrategyInstanceService {
      * 策略实例 Mapper。
      */
     private final QuantStrategyInstanceMapper instanceMapper;
+    private final StrategyRuntimeService runtimeService;
 
     /**
      * 根据绑定关系生成或补齐运行实例。
      */
+    @Transactional(rollbackFor = Exception.class)
     public void provision(Long strategyId) {
         List<QuantStrategyAccount> accounts =
             accountMapper.selectList(new LambdaQueryWrapper<QuantStrategyAccount>().eq(QuantStrategyAccount::getStrategyId, strategyId).eq(QuantStrategyAccount::getStatus, "0"));
@@ -67,8 +73,22 @@ public class StrategyInstanceService {
                 instance.setStatus("STOPPED");
                 instance.setLastError("策略交易对或账户绑定已失效");
                 instanceMapper.updateById(instance);
+                afterCommit(() -> runtimeService.invalidateInstance(instance.getId()));
             }
         }
+    }
+
+    private static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     private String bindingKey(Long strategySymbolId, Long credentialId) {
@@ -78,11 +98,13 @@ public class StrategyInstanceService {
     /**
      * 停止组件或订阅并释放资源。
      */
+    @Transactional(rollbackFor = Exception.class)
     public void stop(Long strategyId) {
         List<QuantStrategyInstance> instances = instanceMapper.selectList(new LambdaQueryWrapper<QuantStrategyInstance>().eq(QuantStrategyInstance::getStrategyId, strategyId));
         for (QuantStrategyInstance instance : instances) {
             instance.setStatus("STOPPED");
             instanceMapper.updateById(instance);
+            afterCommit(() -> runtimeService.invalidateInstance(instance.getId()));
         }
     }
 }
