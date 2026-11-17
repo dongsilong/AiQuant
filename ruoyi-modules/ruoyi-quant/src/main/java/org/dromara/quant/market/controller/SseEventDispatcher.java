@@ -35,6 +35,7 @@ final class SseEventDispatcher implements AutoCloseable {
     private final AtomicLong nextDelayWarningAt = new AtomicLong();
     private final AtomicLong coalescedCount = new AtomicLong();
     private Thread worker;
+    private int consecutiveReliableWrites;
 
     SseEventDispatcher(SseEmitter emitter, SseResponseReadyGate responseReady, Runnable failure) {
         this.emitter = emitter;
@@ -130,13 +131,25 @@ final class SseEventDispatcher implements AutoCloseable {
     private Pending takeNext() throws InterruptedException {
         available.acquire();
         synchronized (queueLock) {
-            Pending pending = reliableQueue.poll();
-            if (pending != null) return pending;
+            boolean preferLatestState = consecutiveReliableWrites >= 8 && !latestStateQueue.isEmpty();
+            if (!preferLatestState) {
+                Pending reliable = reliableQueue.poll();
+                if (reliable != null) {
+                    consecutiveReliableWrites++;
+                    return reliable;
+                }
+            }
             Iterator<Map.Entry<String, Pending>> iterator = latestStateQueue.entrySet().iterator();
             if (iterator.hasNext()) {
                 Pending latest = iterator.next().getValue();
                 iterator.remove();
+                consecutiveReliableWrites = 0;
                 return latest;
+            }
+            Pending reliable = reliableQueue.poll();
+            if (reliable != null) {
+                consecutiveReliableWrites++;
+                return reliable;
             }
             return null;
         }
