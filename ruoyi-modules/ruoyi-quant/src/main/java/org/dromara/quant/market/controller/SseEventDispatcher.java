@@ -34,15 +34,39 @@ final class SseEventDispatcher implements AutoCloseable {
         worker = Thread.ofVirtual().name("quant-sse-writer").start(this::writeLoop);
     }
 
-    synchronized boolean offer(String eventName, Object data) {
-        return enqueue(new Pending(eventName, data, null, System.nanoTime()));
+    boolean offer(String eventName, Object data) {
+        long startedAt = System.nanoTime();
+        boolean accepted;
+        int queueSize;
+        synchronized (this) {
+            accepted = enqueue(new Pending(eventName, data, null, System.nanoTime()));
+            queueSize = queue.size();
+        }
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        if (elapsedMs >= 100) {
+            log.warn("SSE 事件入队耗时异常 eventName={} elapsedMs={} queueSize={} accepted={} thread={}",
+                eventName, elapsedMs, queueSize, accepted, Thread.currentThread().getName());
+        }
+        return accepted;
     }
 
     /** Replace an unsent event with the newest state for the same key. */
-    synchronized boolean offerLatest(String coalesceKey, String eventName, Object data) {
-        if (closed.get()) return false;
-        queue.removeIf(pending -> coalesceKey.equals(pending.coalesceKey()));
-        return enqueue(new Pending(eventName, data, coalesceKey, System.nanoTime()));
+    boolean offerLatest(String coalesceKey, String eventName, Object data) {
+        long startedAt = System.nanoTime();
+        boolean accepted;
+        int queueSize;
+        synchronized (this) {
+            if (closed.get()) return false;
+            queue.removeIf(pending -> coalesceKey.equals(pending.coalesceKey()));
+            accepted = enqueue(new Pending(eventName, data, coalesceKey, System.nanoTime()));
+            queueSize = queue.size();
+        }
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        if (elapsedMs >= 100) {
+            log.warn("SSE 最新状态入队耗时异常 eventName={} elapsedMs={} queueSize={} accepted={} thread={}",
+                eventName, elapsedMs, queueSize, accepted, Thread.currentThread().getName());
+        }
+        return accepted;
     }
 
     private boolean enqueue(Pending pending) {
