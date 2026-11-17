@@ -135,7 +135,9 @@ class SseEventDispatcherTest {
             assertTrue(latestStateQueue != null && latestStateQueue.size() == 1);
             Object pending = latestStateQueue.values().iterator().next();
             assertTrue("latest".equals(ReflectionTestUtils.getField(pending, "data")));
-            assertTrue(ReflectionTestUtils.getField(dispatcher, "coalescedCount").equals(new java.util.concurrent.atomic.AtomicLong(1)));
+            java.util.concurrent.atomic.AtomicLong coalescedCount =
+                (java.util.concurrent.atomic.AtomicLong) ReflectionTestUtils.getField(dispatcher, "coalescedCount");
+            assertTrue(coalescedCount != null && coalescedCount.get() == 1);
         } finally {
             releaseFirstWrite.countDown();
             dispatcher.close();
