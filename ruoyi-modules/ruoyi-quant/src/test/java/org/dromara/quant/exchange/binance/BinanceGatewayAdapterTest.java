@@ -13,6 +13,20 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BinanceGatewayAdapterTest {
     @Test
+    void mapsKnownUsdMarginedFuturesEndpointWeights() {
+        assertEquals(1, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/openAlgoOrders?symbol=BTCUSDT").build()));
+        assertEquals(40, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/openAlgoOrders").build()));
+        assertEquals(5, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/allAlgoOrders?symbol=BTCUSDT").build()));
+        assertEquals(5, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v3/positionRisk").build()));
+        assertEquals(1, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/order").build()));
+    }
+
+    @Test
     void preservesMissingExchangeOrderCreateTimeAsNull() {
         assertNull(BinanceGatewayAdapter.instantNullable(null));
         Instant createTime = Instant.parse("2026-10-07T15:51:00Z");
