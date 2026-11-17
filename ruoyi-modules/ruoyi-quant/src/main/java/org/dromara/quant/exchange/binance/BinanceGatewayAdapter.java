@@ -1347,7 +1347,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAlgoOrderResponse data;
             long exactStartedAt = System.nanoTime();
             try {
-                data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                data = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
                     client -> client.queryAlgoOrder(orderId, clientOrderId, RECV_WINDOW_MILLIS).getData());
             } catch (com.binance.connector.client.common.ApiException ex) {
                 timing.exactQueryNanos += System.nanoTime() - exactStartedAt;
@@ -1408,7 +1408,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         long endTime = System.currentTimeMillis() + exchangeOffsetMillis;
         long recentStartTime = endTime - java.time.Duration.ofDays(7).toMillis() + 1;
         if (orderId != null && orderId > 0) {
-            var response = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+            var response = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
                 client -> client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), orderId, recentStartTime, endTime,
                     (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS));
             var data = response == null ? null : response.getData();
@@ -1423,7 +1423,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         boolean absenceCanBeProven = isProtectionHistoryAbsenceProvable(intentStartTime, endTime);
         long startTime = intentStartTime > recentStartTime && intentStartTime <= endTime ? intentStartTime : recentStartTime;
         AlgoHistoryResult result = collectCompleteAlgoHistory(startTime, endTime, (from, to) -> {
-            var response = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+            var response = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
                 client -> client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), null, from, to,
                     (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS));
             return response == null ? null : response.getData();
@@ -1967,7 +1967,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             config.setSignatureConfiguration(signature);
             long offset = clockOffset(config.getUrl());
             ApiClient client = new ApiClient(config, new OffsetAuthenticationFactory(offset));
-            return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT || kind == RestRequestScheduler.Kind.POSITION_VERIFY
+            return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT || kind == RestRequestScheduler.Kind.POSITION_VERIFY || kind == RestRequestScheduler.Kind.PROTECTION_VERIFY
                 ? accountRestClient(client, kind) : restClient(client, kind));
         }
         ApiClient client = new ApiClient(config);
