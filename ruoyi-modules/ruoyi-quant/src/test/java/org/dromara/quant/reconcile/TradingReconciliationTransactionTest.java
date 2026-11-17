@@ -839,6 +839,12 @@ class TradingReconciliationTransactionTest {
         }
         when(gateway.queryOrderHistory(any(), eq("BTCUSDT"), any(), anyLong())).thenReturn(ordersForSymbol);
         when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+        when(fillCursors.selectLastCompleteTo(1L, "BTCUSDT")).thenReturn(null);
+        doAnswer(invocation -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive(),
+                "manual fill cursor must advance in the same transaction as persisted fills");
+            return null;
+        }).when(fillCursorService).advance(eq(1L), eq("BTCUSDT"), any(java.time.LocalDateTime.class));
         when(orders.selectOne(any())).thenReturn(null);
         when(orders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
 
@@ -847,6 +853,29 @@ class TradingReconciliationTransactionTest {
         assertEquals(20, result.orderCount());
         verify(gateway, atLeast(13)).queryTrades(any(), eq("BTCUSDT"), any());
         verify(gateway, never()).queryTradesByOrder(any(), any(), any(), any(), any());
+        verify(fillCursorService).advance(eq(1L), eq("BTCUSDT"), any(java.time.LocalDateTime.class));
+    }
+
+    @Test
+    void manualSyncDoesNotAdvanceFillCursorWhenStoredCursorPredatesCollectedWindow() {
+        initializeManualSyncMapperMetadata();
+        Instant now = Instant.now();
+        List<ExchangeGateway.OrderSnapshot> ordersForSymbol = new java.util.ArrayList<>();
+        for (long orderId = 1; orderId <= 20; orderId++) {
+            ordersForSymbol.add(new ExchangeGateway.OrderSnapshot("BTCUSDT", 6000L + orderId, "client-" + orderId,
+                "BUY", "MARKET", "FILLED", BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE,
+                now, BigDecimal.TEN, "BOTH", false, now.minusSeconds(120)));
+        }
+        when(gateway.queryOrderHistory(any(), eq("BTCUSDT"), any(), anyLong())).thenReturn(ordersForSymbol);
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+        when(fillCursors.selectLastCompleteTo(1L, "BTCUSDT"))
+            .thenReturn(java.time.LocalDateTime.ofInstant(now.minus(java.time.Duration.ofDays(120)), java.time.ZoneOffset.UTC));
+        when(orders.selectOne(any())).thenReturn(null);
+        when(orders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
+
+        service().syncTradingData(credential(), "BTCUSDT");
+
+        verify(fillCursorService, never()).advance(eq(1L), eq("BTCUSDT"), any(java.time.LocalDateTime.class));
     }
 
     @Test
