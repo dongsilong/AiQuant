@@ -43,6 +43,55 @@ class RestRequestSchedulerTest {
     }
 
     @Test
+    void protectionVerificationIsReservedAheadOfTradeRequests() throws InterruptedException {
+        var scheduler = new RestRequestScheduler(200);
+        scheduler.acquire(RestRequestScheduler.Kind.BACKGROUND, 40);
+
+        var sequence = new java.util.concurrent.atomic.AtomicInteger();
+        var tradeOrder = new java.util.concurrent.atomic.AtomicInteger();
+        var protectionOrder = new java.util.concurrent.atomic.AtomicInteger();
+        var requestFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        var tradeDone = new java.util.concurrent.CountDownLatch(1);
+        var protectionDone = new java.util.concurrent.CountDownLatch(1);
+        Thread trade = new Thread(() -> {
+            try {
+                scheduler.acquire(RestRequestScheduler.Kind.TRADE, 1);
+                tradeOrder.set(sequence.incrementAndGet());
+            } catch (Throwable ex) {
+                requestFailure.compareAndSet(null, ex);
+            } finally {
+                tradeDone.countDown();
+            }
+        });
+        Thread protection = new Thread(() -> {
+            try {
+                scheduler.acquire(RestRequestScheduler.Kind.PROTECTION_VERIFY, 1);
+                protectionOrder.set(sequence.incrementAndGet());
+            } catch (Throwable ex) {
+                requestFailure.compareAndSet(null, ex);
+            } finally {
+                protectionDone.countDown();
+            }
+        });
+        try {
+            trade.start();
+            Thread.sleep(50L);
+            protection.start();
+
+            assertTrue(protectionDone.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(tradeDone.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertNull(requestFailure.get());
+            assertTrue(protectionOrder.get() < tradeOrder.get(),
+                "protection verification must receive the next available token before trade traffic");
+        } finally {
+            trade.interrupt();
+            protection.interrupt();
+            trade.join(1_000L);
+            protection.join(1_000L);
+        }
+    }
+
+    @Test
     void agedAccountRequestReservesItsWeightFromBackgroundReads() throws InterruptedException {
         var scheduler = new RestRequestScheduler(50);
         scheduler.acquire(RestRequestScheduler.Kind.TRADE, 40);
