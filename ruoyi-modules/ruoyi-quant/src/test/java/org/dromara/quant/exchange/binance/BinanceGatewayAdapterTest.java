@@ -306,6 +306,17 @@ class BinanceGatewayAdapterTest {
     }
 
     @Test
+    void doesNotRetryWhenCallingThreadIsInterrupted() {
+        Thread.currentThread().interrupt();
+        try {
+            assertFalse(BinanceGatewayAdapter.isTransientNetworkFailure(
+                new java.io.InterruptedIOException("timeout")));
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
     void doesNotRetryCertificateValidationFailure() {
         var attempts = new java.util.concurrent.atomic.AtomicInteger();
         var failure = new IllegalStateException("TLS certificate validation failed",
