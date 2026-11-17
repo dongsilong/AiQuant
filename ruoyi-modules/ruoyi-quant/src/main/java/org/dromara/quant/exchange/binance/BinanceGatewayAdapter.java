@@ -74,6 +74,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     private final ThreadLocal<ClockSyncTiming> clockSyncTiming = new ThreadLocal<>();
     /**
+     * 当前线程正在执行的精确条件单查询诊断上下文，仅统计该查询触发的 REST 请求。
+     */
+    private static final ThreadLocal<ProtectionQueryTiming> protectionQueryTiming = new ThreadLocal<>();
+    /**
      * 同一环境只允许一个服务器时间刷新，其他线程复用结果。
      */
     private final Map<String, Object> clockOffsetRefreshLocks = new ConcurrentHashMap<>();
@@ -1035,6 +1039,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 if (attempt >= MAX_NETWORK_RETRIES || !isTransientNetworkFailure(ex)) {
                     throw ex;
                 }
+                ProtectionQueryTiming timing = protectionQueryTiming.get();
+                if (timing != null) {
+                    timing.networkRetryCount++;
+                }
                 long delay = NETWORK_RETRY_BASE_DELAY_MILLIS * (1L << attempt)
                     + java.util.concurrent.ThreadLocalRandom.current().nextLong(NETWORK_RETRY_JITTER_MILLIS + 1L);
                 log.warn("Binance REST 网络连接异常，准备重试: kind={}, runMode={}, attempt={}/{}, delay={}ms, errorType={}",
@@ -1327,27 +1335,65 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     @Override
     public ProtectionOrderSnapshot queryProtectionOrder(Credential credential, Long orderId, String clientOrderId, String symbol, Long intentCreatedAtEpochMillis) {
         requireCredential(credential);
-        com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAlgoOrderResponse data;
+        QueryProtectionTiming timing = new QueryProtectionTiming();
+        QueryProtectionTiming previousTiming = protectionQueryTiming.get();
+        protectionQueryTiming.set(timing);
+        long totalStartedAt = System.nanoTime();
         try {
-            data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
-                client -> client.queryAlgoOrder(orderId, clientOrderId, RECV_WINDOW_MILLIS).getData());
-        } catch (com.binance.connector.client.common.ApiException ex) {
-            if (!isProtectionOrderAbsent(ex)) {
-                throw ex;
+            com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAlgoOrderResponse data;
+            long exactStartedAt = System.nanoTime();
+            try {
+                data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+                    client -> client.queryAlgoOrder(orderId, clientOrderId, RECV_WINDOW_MILLIS).getData());
+            } catch (com.binance.connector.client.common.ApiException ex) {
+                timing.exactQueryNanos += System.nanoTime() - exactStartedAt;
+                if (!isProtectionOrderAbsent(ex)) {
+                    throw ex;
+                }
+                // Binance 的精确查询可能已不再返回已结束的 Algo 单；历史记录必须按订单身份精确匹配。
+                // 未命中只有在本地创建时间处于 3 天完整保留窗口且分页完整时才确认不存在，否则保持未知。
+                return queryProtectionOrderHistoryTimed(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis, timing);
             }
-            // Binance 的精确查询可能已不返回已结束的 Algo 单；历史记录必须按订单身份精确匹配。
-            // 未命中只有在本地创建时间处于 3 天完整保留窗口且分页完整时才确认不存在，否则保持未知。
-            return queryProtectionOrderHistory(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+            timing.exactQueryNanos += System.nanoTime() - exactStartedAt;
+            if (data == null) {
+                // 成功响应也可能没有 data；先查有限时间范围的算法单历史，再由上层决定是否仍未知。
+                return queryProtectionOrderHistoryTimed(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis, timing);
+            }
+            String status = normalizeAlgoStatus(string(data, "getAlgoStatus"));
+            return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), status, string(data, "getSide"), string(data,
+                "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")), decimal(string(data, "getTriggerPrice")),
+                instant(number(data, "getUpdateTime")), protectionExecutedQuantity(status, decimal(string(data, "getActualQty"))), nullableBoolean(data, "getReduceOnly"), nullableBoolean(data, "getClosePosition"), number(data, "getActualOrderId"),
+                decimal(string(data, "getActualPrice")));
+        } finally {
+            long totalNanos = System.nanoTime() - totalStartedAt;
+            long totalMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(totalNanos);
+            if (totalMs >= 500L) {
+                long schedulerQueueMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.schedulerQueueNanos);
+                long interceptorProceedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.interceptorProceedNanos);
+                long nonInterceptorMs = Math.max(0L, totalMs - schedulerQueueMs - interceptorProceedMs);
+                log.warn("Binance 条件单精确查询耗时偏高 runMode={} symbol={} clientAlgoId={} orderId={} totalMs={} exactQueryMs={} historyQueryMs={} schedulerQueueMs={} interceptorProceedMs={} nonInterceptorMs={} requestCount={} networkRetryCount={} transportFailureCount={} httpStatusCounts={} pathCounts={}",
+                    credential.runMode(), symbol, clientOrderId, orderId, totalMs,
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.exactQueryNanos),
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.historyQueryNanos),
+                    schedulerQueueMs, interceptorProceedMs, nonInterceptorMs, timing.requestCount,
+                    timing.networkRetryCount, timing.transportFailureCount, timing.httpStatusCounts, timing.pathCounts);
+            }
+            if (previousTiming == null) {
+                protectionQueryTiming.remove();
+            } else {
+                protectionQueryTiming.set(previousTiming);
+            }
         }
-        if (data == null) {
-            // 成功响应也可能没有 data；先查有限时间范围的算法单历史，再由上层决定是否仍未知。
+    }
+
+    private ProtectionOrderSnapshot queryProtectionOrderHistoryTimed(Credential credential, Long orderId, String clientOrderId, String symbol,
+                                                                        Long intentCreatedAtEpochMillis, QueryProtectionTiming timing) {
+        long startedAt = System.nanoTime();
+        try {
             return queryProtectionOrderHistory(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+        } finally {
+            timing.historyQueryNanos += System.nanoTime() - startedAt;
         }
-        String status = normalizeAlgoStatus(string(data, "getAlgoStatus"));
-        return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), status, string(data, "getSide"), string(data,
-            "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")), decimal(string(data, "getTriggerPrice")),
-            instant(number(data, "getUpdateTime")), protectionExecutedQuantity(status, decimal(string(data, "getActualQty"))), nullableBoolean(data, "getReduceOnly"), nullableBoolean(data, "getClosePosition"), number(data, "getActualOrderId"),
-            decimal(string(data, "getActualPrice")));
     }
 
     private ProtectionOrderSnapshot queryProtectionOrderHistory(Credential credential, Long orderId, String clientOrderId, String symbol, Long intentCreatedAtEpochMillis) {
@@ -1715,15 +1761,33 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                         java.util.Arrays.toString(deferred.queueSizes()), deferred.waitedMillis(), deferred.retryAfterMillis());
                     throw deferred;
                 }
-                long queueMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted);
+                long queueNanos = System.nanoTime() - queueStarted;
+                long queueMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(queueNanos);
                 ClockSyncTiming syncTiming = clockSyncTiming.get();
+                QueryProtectionTiming protectionTiming = protectionQueryTiming.get();
+                if (protectionTiming != null) {
+                    protectionTiming.schedulerQueueNanos += queueNanos;
+                }
                 log.debug("Binance REST 获准执行 kind={} queueMillis={} clockSync={}", kind, queueMillis, syncTiming != null);
                 // Keep diagnostics out of the measured HTTP round trip.
                 long requestStartedAt = System.currentTimeMillis();
                 if (syncTiming != null) {
                     syncTiming.markRequestStarted(requestStartedAt, queueMillis);
                 }
-                okhttp3.Response response = chain.proceed(chain.request());
+                long proceedStartedAt = System.nanoTime();
+                okhttp3.Response response;
+                try {
+                    response = chain.proceed(chain.request());
+                } catch (java.io.IOException | RuntimeException ex) {
+                    if (protectionTiming != null) {
+                        protectionTiming.recordTransportFailure(chain.request().url().encodedPath(), System.nanoTime() - proceedStartedAt);
+                    }
+                    throw ex;
+                }
+                long proceedNanos = System.nanoTime() - proceedStartedAt;
+                if (protectionTiming != null) {
+                    protectionTiming.recordResponse(chain.request().url().encodedPath(), response.code(), proceedNanos);
+                }
                 if (syncTiming != null) {
                     syncTiming.markResponseReceived(System.currentTimeMillis());
                 }
@@ -2067,6 +2131,33 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     /** 单次服务器时间同步的 HTTP 时序采样。 */
     private record ClockSyncResult(long offsetMillis, long requestStartedAtMillis, long responseReceivedAtMillis,
                                    long schedulerQueueMillis) {
+    }
+
+    /** 当前精确条件单查询的 REST 时序统计；仅在对应调用线程内累积。 */
+    private static final class QueryProtectionTiming {
+        private long exactQueryNanos;
+        private long historyQueryNanos;
+        private long schedulerQueueNanos;
+        private long interceptorProceedNanos;
+        private int requestCount;
+        private int networkRetryCount;
+        private int transportFailureCount;
+        private final Map<Integer, Integer> httpStatusCounts = new LinkedHashMap<>();
+        private final Map<String, Integer> pathCounts = new LinkedHashMap<>();
+
+        private void recordResponse(String path, int status, long elapsedNanos) {
+            requestCount++;
+            interceptorProceedNanos += elapsedNanos;
+            pathCounts.merge(path, 1, Integer::sum);
+            httpStatusCounts.merge(status, 1, Integer::sum);
+        }
+
+        private void recordTransportFailure(String path, long elapsedNanos) {
+            requestCount++;
+            transportFailureCount++;
+            interceptorProceedNanos += elapsedNanos;
+            pathCounts.merge(path, 1, Integer::sum);
+        }
     }
 
     /** 由 REST 拦截器在调度放行及响应到达时填充。 */
