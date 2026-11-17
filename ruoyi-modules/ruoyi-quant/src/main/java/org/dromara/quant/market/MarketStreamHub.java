@@ -109,7 +109,7 @@ public class MarketStreamHub {
         Map<String, Long> streamsByInterval = streams.keySet().stream()
             .collect(java.util.stream.Collectors.groupingBy(Key::interval, java.util.stream.Collectors.counting()));
         int subscriberCount = streams.values().stream().mapToInt(stream -> stream.listeners.size()).sum();
-        log.info("行情订阅规模变化 action={} activeStreamCount={} activeSubscriberCount={} streamsByMode={} streamsByInterval={}",
+        log.info("行情订阅规模变化 action={} managedUpstreamStreamCount={} managedSubscriberCount={} streamsByMode={} streamsByInterval={}",
             action, streams.size(), subscriberCount, streamsByMode, streamsByInterval);
     }
 
