@@ -1695,6 +1695,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         try {
             response = api(request.credential(), true).newAlgoOrder(algo);
         } catch (RuntimeException ex) {
+            // 与普通订单保持一致：调度器在 HTTP 请求发送前延期时，明确标记为未发送，不能占用 UNKNOWN 派发锁。
+            RuntimeException dispatchFailure = classifyOrderDispatchFailure(ex);
+            if (dispatchFailure instanceof OrderNotSentException) {
+                throw dispatchFailure;
+            }
             var error = apiError(ex);
             Integer code = error == null ? null : errorCode(error);
             if (error != null && error.getCode() == 400 && code != null && Set.of(-4023, -4004, -4005, -1111, -4164, -4014, -2021).contains(code)) {
