@@ -1,6 +1,7 @@
 package org.dromara.quant.runtime;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +45,7 @@ import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.redisson.api.RLock;
+import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,6 +77,11 @@ public class StrategyRuntimeService {
     private final QuantProperties properties;
     /** 用于跨节点串行化交易对暂停操作与开仓派单。 */
     private final RedissonClient redissonClient;
+    /** 凭证身份变化的跨节点即时失效通知；数据库版本轮询作为消息丢失兜底。 */
+    private RTopic credentialInvalidationTopic;
+    private RTopic credentialDisableTopic;
+    private int credentialInvalidationListenerId = -1;
+    private int credentialDisableListenerId = -1;
     /**
      * 策略实例 Mapper。
      */
@@ -423,6 +430,76 @@ public class StrategyRuntimeService {
 
     private static String strategySymbolRuntimeLockKey(Long strategySymbolId) {
         return "quant:strategy-symbol-runtime:" + strategySymbolId;
+    }
+
+    @PostConstruct
+    public void subscribeCredentialLifecycleEvents() {
+        credentialInvalidationTopic = redissonClient.getTopic("quant:credential-runtime-invalidation");
+        credentialInvalidationListenerId = credentialInvalidationTopic.addListener(Long.class,
+            (channel, credentialId) -> invalidateCredential(credentialId));
+        credentialDisableTopic = redissonClient.getTopic("quant:credential-runtime-disable");
+        credentialDisableListenerId = credentialDisableTopic.addListener(Long.class,
+            (channel, credentialId) -> disableCredential(credentialId));
+    }
+
+    /** 在凭证变更事务提交后广播给所有 JVM，并立即处理当前节点。 */
+    public void invalidateCredentialAcrossNodes(Long credentialId) {
+        if (credentialId == null) {
+            return;
+        }
+        publishCredentialLifecycleEvent(credentialInvalidationTopic, credentialId);
+        invalidateCredential(credentialId);
+    }
+
+    /** 禁用凭证时广播保护模式切换，避免其他 JVM 继续使用旧凭证。 */
+    public void disableCredentialAcrossNodes(Long credentialId) {
+        if (credentialId == null) {
+            return;
+        }
+        publishCredentialLifecycleEvent(credentialDisableTopic, credentialId);
+        disableCredential(credentialId);
+    }
+
+    private void publishCredentialLifecycleEvent(RTopic topic, Long credentialId) {
+        try {
+            if (topic != null) {
+                topic.publish(credentialId);
+            }
+        } catch (RuntimeException ex) {
+            log.error("凭证生命周期跨节点通知发送失败 credentialId={}；数据库版本轮询将负责兜底", credentialId, ex);
+        }
+    }
+
+    /**
+     * Redis Pub/Sub 消息可能在节点断连期间丢失；每秒按凭证版本核对本地 Runtime。
+     * 只查询 ID、更新时间和状态，不读取或加载 API Key/Secret。
+     */
+    public void refreshActiveRuntimeCredentialVersions() {
+        Map<Long, Set<LocalDateTime>> runtimeVersions = new HashMap<>();
+        for (ActiveRuntime runtime : activeRuntimes.values()) {
+            if (runtime != null && !runtime.closed && runtime.credential.getId() != null) {
+                runtimeVersions.computeIfAbsent(runtime.credential.getId(), ignored -> new HashSet<>())
+                    .add(runtime.credential.getUpdateTime());
+            }
+        }
+        if (runtimeVersions.isEmpty()) {
+            return;
+        }
+        List<QuantCredential> credentials = credentialMapper.selectList(new LambdaQueryWrapper<QuantCredential>()
+            .select(QuantCredential::getId, QuantCredential::getUpdateTime, QuantCredential::getStatus)
+            .in(QuantCredential::getId, runtimeVersions.keySet()));
+        Map<Long, QuantCredential> latestById = new HashMap<>();
+        credentials.forEach(credential -> latestById.put(credential.getId(), credential));
+        runtimeVersions.forEach((credentialId, versions) -> {
+            QuantCredential latest = latestById.get(credentialId);
+            if (latest == null || !versions.contains(latest.getUpdateTime())) {
+                if (latest != null && "1".equals(latest.getStatus())) {
+                    disableCredential(credentialId);
+                } else {
+                    invalidateCredential(credentialId);
+                }
+            }
+        });
     }
 
     /**
@@ -5264,6 +5341,12 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
      */
     @PreDestroy
     public void destroy() {
+        if (credentialInvalidationTopic != null && credentialInvalidationListenerId >= 0) {
+            credentialInvalidationTopic.removeListener(credentialInvalidationListenerId);
+        }
+        if (credentialDisableTopic != null && credentialDisableListenerId >= 0) {
+            credentialDisableTopic.removeListener(credentialDisableListenerId);
+        }
         stopAll();
         recoveryExecutor.shutdownNow();
         leaseRenewalExecutor.shutdownNow();
