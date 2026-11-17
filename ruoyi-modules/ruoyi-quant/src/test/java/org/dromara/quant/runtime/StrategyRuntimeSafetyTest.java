@@ -25,6 +25,31 @@ import static org.mockito.Mockito.*;
 @org.junit.jupiter.api.Tag("dev")
 class StrategyRuntimeSafetyTest {
     @Test
+    void reportsTheFirstFailedEntryProtectionProofCondition() {
+        assertEquals("RUNTIME_CLOSED", StrategyRuntimeService.entryProtectionProofStateFailureReason(
+            true, true, true, false, 1L, 2L, "cycle-a", "cycle-b"));
+        assertEquals("POSITION_EXISTS", StrategyRuntimeService.entryProtectionProofStateFailureReason(
+            false, true, true, false, 1L, 2L, "cycle-a", "cycle-b"));
+        assertEquals("PENDING_ACTION", StrategyRuntimeService.entryProtectionProofStateFailureReason(
+            false, false, true, false, 1L, 2L, "cycle-a", "cycle-b"));
+        assertEquals("POSITION_FACTS_NOT_READY", StrategyRuntimeService.entryProtectionProofStateFailureReason(
+            false, false, false, false, 1L, 2L, "cycle-a", "cycle-b"));
+        assertEquals("GENERATION_CHANGED", StrategyRuntimeService.entryProtectionProofStateFailureReason(
+            false, false, false, true, 1L, 2L, "cycle-a", "cycle-b"));
+        assertEquals("CYCLE_CHANGED", StrategyRuntimeService.entryProtectionProofStateFailureReason(
+            false, false, false, true, 1L, 1L, "cycle-a", "cycle-b"));
+        assertNull(StrategyRuntimeService.entryProtectionProofStateFailureReason(
+            false, false, false, true, 1L, 1L, "cycle-a", "cycle-a"));
+    }
+
+    @Test
+    void distinguishesUnavailableAndChangedProtectionProofLeaseEpoch() {
+        assertEquals("LEASE_EPOCH_UNAVAILABLE", StrategyRuntimeService.entryProtectionProofLeaseFailureReason(7L, null));
+        assertEquals("LEASE_EPOCH_CHANGED", StrategyRuntimeService.entryProtectionProofLeaseFailureReason(7L, 8L));
+        assertNull(StrategyRuntimeService.entryProtectionProofLeaseFailureReason(7L, 7L));
+    }
+
+    @Test
     void identifiesStaleOrUnavailableTradeFeedForProtectionFallback() {
         Instant now = Instant.parse("2026-11-09T12:00:00Z");
 
