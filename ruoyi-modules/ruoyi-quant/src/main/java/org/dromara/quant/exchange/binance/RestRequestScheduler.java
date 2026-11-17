@@ -1,6 +1,8 @@
 package org.dromara.quant.exchange.binance;
 
 import org.dromara.quant.exchange.ExchangeMarketPort;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
 import java.util.concurrent.TimeUnit;
@@ -9,6 +11,7 @@ import java.util.concurrent.TimeUnit;
  * 有界加权轮转队列；交易和持仓核验优先，余额校准及后台补偿保留固定执行份额。
  */
 final class RestRequestScheduler {
+    private static final Logger log = LoggerFactory.getLogger(RestRequestScheduler.class);
     private final ArrayDeque<Object>[] queues;
     private final int[] rotation = {0, 1, 0, 2, 0, 0, 1, 3, 0, 4};
     private final long interval;
@@ -65,6 +68,15 @@ final class RestRequestScheduler {
                 }
                 if (rotation[selected] == kind.ordinal() && queue.peekFirst() == ticket && now >= nextStart) {
                     queue.removeFirst();
+                    long waitedMillis = TimeUnit.NANOSECONDS.toMillis(now - initialNow);
+                    if (waitedMillis >= 250L) {
+                        int[] queueSizes = new int[queues.length];
+                        for (int i = 0; i < queues.length; i++) {
+                            queueSizes[i] = queues[i].size();
+                        }
+                        log.warn("Binance REST 请求排队等待偏高 kind={} waitedMs={} queueSizes={}",
+                            kind, waitedMillis, java.util.Arrays.toString(queueSizes));
+                    }
                     nextStart = now + interval;
                     cursor = (selected + 1) % rotation.length;
                     notifyAll();
