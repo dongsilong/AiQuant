@@ -89,7 +89,13 @@ public class TradingReconciliationScheduler {
             log.warn("量化账户事实对账遇到 Binance 限流，已安排合并重试 credentialId={} retryAfterMs={} retryDelayMs={}",
                 credentialId, ex.retryAfterMillis(), delay);
         } catch (RuntimeException ex) {
-            log.error("量化账户事实对账失败 credentialId={}", credentialId, ex);
+            if (isTransientNetworkFailure(ex)) {
+                long delay = scheduleRetry(credential, historyHours, 0L);
+                log.warn("量化账户事实对账遇到瞬时网络异常，已安排合并重试 credentialId={} retryDelayMs={} errorType={}",
+                    credentialId, delay, ex.getClass().getSimpleName());
+            } else {
+                log.error("量化账户事实对账失败 credentialId={}", credentialId, ex);
+            }
         } finally {
             inFlight.remove(credentialId);
         }
@@ -109,6 +115,22 @@ public class TradingReconciliationScheduler {
             }, delay, TimeUnit.MILLISECONDS);
         });
         return delay;
+    }
+
+    static boolean isTransientNetworkFailure(Throwable failure) {
+        if (Thread.currentThread().isInterrupted()) {
+            return false;
+        }
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof java.io.EOFException
+                || current instanceof java.net.SocketException
+                || current instanceof java.net.SocketTimeoutException
+                || current instanceof java.net.ConnectException
+                || current instanceof java.io.InterruptedIOException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     static long retryDelayMillis(long retryAfterMillis, int attempt) {
