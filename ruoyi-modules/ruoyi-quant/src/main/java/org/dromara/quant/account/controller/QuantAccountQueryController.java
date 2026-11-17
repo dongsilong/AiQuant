@@ -87,7 +87,8 @@ public class QuantAccountQueryController {
     }
 
     /**
-     * 查询当日零点附近的账户权益基线；缺少可信基线时返回空。
+     * 查询北京时间当日最早的有效账户权益快照作为收益率基线。
+     * 基线时间随结果返回，调用方不得将非零点快照解释为零点权益。
      */
     @SaCheckPermission(value = {"quant:account:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/account/{credentialId}/daily-baseline")
@@ -98,7 +99,9 @@ public class QuantAccountQueryController {
             .select(QuantAccountSnapshot::getMarginBalance, QuantAccountSnapshot::getObservedAt)
             .eq(QuantAccountSnapshot::getCredentialId, credentialId)
             .ge(QuantAccountSnapshot::getObservedAt, dayStart)
-            .lt(QuantAccountSnapshot::getObservedAt, dayStart.plusMinutes(5))
+            .lt(QuantAccountSnapshot::getObservedAt, dayStart.plusDays(1))
+            .isNotNull(QuantAccountSnapshot::getMarginBalance)
+            .gt(QuantAccountSnapshot::getMarginBalance, java.math.BigDecimal.ZERO)
             .orderByAsc(QuantAccountSnapshot::getObservedAt)
             .last("LIMIT 1"));
         return R.ok(baseline == null ? null : new DailyAccountBaseline(baseline.getMarginBalance(), baseline.getObservedAt().atOffset(ZoneOffset.UTC).withOffsetSameInstant(ZoneOffset.ofHours(8))));
