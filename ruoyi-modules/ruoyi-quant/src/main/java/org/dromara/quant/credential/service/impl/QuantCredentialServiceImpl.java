@@ -145,7 +145,7 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         }
         credentialMapper.updateById(entity);
         if (modeChanged || credentialChanged) {
-            afterCommit(() -> runtimeService.invalidateCredential(entity.getId()));
+            afterCommit(() -> runtimeService.invalidateCredentialAcrossNodes(entity.getId()));
         }
         return toVo(entity);
     }
@@ -159,7 +159,7 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         ids.forEach(id -> validateOwner(credentialMapper.selectById(id)));
         boolean deleted = credentialMapper.deleteByIds(ids) > 0;
         if (deleted) {
-            ids.forEach(id -> afterCommit(() -> runtimeService.invalidateCredential(id)));
+            ids.forEach(id -> afterCommit(() -> runtimeService.invalidateCredentialAcrossNodes(id)));
         }
         return deleted;
     }
@@ -184,7 +184,7 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         credential.setStatus(status);
         credentialMapper.updateById(credential);
         if ("1".equals(status)) {
-            afterCommit(() -> runtimeService.disableCredential(id));
+            afterCommit(() -> runtimeService.disableCredentialAcrossNodes(id));
         }
     }
 
