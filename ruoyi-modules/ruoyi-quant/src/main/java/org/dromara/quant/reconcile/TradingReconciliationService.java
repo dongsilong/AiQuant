@@ -1059,53 +1059,53 @@ public class TradingReconciliationService {
                 continue;
             }
             try (lease) {
-            LocalDateTime storedCursor = fillSyncCursors.selectLastCompleteTo(credential.getId(), symbol);
-            Instant from = storedCursor == null ? range.from() : storedCursor.toInstant(ZoneOffset.UTC);
-            if (from.isBefore(range.from())) {
-                from = range.from();
-            }
-            Instant to = range.to();
-            LocalDateTime futureCursor = null;
-            if (from.isAfter(to)) {
-                futureCursor = storedCursor;
-                from = range.from().minus(Duration.between(to, from));
-            }
-            if (Duration.between(from, to).compareTo(FILL_HISTORY_RECONCILE_WINDOW) > 0) {
-                to = from.plus(FILL_HISTORY_RECONCILE_WINDOW);
-            }
-            boolean hasBacklog = to.isBefore(range.to());
-            List<ExchangeGateway.TradeSnapshot> trades = from.isBefore(to)
-                ? tradeCollector.collect(exchangeCredential, symbol, from, to)
-                : List.of();
-            List<ExchangeGateway.OrderSnapshot> symbolHistory = history.stream()
-                .filter(order -> symbol.equalsIgnoreCase(order.symbol())).toList();
-            List<ExchangeGateway.OrderSnapshot> symbolOpenOrders = openOrders.stream()
-                .filter(order -> symbol.equalsIgnoreCase(order.symbol())).toList();
-            Instant collectedTo = to;
-            Instant collectedFrom = from;
-            LocalDateTime expectedFutureCursor = futureCursor;
-            long collectionStartedAt = System.nanoTime();
-
-            transaction.executeWithoutResult(status -> {
-                lease.assertOwnedForCommit();
-                syncOrders(credential, symbolHistory);
-                syncOrders(credential, symbolOpenOrders);
-                syncTrades(credential, trades);
-                if (collectedFrom.isBefore(collectedTo)) {
-                    LocalDateTime cursorEnd = LocalDateTime.ofInstant(collectedTo, ZoneOffset.UTC);
-                    if (expectedFutureCursor == null) {
-                        fillSyncCursorService.advance(credential.getId(), symbol, cursorEnd);
-                    } else {
-                        fillSyncCursorService.repairFutureAfterCollection(credential.getId(), symbol, expectedFutureCursor, cursorEnd);
-                    }
+                LocalDateTime storedCursor = fillSyncCursors.selectLastCompleteTo(credential.getId(), symbol);
+                Instant from = storedCursor == null ? range.from() : storedCursor.toInstant(ZoneOffset.UTC);
+                if (from.isBefore(range.from())) {
+                    from = range.from();
                 }
-            });
-            if (hasBacklog) {
-                fillHistoryBacklogSymbols++;
-            }
-            log.info("周期交易对订单/成交事实已提交 credentialId={} symbol={} orderCount={} tradeCount={} from={} to={} hasBacklog={} elapsedMs={}",
-                credential.getId(), symbol, symbolHistory.size() + symbolOpenOrders.size(), trades.size(), collectedFrom, collectedTo,
-                hasBacklog, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - collectionStartedAt));
+                Instant to = range.to();
+                LocalDateTime futureCursor = null;
+                if (from.isAfter(to)) {
+                    futureCursor = storedCursor;
+                    from = range.from().minus(Duration.between(to, from));
+                }
+                if (Duration.between(from, to).compareTo(FILL_HISTORY_RECONCILE_WINDOW) > 0) {
+                    to = from.plus(FILL_HISTORY_RECONCILE_WINDOW);
+                }
+                boolean hasBacklog = to.isBefore(range.to());
+                List<ExchangeGateway.TradeSnapshot> trades = from.isBefore(to)
+                    ? tradeCollector.collect(exchangeCredential, symbol, from, to)
+                    : List.of();
+                List<ExchangeGateway.OrderSnapshot> symbolHistory = history.stream()
+                    .filter(order -> symbol.equalsIgnoreCase(order.symbol())).toList();
+                List<ExchangeGateway.OrderSnapshot> symbolOpenOrders = openOrders.stream()
+                    .filter(order -> symbol.equalsIgnoreCase(order.symbol())).toList();
+                Instant collectedTo = to;
+                Instant collectedFrom = from;
+                LocalDateTime expectedFutureCursor = futureCursor;
+                long collectionStartedAt = System.nanoTime();
+
+                transaction.executeWithoutResult(status -> {
+                    lease.assertOwnedForCommit();
+                    syncOrders(credential, symbolHistory);
+                    syncOrders(credential, symbolOpenOrders);
+                    syncTrades(credential, trades);
+                    if (collectedFrom.isBefore(collectedTo)) {
+                        LocalDateTime cursorEnd = LocalDateTime.ofInstant(collectedTo, ZoneOffset.UTC);
+                        if (expectedFutureCursor == null) {
+                            fillSyncCursorService.advance(credential.getId(), symbol, cursorEnd);
+                        } else {
+                            fillSyncCursorService.repairFutureAfterCollection(credential.getId(), symbol, expectedFutureCursor, cursorEnd);
+                        }
+                    }
+                });
+                if (hasBacklog) {
+                    fillHistoryBacklogSymbols++;
+                }
+                log.info("周期交易对订单/成交事实已提交 credentialId={} symbol={} orderCount={} tradeCount={} from={} to={} hasBacklog={} elapsedMs={}",
+                    credential.getId(), symbol, symbolHistory.size() + symbolOpenOrders.size(), trades.size(), collectedFrom, collectedTo,
+                    hasBacklog, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - collectionStartedAt));
             }
         }
         return fillHistoryBacklogSymbols;
