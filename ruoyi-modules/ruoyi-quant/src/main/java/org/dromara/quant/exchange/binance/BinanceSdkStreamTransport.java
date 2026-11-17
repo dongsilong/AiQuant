@@ -155,6 +155,9 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
 
     private static void stop(StreamConnectionInterface connection) {
         try {
+            if (connection instanceof MarketStreamConnectionWrapper wrapper) {
+                wrapper.markIntentionalClose();
+            }
             connection.stop();
         } catch (Exception ex) {
             log.debug("Binance SDK stream close: {}", ex.getClass().getSimpleName());
