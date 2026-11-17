@@ -134,7 +134,10 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         validateSingleBoundUser(entity.getUserId());
         boolean modeChanged = !java.util.Objects.equals(current.getRunMode(), entity.getRunMode());
         boolean credentialChanged = StringUtils.isNotBlank(bo.getApiKey()) || StringUtils.isNotBlank(bo.getSecretKey());
-        if (modeChanged || credentialChanged || "PAPER".equalsIgnoreCase(entity.getRunMode())) {
+        boolean signatureChanged = !java.util.Objects.equals(current.getSignatureType(), entity.getSignatureType());
+        boolean ownerChanged = !java.util.Objects.equals(current.getUserId(), entity.getUserId());
+        boolean runtimeIdentityChanged = modeChanged || credentialChanged || signatureChanged || ownerChanged;
+        if (runtimeIdentityChanged || "PAPER".equalsIgnoreCase(entity.getRunMode())) {
             // PAPER 永不访问 private API；从 PAPER 切到 TESTNET/LIVE 时则必须重新验证真实凭证。
             validateCredential(entity);
         } else {
@@ -144,7 +147,10 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setLastConnectTime(current.getLastConnectTime());
         }
         credentialMapper.updateById(entity);
-        if (modeChanged || credentialChanged) {
+        if (runtimeIdentityChanged) {
+            if (credentialMapper.incrementRuntimeVersion(entity.getId()) != 1) {
+                throw new ServiceException("更新凭证 Runtime 版本失败");
+            }
             afterCommit(() -> runtimeService.invalidateCredentialAcrossNodes(entity.getId()));
         }
         return toVo(entity);
@@ -181,10 +187,18 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         if ("0".equals(status) && !"NORMAL".equals(credential.getConnectionStatus()) && !"PAPER".equals(credential.getConnectionStatus())) {
             throw new ServiceException("凭证连接状态不是正常，无法启用");
         }
+        boolean statusChanged = !java.util.Objects.equals(credential.getStatus(), status);
         credential.setStatus(status);
         credentialMapper.updateById(credential);
-        if ("1".equals(status)) {
-            afterCommit(() -> runtimeService.disableCredentialAcrossNodes(id));
+        if (statusChanged) {
+            if (credentialMapper.incrementRuntimeVersion(id) != 1) {
+                throw new ServiceException("更新凭证 Runtime 版本失败");
+            }
+            if ("1".equals(status)) {
+                afterCommit(() -> runtimeService.disableCredentialAcrossNodes(id));
+            } else {
+                afterCommit(() -> runtimeService.invalidateCredentialAcrossNodes(id));
+            }
         }
     }
 
@@ -192,18 +206,22 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
      * 验证交易所连通性。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class, noRollbackFor = ServiceException.class)
     public void testConnectivity(Long id) {
         QuantCredential credential = credentialMapper.selectById(id);
         if (credential == null) {
             throw new ServiceException("凭证不存在");
         }
         validateOwner(credential);
+        String previousConnectionStatus = credential.getConnectionStatus();
+        Boolean previousTradePermission = credential.getTradePermission();
         if ("PAPER".equalsIgnoreCase(credential.getRunMode())) {
             credential.setConnectionStatus("PAPER");
             credential.setTradePermission(true);
             credential.setWithdrawalDisabled(true);
             credential.setLastConnectTime(LocalDateTime.now());
             credentialMapper.updateById(credential);
+            incrementRuntimeVersionIfConnectivityChanged(id, previousConnectionStatus, previousTradePermission, credential);
             return;
         }
         ExchangeGateway.ConnectivityResult result = exchangeGateway.validateCredential(new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
@@ -213,8 +231,20 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         credential.setWithdrawalDisabled(result.withdrawalDisabled());
         credential.setLastConnectTime(LocalDateTime.now());
         credentialMapper.updateById(credential);
+        incrementRuntimeVersionIfConnectivityChanged(id, previousConnectionStatus, previousTradePermission, credential);
         if (!result.success()) {
             throw new ServiceException("凭证验证失败：" + result.message());
+        }
+    }
+
+    private void incrementRuntimeVersionIfConnectivityChanged(Long id, String previousConnectionStatus, Boolean previousTradePermission,
+                                                               QuantCredential credential) {
+        if (!java.util.Objects.equals(previousConnectionStatus, credential.getConnectionStatus())
+            || !java.util.Objects.equals(previousTradePermission, credential.getTradePermission())) {
+            if (credentialMapper.incrementRuntimeVersion(id) != 1) {
+                throw new IllegalStateException("更新凭证 Runtime 版本失败");
+            }
+            afterCommit(() -> runtimeService.invalidateCredentialAcrossNodes(id));
         }
     }
 

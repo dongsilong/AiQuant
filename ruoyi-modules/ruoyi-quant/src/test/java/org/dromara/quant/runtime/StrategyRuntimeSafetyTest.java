@@ -446,11 +446,11 @@ class StrategyRuntimeSafetyTest {
             ReflectionTestUtils.setField(f.runtime, "leaseValid", false);
             assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime),
                 "an unverified lease must fail closed");
-            verify(lease, never()).acquireOrRenew(any(), any(), any());
+            verify(lease, never()).acquireOrRenew(any(), any(), any(), any());
 
             ReflectionTestUtils.setField(f.runtime, "leaseValid", true);
             assertTrue((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime));
-            verify(lease, never()).acquireOrRenew(any(), any(), any());
+            verify(lease, never()).acquireOrRenew(any(), any(), any(), any());
         } finally {
             f.service.destroy();
         }
@@ -462,7 +462,7 @@ class StrategyRuntimeSafetyTest {
         try {
             var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
             ReflectionTestUtils.setField(f.runtime, "marketHealthy", true);
-            when(lease.acquireOrRenew(any(), any(), any())).thenReturn(false);
+            when(lease.acquireOrRenew(any(), any(), any(), any())).thenReturn(false);
 
             f.service.renewActiveRuntimeLeases();
             long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
@@ -475,7 +475,7 @@ class StrategyRuntimeSafetyTest {
             assertTrue((boolean) ReflectionTestUtils.getField(f.runtime, "marketHealthy"),
                 "lease renewal failure must not poison the independent public-market health state");
             assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "ensureEventLease", f.runtime));
-            verify(lease, atLeastOnce()).acquireOrRenew(any(), any(), any());
+            verify(lease, atLeastOnce()).acquireOrRenew(any(), any(), any(), any());
         } finally {
             f.service.destroy();
         }
@@ -488,7 +488,7 @@ class StrategyRuntimeSafetyTest {
         var renewalEntered = new java.util.concurrent.CountDownLatch(1);
         var allowRenewalToFinish = new java.util.concurrent.CountDownLatch(1);
         try {
-            when(lease.acquireOrRenew(any(), any(), any())).thenAnswer(invocation -> {
+            when(lease.acquireOrRenew(any(), any(), any(), any())).thenAnswer(invocation -> {
                 renewalEntered.countDown();
                 assertTrue(allowRenewalToFinish.await(5, java.util.concurrent.TimeUnit.SECONDS));
                 return true;
@@ -524,7 +524,7 @@ class StrategyRuntimeSafetyTest {
             var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
             var renewalEntered = new java.util.concurrent.CountDownLatch(1);
             var allowRenewalToFinish = new java.util.concurrent.CountDownLatch(1);
-            when(lease.acquireOrRenew(any(), any(), any())).thenAnswer(invocation -> {
+            when(lease.acquireOrRenew(any(), any(), any(), any())).thenAnswer(invocation -> {
                 renewalEntered.countDown();
                 assertTrue(allowRenewalToFinish.await(2, java.util.concurrent.TimeUnit.SECONDS));
                 return true;
@@ -569,7 +569,7 @@ class StrategyRuntimeSafetyTest {
 
             ReflectionTestUtils.invokeMethod(f.service, "closeRuntime", f.runtime);
 
-            verify(lease).acquireOrRenew(1L, 3L, "BTCUSDT");
+            verify(lease).acquireOrRenew(1L, 3L, "BTCUSDT", 1L);
             verify(lease).release(1L, 3L, "BTCUSDT");
             assertFalse((boolean) ReflectionTestUtils.getField(f.runtime, "leaseValid"));
         } finally {
@@ -582,7 +582,7 @@ class StrategyRuntimeSafetyTest {
         Fixture f = fixture();
         try {
             var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
-            when(lease.acquireOrRenew(any(), any(), any())).thenThrow(new IllegalStateException("database unavailable"));
+            when(lease.acquireOrRenew(any(), any(), any(), any())).thenThrow(new IllegalStateException("database unavailable"));
 
             f.service.renewActiveRuntimeLeases();
             long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
@@ -1137,7 +1137,7 @@ class StrategyRuntimeSafetyTest {
         var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
         var reconciliation = (org.dromara.quant.reconcile.TradingReconciliationService) ReflectionTestUtils.getField(f.service, "reconciliationService");
         var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
-        when(lease.acquireOrRenew(any(), any(), any())).thenReturn(true);
+        when(lease.acquireOrRenew(any(), any(), any(), any())).thenReturn(true);
         when(reconciliation.runtimePositionSnapshot(any())).thenAnswer(invocation -> {
             entered.countDown();
             release.await(3, java.util.concurrent.TimeUnit.SECONDS);
@@ -2804,7 +2804,7 @@ class StrategyRuntimeSafetyTest {
             state.setStatus("CLOSED");
             state.setPositionQty(BigDecimal.ZERO);
             var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
-            when(lease.requireCurrentEpoch(any(), any(), any())).thenReturn(1L);
+            when(lease.requireCurrentEpoch(any(), any(), any(), any())).thenReturn(1L);
             when(f.protection.prepareEntryProtectionCleanup(any(), any(), anyBoolean())).thenAnswer(call -> {
                 entered.countDown();
                 release.await(3, java.util.concurrent.TimeUnit.SECONDS);
@@ -2925,7 +2925,7 @@ class StrategyRuntimeSafetyTest {
             ReflectionTestUtils.setField(f.runtime, "position", null);
             ReflectionTestUtils.setField(f.runtime, "positionFactsReady", true);
             var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
-            when(lease.requireCurrentEpoch(any(), any(), any())).thenReturn(1L);
+            when(lease.requireCurrentEpoch(any(), any(), any(), any())).thenReturn(1L);
             when(f.protection.prepareEntryProtectionCleanup(3L, "BTCUSDT", true)).thenReturn(false);
 
             assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "entryProtectionReady", f.runtime));
@@ -2948,7 +2948,7 @@ class StrategyRuntimeSafetyTest {
             ReflectionTestUtils.setField(f.runtime, "entryProtectionCleanupReady", true);
             ReflectionTestUtils.setField(f.runtime, "entryProtectionCleanupEpoch", 1L);
             var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(f.service, "leaseService");
-            when(lease.requireCurrentEpoch(any(), any(), any())).thenReturn(1L);
+            when(lease.requireCurrentEpoch(any(), any(), any(), any())).thenReturn(1L);
             Instant completed = Instant.now();
             ReflectionTestUtils.setField(f.runtime, "entryProtectionCleanupConfirmedAt", completed);
             for (int delta : new int[] {-1, 0, 1}) {
@@ -3033,7 +3033,7 @@ class StrategyRuntimeSafetyTest {
         var service = (StrategyRuntimeService) constructor.newInstance(args);
         var gateway = (ExchangeGateway) ReflectionTestUtils.getField(service, "gateway");
         var lease = (org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService) ReflectionTestUtils.getField(service, "leaseService");
-        when(lease.acquireOrRenew(any(), any(), any())).thenReturn(true);
+        when(lease.acquireOrRenew(any(), any(), any(), any())).thenReturn(true);
         when(gateway.queryKlines(any(), any(), anyInt())).thenReturn(List.of());
         var instance = new QuantStrategyInstance();
         instance.setId(1L);
@@ -3047,6 +3047,7 @@ class StrategyRuntimeSafetyTest {
         symbolConfig.setLeverage(10);
         var credential = new QuantCredential();
         credential.setId(3L);
+        credential.setCredentialRuntimeVersion(1L);
         credential.setRunMode("LIVE");
         var symbol = new QuantSymbol();
         symbol.setSymbol("BTCUSDT");

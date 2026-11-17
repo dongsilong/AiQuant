@@ -2,7 +2,6 @@ package org.dromara.quant.runtime.coordination.mapper;
 
 import org.apache.ibatis.annotations.*;
 
-import java.time.LocalDateTime;
 
 /**
  * MySQL 原子策略租约。唯一键 (credential_id, symbol) 是跨实例排他保证。
@@ -15,20 +14,20 @@ public interface StrategyRuntimeLeaseMapper {
         "leaseSeconds") int leaseSeconds);
 
     int acquireOrRenew(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken,
-                       @Param("leaseSeconds") int leaseSeconds, @Param("credentialUpdateTime") LocalDateTime credentialUpdateTime);
+                       @Param("leaseSeconds") int leaseSeconds, @Param("credentialRuntimeVersion") Long credentialRuntimeVersion);
 
     /**
      * Final outbound check: owner token AND instance identity AND unexpired lease
      * must all match. This narrows the stale-worker window, but Binance does not
      * recognize internal fencing epochs; a centralized outbound executor remains required.
      */
-    Long countCurrentOwner(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken, @Param("credentialUpdateTime") LocalDateTime credentialUpdateTime);
+    Long countCurrentOwner(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken, @Param("credentialRuntimeVersion") Long credentialRuntimeVersion);
 
     /**
      * Monotonic fencing epoch. This value is never reset on release or takeover.
      * Missing/expired/foreign ownership returns null; callers must fail closed.
      */
-    Long currentEpoch(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken, @Param("credentialUpdateTime") LocalDateTime credentialUpdateTime);
+    Long currentEpoch(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken, @Param("credentialRuntimeVersion") Long credentialRuntimeVersion);
 
     int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken);
 }

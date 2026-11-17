@@ -494,28 +494,28 @@ public class StrategyRuntimeService {
     }
 
     /**
-     * Redis Pub/Sub 消息可能在节点断连期间丢失；每秒按凭证版本核对本地 Runtime。
-     * 只查询 ID、更新时间和状态，不读取或加载 API Key/Secret。
+     * Redis Pub/Sub 消息可能在节点断连期间丢失；每秒按凭证 Runtime 版本核对本地 Runtime。
+     * 只查询 ID、Runtime 版本和状态，不读取或加载 API Key/Secret。
      */
     public void refreshActiveRuntimeCredentialVersions() {
-        Map<Long, Set<LocalDateTime>> runtimeVersions = new HashMap<>();
+        Map<Long, Set<Long>> runtimeVersions = new HashMap<>();
         for (ActiveRuntime runtime : activeRuntimes.values()) {
             if (runtime != null && !runtime.closed && runtime.credential.getId() != null) {
                 runtimeVersions.computeIfAbsent(runtime.credential.getId(), ignored -> new HashSet<>())
-                    .add(runtime.credential.getUpdateTime());
+                    .add(runtime.credential.getCredentialRuntimeVersion());
             }
         }
         if (runtimeVersions.isEmpty()) {
             return;
         }
         List<QuantCredential> credentials = credentialMapper.selectList(new LambdaQueryWrapper<QuantCredential>()
-            .select(QuantCredential::getId, QuantCredential::getUpdateTime, QuantCredential::getStatus)
+            .select(QuantCredential::getId, QuantCredential::getCredentialRuntimeVersion, QuantCredential::getStatus)
             .in(QuantCredential::getId, runtimeVersions.keySet()));
         Map<Long, QuantCredential> latestById = new HashMap<>();
         credentials.forEach(credential -> latestById.put(credential.getId(), credential));
         runtimeVersions.forEach((credentialId, versions) -> {
             QuantCredential latest = latestById.get(credentialId);
-            if (latest == null || !versions.contains(latest.getUpdateTime())) {
+            if (latest == null || !versions.contains(latest.getCredentialRuntimeVersion())) {
                 if (latest != null && "1".equals(latest.getStatus())) {
                     scheduleCredentialLifecycleAction(credentialId, true);
                 } else {
@@ -862,7 +862,7 @@ public class StrategyRuntimeService {
                         runtime.leaseOperationLock.lock();
                         try {
                             if (!runtime.closed) snapshot = leaseService.acquireOrRenewSnapshot(
-                                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime());
+                                runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion());
                             synchronized (runtime) {
                                 if (runtime.closed) invalidateLeaseSnapshot(runtime);
                                 else if (snapshot != null) updateLeaseSnapshot(runtime, snapshot);
@@ -1061,7 +1061,7 @@ public class StrategyRuntimeService {
                 expectedQuantity = expectedPosition == null ? null : expectedPosition.getQuantity();
             }
             phaseStartedAt = System.nanoTime();
-            boolean leaseAcquired = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime());
+            boolean leaseAcquired = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion());
             leaseAcquireMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             if (!leaseAcquired) {
                 runtime.positionReconciliationBlockReason = "STRATEGY_LEASE_NOT_HELD";
@@ -1129,7 +1129,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
              firstExecuted != null && expectedState.getFirstTakeProfitTargetQty() != null && firstExecuted.add(expectedState.getFirstTakeProfitLocalExecutedQty() == null ?
             BigDecimal.ZERO : expectedState.getFirstTakeProfitLocalExecutedQty()).compareTo(expectedState.getFirstTakeProfitTargetQty()) >= 0;
             phaseStartedAt = System.nanoTime();
-            boolean leaseHeld = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime());
+            boolean leaseHeld = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion());
             finalLeaseCheckMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             synchronized (runtime) {
                 if (runtime.exitCoordinating.get() || runtime.state != expectedState || runtime.hasPendingAction() != expectedPending || !Objects.equals(expectedPendingIdentity, runtime.state == null ?
@@ -1413,7 +1413,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
 
         StrategyRuntimeLeaseService.LeaseSnapshot leaseSnapshot = leaseService.acquireOrRenewSnapshot(
-            instance.getId(), credential.getId(), symbol.getSymbol(), credential.getUpdateTime());
+            instance.getId(), credential.getId(), symbol.getSymbol(), credential.getCredentialRuntimeVersion());
         if (leaseSnapshot == null) {
             log.warn("策略运行时获取租约失败 instanceId={} credentialId={} symbol={}", instance.getId(), credential.getId(), symbol.getSymbol());
             stopInactiveRuntime(instance.getId());
@@ -1443,7 +1443,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (current != null) {
             closeRuntime(current);
             activeRuntimes.remove(instance.getId(), current);
-            leaseSnapshot = leaseService.acquireOrRenewSnapshot(instance.getId(), credential.getId(), symbol.getSymbol(), credential.getUpdateTime());
+            leaseSnapshot = leaseService.acquireOrRenewSnapshot(instance.getId(), credential.getId(), symbol.getSymbol(), credential.getCredentialRuntimeVersion());
             if (leaseSnapshot == null) return false;
         }
 
@@ -2138,7 +2138,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 String errorType = null;
                 try {
                     StrategyRuntimeLeaseService.LeaseSnapshot cleanupLeaseSnapshot = leaseService.acquireOrRenewSnapshot(
-                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime());
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion());
                     if (cleanupLeaseSnapshot == null) {
                         result = "LEASE_NOT_ACQUIRED";
                         return;
@@ -2160,7 +2160,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         if (!runtime.closed && runtime.position == null && !runtime.hasPendingAction() && runtime.positionFactsReady
                             && generation == runtime.entryProtectionCleanupGeneration.get()
                             && Objects.equals(cycle, runtime.state == null ? null : runtime.state.getPositionCycleKey())
-                            && epoch == leaseService.requireCurrentEpoch(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime())) {
+                            && epoch == leaseService.requireCurrentEpoch(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion())) {
                             runtime.entryProtectionCleanupEpoch = epoch;
                             runtime.entryProtectionCleanupProofGeneration = generation;
                             runtime.entryProtectionCleanupConfirmedAt = Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
@@ -2976,7 +2976,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                     try {
                         while (renewing.get()) {
                             Thread.sleep(5000);
-                            if (renewing.get() && !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime())) {
+                            if (renewing.get() && !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion())) {
                                 leaseHeld.set(false);
                                 break;
                             }
@@ -3006,7 +3006,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                             return;
                         }
                     }
-                    if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime())) {
+                    if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion())) {
                         return;
                     }
                     // 触发事实已经锁定；确认窗口中即便价格反弹仍完成该保护意图，不追用旧信号开仓。
@@ -3108,7 +3108,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
         String side = "SHORT".equalsIgnoreCase(direction) ? "BUY" : "SELL";
         Instant klineOpenTime = context.klineOpenTime() == null ? Instant.ofEpochMilli(System.currentTimeMillis()) : context.klineOpenTime();
         String idempotencyKey = nextExitAttemptKey(runtime, exit.type(), klineOpenTime);
-        if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime())) {
+        if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion())) {
             throw new IllegalStateException("退出前租约失效，等待恢复");
         }
         QuantStrategyPositionState state = preparePendingStateForExit(runtime, exit.type(), quantity, klineOpenTime, idempotencyKey);
@@ -3607,7 +3607,7 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
                 runtime.reconcileRequested.set(true);
                 return true;
             }
-            if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime())) {
+            if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion())) {
                 return true;
             }
             return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven, closedCloseProven);
@@ -4565,7 +4565,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                         if (runtime.closed || !leaseHeld.get()) {
                             break;
                         }
-                        if (!leaseService.acquireOrRenew(runtime.instance.getId(), work.credentialId(), work.position().getSymbol(), runtime.credential.getUpdateTime())) {
+                        if (!leaseService.acquireOrRenew(runtime.instance.getId(), work.credentialId(), work.position().getSymbol(), runtime.credential.getCredentialRuntimeVersion())) {
                             runtime.marketHealthy = false;
                             runtime.protectionRequested.set(false);
                             break;
@@ -4578,7 +4578,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                         if (!renewing.get()) {
                                             break;
                                         }
-                                        if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime())) {
+                                        if (!leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion())) {
                                             leaseHeld.set(false);
                                             runtime.marketHealthy = false;
                                             break;
@@ -4622,7 +4622,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                     throw work.signalFailure();
                                 }
                                 if (work.dynamic() && !runtime.closed && leaseHeld.get() && leaseService.acquireOrRenew(runtime.instance.getId(), work.credentialId(),
-                                 work.position().getSymbol(), runtime.credential.getUpdateTime())) {
+                                 work.position().getSymbol(), runtime.credential.getCredentialRuntimeVersion())) {
                                     // 硬止损价可能已冻结；跨类型覆盖必须由保护服务精确核实实际委托，不能用重算价格提前过滤。
                                     List<ProtectionSignal> exchangeSignals = deduplicateExchangeProtectionSignals(work.signals(), work.position(), work.initialQuantity(),
                                      null, runtime.protectionRule, work.state() != null && work.state().getFrozenLeverage() != null ?
@@ -4650,7 +4650,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                                 }
                             }
                         }
-                        if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), work.credentialId(), work.position().getSymbol(), runtime.credential.getUpdateTime())) {
+                        if (!leaseHeld.get() || !leaseService.acquireOrRenew(runtime.instance.getId(), work.credentialId(), work.position().getSymbol(), runtime.credential.getCredentialRuntimeVersion())) {
                             runtime.marketHealthy = false;
                             runtime.protectionRequested.set(false);
                             break;
@@ -5492,7 +5492,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                         continue;
                     }
                     try {
-                        boolean renewed = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getUpdateTime());
+                        boolean renewed = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion());
                         if (!renewed) {
                             invalidateLeaseSnapshot(runtime);
                             log.error("关闭运行时等待在途交易期间租约续期失败，保持关闭并禁止接管假设 instanceId={} credentialId={} symbol={}",
