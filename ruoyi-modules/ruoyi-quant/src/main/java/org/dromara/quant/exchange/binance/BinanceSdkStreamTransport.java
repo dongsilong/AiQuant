@@ -66,12 +66,6 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
         return market(connection, symbol, interval, events, disconnected, backlogLimit);
     }
 
-    static void notifyMarketSocketClosed(String connectionId, int statusCode, String reason, Runnable disconnected, String symbol, String interval) {
-        log.warn("Binance SDK 行情 WebSocket 已关闭 connectionId={} symbol={} interval={} closeCode={} reason={}", connectionId, symbol, interval,
-            statusCode, reason);
-        disconnected.run();
-    }
-
     static WebSocketClientConfiguration marketConfiguration(String url, QuantProperties.Proxy proxy) {
         WebSocketClientConfiguration config = configuration(url, proxy);
         // MarketStreamHub rotates market connections before 24 hours and owns recovery/replay.
