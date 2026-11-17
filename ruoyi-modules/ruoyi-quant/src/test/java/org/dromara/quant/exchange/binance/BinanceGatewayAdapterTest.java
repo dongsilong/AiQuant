@@ -291,6 +291,21 @@ class BinanceGatewayAdapterTest {
     }
 
     @Test
+    void retriesOkHttpInterruptedIoTimeout() {
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        String result = BinanceGatewayAdapter.executeWithNetworkRetries(() -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new IllegalStateException("SDK transport timeout",
+                    new java.io.InterruptedIOException("timeout"));
+            }
+            return "ok";
+        }, RestRequestScheduler.Kind.ACCOUNT, "LIVE");
+
+        assertEquals("ok", result);
+        assertEquals(2, attempts.get());
+    }
+
+    @Test
     void doesNotRetryCertificateValidationFailure() {
         var attempts = new java.util.concurrent.atomic.AtomicInteger();
         var failure = new IllegalStateException("TLS certificate validation failed",
