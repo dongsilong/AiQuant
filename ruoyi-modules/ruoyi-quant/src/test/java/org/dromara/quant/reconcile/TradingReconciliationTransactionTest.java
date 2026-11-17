@@ -504,6 +504,32 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void supersededPositionSnapshotIncrementsRetryBackoffAndKeepsOneScheduledRetry() {
+        stubCommonFacts();
+        var reconciliation = service();
+        when(gateway.queryPositions(any(), isNull())).thenAnswer(invocation -> {
+            reconciliation.invalidateRuntimePositionSnapshot(1L);
+            return List.of();
+        });
+        try {
+            assertThrows(TradingReconciliationService.SnapshotSupersededException.class,
+                () -> reconciliation.refreshPositionsOnly(credential()));
+
+            @SuppressWarnings("unchecked")
+            var attempts = (java.util.Map<Long, Integer>)
+                org.springframework.test.util.ReflectionTestUtils.getField(reconciliation, "positionRetryAttempts");
+            @SuppressWarnings("unchecked")
+            var retries = (java.util.Map<Long, java.util.concurrent.ScheduledFuture<?>>)
+                org.springframework.test.util.ReflectionTestUtils.getField(reconciliation, "positionRetryTasks");
+            assertEquals(1, attempts.get(1L));
+            assertEquals(1, retries.size());
+            assertTrue(retries.containsKey(1L));
+        } finally {
+            reconciliation.shutdownPositionSnapshotRetries();
+        }
+    }
+
+    @Test
     void positionSnapshotAndCapacityReservationUseSameCredentialRowLock() {
         stubCommonFacts();
         var reconciliation = service();
