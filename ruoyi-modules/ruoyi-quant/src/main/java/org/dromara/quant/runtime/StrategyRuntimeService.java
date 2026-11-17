@@ -505,6 +505,7 @@ public class StrategyRuntimeService {
         if (credentialId == null) {
             return;
         }
+        QuantCredential latestCredential = credentialMapper.selectById(credentialId);
         for (Map.Entry<Long, ActiveRuntime> entry : activeRuntimes.entrySet()) {
             ActiveRuntime runtime = entry.getValue();
             if (runtime == null || !Objects.equals(runtime.credential.getId(), credentialId)) {
@@ -512,6 +513,9 @@ public class StrategyRuntimeService {
             }
             boolean retainForRecovery;
             synchronized (runtime) {
+                if (latestCredential != null) {
+                    runtime.credential = latestCredential;
+                }
                 runtime.runtimeEnabled = false;
                 runtime.protectionOnly = true;
                 retainForRecovery = runtime.position != null || runtime.hasPendingAction()
