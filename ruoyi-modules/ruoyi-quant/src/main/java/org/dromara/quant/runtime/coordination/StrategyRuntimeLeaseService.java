@@ -8,6 +8,7 @@ import org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLeaseMapper;
 import org.springframework.stereotype.Service;
 
 import java.util.Locale;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
@@ -33,7 +34,7 @@ public class StrategyRuntimeLeaseService {
     /**
      * 获取或续期策略运行租约。
      */
-    public boolean acquireOrRenew(Long instanceId, Long credentialId, String symbol) {
+    public boolean acquireOrRenew(Long instanceId, Long credentialId, String symbol, LocalDateTime credentialUpdateTime) {
         if (instanceId == null || credentialId == null || symbol == null || symbol.isBlank()) {
             return false;
         }
@@ -42,7 +43,7 @@ public class StrategyRuntimeLeaseService {
         String ownerToken = ownerToken(instanceId);
         try {
             mapper.ensureRow(instanceId, credentialId, normalized, ownerToken, leaseSeconds);
-            int updated = mapper.acquireOrRenew(instanceId, credentialId, normalized, ownerToken, leaseSeconds);
+            int updated = mapper.acquireOrRenew(instanceId, credentialId, normalized, ownerToken, leaseSeconds, credentialUpdateTime);
             return updated == 1;
         } catch (Exception ex) {
             log.error("策略运行租约 SQL 执行失败 instanceId={} credentialId={} symbol={}", instanceId, credentialId, normalized, ex);
@@ -54,13 +55,13 @@ public class StrategyRuntimeLeaseService {
      * 获取或续期租约并读取数据库 fencing epoch。有效期从 SQL 操作开始计时，
      * 扣除安全余量，避免数据库响应耗时被错误计入本地缓存有效期。
      */
-    public LeaseSnapshot acquireOrRenewSnapshot(Long instanceId, Long credentialId, String symbol) {
+    public LeaseSnapshot acquireOrRenewSnapshot(Long instanceId, Long credentialId, String symbol, LocalDateTime credentialUpdateTime) {
         long startedAtNanos = System.nanoTime();
-        if (!acquireOrRenew(instanceId, credentialId, symbol)) {
+        if (!acquireOrRenew(instanceId, credentialId, symbol, credentialUpdateTime)) {
             return null;
         }
         try {
-            long epoch = requireCurrentEpoch(instanceId, credentialId, symbol);
+            long epoch = requireCurrentEpoch(instanceId, credentialId, symbol, credentialUpdateTime);
             long leaseNanos = java.util.concurrent.TimeUnit.SECONDS.toNanos(
                 Math.max(1, Math.max(15, properties.getRuntime().getLeaseSeconds()) - 2));
             return new LeaseSnapshot(epoch, startedAtNanos + leaseNanos);
@@ -77,8 +78,8 @@ public class StrategyRuntimeLeaseService {
      * A missing/expired/mismatched owner always blocks the order; database errors fail closed.
      * This does NOT provide an atomic fence between the SQL read and a remote Binance request.
      */
-    public void requireCurrentOwner(Long instanceId, Long credentialId, String symbol) {
-        requireCurrentEpoch(instanceId, credentialId, symbol);
+    public void requireCurrentOwner(Long instanceId, Long credentialId, String symbol, LocalDateTime credentialUpdateTime) {
+        requireCurrentEpoch(instanceId, credentialId, symbol, credentialUpdateTime);
     }
 
     /**
@@ -86,12 +87,12 @@ public class StrategyRuntimeLeaseService {
      * Calling the method twice around trade preparation detects a takeover/reacquisition.
      * It cannot fence a remote HTTP already in flight; that requires serialized dispatch.
      */
-    public long requireCurrentEpoch(Long instanceId, Long credentialId, String symbol) {
+    public long requireCurrentEpoch(Long instanceId, Long credentialId, String symbol, LocalDateTime credentialUpdateTime) {
         if (instanceId == null || credentialId == null || symbol == null || symbol.isBlank()) {
             throw new IllegalStateException("策略最终下单缺少租约所有权上下文");
         }
         try {
-            Long epoch = mapper.currentEpoch(instanceId, credentialId, symbol.toUpperCase(Locale.ROOT), ownerToken(instanceId));
+            Long epoch = mapper.currentEpoch(instanceId, credentialId, symbol.toUpperCase(Locale.ROOT), ownerToken(instanceId), credentialUpdateTime);
             if (epoch == null || epoch <= 0) {
                 throw new IllegalStateException("策略运行租约已失效或转移，拒绝最终交易所下单");
             }
