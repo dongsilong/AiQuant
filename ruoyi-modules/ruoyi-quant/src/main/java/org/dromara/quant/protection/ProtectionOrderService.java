@@ -31,6 +31,8 @@ import java.util.UUID;
 @RequiredArgsConstructor(onConstructor_ = @Autowired)
 public class ProtectionOrderService {
     private static final Logger log = LoggerFactory.getLogger(ProtectionOrderService.class);
+    private final java.util.concurrent.ConcurrentHashMap<FirstProfitQueryKey, java.util.concurrent.CompletableFuture<FirstProfitFacts>> firstProfitQueries =
+        new java.util.concurrent.ConcurrentHashMap<>();
     /**
      * 由策略插件动态维护的保护单类型集合。
      */
@@ -1813,7 +1815,38 @@ public class ProtectionOrderService {
 
     private record FirstProfitFacts(BigDecimal executed, boolean working) { }
 
+    private record FirstProfitQueryKey(Long credentialId, Long positionId, String positionCycleKey) { }
+
     private FirstProfitFacts firstProfitFacts(Long credentialId, QuantPosition position) {
+        FirstProfitQueryKey key = new FirstProfitQueryKey(credentialId, position.getId(), position.getProtectionCycleKey());
+        var pending = new java.util.concurrent.CompletableFuture<FirstProfitFacts>();
+        var running = firstProfitQueries.putIfAbsent(key, pending);
+        if (running != null) {
+            try {
+                return running.join();
+            } catch (java.util.concurrent.CompletionException ex) {
+                if (ex.getCause() instanceof RuntimeException failure) {
+                    throw failure;
+                }
+                if (ex.getCause() instanceof Error failure) {
+                    throw failure;
+                }
+                throw ex;
+            }
+        }
+        try {
+            FirstProfitFacts facts = loadFirstProfitFacts(credentialId, position);
+            pending.complete(facts);
+            return facts;
+        } catch (RuntimeException | Error ex) {
+            pending.completeExceptionally(ex);
+            throw ex;
+        } finally {
+            firstProfitQueries.remove(key, pending);
+        }
+    }
+
+    private FirstProfitFacts loadFirstProfitFacts(Long credentialId, QuantPosition position) {
         long totalStartedAt = System.nanoTime();
         long phaseStartedAt = System.nanoTime();
         List<QuantProtectionOrder> orders =
