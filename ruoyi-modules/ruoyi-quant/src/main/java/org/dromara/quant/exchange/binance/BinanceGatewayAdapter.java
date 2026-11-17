@@ -1765,7 +1765,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                         protectionTiming.schedulerQueueNanos += java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(deferred.waitedMillis());
                     }
                     log.warn("Binance REST 请求延期 method={} path={} kind={} reason={} queueSize={} queueSizes={} waitedMs={} retryAfterMs={}",
-                        chain.request().method(), chain.request().url().encodedPath(), deferred.kind(), deferred.reason(), deferred.queueSize(), deferred.queueSizes() == null ? null : java.util.Arrays.toString(deferred.queueSizes()), deferred.waitedMillis(), deferred.retryAfterMillis());
+                        chain.request().method(), chain.request().url().encodedPath(), deferred.kind(), deferred.reason(), deferred.queueSize(), java.util.Arrays.toString(deferred.queueSizes()), deferred.waitedMillis(), deferred.retryAfterMillis());
                     throw deferred;
                 }
                 long queueNanos = System.nanoTime() - queueStarted;
