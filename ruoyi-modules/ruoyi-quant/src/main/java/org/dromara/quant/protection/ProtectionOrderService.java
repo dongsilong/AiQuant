@@ -17,7 +17,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -603,7 +605,11 @@ public class ProtectionOrderService {
         BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), live);
         BigDecimal stopPrice = normalizeProtectionPrice(credentialId, position, hardStopPrice(position, marginLossRatio), "STOP_MARKET", live);
         QuantProtectionOrder existing = findActive(credentialId, position, "HARD_STOP");
-        boolean working = existing != null && (!live || confirmOnExchange(credentialId, existing, true, position.getQuantity()));
+        ExchangeGateway.ProtectionOrderSnapshot verifiedFirstProfit = existing == null || firstFacts == null
+            ? null : firstFacts.workingOrders().get(existing.getId());
+        boolean working = existing != null && (!live || (verifiedFirstProfit == null
+            ? confirmOnExchange(credentialId, existing, true, position.getQuantity())
+            : confirmVerifiedActiveProtection(credentialId, existing, verifiedFirstProfit)));
         // 固定保护价在该持仓生命周期内冻结，保证金波动不能驱动撤单重挂。
         if (working && existing.getStopPrice() != null) {
             stopPrice = existing.getStopPrice();
@@ -817,6 +823,7 @@ public class ProtectionOrderService {
         BigDecimal baseQty = signal.quantityBase() == ProtectionSignal.QuantityBase.INITIAL && initialPositionQuantity != null ? initialPositionQuantity : position.getQuantity();
         BigDecimal targetQty = baseQty.multiply(signal.quantityRate() == null ? BigDecimal.ONE : signal.quantityRate());
         boolean firstWasWorking = false;
+        FirstProfitFacts firstFacts = null;
         if ("FIRST_TP".equals(signal.type())) {
             if (firstRemaining != null && firstRemaining.signum() <= 0) {
                 return;
@@ -825,10 +832,10 @@ public class ProtectionOrderService {
                 if (firstLocalExecuted == null || firstLocalExecuted.signum() < 0) {
                     throw new IllegalStateException("首平缺少可信本地累计成交量，禁止创建新目标");
                 }
-                var fact = firstProfitFacts(credentialId, position);
-                firstWasWorking = fact.working();
+                firstFacts = firstProfitFacts(credentialId, position);
+                firstWasWorking = firstFacts.working();
                 targetQty = normalizeQuantity(credentialId, position.getSymbol(), targetQty, true)
-                    .subtract(fact.executed()).subtract(firstLocalExecuted).max(BigDecimal.ZERO);
+                    .subtract(firstFacts.executed()).subtract(firstLocalExecuted).max(BigDecimal.ZERO);
                 if (firstRemaining != null) {
                     targetQty = targetQty.min(firstRemaining);
                 }
@@ -1720,6 +1727,44 @@ public class ProtectionOrderService {
     }
 
     /**
+     * 首止盈事实核查刚刚验证过活动订单时，复用同一份精确快照完成本地确认，避免同一同步轮次再次查询交易所。
+     */
+    private boolean confirmVerifiedActiveProtection(Long credentialId, QuantProtectionOrder local,
+                                                    ExchangeGateway.ProtectionOrderSnapshot actual) {
+        if (recoverNeverSentIntent(credentialId, local)) {
+            return false;
+        }
+        if (actual == null || !Set.of("NEW", "WORKING", "ACCEPTED").contains(actual.status())
+            || local.getClientOrderId() == null || !local.getClientOrderId().equals(actual.clientAlgoId())
+            || actual.algoId() == null || actual.algoId() <= 0
+            || local.getExchangeOrderId() != null && !local.getExchangeOrderId().equals(actual.algoId())
+            || !Objects.equals(local.getSymbol(), actual.symbol())
+            || !sameTarget(local, actual.type(), actual.quantity(), actual.triggerPrice())
+            || !("SHORT".equalsIgnoreCase(local.getPositionSide()) ? "BUY" : "SELL").equalsIgnoreCase(actual.side())
+            || !("BOTH".equalsIgnoreCase(actual.positionSide()) || local.getPositionSide().equalsIgnoreCase(actual.positionSide()))) {
+            throw new IllegalStateException("复用的首止盈交易所快照与本地保护单身份或参数不一致");
+        }
+        if (decisionLogs != null) {
+            decisionLogs.protection(credentialId, local, actual);
+        }
+        boolean newlyConfirmed = !"WORKING".equals(local.getStatus());
+        local.setExchangeOrderId(actual.algoId());
+        local.setStatus("WORKING");
+        if (mapper.updateById(local) != 1) {
+            throw new IllegalStateException("首止盈保护单已生效但本地账本更新失败，保持调度占用");
+        }
+        if (!"PAPER".equalsIgnoreCase(executionApplicationService.requireCredential(credentialId).getRunMode())) {
+            requireLiveDispatcher().recoverVerifiedProtection(credentialId, local.getSymbol(), local.getClientOrderId(), "PROTECT_CREATE", actual.algoId());
+        }
+        if (newlyConfirmed) {
+            log.info("止盈止损交易所确认生效: accountId={}, positionId={}, symbol={}, protectionType={}, exchangeOrderId={}, clientAlgoId={}, quantity={}, triggerPrice={}, exchangeStatus={}",
+                credentialId, local.getPositionId(), local.getSymbol(), local.getProtectionType(), actual.algoId(), local.getClientOrderId(),
+                actual.quantity(), actual.triggerPrice(), actual.status());
+        }
+        return true;
+    }
+
+    /**
      * 条件单触发后，普通子订单也必须确认终态；不能仅凭算法订单 FINISHED 再发减仓。
      */
     private ExchangeGateway.ProtectionOrderSnapshot readProtectionSnapshot(ExchangeGateway.Credential credential, QuantProtectionOrder order) {
@@ -1813,7 +1858,7 @@ public class ProtectionOrderService {
         return firstProfitFacts(credentialId, position).executed();
     }
 
-    private record FirstProfitFacts(BigDecimal executed, boolean working) { }
+    private record FirstProfitFacts(BigDecimal executed, boolean working, Map<Long, ExchangeGateway.ProtectionOrderSnapshot> workingOrders) { }
 
     private record FirstProfitQueryKey(Long credentialId, Long positionId, String positionCycleKey) { }
 
@@ -1862,6 +1907,7 @@ public class ProtectionOrderService {
         int queriedOrderCount = 0;
         BigDecimal total = BigDecimal.ZERO;
         boolean working = false;
+        Map<Long, ExchangeGateway.ProtectionOrderSnapshot> workingOrders = new HashMap<>();
         for (QuantProtectionOrder order : orders) {
             if (recoverNeverSentIntent(credentialId, order)
                 || Set.of("NOT_SENT", "REJECTED").contains(order.getStatus()) && order.getExchangeOrderId() == null
@@ -1899,9 +1945,12 @@ public class ProtectionOrderService {
                 throw new ProtectionExecutionPendingException();
             }
             working |= active;
+            if (active && order.getId() != null) {
+                workingOrders.put(order.getId(), actual);
+            }
             BigDecimal executed = actual.executedQuantity() == null ? BigDecimal.ZERO : actual.executedQuantity();
             order.setExecutedQuantity(executed.max(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity()));
-            order.setStatus(actual.status());
+            order.setStatus(active ? "WORKING" : actual.status());
             phaseStartedAt = System.nanoTime();
             if (mapper.updateById(order) != 1) {
                 throw new IllegalStateException("首平成交事实未可靠持久化，禁止重建目标");
@@ -1915,7 +1964,7 @@ public class ProtectionOrderService {
                 credentialId, position.getSymbol(), position.getId(), orders.size(), queriedOrderCount, dbQueryMs, credentialMs,
                 algoQueryMs, childQueryMs, dbUpdateMs, totalMs, total, working);
         }
-        return new FirstProfitFacts(total, working);
+        return new FirstProfitFacts(total, working, Map.copyOf(workingOrders));
     }
 
     /**
