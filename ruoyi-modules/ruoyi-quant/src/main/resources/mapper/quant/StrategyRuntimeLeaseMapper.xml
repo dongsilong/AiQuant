@@ -27,5 +27,7 @@ WHERE instance_id=#{instanceId} AND credential_id=#{credentialId}
     <select id="currentEpoch" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT lease_epoch FROM quant_strategy_runtime_lease
 WHERE instance_id=#{instanceId} AND credential_id=#{credentialId}
   AND symbol=#{symbol} AND owner_token=#{ownerToken}
-  AND lease_until>NOW() AND lease_epoch>0]]></select>
+  AND lease_until>NOW() AND lease_epoch>0
+  AND EXISTS (SELECT 1 FROM quant_strategy_instance i WHERE i.id=#{instanceId} AND i.credential_id=#{credentialId})
+  AND EXISTS (SELECT 1 FROM quant_credential c WHERE c.id=#{credentialId} AND c.del_flag=0)]]></select>
 </mapper>
