@@ -43,6 +43,62 @@ class RestRequestSchedulerTest {
     }
 
     @Test
+    void agedAccountRequestReservesItsWeightFromBackgroundReads() throws InterruptedException {
+        var scheduler = new RestRequestScheduler(50);
+        scheduler.acquire(RestRequestScheduler.Kind.TRADE, 40);
+
+        var sequence = new java.util.concurrent.atomic.AtomicInteger();
+        var accountOrder = new java.util.concurrent.atomic.AtomicInteger();
+        var backgroundOrder = new java.util.concurrent.atomic.AtomicInteger();
+        var accountDone = new java.util.concurrent.CountDownLatch(1);
+        var backgroundDone = new java.util.concurrent.CountDownLatch(1);
+        Thread account = new Thread(() -> {
+            try {
+                scheduler.acquire(RestRequestScheduler.Kind.ACCOUNT, 20);
+                accountOrder.set(sequence.incrementAndGet());
+            } finally {
+                accountDone.countDown();
+            }
+        });
+        Thread background = new Thread(() -> {
+            try {
+                scheduler.acquire(RestRequestScheduler.Kind.BACKGROUND, 1);
+                backgroundOrder.set(sequence.incrementAndGet());
+            } finally {
+                backgroundDone.countDown();
+            }
+        });
+        try {
+            account.start();
+            Thread.sleep(300L);
+            background.start();
+
+            assertTrue(accountDone.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(backgroundDone.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(accountOrder.get() < backgroundOrder.get(),
+                "aged account request must reserve its remaining weight before background reads");
+        } finally {
+            account.interrupt();
+            background.interrupt();
+            account.join(1_000L);
+            background.join(1_000L);
+        }
+    }
+
+    @Test
+    void queueTimeoutIncludesTheWaitingTicketInQueueSnapshot() {
+        var scheduler = new RestRequestScheduler(60_000L);
+        scheduler.acquire(RestRequestScheduler.Kind.TRADE, 40);
+
+        var failure = assertThrows(ExchangeMarketPort.RequestDeferredException.class,
+            () -> scheduler.acquire(RestRequestScheduler.Kind.TRADE, 1));
+
+        assertEquals("QUEUE_TIMEOUT", failure.reason());
+        assertEquals(1, failure.queueSize());
+        assertEquals(1, failure.queueSizes()[RestRequestScheduler.Kind.TRADE.ordinal()]);
+    }
+
+    @Test
     void queueKindsKeepPositionVerificationAheadOfInformationalReads() {
         assertEquals(0, RestRequestScheduler.Kind.TRADE.ordinal());
         assertEquals(1, RestRequestScheduler.Kind.PROTECTION_VERIFY.ordinal());
