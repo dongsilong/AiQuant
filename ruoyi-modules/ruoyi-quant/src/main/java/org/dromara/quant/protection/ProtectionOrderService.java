@@ -1721,11 +1721,23 @@ public class ProtectionOrderService {
      * 条件单触发后，普通子订单也必须确认终态；不能仅凭算法订单 FINISHED 再发减仓。
      */
     private ExchangeGateway.ProtectionOrderSnapshot readProtectionSnapshot(ExchangeGateway.Credential credential, QuantProtectionOrder order) {
+        return readProtectionSnapshot(credential, order, null);
+    }
+
+    private ExchangeGateway.ProtectionOrderSnapshot readProtectionSnapshot(ExchangeGateway.Credential credential, QuantProtectionOrder order, long[] queryTimes) {
+        long startedAt = System.nanoTime();
         ExchangeGateway.ProtectionOrderSnapshot actual = gateway.queryProtectionOrder(credential, order.getExchangeOrderId(), order.getClientOrderId(), order.getSymbol(), order.getCreatedAtEpochMillis());
+        if (queryTimes != null) {
+            queryTimes[0] += (System.nanoTime() - startedAt) / 1_000_000L;
+        }
         if (actual == null || actual.actualOrderId() == null || actual.actualOrderId() <= 0) {
             return actual;
         }
+        startedAt = System.nanoTime();
         ExchangeGateway.OrderSnapshot child = gateway.queryOrder(credential, order.getSymbol(), actual.actualOrderId(), null);
+        if (queryTimes != null) {
+            queryTimes[1] += (System.nanoTime() - startedAt) / 1_000_000L;
+        }
         if (child != null && protectionJournal != null) {
             protectionJournal.bindChild(credential, order, actual, child);
         }
@@ -1802,10 +1814,19 @@ public class ProtectionOrderService {
     private record FirstProfitFacts(BigDecimal executed, boolean working) { }
 
     private FirstProfitFacts firstProfitFacts(Long credentialId, QuantPosition position) {
+        long totalStartedAt = System.nanoTime();
+        long phaseStartedAt = System.nanoTime();
         List<QuantProtectionOrder> orders =
             mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>().eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getPositionId,
                 position.getId()).eq(QuantProtectionOrder::getPositionCycleKey, position.getProtectionCycleKey()).eq(QuantProtectionOrder::getProtectionType, "FIRST_TP"));
+        long dbQueryMs = (System.nanoTime() - phaseStartedAt) / 1_000_000L;
+        phaseStartedAt = System.nanoTime();
         ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
+        long credentialMs = (System.nanoTime() - phaseStartedAt) / 1_000_000L;
+        long algoQueryMs = 0L;
+        long childQueryMs = 0L;
+        long dbUpdateMs = 0L;
+        int queriedOrderCount = 0;
         BigDecimal total = BigDecimal.ZERO;
         boolean working = false;
         for (QuantProtectionOrder order : orders) {
@@ -1814,7 +1835,18 @@ public class ProtectionOrderService {
                     && (order.getExecutedQuantity() == null || order.getExecutedQuantity().signum() == 0)) {
                 continue;
             }
-            ExchangeGateway.ProtectionOrderSnapshot actual = readProtectionSnapshot(credential, order);
+            long[] queryTimes = new long[2];
+            phaseStartedAt = System.nanoTime();
+            ExchangeGateway.ProtectionOrderSnapshot actual = readProtectionSnapshot(credential, order, queryTimes);
+            long orderQueryMs = (System.nanoTime() - phaseStartedAt) / 1_000_000L;
+            algoQueryMs += queryTimes[0];
+            childQueryMs += queryTimes[1];
+            queriedOrderCount++;
+            if (orderQueryMs >= 500L) {
+                log.warn("首次止盈保护单核查耗时偏高 credentialId={} symbol={} positionId={} clientAlgoId={} localStatus={} exchangeStatus={} totalQueryMs={} algoQueryMs={} childQueryMs={} hasChildOrder={}",
+                    credentialId, order.getSymbol(), position.getId(), order.getClientOrderId(), order.getStatus(), actual == null ? null : actual.status(),
+                    orderQueryMs, queryTimes[0], queryTimes[1], actual != null && actual.actualOrderId() != null);
+            }
             if (actual == null || Set.of("TRIGGERING", "TRIGGERED").contains(actual.status())) {
                 throw new ProtectionExecutionPendingException();
             }
@@ -1837,10 +1869,18 @@ public class ProtectionOrderService {
             BigDecimal executed = actual.executedQuantity() == null ? BigDecimal.ZERO : actual.executedQuantity();
             order.setExecutedQuantity(executed.max(order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity()));
             order.setStatus(actual.status());
+            phaseStartedAt = System.nanoTime();
             if (mapper.updateById(order) != 1) {
                 throw new IllegalStateException("首平成交事实未可靠持久化，禁止重建目标");
             }
+            dbUpdateMs += (System.nanoTime() - phaseStartedAt) / 1_000_000L;
             total = total.add(order.getExecutedQuantity());
+        }
+        long totalMs = (System.nanoTime() - totalStartedAt) / 1_000_000L;
+        if (totalMs >= 500L) {
+            log.warn("首次止盈核查阶段耗时偏高 credentialId={} symbol={} positionId={} firstTpOrderCount={} queriedOrderCount={} dbQueryMs={} credentialMs={} algoQueryMs={} childQueryMs={} dbUpdateMs={} totalMs={} executedQuantity={} working={}",
+                credentialId, position.getSymbol(), position.getId(), orders.size(), queriedOrderCount, dbQueryMs, credentialMs,
+                algoQueryMs, childQueryMs, dbUpdateMs, totalMs, total, working);
         }
         return new FirstProfitFacts(total, working);
     }
