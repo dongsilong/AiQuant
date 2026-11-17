@@ -794,10 +794,12 @@ class ProtectionOrderServiceTest {
             .thenThrow(new org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException());
 
         assertEquals(0, new BigDecimal("0.15").compareTo(service.firstTakeProfitExecutedQuantity(1L, position)));
+        assertEquals(0, new BigDecimal("0.15").compareTo(service.firstTakeProfitExecutedQuantity(1L, position)));
 
         assertEquals("MISSING", local.getStatus());
         assertEquals(0, new BigDecimal("0.15").compareTo(local.getExecutedQuantity()));
         verify(dispatcher).activeProtectionTicket(1L, "BTCUSDT", local.getClientOrderId(), "PROTECT_CREATE");
+        verify(gateway, times(1)).queryProtectionOrder(any(), isNull(), eq(local.getClientOrderId()), eq("BTCUSDT"), any());
         verify(mapper).updateById(local);
     }
 
