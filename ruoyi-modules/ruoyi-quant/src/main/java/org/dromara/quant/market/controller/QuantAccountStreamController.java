@@ -97,11 +97,7 @@ public class QuantAccountStreamController {
             dispatcher.set(writer);
             writer.start();
             heartbeat.set(heartbeatScheduler.scheduleAtFixedRate(() -> {
-                try {
-                    emitter.send(SseEmitter.event().comment("keepalive"));
-                } catch (IOException | RuntimeException ex) {
-                    cleanup.run();
-                }
+                if (!closed.get()) writer.offerComment("heartbeat", "keepalive");
             }, 15, 15, TimeUnit.SECONDS));
             accountSubscription.set(userDataStreamHub.subscribe(credential,
                 event -> send(payload -> writer.offer("quant.account", payload), credential, event)));
