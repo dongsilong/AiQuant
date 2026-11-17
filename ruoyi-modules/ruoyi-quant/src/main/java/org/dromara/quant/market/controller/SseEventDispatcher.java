@@ -1,6 +1,7 @@
 package org.dromara.quant.market.controller;
 
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.dromara.quant.exchange.ExchangeGateway;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import lombok.extern.slf4j.Slf4j;
 
@@ -158,7 +159,7 @@ final class SseEventDispatcher implements AutoCloseable {
                 long now = System.currentTimeMillis();
                 long nextWarningAt = nextDelayWarningAt.get();
                 if (queueDelayMillis >= 1_000 && now >= nextWarningAt && nextDelayWarningAt.compareAndSet(nextWarningAt, now + 10_000L)) {
-                    log.warn("SSE 下游发送排队延迟 eventName={} eventType={} queueDelayMs={} sendDurationMs=pending reliableQueueSize={} latestStateQueueSize={} queueSize={} oldestEventAgeMs={} coalescedCount={}",
+                    log.warn("SSE 下游发送排队延迟 eventName={} eventType={} queueDelayMs={} reliableQueueSize={} latestStateQueueSize={} queueSize={} oldestEventAgeMs={} coalescedCount={}",
                         pending.eventName(), eventType(pending), queueDelayMillis, reliableSize, latestSize,
                         reliableSize + latestSize, oldestEventAgeMs, coalescedCount.get());
                 }
@@ -171,8 +172,10 @@ final class SseEventDispatcher implements AutoCloseable {
                 }
                 long sendDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - sendStartedAt);
                 if (sendDurationMs >= 500) {
-                    log.warn("SSE 下游写出耗时偏高 eventName={} eventType={} sendDurationMs={} reliableQueueSize={} latestStateQueueSize={}",
-                        pending.eventName(), eventType(pending), sendDurationMs, reliableQueue.size(), latestStateQueue.size());
+                    synchronized (queueLock) {
+                        log.warn("SSE 下游写出耗时偏高 eventName={} eventType={} sendDurationMs={} reliableQueueSize={} latestStateQueueSize={}",
+                            pending.eventName(), eventType(pending), sendDurationMs, reliableQueue.size(), latestStateQueue.size());
+                    }
                 }
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
@@ -200,12 +203,8 @@ final class SseEventDispatcher implements AutoCloseable {
             Object type = data.get("type");
             if (type != null) return String.valueOf(type);
         }
-        try {
-            Object type = pending.data().getClass().getMethod("type").invoke(pending.data());
-            return String.valueOf(type);
-        } catch (ReflectiveOperationException ignored) {
-            return pending.data() == null ? "UNKNOWN" : pending.data().getClass().getSimpleName();
-        }
+        if (pending.data() instanceof ExchangeGateway.MarketEvent event) return event.type();
+        return pending.data() == null ? "UNKNOWN" : pending.data().getClass().getSimpleName();
     }
 
     void notifyFailure() {
