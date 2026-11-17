@@ -196,7 +196,7 @@ class MarketStreamHubIsolationTest {
                 callback.accept(new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", interval, BigDecimal.ONE, null, Instant.now(), 10L, Instant.now(), false));
                 callback.accept(new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", interval, BigDecimal.ONE, null, Instant.now(), 12L, Instant.now(), false));
             }
-            assertTrue(aggregateQueryEntered.await(3, TimeUnit.SECONDS));
+            org.junit.jupiter.api.Assertions.assertTrue(aggregateQueryEntered.await(3, TimeUnit.SECONDS));
             long shareDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
             boolean sharedWaiterJoined = false;
             while (System.nanoTime() < shareDeadline) {
@@ -212,7 +212,7 @@ class MarketStreamHubIsolationTest {
             }
             org.junit.jupiter.api.Assertions.assertTrue(sharedWaiterJoined, "second interval did not join the in-flight aggregate-trade request");
             releaseAggregateQuery.countDown();
-            assertTrue(recoveryDone.await(5, TimeUnit.SECONDS), "both intervals should replay the shared aggregate-trade page");
+            org.junit.jupiter.api.Assertions.assertTrue(recoveryDone.await(5, TimeUnit.SECONDS), "both intervals should replay the shared aggregate-trade page");
             verify(gateway, times(1)).queryAggregateTradesFrom(any(), any(), anyLong(), anyInt());
         } finally {
             releaseAggregateQuery.countDown();
