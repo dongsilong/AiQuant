@@ -851,9 +851,16 @@ class TradingReconciliationTransactionTest {
         when(orders.selectOne(any())).thenReturn(null);
         when(orders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
 
+        doAnswer(invocation -> {
+            assertTrue(TransactionSynchronizationManager.isActualTransactionActive(),
+                "lease fencing check must hold the lease row lock in the fact-write transaction");
+            return null;
+        }).when(historyLease).assertOwnedForCommit();
+
         TradingReconciliationService.TradingDataSyncResult result = service().syncTradingData(credential(), "BTCUSDT");
 
         assertEquals(20, result.orderCount());
+        verify(historyLease).assertOwnedForCommit();
         verify(gateway, atLeast(13)).queryTrades(any(), eq("BTCUSDT"), any());
         verify(gateway, never()).queryTradesByOrder(any(), any(), any(), any(), any());
         verify(fillCursorService).advance(eq(1L), eq("BTCUSDT"), any(java.time.LocalDateTime.class));
