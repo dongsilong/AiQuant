@@ -16,9 +16,12 @@ import org.dromara.quant.credential.domain.bo.QuantCredentialBo;
 import org.dromara.quant.credential.domain.vo.QuantCredentialVo;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.runtime.StrategyRuntimeService;
 import org.dromara.quant.security.CredentialMasker;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -38,6 +41,8 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
      * 交易所统一网关。
      */
     private final ExchangeGateway exchangeGateway;
+    /** Runtime 生命周期协调。 */
+    private final StrategyRuntimeService runtimeService;
 
     static void validateSingleBoundUser(Long ownerUserId) {
         if (ownerUserId == null || ownerUserId <= 0) {
@@ -139,6 +144,9 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setLastConnectTime(current.getLastConnectTime());
         }
         credentialMapper.updateById(entity);
+        if (modeChanged || credentialChanged) {
+            afterCommit(() -> runtimeService.invalidateCredential(entity.getId()));
+        }
         return toVo(entity);
     }
 
@@ -149,13 +157,18 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
     @Transactional(rollbackFor = Exception.class)
     public Boolean deleteWithValidByIds(Collection<Long> ids) {
         ids.forEach(id -> validateOwner(credentialMapper.selectById(id)));
-        return credentialMapper.deleteByIds(ids) > 0;
+        boolean deleted = credentialMapper.deleteByIds(ids) > 0;
+        if (deleted) {
+            ids.forEach(id -> afterCommit(() -> runtimeService.invalidateCredential(id)));
+        }
+        return deleted;
     }
 
     /**
      * 修改启停状态。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void changeStatus(Long id, String status) {
         QuantCredential credential = credentialMapper.selectById(id);
         if (credential == null) {
@@ -170,6 +183,9 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         }
         credential.setStatus(status);
         credentialMapper.updateById(credential);
+        if ("1".equals(status)) {
+            afterCommit(() -> runtimeService.invalidateCredential(id));
+        }
     }
 
     /**
@@ -200,6 +216,19 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         if (!result.success()) {
             throw new ServiceException("凭证验证失败：" + result.message());
         }
+    }
+
+    private static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     private void applyDefaults(QuantCredential entity) {
