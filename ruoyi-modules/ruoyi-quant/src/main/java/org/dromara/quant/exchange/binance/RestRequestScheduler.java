@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 final class RestRequestScheduler {
     private static final Logger log = LoggerFactory.getLogger(RestRequestScheduler.class);
     private static final double TOKEN_CAPACITY = 40D;
+    private static final long RESERVATION_WAIT_NANOS = TimeUnit.MILLISECONDS.toNanos(250L);
     private final ArrayDeque<Ticket>[] queues;
     private final int[] rotation = {0, 1, 0, 2, 0, 0, 1, 3, 0, 4};
     /** 每个权重单位补充所需时间；生产环境 50ms 即每秒最多补充 20 个权重单位。 */
@@ -52,7 +53,7 @@ final class RestRequestScheduler {
         if (queue.size() >= 16) {
             throw deferred("QUEUE_FULL", kind, 0L, 2_000L);
         }
-        Ticket ticket = new Ticket(kind, requestWeight);
+        Ticket ticket = new Ticket(kind, requestWeight, initialNow);
         queue.addLast(ticket);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(kind == Kind.TRADE ? 2 : 8);
         try {
@@ -68,10 +69,14 @@ final class RestRequestScheduler {
                     throw deferred("BLOCKED_UNTIL", kind, TimeUnit.NANOSECONDS.toMillis(now - initialNow), TimeUnit.NANOSECONDS.toMillis(blockedUntil - now) + 1L);
                 }
                 if (now >= deadline) {
+                    if (!queue.contains(ticket)) {
+                        log.error("Binance REST 调度器队列状态异常 reason=QUEUE_TIMEOUT kind={} requestWeight={} waitedMs={} queueSizes={}",
+                            kind, requestWeight, TimeUnit.NANOSECONDS.toMillis(now - initialNow), java.util.Arrays.toString(queueSizes()));
+                    }
                     throw deferred("QUEUE_TIMEOUT", kind, TimeUnit.NANOSECONDS.toMillis(now - initialNow), 1_500L);
                 }
                 refillTokens(now);
-                int selected = selectEligibleQueue();
+                int selected = selectEligibleQueue(now);
                 if (selected >= 0 && rotation[selected] == kind.ordinal() && queue.peekFirst() == ticket) {
                     queue.removeFirst();
                     availableTokens -= requestWeight;
@@ -80,7 +85,7 @@ final class RestRequestScheduler {
                     notifyAll();
                     return;
                 }
-                long tokenDelay = nextEligibleTokenDelayNanos();
+                long tokenDelay = nextEligibleTokenDelayNanos(now);
                 long fairnessDelay = TimeUnit.MILLISECONDS.toNanos(10);
                 long delay = tokenDelay == Long.MAX_VALUE ? fairnessDelay : Math.min(tokenDelay, fairnessDelay);
                 TimeUnit.NANOSECONDS.timedWait(this, Math.min(delay, deadline - now));
@@ -103,29 +108,74 @@ final class RestRequestScheduler {
         lastRefill = now;
     }
 
-    private int selectEligibleQueue() {
+    private int selectEligibleQueue(long now) {
+        Ticket reservation = reservationTicket(now);
         for (int i = 0; i < rotation.length; i++) {
             int selected = (cursor + i) % rotation.length;
-            Ticket head = queues[rotation[selected]].peekFirst();
-            if (head != null && head.weight() <= availableTokens) {
-                return selected;
+            Kind kind = Kind.values()[rotation[selected]];
+            Ticket head = queues[kind.ordinal()].peekFirst();
+            if (head == null || head.weight() > availableTokens) {
+                continue;
             }
+            if (reservation != null && head != reservation
+                && priority(kind) >= priority(reservation.kind())
+                && availableTokens - head.weight() < reservation.weight()) {
+                continue;
+            }
+            return selected;
         }
         return -1;
     }
 
-    private long nextEligibleTokenDelayNanos() {
+    private long nextEligibleTokenDelayNanos(long now) {
+        Ticket reservation = reservationTicket(now);
         int minimumWeight = Integer.MAX_VALUE;
-        for (ArrayDeque<Ticket> queue : queues) {
-            Ticket head = queue.peekFirst();
-            if (head != null) {
-                minimumWeight = Math.min(minimumWeight, head.weight());
+        for (Kind kind : Kind.values()) {
+            Ticket head = queues[kind.ordinal()].peekFirst();
+            if (head == null) {
+                continue;
             }
+            if (reservation != null && head != reservation
+                && priority(kind) >= priority(reservation.kind())
+                && availableTokens - head.weight() < reservation.weight()) {
+                continue;
+            }
+            minimumWeight = Math.min(minimumWeight, head.weight());
         }
         if (minimumWeight == Integer.MAX_VALUE || minimumWeight <= availableTokens) {
             return TimeUnit.MILLISECONDS.toNanos(10);
         }
         return Math.max(1L, (long) Math.ceil((minimumWeight - availableTokens) * refillInterval));
+    }
+
+    private Ticket reservationTicket(long now) {
+        Ticket reservation = null;
+        for (Kind kind : Kind.values()) {
+            Ticket head = queues[kind.ordinal()].peekFirst();
+            if (head == null) {
+                continue;
+            }
+            boolean critical = priority(kind) <= priority(Kind.POSITION_VERIFY);
+            if (!critical && now - head.enqueuedAtNanos() < RESERVATION_WAIT_NANOS) {
+                continue;
+            }
+            if (reservation == null || priority(kind) < priority(reservation.kind())
+                || priority(kind) == priority(reservation.kind())
+                    && head.enqueuedAtNanos() < reservation.enqueuedAtNanos()) {
+                reservation = head;
+            }
+        }
+        return reservation;
+    }
+
+    private static int priority(Kind kind) {
+        return switch (kind) {
+            case PROTECTION_VERIFY -> 0;
+            case TRADE -> 1;
+            case POSITION_VERIFY -> 2;
+            case ACCOUNT -> 3;
+            case BACKGROUND -> 4;
+        };
     }
 
     private int[] queueSizes() {
@@ -161,7 +211,7 @@ final class RestRequestScheduler {
         notifyAll();
     }
 
-    private record Ticket(Kind kind, int weight) { }
+    private record Ticket(Kind kind, int weight, long enqueuedAtNanos) { }
 
     /**
      * 令牌桶按每秒 20 个 IP 权重单位补充、最多积累 40 个单位；类别份额仍由加权轮转保证。
