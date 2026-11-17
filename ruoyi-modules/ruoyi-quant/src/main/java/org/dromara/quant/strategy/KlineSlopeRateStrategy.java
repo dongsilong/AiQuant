@@ -314,32 +314,31 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
      */
     @Override
     public Optional<EntrySignal> evaluateEntry(StrategyContext context, Map<String, Object> params) {
+        return evaluateEntry(context, params, null, null);
+    }
+
+    /**
+     * 根据斜率和最近已收盘的 1 分钟 K 线 5MA/7MA 计算开仓信号。
+     * 均线不包含当前未收盘 K 线；缺少完整窗口或均线方向不一致时不允许开仓。
+     */
+    public Optional<EntrySignal> evaluateEntry(StrategyContext context, Map<String, Object> params, BigDecimal ma5, BigDecimal ma7) {
         SlopeEvaluation evaluation = calculateSlope(context, params);
         if (evaluation == null) {
             return Optional.empty();
         }
-//        if("ERAUSDT".equalsIgnoreCase(context.symbol())){
-//            log.info("计算交易对：" + context.symbol());
-//        }
-//        log.info("计算交易对：" + context.symbol());
         double degrees = evaluation.rawDegrees();
         if (Math.abs(degrees) > 58 && shouldLogSlope(context.symbol(), System.currentTimeMillis())) {
-            log.warn("  ***  策略实时斜率 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}°", context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(),
-                evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(), BigDecimal.valueOf(degrees).setScale(2, RoundingMode.HALF_UP));
+            log.warn("  ***  策略实时斜率 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}° 1分钟MA5：{} MA7：{}",
+                context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(),
+                evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(),
+                BigDecimal.valueOf(degrees).setScale(2, RoundingMode.HALF_UP), ma5, ma7);
         }
         if (!evaluation.entryApproved()) {
             return Optional.empty();
         }
         EntrySignal.Direction direction = degrees > 0 ? EntrySignal.Direction.LONG : EntrySignal.Direction.SHORT;
-        return Optional.of(new EntrySignal(direction, "K线斜率角度=" + evaluation.degrees() + "°, 阈值=" + evaluation.entryThreshold() + "°"));
-    }
-
-    /**
-     * 在斜率信号通过后，使用最近已收盘的 1 分钟 K 线 5MA/7MA 做方向过滤。
-     * 均线不包含当前未收盘 K 线；缺少完整窗口或均线方向不一致时不允许开仓。
-     */
-    public Optional<EntrySignal> evaluateEntry(StrategyContext context, Map<String, Object> params, BigDecimal ma5, BigDecimal ma7) {
-        Optional<EntrySignal> signal = evaluateEntry(context, params);
+        Optional<EntrySignal> signal = Optional.of(new EntrySignal(direction,
+            "K线斜率角度=" + evaluation.degrees() + "°, 阈值=" + evaluation.entryThreshold() + "°"));
         if (signal.isEmpty() || !entryMaDirectionFilterEnabled(params)) {
             return signal;
         }
