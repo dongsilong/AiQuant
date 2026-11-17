@@ -103,6 +103,7 @@ public class TradingReconciliationService {
     private final TransactionTemplate transaction;
     private final ConcurrentHashMap<Long, ReentrantLock> positionLocks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, CompletableFuture<AccountPositionSnapshot>> positionRefreshes = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, CompletableFuture<ExchangeGateway.AccountSnapshot>> accountRefreshes = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, CachedPositionSnapshot> runtimePositionSnapshots = new ConcurrentHashMap<>();
     private final Set<Long> balanceSnapshotTasks = ConcurrentHashMap.newKeySet();
     /** Retry read-only snapshot refreshes after REST deferral/rate limits; never retry order mutations. */
@@ -556,8 +557,7 @@ public class TradingReconciliationService {
             && Duration.between(cached.fetchedAt(), Instant.now()).compareTo(RUNTIME_POSITION_CACHE_AGE) <= 0
             && (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || positionFreshness == null || positionFreshness.fresh(credentialId))) {
             ExchangeGateway.AccountSnapshot account = refreshAccount
-                ? java.util.Objects.requireNonNull(gateway.queryAccountForPosition(new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
-                    credential.getSignatureType(), credential.getRunMode())), "Binance account snapshot missing")
+                ? queryAccountSnapshotShared(credential)
                 : cached.account();
             AccountPositionSnapshot snapshot = new AccountPositionSnapshot(account, cached.positions(), generation, runtimeGeneration);
             if (positionGeneration(credentialId) == generation && runtimeSnapshotGeneration(credentialId) == runtimeGeneration
@@ -578,12 +578,8 @@ public class TradingReconciliationService {
                 || runtimeSnapshotGeneration(credentialId) != snapshot.runtimeGeneration()) {
                 throw new SnapshotSupersededException("Shared account position snapshot was invalidated before use");
             }
-            if (refreshAccount) {
-                ExchangeGateway.AccountSnapshot account = java.util.Objects.requireNonNull(
-                    gateway.queryAccountForPosition(new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
-                        credential.getSignatureType(), credential.getRunMode())), "Binance account snapshot missing");
-                return new AccountPositionSnapshot(account, snapshot.positions(), snapshot.positionGeneration(), snapshot.runtimeGeneration());
-            }
+            // The in-flight position refresh already queried the account balance; reuse
+            // that same fresh account fact instead of issuing another ACCOUNT request.
             return snapshot;
         }
         try {
@@ -598,8 +594,7 @@ public class TradingReconciliationService {
                 && Duration.between(cached.fetchedAt(), Instant.now()).compareTo(RUNTIME_POSITION_CACHE_AGE) <= 0
                 && (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || positionFreshness == null || positionFreshness.fresh(credentialId))) {
                 ExchangeGateway.AccountSnapshot account = refreshAccount
-                    ? java.util.Objects.requireNonNull(gateway.queryAccountForPosition(new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
-                        credential.getSignatureType(), credential.getRunMode())), "Binance account snapshot missing")
+                    ? queryAccountSnapshotShared(credential)
                     : cached.account();
                 if (positionGeneration(credentialId) == generation && runtimeSnapshotGeneration(credentialId) == runtimeGeneration
                     && (!"LIVE".equalsIgnoreCase(credential.getRunMode()) || positionFreshness == null || positionFreshness.fresh(credentialId))) {
@@ -616,7 +611,7 @@ public class TradingReconciliationService {
                 credential.getRunMode());
             // Network I/O stays outside the account write lock and database transaction.
             long accountQueryStartedAt = System.nanoTime();
-            var account = java.util.Objects.requireNonNull(gateway.queryAccountForPosition(exchangeCredential), "Binance account snapshot missing");
+            var account = java.util.Objects.requireNonNull(queryAccountSnapshotShared(credential), "Binance account snapshot missing");
             long accountQueryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - accountQueryStartedAt);
             long positionQueryStartedAt = System.nanoTime();
             var snapshots = positionSnapshotQuery.query(credentialId, exchangeCredential);
@@ -714,6 +709,34 @@ public class TradingReconciliationService {
             positionRetryTasks.values().forEach(task -> task.cancel(false));
             positionRetryTasks.clear();
             positionRetryAttempts.clear();
+        }
+    }
+
+    private ExchangeGateway.AccountSnapshot queryAccountSnapshotShared(QuantCredential credential) {
+        Long credentialId = credential.getId();
+        CompletableFuture<ExchangeGateway.AccountSnapshot> created = new CompletableFuture<>();
+        CompletableFuture<ExchangeGateway.AccountSnapshot> existing = accountRefreshes.putIfAbsent(credentialId, created);
+        if (existing != null) {
+            try {
+                return existing.join();
+            } catch (CompletionException ex) {
+                if (ex.getCause() instanceof RuntimeException runtimeException) {
+                    throw runtimeException;
+                }
+                throw ex;
+            }
+        }
+        try {
+            ExchangeGateway.AccountSnapshot snapshot = java.util.Objects.requireNonNull(
+                gateway.queryAccountForPosition(new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
+                    credential.getSignatureType(), credential.getRunMode())), "Binance account snapshot missing");
+            created.complete(snapshot);
+            return snapshot;
+        } catch (RuntimeException ex) {
+            created.completeExceptionally(ex);
+            throw ex;
+        } finally {
+            accountRefreshes.remove(credentialId, created);
         }
     }
 
