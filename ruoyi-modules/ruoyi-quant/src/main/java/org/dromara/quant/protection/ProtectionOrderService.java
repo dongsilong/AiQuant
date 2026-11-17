@@ -1917,7 +1917,29 @@ public class ProtectionOrderService {
             }
             long[] queryTimes = new long[2];
             phaseStartedAt = System.nanoTime();
-            ExchangeGateway.ProtectionOrderSnapshot actual = readProtectionSnapshot(credential, order, queryTimes);
+            ExchangeGateway.ProtectionOrderSnapshot actual;
+            try {
+                actual = readProtectionSnapshot(credential, order, queryTimes);
+            } catch (org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException absent) {
+                String activeTicket = requireLiveDispatcher().activeProtectionTicket(
+                    credentialId, order.getSymbol(), order.getClientOrderId(), "PROTECT_CREATE");
+                if (activeTicket != null) {
+                    throw new ProtectionExecutionPendingException("首止盈订单历史未命中，但原创建派发票据仍未决，保留原意图等待对账");
+                }
+                BigDecimal executed = order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity();
+                order.setStatus("MISSING");
+                phaseStartedAt = System.nanoTime();
+                if (mapper.updateById(order) != 1) {
+                    throw new IllegalStateException("首止盈订单明确缺失，但本地状态更新失败，禁止重建目标");
+                }
+                dbUpdateMs += (System.nanoTime() - phaseStartedAt) / 1_000_000L;
+                queriedOrderCount++;
+                total = total.add(executed);
+                if (targetLease.get() != null) {
+                    targetLease.get().terminal(order);
+                }
+                continue;
+            }
             long orderQueryMs = (System.nanoTime() - phaseStartedAt) / 1_000_000L;
             algoQueryMs += queryTimes[0];
             childQueryMs += queryTimes[1];
