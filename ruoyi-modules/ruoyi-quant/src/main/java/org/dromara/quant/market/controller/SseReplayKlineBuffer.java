@@ -13,20 +13,31 @@ final class SseReplayKlineBuffer {
     private static final int MAX_ONE_MINUTE_REPLAY_KLINES = 8;
     private final ArrayDeque<ExchangeGateway.MarketEvent> replayKlines = new ArrayDeque<>(MAX_REPLAY_KLINES);
 
-    synchronized void publish(ExchangeGateway.MarketEvent event, Consumer<ExchangeGateway.MarketEvent> downstream) {
-        if (event.replay()) {
-            if ("KLINE".equals(event.type()) && event.kline() != null) {
-                int maxReplayKlines = "1m".equals(event.interval()) ? MAX_ONE_MINUTE_REPLAY_KLINES : MAX_REPLAY_KLINES;
-                if (replayKlines.size() == maxReplayKlines) replayKlines.removeFirst();
-                replayKlines.addLast(event);
+    void publish(ExchangeGateway.MarketEvent event, Consumer<ExchangeGateway.MarketEvent> downstream) {
+        long startedAt = System.nanoTime();
+        int replayCount = 0;
+        synchronized (this) {
+            if (event.replay()) {
+                if ("KLINE".equals(event.type()) && event.kline() != null) {
+                    int maxReplayKlines = "1m".equals(event.interval()) ? MAX_ONE_MINUTE_REPLAY_KLINES : MAX_REPLAY_KLINES;
+                    if (replayKlines.size() == maxReplayKlines) replayKlines.removeFirst();
+                    replayKlines.addLast(event);
+                }
+                return;
             }
-            return;
+            if ("CONNECTED".equals(event.type())) {
+                List<ExchangeGateway.MarketEvent> buffered = new ArrayList<>(replayKlines);
+                replayKlines.clear();
+                replayCount = buffered.size();
+                buffered.forEach(downstream);
+            }
+            downstream.accept(event);
         }
-        if ("CONNECTED".equals(event.type())) {
-            List<ExchangeGateway.MarketEvent> buffered = new ArrayList<>(replayKlines);
-            replayKlines.clear();
-            buffered.forEach(downstream);
+        long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+        if (elapsedMs >= 100) {
+            org.slf4j.LoggerFactory.getLogger(SseReplayKlineBuffer.class).warn(
+                "SSE K线回放处理耗时异常 type={} interval={} replayCount={} elapsedMs={} thread={}",
+                event.type(), event.interval(), replayCount, elapsedMs, Thread.currentThread().getName());
         }
-        downstream.accept(event);
     }
 }
