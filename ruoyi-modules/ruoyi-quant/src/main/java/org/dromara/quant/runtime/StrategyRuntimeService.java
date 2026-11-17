@@ -2128,15 +2128,22 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         long strategyEvaluationStartedAt = System.nanoTime();
         Optional<EntrySignal> signal;
         if (entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) {
-            EntryMaSnapshot entryMaSnapshot = runtime.entryMa.snapshot();
-            String entryMaBlockReason = entryMaMarketBlockReason(runtime, entryMaSnapshot);
-            if (entryMaBlockReason != null) {
-                logEntryDecision(runtime, context, "ENTRY_MA_" + entryMaBlockReason,
-                    entryMaMarketDiagnostic(runtime, entryMaSnapshot, entryMaBlockReason));
-                return;
-            }
             KlineSlopeRateStrategy slopeStrategy = (KlineSlopeRateStrategy) runtime.plugin;
-            signal = slopeStrategy.evaluateEntry(context, runtime.params, entryMaSnapshot.ma5(), entryMaSnapshot.ma7());
+            KlineSlopeRateStrategy.SlopeEvaluation slopeEvaluation =
+                KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
+            // 斜率无效或角度未达到阈值时，不读取/阻断 MA 行情；仍通过策略方法保留原有斜率诊断日志。
+            if (slopeEvaluation == null || !slopeEvaluation.entryApproved()) {
+                signal = slopeStrategy.evaluateEntry(context, runtime.params, null, null, slopeEvaluation);
+            } else {
+                EntryMaSnapshot entryMaSnapshot = runtime.entryMa.snapshot();
+                String entryMaBlockReason = entryMaMarketBlockReason(runtime, entryMaSnapshot);
+                if (entryMaBlockReason != null) {
+                    logEntryDecision(runtime, context, "ENTRY_MA_" + entryMaBlockReason,
+                        entryMaMarketDiagnostic(runtime, entryMaSnapshot, entryMaBlockReason));
+                    return;
+                }
+                signal = slopeStrategy.evaluateEntry(context, runtime.params, entryMaSnapshot.ma5(), entryMaSnapshot.ma7(), slopeEvaluation);
+            }
         } else {
             signal = runtime.plugin.evaluateEntry(context, runtime.params);
         }
