@@ -884,7 +884,7 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
-    void periodicSyncSkipsA symbolOwnedByAnotherCollector() {
+    void periodicSyncSkipsASymbolOwnedByAnotherCollector() {
         TradingReconciliationService reconciliation = service();
         when(fillCursors.selectSymbols(1L)).thenReturn(List.of("BTCUSDT"));
         when(orders.selectHistoricalSymbolsByCredential(1L)).thenReturn(List.of());
