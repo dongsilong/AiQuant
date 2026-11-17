@@ -113,6 +113,7 @@ public class TradingReconciliationService {
     private final ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicLong> runtimeSnapshotGenerations = new ConcurrentHashMap<>();
     private static final Duration RUNTIME_POSITION_CACHE_AGE = Duration.ofSeconds(20);
     private static final Duration FILL_HISTORY_RECONCILE_WINDOW = Duration.ofDays(6);
+    private static final Duration INCOME_HISTORY_RECONCILE_WINDOW = Duration.ofDays(6);
     /** Current wallet snapshots cannot reconstruct balances for historical fills. */
     private static final Duration POST_FILL_BALANCE_CAPTURE_WINDOW = Duration.ofMinutes(2);
     @Autowired
@@ -890,9 +891,9 @@ public class TradingReconciliationService {
                 throw new IllegalStateException("Binance income-history cursor is in the future; refusing to skip financial events: credentialId="
                     + credential.getId() + ", cursor=" + storedIncomeCursor);
             }
-            boolean incomeHistoryBacklog = Duration.between(incomeFrom, incomeTo).compareTo(Duration.ofDays(180)) > 0;
+            boolean incomeHistoryBacklog = Duration.between(incomeFrom, incomeTo).compareTo(INCOME_HISTORY_RECONCILE_WINDOW) > 0;
             if (incomeHistoryBacklog) {
-                incomeTo = incomeFrom.plus(Duration.ofDays(180));
+                incomeTo = incomeFrom.plus(INCOME_HISTORY_RECONCILE_WINDOW);
             }
             List<ExchangeGateway.IncomeSnapshot> income = incomeFrom.isBefore(incomeTo)
                 ? incomeCollector.collect(exchangeCredential, new ExchangeGateway.TimeRange(incomeFrom, incomeTo))
