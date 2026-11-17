@@ -35,6 +35,14 @@ class RestRequestSchedulerTest {
     }
 
     @Test
+    void rejectsRequestWeightOutsideTheSupportedBurstCapacity() {
+        var scheduler = new RestRequestScheduler(1);
+
+        assertThrows(IllegalArgumentException.class,
+            () -> scheduler.acquire(RestRequestScheduler.Kind.BACKGROUND, 41));
+    }
+
+    @Test
     void queueKindsKeepPositionVerificationAheadOfInformationalReads() {
         assertEquals(0, RestRequestScheduler.Kind.TRADE.ordinal());
         assertEquals(1, RestRequestScheduler.Kind.PROTECTION_VERIFY.ordinal());
