@@ -798,6 +798,29 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void firstProfitSyncReusesItsVerifiedActiveSnapshotInsteadOfQueryingTheSameAlgoTwice() {
+        position.setProtectionPolicyVersion(2);
+        var existing = scopedStop("FIRST_TP", "101");
+        existing.setOrderType("TAKE_PROFIT_MARKET");
+        existing.setQuantity(BigDecimal.ONE);
+        existing.setExecutedQuantity(BigDecimal.ZERO);
+        when(mapper.selectList(any())).thenAnswer(call -> selectedStops(call, List.of(existing)));
+        when(gateway.queryProtectionOrder(any(), eq(55L), eq(existing.getClientOrderId()), eq("BTCUSDT"), any()))
+            .thenReturn(new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, existing.getClientOrderId(), "NEW",
+                "SELL", "BOTH", "TAKE_PROFIT_MARKET", BigDecimal.ONE, new BigDecimal("101"), Instant.now(), null));
+        when(dispatcher.recoverVerifiedProtection(1L, "BTCUSDT", existing.getClientOrderId(), "PROTECT_CREATE", 55L)).thenReturn(true);
+
+        service.syncStrategyProtections(1L, position, BigDecimal.ONE,
+            List.of(new org.dromara.quant.strategy.ProtectionSignal("FIRST_TP", "TAKE_PROFIT_MARKET", BigDecimal.ONE,
+                org.dromara.quant.strategy.ProtectionSignal.QuantityBase.INITIAL, new BigDecimal("101"), "first profit")),
+            null, BigDecimal.ZERO, true);
+
+        verify(gateway, times(1)).queryProtectionOrder(any(), eq(55L), eq(existing.getClientOrderId()), eq("BTCUSDT"), any());
+        verify(gateway, never()).placeProtectionOrder(any());
+        verify(gateway, never()).cancelProtectionOrder(any());
+    }
+
+    @Test
     void concurrentFirstProfitChecksShareOneExchangeQuery() throws Exception {
         position.setProtectionCycleKey("cycle");
         QuantProtectionOrder local = order();
