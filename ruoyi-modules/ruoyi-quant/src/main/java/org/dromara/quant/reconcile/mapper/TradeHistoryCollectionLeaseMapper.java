@@ -10,8 +10,7 @@ import org.apache.ibatis.annotations.Param;
 @Mapper
 public interface TradeHistoryCollectionLeaseMapper {
 
-    int ensure(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
-               @Param("owner") String owner);
+    int ensure(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
     int acquire(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
                 @Param("owner") String owner, @Param("seconds") int seconds);
