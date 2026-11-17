@@ -527,5 +527,16 @@ CREATE TABLE IF NOT EXISTS `quant_trade_ledger_recovery` (
     KEY `idx_quant_trade_ledger_recovery_lease` (`status`, `lease_until`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='量化成交账本订单驱动恢复状态';
 
+
+CREATE TABLE IF NOT EXISTS `quant_trade_history_collection_lease` (
+    `credential_id` bigint NOT NULL COMMENT '量化凭证ID',
+    `symbol` varchar(32) NOT NULL COMMENT '交易对',
+    `owner_token` varchar(36) NOT NULL DEFAULT '' COMMENT '当前采集节点持有者令牌',
+    `lease_epoch` bigint NOT NULL DEFAULT 0 COMMENT '租约隔离代次',
+    `lease_until` datetime(6) NOT NULL COMMENT '租约到期时间，使用数据库时钟',
+    PRIMARY KEY (`credential_id`, `symbol`),
+    KEY `idx_quant_trade_history_collection_lease_until` (`lease_until`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='量化账户交易对成交历史采集租约';
+
 SET
 FOREIGN_KEY_CHECKS = 1;
