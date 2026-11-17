@@ -93,7 +93,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     private final java.util.concurrent.ConcurrentHashMap<Credential, java.util.concurrent.CompletableFuture<AccountSnapshot>> accountQueries =
         new java.util.concurrent.ConcurrentHashMap<>();
-    private final RestRequestScheduler restScheduler = new RestRequestScheduler(250);
+    private final RestRequestScheduler restScheduler = new RestRequestScheduler(50);
     /**
      * Binance 事件解析使用的 JSON 工具。
      */
@@ -1846,7 +1846,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 if (protectionTiming != null) {
                     protectionTiming.schedulerQueueNanos += queueNanos;
                 }
-                log.debug("Binance REST 获准执行 kind={} requestWeight={} queueMillis={} clockSync={}", kind, requestWeight, queueMillis, syncTiming != null);
+                log.debug("Binance REST 获准执行 method={} path={} kind={} requestWeight={} queueMillis={} clockSync={}", request.method(), request.url().encodedPath(), kind, requestWeight, queueMillis, syncTiming != null);
                 // Keep diagnostics out of the measured HTTP round trip.
                 long requestStartedAt = System.currentTimeMillis();
                 if (syncTiming != null) {
@@ -1863,6 +1863,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                     throw ex;
                 }
                 long proceedNanos = System.nanoTime() - proceedStartedAt;
+                log.debug("Binance REST 响应 method={} path={} kind={} requestWeight={} status={} usedWeight1m={}",
+                    request.method(), request.url().encodedPath(), kind, requestWeight, response.code(), response.header("X-MBX-USED-WEIGHT-1M"));
                 if (protectionTiming != null) {
                     protectionTiming.recordResponse(chain.request().url().encodedPath(), response.code(), proceedNanos);
                 }
