@@ -221,6 +221,32 @@ final class RestRequestScheduler {
             sizes, waitedMillis, retryAfterMillis);
     }
 
+    /**
+     * 输出当前权重预算和各请求队列的积压情况，用于区分令牌耗尽与队列竞争。
+     */
+    synchronized String diagnostics() {
+        long now = System.nanoTime();
+        StringBuilder state = new StringBuilder("availableTokens=")
+            .append(String.format(java.util.Locale.ROOT, "%.2f", availableTokens))
+            .append(", queues={");
+        boolean first = true;
+        for (Kind kind : Kind.values()) {
+            for (Environment environment : Environment.values()) {
+                ArrayDeque<Ticket> queue = queues[kind.ordinal()][environment.ordinal()];
+                if (!first) {
+                    state.append(", ");
+                }
+                first = false;
+                Ticket head = queue.peekFirst();
+                state.append(kind).append('_').append(environment).append('=').append(queue.size())
+                    .append("(oldestWaitMs=")
+                    .append(head == null ? 0L : TimeUnit.NANOSECONDS.toMillis(now - head.enqueuedAtNanos()))
+                    .append(')');
+            }
+        }
+        return state.append('}').toString();
+    }
+
     synchronized void blockUntilManualReset() {
         manualBlock = true;
         notifyAll();
