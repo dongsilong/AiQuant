@@ -79,14 +79,18 @@ public class MarketStreamHub {
             stream.add(id, listener, health, filter);
             return stream;
         });
-        return () -> streams.computeIfPresent(key, (ignored, stream) -> {
-            stream.remove(id);
-            if (stream.listeners.isEmpty()) {
-                stream.close();
-                return null;
-            }
-            return stream;
-        });
+        logStreamSnapshot("SUBSCRIBE");
+        return () -> {
+            streams.computeIfPresent(key, (ignored, stream) -> {
+                stream.remove(id);
+                if (stream.listeners.isEmpty()) {
+                    stream.close();
+                    return null;
+                }
+                return stream;
+            });
+            logStreamSnapshot("UNSUBSCRIBE");
+        };
     }
 
     /**
@@ -97,6 +101,16 @@ public class MarketStreamHub {
         streams.values().forEach(SharedStream::close);
         streams.clear();
         recoveryExecutor.shutdownNow();
+    }
+
+    private void logStreamSnapshot(String action) {
+        Map<String, Long> streamsByMode = streams.keySet().stream()
+            .collect(java.util.stream.Collectors.groupingBy(Key::runMode, java.util.stream.Collectors.counting()));
+        Map<String, Long> streamsByInterval = streams.keySet().stream()
+            .collect(java.util.stream.Collectors.groupingBy(Key::interval, java.util.stream.Collectors.counting()));
+        int subscriberCount = streams.values().stream().mapToInt(stream -> stream.listeners.size()).sum();
+        log.info("行情订阅规模变化 action={} activeStreamCount={} activeSubscriberCount={} streamsByMode={} streamsByInterval={}",
+            action, streams.size(), subscriberCount, streamsByMode, streamsByInterval);
     }
 
     static boolean isEventTimeWithinKlinePeriod(Instant eventTime, Instant openTime, Instant nextOpen) {
