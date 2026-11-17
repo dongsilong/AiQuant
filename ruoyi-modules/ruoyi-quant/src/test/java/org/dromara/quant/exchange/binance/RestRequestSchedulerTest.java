@@ -141,6 +141,48 @@ class RestRequestSchedulerTest {
     }
 
     @Test
+    void liveAndTestnetRequestsShareTheSameGlobalTokenBudget() throws InterruptedException {
+        var scheduler = new RestRequestScheduler(100);
+        scheduler.acquire("fapi.binance.com", RestRequestScheduler.Kind.BACKGROUND, 40);
+
+        var liveDone = new java.util.concurrent.CountDownLatch(1);
+        var testnetDone = new java.util.concurrent.CountDownLatch(1);
+        var requestFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        Thread live = new Thread(() -> {
+            try {
+                scheduler.acquire("fapi.binance.com", RestRequestScheduler.Kind.BACKGROUND, 1);
+            } catch (Throwable ex) {
+                requestFailure.compareAndSet(null, ex);
+            } finally {
+                liveDone.countDown();
+            }
+        });
+        Thread testnet = new Thread(() -> {
+            try {
+                scheduler.acquire("testnet.binancefuture.com", RestRequestScheduler.Kind.BACKGROUND, 1);
+            } catch (Throwable ex) {
+                requestFailure.compareAndSet(null, ex);
+            } finally {
+                testnetDone.countDown();
+            }
+        });
+        try {
+            live.start();
+            Thread.sleep(30L);
+            testnet.start();
+
+            assertTrue(liveDone.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(testnetDone.await(2, java.util.concurrent.TimeUnit.SECONDS));
+            assertNull(requestFailure.get());
+        } finally {
+            live.interrupt();
+            testnet.interrupt();
+            live.join(1_000L);
+            testnet.join(1_000L);
+        }
+    }
+
+    @Test
     void queueTimeoutIncludesTheWaitingTicketInQueueSnapshot() {
         var scheduler = new RestRequestScheduler(60_000L);
         scheduler.acquire(RestRequestScheduler.Kind.TRADE, 40);
