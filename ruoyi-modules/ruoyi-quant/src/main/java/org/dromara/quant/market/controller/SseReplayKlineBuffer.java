@@ -9,7 +9,7 @@ import java.util.function.Consumer;
 
 /** Bounds the historical K-line burst sent to a terminal SSE subscriber. */
 final class SseReplayKlineBuffer {
-    private static final int MAX_REPLAY_KLINES = 4;
+    private static final int MAX_REPLAY_KLINES = 8;
     private final ArrayDeque<ExchangeGateway.MarketEvent> replayKlines = new ArrayDeque<>(MAX_REPLAY_KLINES);
 
     synchronized void publish(ExchangeGateway.MarketEvent event, Consumer<ExchangeGateway.MarketEvent> downstream) {
