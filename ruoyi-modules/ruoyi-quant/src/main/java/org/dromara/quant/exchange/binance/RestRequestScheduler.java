@@ -171,10 +171,9 @@ final class RestRequestScheduler {
     private static int priority(Kind kind) {
         return switch (kind) {
             case PROTECTION_VERIFY -> 0;
-            case TRADE -> 1;
-            case POSITION_VERIFY -> 2;
-            case ACCOUNT -> 3;
-            case BACKGROUND -> 4;
+            case TRADE, POSITION_VERIFY -> 1;
+            case ACCOUNT -> 2;
+            case BACKGROUND -> 3;
         };
     }
 
