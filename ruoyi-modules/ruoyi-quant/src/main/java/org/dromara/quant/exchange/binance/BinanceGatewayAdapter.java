@@ -1024,6 +1024,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                     throw ex;
                 }
                 clockRetried = true;
+                ProtectionQueryTiming timing = protectionQueryTiming.get();
+                if (timing != null) {
+                    timing.clockRetryCount++;
+                }
                 refreshClockOffset(baseUrl, usedOffsetUpdatedAt);
                 log.warn("Binance 只读请求因时间戳被拒绝，已刷新服务器时间并重试一次: kind={}, runMode={}, binanceCode=-1021", kind, runMode);
             }
@@ -1371,12 +1375,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 long schedulerQueueMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.schedulerQueueNanos);
                 long interceptorProceedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.interceptorProceedNanos);
                 long nonInterceptorMs = Math.max(0L, totalMs - schedulerQueueMs - interceptorProceedMs);
-                log.warn("Binance 条件单精确查询耗时偏高 runMode={} symbol={} clientAlgoId={} orderId={} totalMs={} exactQueryMs={} historyQueryMs={} schedulerQueueMs={} interceptorProceedMs={} nonInterceptorMs={} requestCount={} networkRetryCount={} transportFailureCount={} httpStatusCounts={} pathCounts={}",
+                log.warn("Binance 条件单精确查询耗时偏高 runMode={} symbol={} clientAlgoId={} orderId={} totalMs={} exactQueryMs={} historyQueryMs={} schedulerQueueMs={} interceptorProceedMs={} nonInterceptorMs={} requestCount={} networkRetryCount={} clockRetryCount={} transportFailureCount={} httpStatusCounts={} pathCounts={}",
                     credential.runMode(), symbol, clientOrderId, orderId, totalMs,
                     java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.exactQueryNanos),
                     java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.historyQueryNanos),
                     schedulerQueueMs, interceptorProceedMs, nonInterceptorMs, timing.requestCount,
-                    timing.networkRetryCount, timing.transportFailureCount, timing.httpStatusCounts, timing.pathCounts);
+                    timing.networkRetryCount, timing.clockRetryCount, timing.transportFailureCount, timing.httpStatusCounts, timing.pathCounts);
             }
             if (previousTiming == null) {
                 protectionQueryTiming.remove();
@@ -2141,6 +2145,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         private long interceptorProceedNanos;
         private int requestCount;
         private int networkRetryCount;
+        private int clockRetryCount;
         private int transportFailureCount;
         private final Map<Integer, Integer> httpStatusCounts = new LinkedHashMap<>();
         private final Map<String, Integer> pathCounts = new LinkedHashMap<>();
