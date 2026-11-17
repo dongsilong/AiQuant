@@ -184,7 +184,7 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         credential.setStatus(status);
         credentialMapper.updateById(credential);
         if ("1".equals(status)) {
-            afterCommit(() -> runtimeService.invalidateCredential(id));
+            afterCommit(() -> runtimeService.disableCredential(id));
         }
     }
 
