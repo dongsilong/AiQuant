@@ -1017,10 +1017,6 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 只读签名请求允许对明确的瞬时网络故障进行有限重试；写请求不经过此方法。
-     * Binance 时间戳错误仍单独刷新服务器时间，最多重试一次。
-     */
-    /**
      * USDⓈ-M Futures 常用 REST 端点的 IP 权重。未明确列出的端点按 1 计，后续应以 Binance 文档及响应头持续校准。
      */
     static int restRequestWeight(okhttp3.Request request) {
@@ -1037,6 +1033,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         };
     }
 
+    /**
+     * 只读签名请求允许对明确的瞬时网络故障进行有限重试；写请求不经过此方法。
+     * Binance 时间戳错误仍单独刷新服务器时间，最多重试一次。
+     */
     private <T> T signedRead(Credential credential, RestRequestScheduler.Kind kind, Function<DerivativesTradingUsdsFuturesRestApi, T> request) {
         String runMode = credential == null ? "LIVE" : credential.runMode();
         String baseUrl = "TESTNET".equalsIgnoreCase(runMode) ? properties.getBinance().getTestnetUrl() : properties.getBinance().getBaseUrl();
