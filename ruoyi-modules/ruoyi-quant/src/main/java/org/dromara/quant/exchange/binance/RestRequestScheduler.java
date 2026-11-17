@@ -76,10 +76,6 @@ final class RestRequestScheduler {
                     queue.removeFirst();
                     availableTokens -= requestWeight;
                     long waitedMillis = TimeUnit.NANOSECONDS.toMillis(now - initialNow);
-                    if (waitedMillis >= 250L) {
-                        log.warn("Binance REST 请求排队等待偏高 kind={} requestWeight={} waitedMs={} remainingWeightTokens={} queueSizes={}",
-                            kind, requestWeight, waitedMillis, String.format(java.util.Locale.ROOT, "%.2f", availableTokens), queueSizes());
-                    }
                     cursor = (selected + 1) % rotation.length;
                     notifyAll();
                     return;
