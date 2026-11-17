@@ -2836,6 +2836,20 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                     executeProtectedExit(runtime, context, leaseHeld, evaluated.getFirst());
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
+                } catch (TradingReconciliationService.SnapshotSupersededException ex) {
+                    String pendingAction = null;
+                    Long pendingOrderId = null;
+                    synchronized (runtime) {
+                        if (!runtime.closed && runtime.state != null) {
+                            runtime.state.setRecoveryRequired(true);
+                            stateService.save(runtime.state);
+                            pendingAction = runtime.state.getPendingAction();
+                            pendingOrderId = runtime.state.getPendingOrderId();
+                        }
+                    }
+                    // 平仓请求可能已经提交；保留待确认动作，交由 finally 中的对账恢复，绝不直接重发。
+                    log.warn("本地保护兜底持仓快照已被私有流新事实取代，保留待确认动作并等待对账 instanceId={} credentialId={} symbol={} pendingAction={} pendingOrderId={} message={}",
+                        runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), pendingAction, pendingOrderId, ex.getMessage());
                 } catch (RuntimeException ex) {
                     synchronized (runtime) {
                         if (!runtime.closed && runtime.state != null) {
