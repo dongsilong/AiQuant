@@ -246,10 +246,34 @@ public class TradingReconciliationService {
             String symbol = entry.getKey();
             List<ExchangeGateway.OrderSnapshot> orders = entry.getValue();
             try {
-                List<ExchangeGateway.TradeSnapshot> trades = tradeCollector.collect(
-                    exchangeCredential, symbol, historyStart, historyEnd);
-                log.info("手动账户级成交历史获取完成 credentialId={} symbol={} orderCount={} tradeCount={}",
-                    credential.getId(), symbol, orders.size(), trades.size());
+                long perOrderQueryEstimate = 0L;
+                for (ExchangeGateway.OrderSnapshot order : orders) {
+                    boolean mayHaveFills = order.executedQuantity() != null && order.executedQuantity().signum() > 0
+                        || "FILLED".equalsIgnoreCase(order.status()) || "PARTIALLY_FILLED".equalsIgnoreCase(order.status());
+                    if (!mayHaveFills) {
+                        continue;
+                    }
+                    Instant orderStart = order.createTime() == null || order.createTime().isBefore(historyStart)
+                        ? historyStart : order.createTime();
+                    Instant orderEnd = order.updateTime() == null || order.updateTime().isAfter(historyEnd)
+                        ? historyEnd : order.updateTime();
+                    if (!orderStart.isAfter(orderEnd)) {
+                        perOrderQueryEstimate += Math.max(1L,
+                            (Duration.between(orderStart, orderEnd).toMillis() + Duration.ofDays(7).toMillis() - 1)
+                                / Duration.ofDays(7).toMillis());
+                    }
+                }
+                long accountQueryEstimate = Math.max(1L,
+                    (Duration.between(historyStart, historyEnd).toMillis() + Duration.ofDays(6).toMillis() - 1)
+                        / Duration.ofDays(6).toMillis());
+                boolean useAccountWideTradeHistory = perOrderQueryEstimate > accountQueryEstimate;
+                List<ExchangeGateway.TradeSnapshot> trades = useAccountWideTradeHistory
+                    ? tradeCollector.collect(exchangeCredential, symbol, historyStart, historyEnd)
+                    : tradeCollector.collectByOrders(exchangeCredential, symbol, orders, historyStart, historyEnd);
+                log.info("手动历史成交获取完成 credentialId={} symbol={} orderCount={} tradeCount={} queryMode={} perOrderQueryEstimate={} accountQueryEstimate={}",
+                    credential.getId(), symbol, orders.size(), trades.size(),
+                    useAccountWideTradeHistory ? "ACCOUNT_TIME_WINDOW" : "PER_ORDER",
+                    perOrderQueryEstimate, accountQueryEstimate);
 
                 int acceptedTradeCount = transaction.execute(status -> {
                     syncOrders(credential, orders);
