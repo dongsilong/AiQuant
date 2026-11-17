@@ -279,6 +279,16 @@ public class TradingReconciliationService {
                 int acceptedTradeCount = transaction.execute(status -> {
                     syncOrders(credential, orders);
                     int accepted = syncTrades(credential, trades);
+                    if (useAccountWideTradeHistory) {
+                        LocalDateTime currentCursor = fillSyncCursors.selectLastCompleteTo(credential.getId(), symbol);
+                        LocalDateTime historyStartCursor = LocalDateTime.ofInstant(historyStart, ZoneOffset.UTC);
+                        LocalDateTime historyEndCursor = LocalDateTime.ofInstant(historyEnd, ZoneOffset.UTC);
+                        if (currentCursor == null || !currentCursor.isBefore(historyStartCursor) && !currentCursor.isAfter(historyEndCursor)) {
+                            fillSyncCursorService.advance(credential.getId(), symbol, historyEndCursor);
+                            log.info("手动完整成交历史同步推进周期成交游标 credentialId={} symbol={} previousCursor={} completedTo={}",
+                                credential.getId(), symbol, currentCursor, historyEndCursor);
+                        }
+                    }
                     if (tradeCycleProjectionService != null) {
                         tradeCycleProjectionService.markDirty(credential.getId(), symbol);
                     }
