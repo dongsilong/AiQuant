@@ -50,12 +50,15 @@ class RestRequestSchedulerTest {
         var sequence = new java.util.concurrent.atomic.AtomicInteger();
         var accountOrder = new java.util.concurrent.atomic.AtomicInteger();
         var backgroundOrder = new java.util.concurrent.atomic.AtomicInteger();
+        var requestFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
         var accountDone = new java.util.concurrent.CountDownLatch(1);
         var backgroundDone = new java.util.concurrent.CountDownLatch(1);
         Thread account = new Thread(() -> {
             try {
                 scheduler.acquire(RestRequestScheduler.Kind.ACCOUNT, 20);
                 accountOrder.set(sequence.incrementAndGet());
+            } catch (Throwable ex) {
+                requestFailure.compareAndSet(null, ex);
             } finally {
                 accountDone.countDown();
             }
@@ -64,6 +67,8 @@ class RestRequestSchedulerTest {
             try {
                 scheduler.acquire(RestRequestScheduler.Kind.BACKGROUND, 1);
                 backgroundOrder.set(sequence.incrementAndGet());
+            } catch (Throwable ex) {
+                requestFailure.compareAndSet(null, ex);
             } finally {
                 backgroundDone.countDown();
             }
@@ -75,6 +80,7 @@ class RestRequestSchedulerTest {
 
             assertTrue(accountDone.await(2, java.util.concurrent.TimeUnit.SECONDS));
             assertTrue(backgroundDone.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertNull(requestFailure.get());
             assertTrue(accountOrder.get() < backgroundOrder.get(),
                 "aged account request must reserve its remaining weight before background reads");
         } finally {
