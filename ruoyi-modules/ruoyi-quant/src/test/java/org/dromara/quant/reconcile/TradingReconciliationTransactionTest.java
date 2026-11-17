@@ -749,9 +749,9 @@ class TradingReconciliationTransactionTest {
             "BUY", "MARKET", "FILLED", BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE,
             orderUpdatedAt, BigDecimal.TEN, "BOTH", false, orderUpdatedAt.minusSeconds(120));
         when(gateway.queryOrderHistory(any(), eq("BTCUSDT"), any(), anyLong())).thenReturn(List.of(historicalOrder));
-        when(gateway.queryTradesByOrder(any(), eq("BTCUSDT"), eq(303L), any(), anyLong())).thenAnswer(invocation -> {
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenAnswer(invocation -> {
             var fill = manualSyncFill("BTCUSDT", 303L);
-            ExchangeGateway.TimeRange range = invocation.getArgument(3);
+            ExchangeGateway.TimeRange range = invocation.getArgument(2);
             return !fill.time().isBefore(range.from()) && !fill.time().isAfter(range.to()) ? List.of(fill) : List.of();
         });
         when(orders.selectOne(any())).thenReturn(null);
@@ -765,7 +765,8 @@ class TradingReconciliationTransactionTest {
         assertEquals(1, result.orderCount());
         assertEquals(1, result.tradeCount());
         verify(gateway, atLeastOnce()).queryOrderHistory(any(), eq("BTCUSDT"), any(), anyLong());
-        verify(gateway, atLeastOnce()).queryTradesByOrder(any(), eq("BTCUSDT"), eq(303L), any(), eq(1000L));
+        verify(gateway, atLeastOnce()).queryTrades(any(), eq("BTCUSDT"), any());
+        verify(gateway, never()).queryTradesByOrder(any(), any(), any(), any(), any());
         verify(gateway, never()).queryOrders(any(), any());
         verify(orders).insert(any(org.dromara.quant.order.domain.QuantOrder.class));
     }
@@ -783,7 +784,7 @@ class TradingReconciliationTransactionTest {
         when(gateway.queryOrderHistory(any(), eq(""), isNull(), anyLong())).thenReturn(List.of(btcOrder, ethOrder));
         when(gateway.queryOrderHistory(any(), eq("BTCUSDT"), any(), anyLong())).thenReturn(List.of(btcOrder));
         when(gateway.queryOrderHistory(any(), eq("ETHUSDT"), any(), anyLong())).thenReturn(List.of(ethOrder));
-        when(gateway.queryTradesByOrder(any(), anyString(), anyLong(), any(), anyLong())).thenReturn(List.of());
+        when(gateway.queryTrades(any(), anyString(), any())).thenReturn(List.of());
         when(orders.selectOne(any())).thenReturn(null);
         when(orders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
 
@@ -795,8 +796,9 @@ class TradingReconciliationTransactionTest {
         verify(gateway, times(1)).queryOrderHistory(any(), eq(""), isNull(), eq(1000L));
         verify(gateway, atLeastOnce()).queryOrderHistory(any(), eq("BTCUSDT"), any(), anyLong());
         verify(gateway, atLeastOnce()).queryOrderHistory(any(), eq("ETHUSDT"), any(), anyLong());
-        verify(gateway).queryTradesByOrder(any(), eq("BTCUSDT"), eq(501L), any(), eq(1000L));
-        verify(gateway).queryTradesByOrder(any(), eq("ETHUSDT"), eq(601L), any(), eq(1000L));
+        verify(gateway, atLeastOnce()).queryTrades(any(), eq("BTCUSDT"), any());
+        verify(gateway, atLeastOnce()).queryTrades(any(), eq("ETHUSDT"), any());
+        verify(gateway, never()).queryTradesByOrder(any(), any(), any(), any(), any());
         verify(tradeCycleProjection).projectNow(1L, "BTCUSDT");
         verify(tradeCycleProjection).projectNow(1L, "ETHUSDT");
     }
@@ -808,7 +810,7 @@ class TradingReconciliationTransactionTest {
             "BUY", "MARKET", "FILLED", BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE,
             Instant.now(), BigDecimal.TEN, "BOTH", false, beforeSync.minusSeconds(120));
         when(gateway.queryOrderHistory(any(), eq("BTCUSDT"), any(), anyLong())).thenReturn(List.of(order));
-        when(gateway.queryTradesByOrder(any(), eq("BTCUSDT"), eq(404L), any(), anyLong())).thenReturn(List.of());
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
         when(orders.selectOne(any())).thenReturn(null);
         when(orders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
 
@@ -816,8 +818,13 @@ class TradingReconciliationTransactionTest {
 
         var orderRanges = org.mockito.ArgumentCaptor.forClass(ExchangeGateway.TimeRange.class);
         verify(gateway, atLeast(13)).queryOrderHistory(any(), eq("BTCUSDT"), orderRanges.capture(), anyLong());
-        verify(gateway, atLeastOnce()).queryTradesByOrder(any(), eq("BTCUSDT"), eq(404L), any(), eq(1000L));
-        verify(gateway, never()).queryTrades(any(), any(), any());
+        var fillRanges = org.mockito.ArgumentCaptor.forClass(ExchangeGateway.TimeRange.class);
+        verify(gateway, atLeast(13)).queryTrades(any(), eq("BTCUSDT"), fillRanges.capture());
+        verify(gateway, never()).queryTradesByOrder(any(), any(), any(), any(), any());
+        assertTrue(fillRanges.getAllValues().stream().allMatch(range ->
+            java.time.Duration.between(range.from(), range.to()).compareTo(java.time.Duration.ofDays(7)) < 0));
+        assertTrue(java.time.Duration.between(fillRanges.getAllValues().getFirst().from(),
+            fillRanges.getAllValues().getLast().to()).compareTo(java.time.Duration.ofDays(89)) > 0);
         List<ExchangeGateway.TimeRange> queriedRanges = orderRanges.getAllValues();
         assertTrue(queriedRanges.getFirst().from().isAfter(beforeSync.minus(java.time.Duration.ofDays(90)).plusSeconds(50)));
         assertTrue(queriedRanges.stream().allMatch(range ->
