@@ -2139,6 +2139,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 long currentGeneration = -1L;
                 String currentCycle = null;
                 Long currentEpoch = null;
+                Long cleanupEpoch = null;
                 String errorType = null;
                 try {
                     StrategyRuntimeLeaseService.LeaseSnapshot cleanupLeaseSnapshot = leaseService.acquireOrRenewSnapshot(
@@ -2149,6 +2150,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     }
                     leaseAcquired = true;
                     long epoch = cleanupLeaseSnapshot.epoch();
+                    cleanupEpoch = epoch;
                     synchronized (runtime) {
                         if (!runtime.closed) updateLeaseSnapshot(runtime, cleanupLeaseSnapshot);
                     }
@@ -2169,9 +2171,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             try {
                                 currentEpoch = leaseService.requireCurrentEpoch(runtime.instance.getId(), runtime.credential.getId(),
                                     runtime.symbol.getSymbol(), runtime.credential.getCredentialRuntimeVersion());
-                                if (epoch != currentEpoch) {
-                                    proofFailureReason = "LEASE_EPOCH_CHANGED";
-                                }
+                                proofFailureReason = entryProtectionProofLeaseFailureReason(epoch, currentEpoch);
                             } catch (RuntimeException ex) {
                                 proofFailureReason = "LEASE_EPOCH_UNAVAILABLE";
                             }
@@ -2207,7 +2207,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             queueWaitMs, leaseWaitMs, cleanupElapsedMs, elapsedMs);
                     } else {
                         log.warn("开仓前保护清理未建立有效证明 instanceId={} credentialId={} symbol={} cycle={} generation={} currentGeneration={} currentCycle={} cleanupEpoch={} currentEpoch={} leaseAcquired={} cleanupResult={} proofEstablished={} result={} proofFailureReason={} errorType={} executorQueueWaitMs={} leaseWaitMs={} cleanupExecutionMs={} totalExecutionMs={}",
-                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), cycle, generation, currentGeneration, currentCycle, leaseAcquired ? epoch : null,
+                            runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), cycle, generation, currentGeneration, currentCycle, cleanupEpoch,
                             currentEpoch, leaseAcquired, cleaned, false, result, proofFailureReason == null ? result : proofFailureReason, errorType,
                             queueWaitMs, leaseWaitMs, cleanupElapsedMs, elapsedMs);
                     }
@@ -2248,6 +2248,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (expectedGeneration != currentGeneration) return "GENERATION_CHANGED";
         if (!Objects.equals(expectedCycle, currentCycle)) return "CYCLE_CHANGED";
         return null;
+    }
+
+    /** 返回租约 fencing epoch 的证明失败原因。 */
+    static String entryProtectionProofLeaseFailureReason(long expectedEpoch, Long currentEpoch) {
+        if (currentEpoch == null) return "LEASE_EPOCH_UNAVAILABLE";
+        return expectedEpoch == currentEpoch ? null : "LEASE_EPOCH_CHANGED";
     }
 
     /** 返回历史保护清理门禁的具体阻塞原因；仅读取本地状态，不触发 REST 或状态变更。 */
