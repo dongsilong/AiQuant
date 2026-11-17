@@ -780,6 +780,67 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void explicitlyAbsentFirstProfitIsMarkedMissingAndKeepsConfirmedExecution() {
+        position.setProtectionCycleKey("cycle");
+        QuantProtectionOrder local = order();
+        local.setProtectionType("FIRST_TP");
+        local.setOrderType("TAKE_PROFIT_MARKET");
+        local.setStatus("UNKNOWN");
+        local.setExchangeOrderId(null);
+        local.setCreatedAtEpochMillis(Instant.now().minusSeconds(60).toEpochMilli());
+        local.setExecutedQuantity(new BigDecimal("0.15"));
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        when(gateway.queryProtectionOrder(any(), isNull(), eq(local.getClientOrderId()), eq("BTCUSDT"), any()))
+            .thenThrow(new org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException());
+
+        assertEquals(0, new BigDecimal("0.15").compareTo(service.firstTakeProfitExecutedQuantity(1L, position)));
+
+        assertEquals("MISSING", local.getStatus());
+        assertEquals(0, new BigDecimal("0.15").compareTo(local.getExecutedQuantity()));
+        verify(dispatcher).activeProtectionTicket(1L, "BTCUSDT", local.getClientOrderId(), "PROTECT_CREATE");
+        verify(mapper).updateById(local);
+    }
+
+    @Test
+    void explicitlyAbsentFirstProfitRemainsUnknownWhileCreateTicketIsActive() {
+        position.setProtectionCycleKey("cycle");
+        QuantProtectionOrder local = order();
+        local.setProtectionType("FIRST_TP");
+        local.setStatus("UNKNOWN");
+        local.setExchangeOrderId(null);
+        local.setCreatedAtEpochMillis(Instant.now().minusSeconds(60).toEpochMilli());
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        when(dispatcher.activeProtectionTicket(1L, "BTCUSDT", local.getClientOrderId(), "PROTECT_CREATE"))
+            .thenReturn("pending-create-ticket");
+        when(gateway.queryProtectionOrder(any(), isNull(), eq(local.getClientOrderId()), eq("BTCUSDT"), any()))
+            .thenThrow(new org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException());
+
+        assertThrows(ProtectionOrderService.ProtectionExecutionPendingException.class,
+            () -> service.firstTakeProfitExecutedQuantity(1L, position));
+
+        assertEquals("UNKNOWN", local.getStatus());
+        verify(mapper, never()).updateById(any(QuantProtectionOrder.class));
+    }
+
+    @Test
+    void explicitlyAbsentFirstProfitCannotContinueWhenMissingStateCannotBePersisted() {
+        position.setProtectionCycleKey("cycle");
+        QuantProtectionOrder local = order();
+        local.setProtectionType("FIRST_TP");
+        local.setStatus("UNKNOWN");
+        local.setExchangeOrderId(null);
+        local.setCreatedAtEpochMillis(Instant.now().minusSeconds(60).toEpochMilli());
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        when(gateway.queryProtectionOrder(any(), isNull(), eq(local.getClientOrderId()), eq("BTCUSDT"), any()))
+            .thenThrow(new org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException());
+        when(mapper.updateById(local)).thenReturn(0);
+
+        assertThrows(IllegalStateException.class, () -> service.firstTakeProfitExecutedQuantity(1L, position));
+
+        verify(mapper).updateById(local);
+    }
+
+    @Test
     void firstProfitProgressAccumulatesDistinctOrdersButNotRepeatedQueries() {
         position.setProtectionCycleKey("cycle");
         QuantProtectionOrder one = order();
