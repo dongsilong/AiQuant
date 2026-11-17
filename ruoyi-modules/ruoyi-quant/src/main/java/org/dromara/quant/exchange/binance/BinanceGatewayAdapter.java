@@ -1103,7 +1103,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             if (current instanceof java.io.EOFException
                 || current instanceof java.net.SocketException
                 || current instanceof java.net.SocketTimeoutException
-                || current instanceof java.net.ConnectException) {
+                || current instanceof java.net.ConnectException
+                || current instanceof java.io.InterruptedIOException && !Thread.currentThread().isInterrupted()) {
                 transportFailure = true;
             }
         }
