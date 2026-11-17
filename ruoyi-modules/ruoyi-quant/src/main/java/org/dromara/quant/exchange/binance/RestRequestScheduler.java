@@ -8,37 +8,44 @@ import java.util.ArrayDeque;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 基于请求权重的全局令牌桶，并按请求类别加权轮转；对关键和长时间等待的请求预留权重。
+ * 基于请求权重的全局令牌桶，并在环境和请求类别之间公平调度。
  */
 final class RestRequestScheduler {
     private static final Logger log = LoggerFactory.getLogger(RestRequestScheduler.class);
     private static final double TOKEN_CAPACITY = 40D;
     private static final long RESERVATION_WAIT_NANOS = TimeUnit.MILLISECONDS.toNanos(250L);
-    private final ArrayDeque<Ticket>[] queues;
+    private static final long AGING_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(2L);
+    private final ArrayDeque<Ticket>[][] queues;
     private final int[] rotation = {0, 1, 0, 2, 0, 0, 1, 3, 0, 4};
     /** 每个权重单位补充所需时间；生产环境 50ms 即每秒最多补充 20 个权重单位。 */
     private final long refillInterval;
     private double availableTokens = TOKEN_CAPACITY;
     private long lastRefill = System.nanoTime();
     private long blockedUntil;
-    /** A 418 without a trustworthy expiry requires operator intervention; never auto-expire this latch. */
     private boolean manualBlock;
     private int cursor;
+    private int environmentCursor;
 
     @SuppressWarnings("unchecked")
     RestRequestScheduler(long refillIntervalMillis) {
         refillInterval = TimeUnit.MILLISECONDS.toNanos(refillIntervalMillis);
-        queues = new ArrayDeque[Kind.values().length];
-        for (int i = 0; i < queues.length; i++) {
-            queues[i] = new ArrayDeque<>();
+        queues = new ArrayDeque[Kind.values().length][Environment.values().length];
+        for (int kind = 0; kind < queues.length; kind++) {
+            for (int environment = 0; environment < Environment.values().length; environment++) {
+                queues[kind][environment] = new ArrayDeque<>();
+            }
         }
     }
 
     synchronized void acquire(Kind kind) {
-        acquire(kind, 1);
+        acquire("fapi.binance.com", kind, 1);
     }
 
     synchronized void acquire(Kind kind, int requestWeight) {
+        acquire("fapi.binance.com", kind, requestWeight);
+    }
+
+    synchronized void acquire(String host, Kind kind, int requestWeight) {
         if (requestWeight < 1 || requestWeight > TOKEN_CAPACITY) {
             throw new IllegalArgumentException("Binance REST 请求权重超出调度器支持范围: " + requestWeight);
         }
@@ -49,11 +56,12 @@ final class RestRequestScheduler {
         if (initialNow < blockedUntil) {
             throw deferred("BLOCKED_UNTIL", kind, 0L, TimeUnit.NANOSECONDS.toMillis(blockedUntil - initialNow) + 1L);
         }
-        var queue = queues[kind.ordinal()];
-        if (queue.size() >= 16) {
+        Environment environment = Environment.fromHost(host);
+        if (queueSize(kind) >= 16) {
             throw deferred("QUEUE_FULL", kind, 0L, 2_000L);
         }
-        Ticket ticket = new Ticket(kind, requestWeight, initialNow);
+        Ticket ticket = new Ticket(kind, environment, requestWeight, initialNow);
+        ArrayDeque<Ticket> queue = queues[kind.ordinal()][environment.ordinal()];
         queue.addLast(ticket);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(kind == Kind.TRADE ? 2 : 8);
         try {
@@ -70,18 +78,18 @@ final class RestRequestScheduler {
                 }
                 if (now >= deadline) {
                     if (!queue.contains(ticket)) {
-                        log.error("Binance REST 调度器队列状态异常 reason=QUEUE_TIMEOUT kind={} requestWeight={} waitedMs={} queueSizes={}",
-                            kind, requestWeight, TimeUnit.NANOSECONDS.toMillis(now - initialNow), java.util.Arrays.toString(queueSizes()));
+                        log.error("Binance REST 调度器队列状态异常 reason=QUEUE_TIMEOUT kind={} environment={} requestWeight={} waitedMs={} queueSizes={}",
+                            kind, environment, requestWeight, TimeUnit.NANOSECONDS.toMillis(now - initialNow), java.util.Arrays.toString(queueSizes()));
                     }
                     throw deferred("QUEUE_TIMEOUT", kind, TimeUnit.NANOSECONDS.toMillis(now - initialNow), 1_500L);
                 }
                 refillTokens(now);
-                int selected = selectEligibleQueue(now);
-                if (selected >= 0 && rotation[selected] == kind.ordinal() && queue.peekFirst() == ticket) {
+                Ticket selected = selectEligibleTicket(now);
+                if (selected == ticket) {
                     queue.removeFirst();
                     availableTokens -= requestWeight;
-                    long waitedMillis = TimeUnit.NANOSECONDS.toMillis(now - initialNow);
-                    cursor = (selected + 1) % rotation.length;
+                    cursor = selected.rotationIndex() + 1;
+                    environmentCursor = (environment.ordinal() + 1) % Environment.values().length;
                     notifyAll();
                     return;
                 }
@@ -108,39 +116,43 @@ final class RestRequestScheduler {
         lastRefill = now;
     }
 
-    private int selectEligibleQueue(long now) {
+    private Ticket selectEligibleTicket(long now) {
         Ticket reservation = reservationTicket(now);
         for (int i = 0; i < rotation.length; i++) {
             int selected = (cursor + i) % rotation.length;
             Kind kind = Kind.values()[rotation[selected]];
-            Ticket head = queues[kind.ordinal()].peekFirst();
-            if (head == null || head.weight() > availableTokens) {
-                continue;
+            for (int offset = 0; offset < Environment.values().length; offset++) {
+                Environment environment = Environment.values()[(environmentCursor + offset) % Environment.values().length];
+                Ticket head = queues[kind.ordinal()][environment.ordinal()].peekFirst();
+                if (head == null || head.weight() > availableTokens) {
+                    continue;
+                }
+                if (reservedForAnother(head, reservation, now)) {
+                    continue;
+                }
+                return head.withRotationIndex(selected);
             }
-            if (reservation != null && head != reservation
-                && priority(kind) >= priority(reservation.kind())
-                && availableTokens - head.weight() < reservation.weight()) {
-                continue;
-            }
-            return selected;
         }
-        return -1;
+        return null;
+    }
+
+    private boolean reservedForAnother(Ticket candidate, Ticket reservation, long now) {
+        return reservation != null && candidate != reservation
+            && effectivePriority(candidate, now) >= effectivePriority(reservation, now)
+            && availableTokens - candidate.weight() < reservation.weight();
     }
 
     private long nextEligibleTokenDelayNanos(long now) {
         Ticket reservation = reservationTicket(now);
         int minimumWeight = Integer.MAX_VALUE;
         for (Kind kind : Kind.values()) {
-            Ticket head = queues[kind.ordinal()].peekFirst();
-            if (head == null) {
-                continue;
+            for (Environment environment : Environment.values()) {
+                Ticket head = queues[kind.ordinal()][environment.ordinal()].peekFirst();
+                if (head == null || reservedForAnother(head, reservation, now)) {
+                    continue;
+                }
+                minimumWeight = Math.min(minimumWeight, head.weight());
             }
-            if (reservation != null && head != reservation
-                && priority(kind) >= priority(reservation.kind())
-                && availableTokens - head.weight() < reservation.weight()) {
-                continue;
-            }
-            minimumWeight = Math.min(minimumWeight, head.weight());
         }
         if (minimumWeight == Integer.MAX_VALUE || minimumWeight <= availableTokens) {
             return TimeUnit.MILLISECONDS.toNanos(10);
@@ -148,25 +160,33 @@ final class RestRequestScheduler {
         return Math.max(1L, (long) Math.ceil((minimumWeight - availableTokens) * refillInterval));
     }
 
-    /** 保护、交易和持仓核验立即预留；其他请求等待250ms后参与权重预留。 */
+    /** 关键请求立即预留；其他请求等待250ms后参与预留，并通过等待时长逐级提升优先级。 */
     private Ticket reservationTicket(long now) {
         Ticket reservation = null;
         for (Kind kind : Kind.values()) {
-            Ticket head = queues[kind.ordinal()].peekFirst();
-            if (head == null) {
-                continue;
-            }
-            boolean critical = priority(kind) <= priority(Kind.POSITION_VERIFY);
-            if (!critical && now - head.enqueuedAtNanos() < RESERVATION_WAIT_NANOS) {
-                continue;
-            }
-            if (reservation == null || priority(kind) < priority(reservation.kind())
-                || priority(kind) == priority(reservation.kind())
-                    && head.enqueuedAtNanos() < reservation.enqueuedAtNanos()) {
-                reservation = head;
+            for (Environment environment : Environment.values()) {
+                Ticket head = queues[kind.ordinal()][environment.ordinal()].peekFirst();
+                if (head == null) {
+                    continue;
+                }
+                boolean critical = priority(kind) <= priority(Kind.POSITION_VERIFY);
+                if (!critical && now - head.enqueuedAtNanos() < RESERVATION_WAIT_NANOS) {
+                    continue;
+                }
+                if (reservation == null || effectivePriority(head, now) < effectivePriority(reservation, now)
+                    || effectivePriority(head, now) == effectivePriority(reservation, now)
+                        && head.enqueuedAtNanos() < reservation.enqueuedAtNanos()) {
+                    reservation = head;
+                }
             }
         }
         return reservation;
+    }
+
+    private static int effectivePriority(Ticket ticket, long now) {
+        long waited = Math.max(0L, now - ticket.enqueuedAtNanos());
+        int aging = (int) Math.min(priority(ticket.kind()), waited / AGING_INTERVAL_NANOS);
+        return priority(ticket.kind()) - aging;
     }
 
     private static int priority(Kind kind) {
@@ -178,10 +198,18 @@ final class RestRequestScheduler {
         };
     }
 
+    private int queueSize(Kind kind) {
+        int size = 0;
+        for (Environment environment : Environment.values()) {
+            size += queues[kind.ordinal()][environment.ordinal()].size();
+        }
+        return size;
+    }
+
     private int[] queueSizes() {
         int[] sizes = new int[queues.length];
-        for (int i = 0; i < queues.length; i++) {
-            sizes[i] = queues[i].size();
+        for (Kind kind : Kind.values()) {
+            sizes[kind.ordinal()] = queueSize(kind);
         }
         return sizes;
     }
@@ -192,10 +220,6 @@ final class RestRequestScheduler {
             sizes, waitedMillis, retryAfterMillis);
     }
 
-    /**
-     * Permanently blocks REST requests for this process after an unbounded HTTP 418.
-     * Restarting the process is an explicit operator action, not an automatic expiry.
-     */
     synchronized void blockUntilManualReset() {
         manualBlock = true;
         notifyAll();
@@ -211,10 +235,26 @@ final class RestRequestScheduler {
         notifyAll();
     }
 
-    private record Ticket(Kind kind, int weight, long enqueuedAtNanos) { }
+    private record Ticket(Kind kind, Environment environment, int weight, long enqueuedAtNanos, int rotationIndex) {
+        private Ticket(Kind kind, Environment environment, int weight, long enqueuedAtNanos) {
+            this(kind, environment, weight, enqueuedAtNanos, -1);
+        }
 
-    /**
-     * 令牌桶按每秒 20 个 IP 权重单位补充、最多积累 40 个单位；类别份额仍由加权轮转保证。
-     */
+        private Ticket withRotationIndex(int index) {
+            return new Ticket(kind, environment, weight, enqueuedAtNanos, index);
+        }
+    }
+
+    private enum Environment {
+        LIVE, TESTNET;
+
+        private static Environment fromHost(String host) {
+            String normalized = host == null ? "" : host.toLowerCase(java.util.Locale.ROOT);
+            return normalized.contains("testnet") || normalized.startsWith("demo-")
+                ? TESTNET : LIVE;
+        }
+    }
+
+    /** 单一全局令牌桶按每秒20个IP权重单位补充、最多积累40个单位。 */
     enum Kind {TRADE, PROTECTION_VERIFY, POSITION_VERIFY, ACCOUNT, BACKGROUND}
 }
