@@ -1029,6 +1029,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                  "/fapi/v2/account", "/fapi/v3/account", "/fapi/v3/balance",
                  "/fapi/v1/userTrades" -> 5;
             case "/fapi/v1/income" -> 30;
+            case "/fapi/v1/aggTrades" -> 20;
             default -> 1;
         };
     }
