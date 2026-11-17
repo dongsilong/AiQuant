@@ -1091,6 +1091,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     static boolean isTransientNetworkFailure(Throwable failure) {
+        if (Thread.currentThread().isInterrupted()) {
+            return false;
+        }
         boolean transportFailure = false;
         for (Throwable current = failure; current != null; current = current.getCause()) {
             if (current instanceof ExchangeMarketPort.RequestDeferredException
