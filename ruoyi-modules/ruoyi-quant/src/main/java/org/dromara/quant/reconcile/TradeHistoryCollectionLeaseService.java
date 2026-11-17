@@ -30,13 +30,12 @@ public class TradeHistoryCollectionLeaseService {
             throw new IllegalArgumentException("成交历史采集租约缺少账户或交易对");
         }
         String owner = UUID.randomUUID().toString();
-        mapper.ensure(credentialId, symbol, owner);
+        mapper.ensure(credentialId, symbol);
         if (mapper.acquire(credentialId, symbol, owner, LEASE_SECONDS) != 1) {
             return null;
         }
         Long epoch = mapper.currentEpoch(credentialId, symbol, owner);
         if (epoch == null) {
-            mapper.release(credentialId, symbol, owner, -1L);
             return null;
         }
         return new Lease(credentialId, symbol, owner, epoch);
