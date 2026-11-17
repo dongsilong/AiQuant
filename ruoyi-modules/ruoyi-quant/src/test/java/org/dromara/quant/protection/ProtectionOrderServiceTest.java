@@ -815,7 +815,19 @@ class ProtectionOrderServiceTest {
         try {
             var first = executor.submit(() -> service.firstTakeProfitExecutedQuantity(1L, position));
             assertTrue(queryStarted.await(3, java.util.concurrent.TimeUnit.SECONDS));
-            var second = executor.submit(() -> service.firstTakeProfitExecutedQuantity(1L, position));
+            var secondThread = new java.util.concurrent.atomic.AtomicReference<Thread>();
+            var secondStarted = new java.util.concurrent.CountDownLatch(1);
+            var second = executor.submit(() -> {
+                secondThread.set(Thread.currentThread());
+                secondStarted.countDown();
+                return service.firstTakeProfitExecutedQuantity(1L, position);
+            });
+            assertTrue(secondStarted.await(3, java.util.concurrent.TimeUnit.SECONDS));
+            long waitDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
+            while (secondThread.get().getState() != Thread.State.WAITING && System.nanoTime() < waitDeadline) {
+                Thread.yield();
+            }
+            assertEquals(Thread.State.WAITING, secondThread.get().getState());
             releaseQuery.countDown();
 
             assertEquals(0, BigDecimal.ZERO.compareTo(first.get(3, java.util.concurrent.TimeUnit.SECONDS)));
