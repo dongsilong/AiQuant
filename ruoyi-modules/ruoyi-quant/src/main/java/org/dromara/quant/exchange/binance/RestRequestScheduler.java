@@ -8,21 +8,25 @@ import java.util.ArrayDeque;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 有界加权轮转队列；交易和持仓核验优先，余额校准及后台补偿保留固定执行份额。
+ * 基于请求权重的全局令牌桶，并按请求类别加权轮转，避免高权重查询挤占全部请求容量。
  */
 final class RestRequestScheduler {
     private static final Logger log = LoggerFactory.getLogger(RestRequestScheduler.class);
-    private final ArrayDeque<Object>[] queues;
+    private static final double TOKEN_CAPACITY = 40D;
+    private final ArrayDeque<Ticket>[] queues;
     private final int[] rotation = {0, 1, 0, 2, 0, 0, 1, 3, 0, 4};
-    private final long interval;
-    private long nextStart;
+    /** 每个权重单位补充所需时间；生产环境 50ms 即每秒最多补充 20 个权重单位。 */
+    private final long refillInterval;
+    private double availableTokens = TOKEN_CAPACITY;
+    private long lastRefill = System.nanoTime();
     private long blockedUntil;
     /** A 418 without a trustworthy expiry requires operator intervention; never auto-expire this latch. */
     private boolean manualBlock;
     private int cursor;
+
     @SuppressWarnings("unchecked")
-    RestRequestScheduler(long intervalMillis) {
-        interval = TimeUnit.MILLISECONDS.toNanos(intervalMillis);
+    RestRequestScheduler(long refillIntervalMillis) {
+        refillInterval = TimeUnit.MILLISECONDS.toNanos(refillIntervalMillis);
         queues = new ArrayDeque[Kind.values().length];
         for (int i = 0; i < queues.length; i++) {
             queues[i] = new ArrayDeque<>();
@@ -30,6 +34,13 @@ final class RestRequestScheduler {
     }
 
     synchronized void acquire(Kind kind) {
+        acquire(kind, 1);
+    }
+
+    synchronized void acquire(Kind kind, int requestWeight) {
+        if (requestWeight < 1 || requestWeight > TOKEN_CAPACITY) {
+            throw new IllegalArgumentException("Binance REST 请求权重超出调度器支持范围: " + requestWeight);
+        }
         long initialNow = System.nanoTime();
         if (manualBlock) {
             throw deferred("MANUAL_BLOCK", kind, 0L, 0L);
@@ -41,11 +52,11 @@ final class RestRequestScheduler {
         if (queue.size() >= 16) {
             throw deferred("QUEUE_FULL", kind, 0L, 2_000L);
         }
-        Object ticket = new Object();
+        Ticket ticket = new Ticket(kind, requestWeight);
         queue.addLast(ticket);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(kind == Kind.TRADE ? 2 : 8);
         try {
-            for (; ; ) {
+            for (;;) {
                 if (Thread.currentThread().isInterrupted()) {
                     throw deferred("INTERRUPTED", kind, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
                 }
@@ -59,30 +70,23 @@ final class RestRequestScheduler {
                 if (now >= deadline) {
                     throw deferred("QUEUE_TIMEOUT", kind, TimeUnit.NANOSECONDS.toMillis(now - initialNow), 1_500L);
                 }
-                int selected = cursor;
-                for (int i = 0; i < rotation.length; i++) {
-                    selected = (cursor + i) % rotation.length;
-                    if (!queues[rotation[selected]].isEmpty()) {
-                        break;
-                    }
-                }
-                if (rotation[selected] == kind.ordinal() && queue.peekFirst() == ticket && now >= nextStart) {
+                refillTokens(now);
+                int selected = selectEligibleQueue();
+                if (selected >= 0 && rotation[selected] == kind.ordinal() && queue.peekFirst() == ticket) {
                     queue.removeFirst();
+                    availableTokens -= requestWeight;
                     long waitedMillis = TimeUnit.NANOSECONDS.toMillis(now - initialNow);
                     if (waitedMillis >= 250L) {
-                        int[] queueSizes = new int[queues.length];
-                        for (int i = 0; i < queues.length; i++) {
-                            queueSizes[i] = queues[i].size();
-                        }
-                        log.warn("Binance REST 请求排队等待偏高 kind={} waitedMs={} queueSizes={}",
-                            kind, waitedMillis, java.util.Arrays.toString(queueSizes));
+                        log.warn("Binance REST 请求排队等待偏高 kind={} requestWeight={} waitedMs={} remainingWeightTokens={} queueSizes={}",
+                            kind, requestWeight, waitedMillis, String.format(java.util.Locale.ROOT, "%.2f", availableTokens), queueSizes());
                     }
-                    nextStart = now + interval;
                     cursor = (selected + 1) % rotation.length;
                     notifyAll();
                     return;
                 }
-                long delay = nextStart > now ? nextStart - now : TimeUnit.MILLISECONDS.toNanos(10);
+                long tokenDelay = nextEligibleTokenDelayNanos();
+                long fairnessDelay = TimeUnit.MILLISECONDS.toNanos(10);
+                long delay = tokenDelay == Long.MAX_VALUE ? fairnessDelay : Math.min(tokenDelay, fairnessDelay);
                 TimeUnit.NANOSECONDS.timedWait(this, Math.min(delay, deadline - now));
             }
         } catch (InterruptedException ex) {
@@ -94,13 +98,52 @@ final class RestRequestScheduler {
         }
     }
 
-    private ExchangeMarketPort.RequestDeferredException deferred(String reason, Kind kind, long waitedMillis, long retryAfterMillis) {
-        int[] queueSizes = new int[queues.length];
-        for (int i = 0; i < queues.length; i++) {
-            queueSizes[i] = queues[i].size();
+    private void refillTokens(long now) {
+        long elapsed = now - lastRefill;
+        if (elapsed <= 0L) {
+            return;
         }
-        return new ExchangeMarketPort.RequestDeferredException(reason, kind.name(), queueSizes[kind.ordinal()],
-            queueSizes, waitedMillis, retryAfterMillis);
+        availableTokens = Math.min(TOKEN_CAPACITY, availableTokens + (double) elapsed / refillInterval);
+        lastRefill = now;
+    }
+
+    private int selectEligibleQueue() {
+        for (int i = 0; i < rotation.length; i++) {
+            int selected = (cursor + i) % rotation.length;
+            Ticket head = queues[rotation[selected]].peekFirst();
+            if (head != null && head.weight() <= availableTokens) {
+                return selected;
+            }
+        }
+        return -1;
+    }
+
+    private long nextEligibleTokenDelayNanos() {
+        int minimumWeight = Integer.MAX_VALUE;
+        for (ArrayDeque<Ticket> queue : queues) {
+            Ticket head = queue.peekFirst();
+            if (head != null) {
+                minimumWeight = Math.min(minimumWeight, head.weight());
+            }
+        }
+        if (minimumWeight == Integer.MAX_VALUE || minimumWeight <= availableTokens) {
+            return TimeUnit.MILLISECONDS.toNanos(10);
+        }
+        return Math.max(1L, (long) Math.ceil((minimumWeight - availableTokens) * refillInterval));
+    }
+
+    private int[] queueSizes() {
+        int[] sizes = new int[queues.length];
+        for (int i = 0; i < queues.length; i++) {
+            sizes[i] = queues[i].size();
+        }
+        return sizes;
+    }
+
+    private ExchangeMarketPort.RequestDeferredException deferred(String reason, Kind kind, long waitedMillis, long retryAfterMillis) {
+        int[] sizes = queueSizes();
+        return new ExchangeMarketPort.RequestDeferredException(reason, kind.name(), sizes[kind.ordinal()],
+            sizes, waitedMillis, retryAfterMillis);
     }
 
     /**
@@ -122,8 +165,10 @@ final class RestRequestScheduler {
         notifyAll();
     }
 
+    private record Ticket(Kind kind, int weight) { }
+
     /**
-     * REST 请求加权份额：交易请求 5/10、保护单核查 2/10、持仓事实核验 1/10、账户查询 1/10、后台补偿 1/10；所有类别共享全局请求间隔。
+     * 令牌桶按每秒 20 个 IP 权重单位补充、最多积累 40 个单位；类别份额仍由加权轮转保证。
      */
     enum Kind {TRADE, PROTECTION_VERIFY, POSITION_VERIFY, ACCOUNT, BACKGROUND}
 }
