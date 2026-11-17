@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit;
  */
 final class RestRequestScheduler {
     private final ArrayDeque<Object>[] queues;
-    private final int[] rotation = {0, 1, 0, 2, 0, 0, 1, 3};
+    private final int[] rotation = {0, 1, 0, 2, 0, 0, 1, 3, 0, 4};
     private final long interval;
     private long nextStart;
     private long blockedUntil;
@@ -20,7 +20,10 @@ final class RestRequestScheduler {
     @SuppressWarnings("unchecked")
     RestRequestScheduler(long intervalMillis) {
         interval = TimeUnit.MILLISECONDS.toNanos(intervalMillis);
-        queues = new ArrayDeque[]{new ArrayDeque<>(), new ArrayDeque<>(), new ArrayDeque<>(), new ArrayDeque<>()};
+        queues = new ArrayDeque[Kind.values().length];
+        for (int i = 0; i < queues.length; i++) {
+            queues[i] = new ArrayDeque<>();
+        }
     }
 
     synchronized void acquire(Kind kind) {
@@ -108,7 +111,7 @@ final class RestRequestScheduler {
     }
 
     /**
-     * REST 请求优先级：交易请求 > 持仓事实核验 > 账户余额校准 > 后台补偿查询。
+     * REST 请求优先级：交易请求 > 首次止盈保护核验 > 持仓事实核验 > 账户余额校准 > 后台补偿查询。
      */
-    enum Kind {TRADE, POSITION_VERIFY, ACCOUNT, BACKGROUND}
+    enum Kind {TRADE, PROTECTION_VERIFY, POSITION_VERIFY, ACCOUNT, BACKGROUND}
 }
