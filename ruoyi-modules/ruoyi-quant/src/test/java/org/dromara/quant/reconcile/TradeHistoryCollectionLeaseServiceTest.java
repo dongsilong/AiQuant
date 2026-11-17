@@ -22,7 +22,7 @@ class TradeHistoryCollectionLeaseServiceTest {
         assertDoesNotThrow(lease::assertOwnedForCommit);
         lease.close();
 
-        verify(mapper).ensure(eq(9L), eq("BTCUSDT"), anyString());
+        verify(mapper).ensure(eq(9L), eq("BTCUSDT"));
         verify(mapper).acquire(eq(9L), eq("BTCUSDT"), anyString(), eq(90));
         verify(mapper).lockOwned(eq(9L), eq("BTCUSDT"), anyString(), eq(17L));
         verify(mapper).release(eq(9L), eq("BTCUSDT"), anyString(), eq(17L));
@@ -41,7 +41,7 @@ class TradeHistoryCollectionLeaseServiceTest {
         assertNotNull(lease);
         assertThrows(IllegalStateException.class, lease::assertOwnedForCommit);
         lease.close();
-        verify(mapper, never()).release(eq(9L), eq("ETHUSDT"), anyString(), eq(21L));
+        verify(mapper).release(eq(9L), eq("ETHUSDT"), anyString(), eq(21L));
         service.shutdown();
     }
 
