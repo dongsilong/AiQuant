@@ -9,13 +9,15 @@ import java.util.function.Consumer;
 
 /** Bounds the historical K-line burst sent to a terminal SSE subscriber. */
 final class SseReplayKlineBuffer {
-    private static final int MAX_REPLAY_KLINES = 8;
+    private static final int MAX_REPLAY_KLINES = 4;
+    private static final int MAX_ONE_MINUTE_REPLAY_KLINES = 8;
     private final ArrayDeque<ExchangeGateway.MarketEvent> replayKlines = new ArrayDeque<>(MAX_REPLAY_KLINES);
 
     synchronized void publish(ExchangeGateway.MarketEvent event, Consumer<ExchangeGateway.MarketEvent> downstream) {
         if (event.replay()) {
             if ("KLINE".equals(event.type()) && event.kline() != null) {
-                if (replayKlines.size() == MAX_REPLAY_KLINES) replayKlines.removeFirst();
+                int maxReplayKlines = "1m".equals(event.interval()) ? MAX_ONE_MINUTE_REPLAY_KLINES : MAX_REPLAY_KLINES;
+                if (replayKlines.size() == maxReplayKlines) replayKlines.removeFirst();
                 replayKlines.addLast(event);
             }
             return;
