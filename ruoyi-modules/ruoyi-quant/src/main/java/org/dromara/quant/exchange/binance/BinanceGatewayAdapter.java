@@ -1020,6 +1020,23 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * 只读签名请求允许对明确的瞬时网络故障进行有限重试；写请求不经过此方法。
      * Binance 时间戳错误仍单独刷新服务器时间，最多重试一次。
      */
+    /**
+     * USDⓈ-M Futures 常用 REST 端点的 IP 权重。未明确列出的端点按 1 计，后续应以 Binance 文档及响应头持续校准。
+     */
+    static int restRequestWeight(okhttp3.Request request) {
+        String path = request.url().encodedPath();
+        boolean hasSymbol = request.url().queryParameter("symbol") != null;
+        return switch (path) {
+            case "/fapi/v1/openOrders", "/fapi/v1/openAlgoOrders" -> hasSymbol ? 1 : 40;
+            case "/fapi/v1/allOrders", "/fapi/v1/allAlgoOrders",
+                 "/fapi/v2/positionRisk", "/fapi/v3/positionRisk",
+                 "/fapi/v2/account", "/fapi/v3/account", "/fapi/v3/balance",
+                 "/fapi/v1/userTrades" -> 5;
+            case "/fapi/v1/income" -> 30;
+            default -> 1;
+        };
+    }
+
     private <T> T signedRead(Credential credential, RestRequestScheduler.Kind kind, Function<DerivativesTradingUsdsFuturesRestApi, T> request) {
         String runMode = credential == null ? "LIVE" : credential.runMode();
         String baseUrl = "TESTNET".equalsIgnoreCase(runMode) ? properties.getBinance().getTestnetUrl() : properties.getBinance().getBaseUrl();
@@ -1808,16 +1825,18 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             // Acquire a slot for every actual HTTP request, not merely when an SDK client is constructed.
             // Some SDK API objects issue multiple requests, so client-construction throttling is insufficient.
             .addInterceptor(chain -> {
+                okhttp3.Request request = chain.request();
+                int requestWeight = restRequestWeight(request);
                 long queueStarted = System.nanoTime();
                 try {
-                    restScheduler.acquire(kind);
+                    restScheduler.acquire(kind, requestWeight);
                 } catch (ExchangeMarketPort.RequestDeferredException deferred) {
                     QueryProtectionTiming protectionTiming = protectionQueryTiming.get();
                     if (protectionTiming != null) {
                         protectionTiming.schedulerQueueNanos += java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(deferred.waitedMillis());
                     }
-                    log.warn("Binance REST 请求延期 method={} path={} kind={} reason={} queueSize={} queueSizes={} waitedMs={} retryAfterMs={}",
-                        chain.request().method(), chain.request().url().encodedPath(), deferred.kind(), deferred.reason(), deferred.queueSize(), java.util.Arrays.toString(deferred.queueSizes()), deferred.waitedMillis(), deferred.retryAfterMillis());
+                    log.warn("Binance REST 请求延期 method={} path={} kind={} requestWeight={} reason={} queueSize={} queueSizes={} waitedMs={} retryAfterMs={}",
+                        request.method(), request.url().encodedPath(), deferred.kind(), requestWeight, deferred.reason(), deferred.queueSize(), java.util.Arrays.toString(deferred.queueSizes()), deferred.waitedMillis(), deferred.retryAfterMillis());
                     throw deferred;
                 }
                 long queueNanos = System.nanoTime() - queueStarted;
@@ -1827,7 +1846,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 if (protectionTiming != null) {
                     protectionTiming.schedulerQueueNanos += queueNanos;
                 }
-                log.debug("Binance REST 获准执行 kind={} queueMillis={} clockSync={}", kind, queueMillis, syncTiming != null);
+                log.debug("Binance REST 获准执行 kind={} requestWeight={} queueMillis={} clockSync={}", kind, requestWeight, queueMillis, syncTiming != null);
                 // Keep diagnostics out of the measured HTTP round trip.
                 long requestStartedAt = System.currentTimeMillis();
                 if (syncTiming != null) {
