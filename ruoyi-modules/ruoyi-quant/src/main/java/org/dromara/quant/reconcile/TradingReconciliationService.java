@@ -257,11 +257,12 @@ public class TradingReconciliationService {
                         ? historyStart : order.createTime();
                     Instant orderEnd = order.updateTime() == null || order.updateTime().isAfter(historyEnd)
                         ? historyEnd : order.updateTime();
-                    if (!orderStart.isAfter(orderEnd)) {
-                        perOrderQueryEstimate += Math.max(1L,
+                    if (orderStart.isAfter(orderEnd)) {
+                        throw new IllegalStateException("历史订单创建时间晚于更新时间，无法安全查询其成交");
+                    }
+                    perOrderQueryEstimate += Math.max(1L,
                             (Duration.between(orderStart, orderEnd).toMillis() + Duration.ofDays(7).toMillis() - 1)
                                 / Duration.ofDays(7).toMillis());
-                    }
                 }
                 long accountQueryEstimate = Math.max(1L,
                     (Duration.between(historyStart, historyEnd).toMillis() + Duration.ofDays(6).toMillis() - 1)
