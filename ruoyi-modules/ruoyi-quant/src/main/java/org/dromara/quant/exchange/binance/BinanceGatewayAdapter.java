@@ -1870,9 +1870,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 long proceedNanos = System.nanoTime() - proceedStartedAt;
                 long requestElapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(proceedNanos);
                 if (queueMillis >= 250L) {
-                    log.warn("Binance REST 请求排队等待偏高 host={} method={} path={} kind={} requestWeight={} queueMillis={} requestElapsedMillis={} status={} usedWeight1m={}",
+                    log.warn("Binance REST 请求排队等待偏高 host={} method={} path={} kind={} requestWeight={} queueMillis={} requestElapsedMillis={} status={} usedWeight1m={} schedulerState={}",
                         request.url().host(), request.method(), request.url().encodedPath(), kind, requestWeight, queueMillis,
-                        requestElapsedMillis, response.code(), response.header("X-MBX-USED-WEIGHT-1M"));
+                        requestElapsedMillis, response.code(), response.header("X-MBX-USED-WEIGHT-1M"), restScheduler.diagnostics());
                 } else {
                     log.debug("Binance REST 响应 host={} method={} path={} kind={} requestWeight={} queueMillis={} requestElapsedMillis={} status={} usedWeight1m={}",
                         request.url().host(), request.method(), request.url().encodedPath(), kind, requestWeight, queueMillis,
