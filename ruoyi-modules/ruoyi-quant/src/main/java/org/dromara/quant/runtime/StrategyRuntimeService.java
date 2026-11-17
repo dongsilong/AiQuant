@@ -478,6 +478,52 @@ public class StrategyRuntimeService {
     }
 
     /**
+     * 凭证被删除或交易身份发生变化后，立即关闭本节点引用旧凭证的 Runtime。
+     * 关闭流程会等待已提交的保护/平仓任务，不会取消可能已发送的交易请求。
+     */
+    public void invalidateCredential(Long credentialId) {
+        if (credentialId == null) {
+            return;
+        }
+        for (Map.Entry<Long, ActiveRuntime> entry : activeRuntimes.entrySet()) {
+            ActiveRuntime runtime = entry.getValue();
+            if (runtime != null && Objects.equals(runtime.credential.getId(), credentialId)
+                && activeRuntimes.remove(entry.getKey(), runtime)) {
+                if (runtime.position != null || runtime.hasPendingAction()) {
+                    log.error("交易凭证已变更/删除，旧 Runtime 停止继续访问交易所；现有持仓需由新凭证核实 instanceId={} credentialId={} symbol={}",
+                        runtime.instance.getId(), credentialId, runtime.symbol.getSymbol());
+                }
+                closeRuntime(runtime);
+            }
+        }
+    }
+
+    /**
+     * 策略实例停止或绑定失效时立即禁止新开仓；已有持仓和未决动作继续保留保护 Runtime。
+     */
+    public void invalidateInstance(Long instanceId) {
+        if (instanceId == null) {
+            return;
+        }
+        ActiveRuntime runtime = activeRuntimes.get(instanceId);
+        if (runtime == null) {
+            return;
+        }
+        boolean retainForRecovery;
+        synchronized (runtime) {
+            runtime.runtimeEnabled = false;
+            runtime.protectionOnly = true;
+            retainForRecovery = runtime.position != null || runtime.hasPendingAction()
+                || runtime.state != null && (Boolean.TRUE.equals(runtime.state.getRecoveryRequired())
+                    || Boolean.TRUE.equals(runtime.state.getUnsafeRecovery())
+                    || "PROTECTION_CLEANUP".equals(runtime.state.getStatus()));
+        }
+        if (!retainForRecovery && activeRuntimes.remove(instanceId, runtime)) {
+            closeRuntime(runtime);
+        }
+    }
+
+    /**
      * 已关闭周期的保护单清理不能依赖 ActiveRuntime；STOPPED 实例也必须能够从持久化状态恢复。
      */
     private void recoverClosedProtectionCleanup() {
