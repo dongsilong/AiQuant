@@ -499,6 +499,33 @@ public class StrategyRuntimeService {
     }
 
     /**
+     * 凭证被禁用时停止开仓，但不丢弃仍有持仓或未决动作的本地保护上下文。
+     */
+    public void disableCredential(Long credentialId) {
+        if (credentialId == null) {
+            return;
+        }
+        for (Map.Entry<Long, ActiveRuntime> entry : activeRuntimes.entrySet()) {
+            ActiveRuntime runtime = entry.getValue();
+            if (runtime == null || !Objects.equals(runtime.credential.getId(), credentialId)) {
+                continue;
+            }
+            boolean retainForRecovery;
+            synchronized (runtime) {
+                runtime.runtimeEnabled = false;
+                runtime.protectionOnly = true;
+                retainForRecovery = runtime.position != null || runtime.hasPendingAction()
+                    || runtime.state != null && (Boolean.TRUE.equals(runtime.state.getRecoveryRequired())
+                        || Boolean.TRUE.equals(runtime.state.getUnsafeRecovery())
+                        || "PROTECTION_CLEANUP".equals(runtime.state.getStatus()));
+            }
+            if (!retainForRecovery && activeRuntimes.remove(entry.getKey(), runtime)) {
+                closeRuntime(runtime);
+            }
+        }
+    }
+
+    /**
      * 策略实例停止或绑定失效时立即禁止新开仓；已有持仓和未决动作继续保留保护 Runtime。
      */
     public void invalidateInstance(Long instanceId) {
