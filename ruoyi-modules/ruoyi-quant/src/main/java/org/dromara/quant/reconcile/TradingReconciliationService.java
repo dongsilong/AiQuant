@@ -109,6 +109,7 @@ public class TradingReconciliationService {
     private final ScheduledExecutorService positionRetryExecutor = Executors.newSingleThreadScheduledExecutor(
         Thread.ofPlatform().daemon().name("quant-position-snapshot-retry").factory());
     private final Map<Long, ScheduledFuture<?>> positionRetryTasks = new HashMap<>();
+    private final Set<Long> positionRetryRunning = ConcurrentHashMap.newKeySet();
     private final Map<Long, Integer> positionRetryAttempts = new HashMap<>();
     private final ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicLong> runtimeSnapshotGenerations = new ConcurrentHashMap<>();
     private static final Duration RUNTIME_POSITION_CACHE_AGE = Duration.ofSeconds(20);
@@ -673,23 +674,31 @@ public class TradingReconciliationService {
         long credentialId = credential.getId();
         synchronized (positionRetryTasks) {
             ScheduledFuture<?> current = positionRetryTasks.get(credentialId);
-            if (current != null && !current.isDone()) {
+            if (positionRetryRunning.contains(credentialId) || current != null && !current.isDone()) {
                 return;
             }
-            int retryAttempt = trigger != null && trigger.contains("superseded")
-                ? 0 : positionRetryAttempts.merge(credentialId, 1, Integer::sum);
-            long backoffMillis = retryAttempt == 0 ? 1_000L
-                : Math.min(30_000L, 1_000L << Math.min(retryAttempt - 1, 5));
+            int retryAttempt = positionRetryAttempts.merge(credentialId, 1, Integer::sum);
+            long backoffMillis = Math.min(30_000L, 1_000L << Math.min(retryAttempt - 1, 5));
             long delay = Math.max(Math.max(1_000L, retryAfterMillis), backoffMillis);
             ScheduledFuture<?> scheduled = positionRetryExecutor.schedule(() -> {
                 synchronized (positionRetryTasks) {
                     positionRetryTasks.remove(credentialId);
+                    positionRetryRunning.add(credentialId);
                 }
+                boolean failed = false;
                 try {
                     refreshAccountPositionSnapshot(credential, "retry:" + trigger);
                 } catch (RuntimeException retryFailure) {
+                    failed = true;
                     log.warn("账户持仓快照延迟重试仍未成功 credentialId={} trigger={} errorType={}",
                         credentialId, trigger, retryFailure.getClass().getSimpleName());
+                } finally {
+                    synchronized (positionRetryTasks) {
+                        positionRetryRunning.remove(credentialId);
+                    }
+                }
+                if (failed) {
+                    schedulePositionSnapshotRetry(credential, trigger, 1_000L);
                 }
             }, delay, TimeUnit.MILLISECONDS);
             positionRetryTasks.put(credentialId, scheduled);
