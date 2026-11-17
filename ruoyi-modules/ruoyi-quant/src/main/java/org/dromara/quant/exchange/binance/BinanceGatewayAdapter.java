@@ -1336,7 +1336,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     @Override
     public List<ProtectionOrderSnapshot> queryProtectionOrders(Credential credential, String symbol) {
         requireCredential(credential);
-        var data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+        var data = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
             client -> client.currentAllAlgoOpenOrders("CONDITIONAL", symbol, null, RECV_WINDOW_MILLIS).getData());
         if (data == null) {
             throw new IllegalStateException("Binance 条件单活动列表响应缺少数据载荷，无法确认保护单清理状态");
