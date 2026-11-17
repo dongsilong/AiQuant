@@ -29,6 +29,7 @@ import java.util.Optional;
 public final class KlineSlopeRateStrategy implements StrategyPlugin {
     private static final long SLOPE_LOG_INTERVAL_MILLIS = 5_000L;
     private static final java.util.concurrent.ConcurrentHashMap<String, Long> NEXT_SLOPE_LOG_AT = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> NEXT_MA_DIRECTION_LOG_AT = new java.util.concurrent.ConcurrentHashMap<>();
     /**
      * 斜率参考 K 线根数：1 表示往前第 1 根，2 表示往前第 2 根，3 表示往前第 3 根，最大是3。
      */
@@ -361,6 +362,12 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         boolean directionApproved = entry.direction() == EntrySignal.Direction.LONG ? comparison > 0
             : entry.direction() == EntrySignal.Direction.SHORT && comparison < 0;
         if (!directionApproved) {
+            if (shouldLogMaDirection(context.symbol(), System.currentTimeMillis())) {
+                String directionText = entry.direction() == EntrySignal.Direction.LONG ? "LONG" : "SHORT";
+                log.warn("策略开仓条件未通过 时间：{} 交易对：{} 方向：{} 斜率角度：{}° 阈值：{}° MA5：{} MA7：{} 原因：MA5_MA7_DIRECTION_MISMATCH",
+                    context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(), directionText,
+                    evaluation.degrees(), evaluation.entryThreshold(), ma5, ma7);
+            }
             return Optional.empty();
         }
         String maReason = comparison > 0 ? "1分钟5MA高于7MA" : "1分钟5MA低于7MA";
@@ -375,6 +382,18 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
     static boolean shouldLogSlope(String symbol, long nowMillis) {
         java.util.concurrent.atomic.AtomicBoolean allowed = new java.util.concurrent.atomic.AtomicBoolean();
         NEXT_SLOPE_LOG_AT.compute(symbol, (ignored, nextAt) -> {
+            if (nextAt == null || nowMillis >= nextAt) {
+                allowed.set(true);
+                return nowMillis + SLOPE_LOG_INTERVAL_MILLIS;
+            }
+            return nextAt;
+        });
+        return allowed.get();
+    }
+
+    private static boolean shouldLogMaDirection(String symbol, long nowMillis) {
+        java.util.concurrent.atomic.AtomicBoolean allowed = new java.util.concurrent.atomic.AtomicBoolean();
+        NEXT_MA_DIRECTION_LOG_AT.compute(symbol, (ignored, nextAt) -> {
             if (nextAt == null || nowMillis >= nextAt) {
                 allowed.set(true);
                 return nowMillis + SLOPE_LOG_INTERVAL_MILLIS;
