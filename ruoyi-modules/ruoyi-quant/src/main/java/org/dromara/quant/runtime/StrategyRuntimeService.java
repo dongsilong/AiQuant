@@ -82,6 +82,7 @@ public class StrategyRuntimeService {
     private RTopic credentialDisableTopic;
     private int credentialInvalidationListenerId = -1;
     private int credentialDisableListenerId = -1;
+    private final Set<Long> credentialLifecyclePending = ConcurrentHashMap.newKeySet();
     /**
      * 策略实例 Mapper。
      */
@@ -436,10 +437,10 @@ public class StrategyRuntimeService {
     public void subscribeCredentialLifecycleEvents() {
         credentialInvalidationTopic = redissonClient.getTopic("quant:credential-runtime-invalidation");
         credentialInvalidationListenerId = credentialInvalidationTopic.addListener(Long.class,
-            (channel, credentialId) -> invalidateCredential(credentialId));
+            (channel, credentialId) -> scheduleCredentialLifecycleAction(credentialId, false));
         credentialDisableTopic = redissonClient.getTopic("quant:credential-runtime-disable");
         credentialDisableListenerId = credentialDisableTopic.addListener(Long.class,
-            (channel, credentialId) -> disableCredential(credentialId));
+            (channel, credentialId) -> scheduleCredentialLifecycleAction(credentialId, true));
     }
 
     /** 在凭证变更事务提交后广播给所有 JVM，并立即处理当前节点。 */
@@ -448,7 +449,7 @@ public class StrategyRuntimeService {
             return;
         }
         publishCredentialLifecycleEvent(credentialInvalidationTopic, credentialId);
-        invalidateCredential(credentialId);
+        scheduleCredentialLifecycleAction(credentialId, false);
     }
 
     /** 禁用凭证时广播保护模式切换，避免其他 JVM 继续使用旧凭证。 */
@@ -457,7 +458,29 @@ public class StrategyRuntimeService {
             return;
         }
         publishCredentialLifecycleEvent(credentialDisableTopic, credentialId);
-        disableCredential(credentialId);
+        scheduleCredentialLifecycleAction(credentialId, true);
+    }
+
+    private void scheduleCredentialLifecycleAction(Long credentialId, boolean disabled) {
+        if (credentialId == null || !credentialLifecyclePending.add(credentialId)) {
+            return;
+        }
+        try {
+            recoveryExecutor.execute(() -> {
+                try {
+                    if (disabled) {
+                        disableCredential(credentialId);
+                    } else {
+                        invalidateCredential(credentialId);
+                    }
+                } finally {
+                    credentialLifecyclePending.remove(credentialId);
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            credentialLifecyclePending.remove(credentialId);
+            log.warn("凭证生命周期失效任务未能提交 credentialId={} executorShutdown={}", credentialId, recoveryExecutor.isShutdown());
+        }
     }
 
     private void publishCredentialLifecycleEvent(RTopic topic, Long credentialId) {
@@ -494,9 +517,9 @@ public class StrategyRuntimeService {
             QuantCredential latest = latestById.get(credentialId);
             if (latest == null || !versions.contains(latest.getUpdateTime())) {
                 if (latest != null && "1".equals(latest.getStatus())) {
-                    disableCredential(credentialId);
+                    scheduleCredentialLifecycleAction(credentialId, true);
                 } else {
-                    invalidateCredential(credentialId);
+                    scheduleCredentialLifecycleAction(credentialId, false);
                 }
             }
         });
