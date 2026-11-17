@@ -8,7 +8,7 @@ import java.util.ArrayDeque;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 基于请求权重的全局令牌桶，并按请求类别加权轮转，避免高权重查询挤占全部请求容量。
+ * 基于请求权重的全局令牌桶，并按请求类别加权轮转；对关键和长时间等待的请求预留权重。
  */
 final class RestRequestScheduler {
     private static final Logger log = LoggerFactory.getLogger(RestRequestScheduler.class);
@@ -148,6 +148,7 @@ final class RestRequestScheduler {
         return Math.max(1L, (long) Math.ceil((minimumWeight - availableTokens) * refillInterval));
     }
 
+    /** 保护、交易和持仓核验立即预留；其他请求等待250ms后参与权重预留。 */
     private Ticket reservationTicket(long now) {
         Ticket reservation = null;
         for (Kind kind : Kind.values()) {
