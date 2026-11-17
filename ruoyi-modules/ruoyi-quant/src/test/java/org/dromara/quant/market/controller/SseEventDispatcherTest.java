@@ -146,29 +146,33 @@ class SseEventDispatcherTest {
     }
     @Test
     void reliableEventsDoNotStarveLatestStateEvents() {
-        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L),
-            new SseResponseReadyGate(new MockHttpServletRequest()), () -> { });
-        for (int index = 0; index < 9; index++) {
-            assertTrue(dispatcher.offer("quant.account", "reliable-" + index));
-        }
-        assertTrue(dispatcher.offerLatest("position", "quant.account", "latest-state"));
+        SseResponseReadyGate responseReady = new SseResponseReadyGate(new MockHttpServletRequest());
+        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L), responseReady, () -> { });
+        try {
+            for (int index = 0; index < 9; index++) {
+                assertTrue(dispatcher.offer("quant.account", "reliable-" + index));
+            }
+            assertTrue(dispatcher.offerLatest("position", "quant.account", "latest-state"));
 
-        for (int index = 0; index < 8; index++) {
-            Object pending = ReflectionTestUtils.invokeMethod(dispatcher, "takeNext");
-            assertTrue(("reliable-" + index).equals(ReflectionTestUtils.getField(pending, "data")));
+            for (int index = 0; index < 8; index++) {
+                Object pending = ReflectionTestUtils.invokeMethod(dispatcher, "takeNext");
+                assertTrue(("reliable-" + index).equals(ReflectionTestUtils.getField(pending, "data")));
+            }
+            Object state = ReflectionTestUtils.invokeMethod(dispatcher, "takeNext");
+            assertTrue("latest-state".equals(ReflectionTestUtils.getField(state, "data")));
+            Object remaining = ReflectionTestUtils.invokeMethod(dispatcher, "takeNext");
+            assertTrue("reliable-8".equals(ReflectionTestUtils.getField(remaining, "data")));
+        } finally {
+            dispatcher.close();
+            responseReady.close();
         }
-        Object state = ReflectionTestUtils.invokeMethod(dispatcher, "takeNext");
-        assertTrue("latest-state".equals(ReflectionTestUtils.getField(state, "data")));
-        Object remaining = ReflectionTestUtils.invokeMethod(dispatcher, "takeNext");
-        assertTrue("reliable-8".equals(ReflectionTestUtils.getField(remaining, "data")));
-        dispatcher.close();
     }
 
     @Test
     void latestStateQueueIsBoundedAndOverflowDisconnectsClient() throws Exception {
         CountDownLatch failureCalled = new CountDownLatch(1);
-        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L),
-            new SseResponseReadyGate(new MockHttpServletRequest()), failureCalled::countDown);
+        SseResponseReadyGate responseReady = new SseResponseReadyGate(new MockHttpServletRequest());
+        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L), responseReady, failureCalled::countDown);
         try {
             for (int index = 0; index < 256; index++) {
                 assertTrue(dispatcher.offerLatest("state-" + index, "quant.market", index));
@@ -177,6 +181,7 @@ class SseEventDispatcherTest {
             assertTrue(failureCalled.await(1, TimeUnit.SECONDS));
         } finally {
             dispatcher.close();
+            responseReady.close();
         }
     }
 
