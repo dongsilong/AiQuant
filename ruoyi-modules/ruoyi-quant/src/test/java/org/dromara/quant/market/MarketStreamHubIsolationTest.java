@@ -168,7 +168,7 @@ class MarketStreamHubIsolationTest {
         var releaseAggregateQuery = new CountDownLatch(1);
         when(gateway.queryAggregateTradesFrom(any(), any(), anyLong(), anyInt())).thenAnswer(invocation -> {
             aggregateQueryEntered.countDown();
-            assertDoesNotThrow(() -> assertTrue(releaseAggregateQuery.await(5, TimeUnit.SECONDS)));
+            assertDoesNotThrow(() -> org.junit.jupiter.api.Assertions.assertTrue(releaseAggregateQuery.await(5, TimeUnit.SECONDS)));
             return java.util.List.of(
                 new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", invocation.getArgument(1), BigDecimal.ONE, null, Instant.now(), 11L, Instant.now(), true),
                 new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", invocation.getArgument(1), BigDecimal.ONE, null, Instant.now(), 12L, Instant.now(), true));
@@ -199,7 +199,7 @@ class MarketStreamHubIsolationTest {
             assertTrue(aggregateQueryEntered.await(3, TimeUnit.SECONDS));
             long shareDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
             while (System.nanoTime() < shareDeadline) {
-                var reads = (Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(hub, "aggregateTradeReads");
+                var reads = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(hub, "aggregateTradeReads");
                 if (reads != null && reads.size() == 1) {
                     Thread.sleep(100L);
                     break;
