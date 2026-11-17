@@ -322,7 +322,14 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
      * 均线不包含当前未收盘 K 线；缺少完整窗口或均线方向不一致时不允许开仓。
      */
     public Optional<EntrySignal> evaluateEntry(StrategyContext context, Map<String, Object> params, BigDecimal ma5, BigDecimal ma7) {
-        SlopeEvaluation evaluation = calculateSlope(context, params);
+        return evaluateEntry(context, params, ma5, ma7, calculateSlope(context, params));
+    }
+
+    /**
+     * 使用已计算的斜率结果继续完成均线方向过滤，避免 Runtime 为调整门禁顺序重复计算斜率。
+     */
+    public Optional<EntrySignal> evaluateEntry(StrategyContext context, Map<String, Object> params, BigDecimal ma5, BigDecimal ma7,
+                                               SlopeEvaluation evaluation) {
         if (evaluation == null) {
             return Optional.empty();
         }
