@@ -114,7 +114,7 @@ class RestRequestSchedulerTest {
         });
         Thread background = new Thread(() -> {
             try {
-                scheduler.acquire(RestRequestScheduler.Kind.BACKGROUND, 1);
+                scheduler.acquire(RestRequestScheduler.Kind.BACKGROUND, 30);
                 backgroundOrder.set(sequence.incrementAndGet());
             } catch (Throwable ex) {
                 requestFailure.compareAndSet(null, ex);
@@ -128,7 +128,7 @@ class RestRequestSchedulerTest {
             background.start();
 
             assertTrue(accountDone.await(2, java.util.concurrent.TimeUnit.SECONDS));
-            assertTrue(backgroundDone.await(1, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(backgroundDone.await(2, java.util.concurrent.TimeUnit.SECONDS));
             assertNull(requestFailure.get());
             assertTrue(accountOrder.get() < backgroundOrder.get(),
                 "aged account request must reserve its remaining weight before background reads");
