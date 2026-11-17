@@ -115,11 +115,7 @@ public class QuantMarketStreamController {
             }, ignored -> { }));
         } catch (RuntimeException ex) {
             cleanup.run();
-            try {
-                delivery.offer("quant.market", java.util.Map.of("type", "ERROR", "message", "行情订阅失败"));
-            } catch (IOException ignored) {
-                // SSE 已无法继续发送。
-            }
+            delivery.offer("quant.market", java.util.Map.of("type", "ERROR", "message", "行情订阅失败"));
         }
         return emitter;
     }
@@ -189,11 +185,7 @@ public class QuantMarketStreamController {
                 }, ignored -> { });
                 addSubscription(subscriptions, closed, subscription);
             } catch (RuntimeException ex) {
-                try {
-                    delivery.offer("quant.market", java.util.Map.of("type", "ERROR", "symbol", symbol, "interval", interval, "message", "行情订阅失败"));
-                } catch (IOException | RuntimeException sendError) {
-                    cleanup.run();
-                }
+                delivery.offer("quant.market", java.util.Map.of("type", "ERROR", "symbol", symbol, "interval", interval, "message", "行情订阅失败"));
             }
         }
         return emitter;
