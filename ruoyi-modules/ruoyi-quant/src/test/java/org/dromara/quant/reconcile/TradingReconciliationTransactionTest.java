@@ -867,6 +867,38 @@ class TradingReconciliationTransactionTest {
     }
 
     @Test
+    void manualSyncReportsWhenAnotherNodeOwnsTheTradeHistoryLease() {
+        initializeManualSyncMapperMetadata();
+        Instant now = Instant.now();
+        when(gateway.queryOrderHistory(any(), eq("BTCUSDT"), any(), anyLong())).thenReturn(List.of(
+            new ExchangeGateway.OrderSnapshot("BTCUSDT", 6101L, "client-6101", "BUY", "MARKET", "FILLED",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, now, BigDecimal.TEN, "BOTH", false, now.minusSeconds(60))));
+        TradingReconciliationService reconciliation = service();
+        when(historyLeases.acquire(1L, "BTCUSDT")).thenReturn(null);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+            () -> reconciliation.syncTradingData(credential(), "BTCUSDT"));
+
+        assertTrue(failure.getMessage().contains("已有成交历史同步任务正在执行"));
+        verify(gateway, never()).queryTrades(any(), eq("BTCUSDT"), any());
+    }
+
+    @Test
+    void periodicSyncSkipsA symbolOwnedByAnotherCollector() {
+        TradingReconciliationService reconciliation = service();
+        when(fillCursors.selectSymbols(1L)).thenReturn(List.of("BTCUSDT"));
+        when(orders.selectHistoricalSymbolsByCredential(1L)).thenReturn(List.of());
+        when(historyLeases.acquire(1L, "BTCUSDT")).thenReturn(null);
+
+        Integer backlog = org.springframework.test.util.ReflectionTestUtils.invokeMethod(reconciliation,
+            "syncHistoricalSymbolFacts", credential(), null, List.of(), List.of(), List.of(),
+            new ExchangeGateway.TimeRange(Instant.now().minusSeconds(3600), Instant.now()));
+
+        assertEquals(1, backlog);
+        verify(gateway, never()).queryTrades(any(), eq("BTCUSDT"), any());
+    }
+
+    @Test
     void manualSyncDoesNotAdvanceFillCursorWhenStoredCursorPredatesCollectedWindow() {
         initializeManualSyncMapperMetadata();
         Instant now = Instant.now();
