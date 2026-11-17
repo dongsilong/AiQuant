@@ -43,7 +43,7 @@ final class SseEventDispatcher implements AutoCloseable {
             accepted = enqueue(new Pending(eventName, data, null, System.nanoTime()));
             queueSize = queue.size();
         }
-        if (!accepted && !closed.get()) notifyFailureAsync();
+        if (!accepted && !closed.get()) notifyFailureAsync(eventName, queueSize);
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
         if (elapsedMs >= 100) {
             log.warn("SSE 事件入队耗时异常 eventName={} elapsedMs={} queueSize={} accepted={} thread={}",
@@ -63,7 +63,7 @@ final class SseEventDispatcher implements AutoCloseable {
             accepted = enqueue(new Pending(eventName, data, coalesceKey, System.nanoTime()));
             queueSize = queue.size();
         }
-        if (!accepted && !closed.get()) notifyFailureAsync();
+        if (!accepted && !closed.get()) notifyFailureAsync(eventName, queueSize);
         long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
         if (elapsedMs >= 100) {
             log.warn("SSE 最新状态入队耗时异常 eventName={} elapsedMs={} queueSize={} accepted={} thread={}",
@@ -76,8 +76,9 @@ final class SseEventDispatcher implements AutoCloseable {
         return !closed.get() && queue.offer(pending);
     }
 
-    private void notifyFailureAsync() {
+    private void notifyFailureAsync(String eventName, int queueSize) {
         if (failureNotified.compareAndSet(false, true)) {
+            log.warn("SSE发送队列已满，关闭慢客户端连接 eventName={} queueSize={}", eventName, queueSize);
             Thread.ofVirtual().name("quant-sse-failure").start(this::notifyFailure);
         }
     }
