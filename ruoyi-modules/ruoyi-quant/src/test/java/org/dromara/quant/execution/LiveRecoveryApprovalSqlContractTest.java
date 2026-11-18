@@ -49,6 +49,8 @@ class LiveRecoveryApprovalSqlContractTest {
         String xml = mapper();
         String request = statement(xml, "requestLegacyOpen", "</insert>");
         assertTrue(request.contains("'LEGACY_TESTNET_OPEN'"));
+        assertTrue(request.contains("q.run_mode='TESTNET'"));
+        assertTrue(request.contains("q.del_flag='0'"));
         assertTrue(request.contains("e.execution_status='UNKNOWN'"));
         assertTrue(request.contains("e.operation_type='OPEN'"));
         assertTrue(request.contains("e.exchange_order_id IS NULL"));
