@@ -145,6 +145,36 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
     }
 
     @Test
+    void historicalUnknownOpenWithoutTicketCanRecoverOnlyWithAnExistingInactiveGuard() {
+        stubVerifiedAbsence();
+        when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
+        when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(1);
+        when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(0);
+
+        service.execute(1L, 12L, "a".repeat(64), "b".repeat(64));
+
+        verify(positionStates).closeUnexecutedOpenPending(50L, 40L, 7, "key-1", "client-1", "cycle-1", any());
+        verify(dispatch, never()).markNotExecuted(any(), any(), any(), any(), any());
+        verify(dispatch, never()).release(any(), any(), any());
+        verify(executions).markNotExecutedAfterVerifiedAbsence(eq(100L), eq(20L), eq("BTCUSDT"), eq("key-1"), eq("client-1"), anyString(), any());
+    }
+
+    @Test
+    void historicalUnknownOpenWithoutTicketRejectsMissingGuardOrExistingTicket() {
+        stubVerifiedAbsence();
+        when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
+        when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(0);
+        when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(0);
+
+        assertThrows(IllegalStateException.class, () -> service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
+        verify(gateway, never()).queryOrder(any(), anyString(), any(), anyString());
+
+        when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(1);
+        when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(1);
+        assertThrows(IllegalStateException.class, () -> service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
+    }
+
+    @Test
     void liveCredentialsCannotUseTestnetAbsenceRecovery() {
         when(cases.findCase(1L)).thenReturn(approvedCase());
         QuantCredential credential = new QuantCredential();
