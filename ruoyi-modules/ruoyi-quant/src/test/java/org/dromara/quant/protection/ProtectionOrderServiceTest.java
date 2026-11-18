@@ -1745,6 +1745,37 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void unknownProtectionCreateChecksActiveSiblingOnExchangeButKeepsDispatchBlocked() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        local.setPositionCycleKey("closed-cycle");
+        local.setStatus("UNKNOWN");
+        local.setExchangeOrderId(null);
+        local.setExecutedQuantity(BigDecimal.ZERO);
+        QuantProtectionOrder hardStop = scopedStop("HARD_STOP", "99");
+        hardStop.setId(9L);
+        hardStop.setExchangeOrderId(66L);
+        hardStop.setStatus("WORKING");
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "create-key", "PROTECT_CREATE",
+            local.getClientOrderId(), "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(mapper.selectList(any())).thenReturn(List.of(local, hardStop));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any()))
+            .thenThrow(new org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException())
+            .thenReturn(new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 66L, hardStop.getClientOrderId(), "NEW",
+                "SELL", "BOTH", "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), BigDecimal.ZERO, true, false));
+
+        assertFalse(service.recheckProtectionDispatch(1L, "BTCUSDT", "create-key", local.getClientOrderId()));
+
+        assertEquals("UNKNOWN", local.getStatus());
+        verify(gateway).queryProtectionOrder(any(), eq(66L), eq(hardStop.getClientOrderId()), eq("BTCUSDT"), any());
+        verify(dispatcher, never()).supersedeProtectionCreate(any(), any(), any(), any());
+        verify(dispatcher, never()).recoverVerifiedProtection(any(), any(), any(), any(), any());
+        verify(gateway, never()).placeProtectionOrder(any());
+    }
+
+    @Test
     void exactExchangeAbsenceSupersedesUnknownProtectionOnlyWhenCycleAndExchangeAreFlatAndIdle() {
         QuantProtectionOrder local = order();
         local.setCredentialId(1L);
