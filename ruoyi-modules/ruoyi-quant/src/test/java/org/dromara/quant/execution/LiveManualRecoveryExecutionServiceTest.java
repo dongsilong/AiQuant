@@ -47,6 +47,7 @@ class LiveManualRecoveryExecutionServiceTest {
         map.put("symbol", "BTCUSDT");
         map.put("dispatch_key", "key-1");
         map.put("operation_type", operation);
+        map.put("recovery_mode", "TICKETED");
         map.put("expected_client_order_id", "client-1");
         return map;
     }
