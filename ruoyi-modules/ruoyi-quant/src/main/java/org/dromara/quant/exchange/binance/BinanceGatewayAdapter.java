@@ -1356,8 +1356,17 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         long start = range.from().toEpochMilli();
         long end = range.to().toEpochMilli();
         OrderHistoryResult result = collectCompleteOrderHistory(start, end, pageSize, (from, to) ->
-            signedRead(credential, RestRequestScheduler.Kind.BACKGROUND,
-                client -> client.allOrders(querySymbol, null, from, to, (long) pageSize, RECV_WINDOW_MILLIS).getData()));
+            signedRead(credential, RestRequestScheduler.Kind.BACKGROUND, client -> {
+                var response = client.allOrders(querySymbol, null, from, to, (long) pageSize, RECV_WINDOW_MILLIS);
+                if (response == null || response.getData() == null) {
+                    return null;
+                }
+                return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(),
+                    item.getSide(), item.getType(), item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()),
+                    decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item, "getAvgPrice")),
+                    string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(item.getTime()),
+                    nullableBoolean(item, "getClosePosition"))).toList();
+            }));
         if (!result.complete()) {
             throw new IllegalStateException("Binance 历史订单查询无法证明完整：时间窗口分页达到查询上限或单毫秒窗口仍被截断");
         }
