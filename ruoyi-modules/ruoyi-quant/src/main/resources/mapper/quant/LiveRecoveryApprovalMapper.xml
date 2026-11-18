@@ -2,11 +2,11 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="org.dromara.quant.execution.mapper.LiveRecoveryApprovalMapper">
     <insert id="request" timeout="3"><![CDATA[INSERT INTO quant_live_recovery_case
-(case_id, credential_id, symbol, dispatch_key, operation_type,
+(case_id, credential_id, symbol, dispatch_key, operation_type, recovery_mode,
  requested_by, evidence_sha256, expected_exchange_order_id,
  expected_client_order_id, state, created_at)
 SELECT #{caseId}, g.credential_id, g.symbol, t.idempotency_key,
-       t.operation_type, #{requesterId}, #{evidenceHash},
+       t.operation_type, 'TICKETED', #{requesterId}, #{evidenceHash},
        t.exchange_order_id, t.client_order_id, 'PENDING', UTC_TIMESTAMP(6)
 FROM quant_live_dispatch_guard g
 JOIN quant_order_dispatch_ticket t ON t.credential_id=g.credential_id
@@ -21,12 +21,49 @@ WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
         AND c.dispatch_key=t.idempotency_key
         AND c.state IN ('PENDING','APPROVED')
   )]]></insert>
+    <insert id="requestLegacyOpen" timeout="3"><![CDATA[INSERT INTO quant_live_recovery_case
+(case_id, credential_id, symbol, dispatch_key, operation_type, recovery_mode,
+ requested_by, evidence_sha256, expected_exchange_order_id,
+ expected_client_order_id, state, created_at)
+SELECT #{caseId}, e.credential_id, e.symbol, e.idempotency_key, 'OPEN',
+       'LEGACY_TESTNET_OPEN', #{requesterId}, #{evidenceHash},
+       NULL, e.client_order_id, 'PENDING', UTC_TIMESTAMP(6)
+FROM quant_execution_record e
+JOIN quant_live_dispatch_guard g
+  ON g.credential_id=e.credential_id AND g.symbol=e.symbol
+JOIN quant_strategy_position_state s
+  ON s.instance_id=e.strategy_instance_id
+WHERE e.credential_id=#{credentialId} AND e.symbol=#{symbol}
+  AND e.idempotency_key=#{dispatchKey}
+  AND e.operation_type='OPEN' AND e.execution_status='UNKNOWN'
+  AND e.exchange_order_id IS NULL
+  AND e.client_order_id IS NOT NULL AND e.client_order_id<>''
+  AND e.strategy_id IS NOT NULL AND e.strategy_instance_id IS NOT NULL
+  AND g.active_dispatch_key IS NULL
+  AND s.status='OPEN_PENDING' AND s.pending_action='OPEN'
+  AND s.pending_idempotency_key=e.idempotency_key
+  AND s.pending_client_order_id=e.client_order_id
+  AND s.pending_order_id IS NULL AND s.position_id IS NULL
+  AND s.position_qty>0 AND s.recovery_required='1' AND s.unsafe_recovery='1'
+  AND s.position_cycle_key IS NOT NULL AND s.position_cycle_key<>''
+  AND NOT EXISTS (
+      SELECT 1 FROM quant_order_dispatch_ticket t
+      WHERE t.credential_id=e.credential_id AND t.symbol=e.symbol
+        AND t.idempotency_key=e.idempotency_key
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM quant_live_recovery_case c
+      WHERE c.credential_id=e.credential_id AND c.symbol=e.symbol
+        AND c.dispatch_key=e.idempotency_key
+        AND c.state IN ('PENDING','APPROVED')
+  )]]></insert>
     <update id="approve" timeout="3"><![CDATA[UPDATE quant_live_recovery_case
 SET state='APPROVED', reviewed_by=#{reviewerId}, reviewed_at=UTC_TIMESTAMP(6)
 WHERE case_id=#{caseId} AND state='PENDING'
   AND requested_by<>#{reviewerId}
   AND evidence_sha256=#{evidenceHash}
-  AND EXISTS (
+  AND (
+    (recovery_mode='TICKETED' AND EXISTS (
       SELECT 1 FROM quant_live_dispatch_guard g
       JOIN quant_order_dispatch_ticket t
         ON t.credential_id=g.credential_id
@@ -39,13 +76,51 @@ WHERE case_id=#{caseId} AND state='PENDING'
         AND t.client_order_id=quant_live_recovery_case.expected_client_order_id
         AND (t.exchange_order_id <=> quant_live_recovery_case.expected_exchange_order_id)
         AND t.dispatch_status IN ('UNKNOWN','DISPATCHING')
+    ))
+    OR
+    (recovery_mode='LEGACY_TESTNET_OPEN' AND operation_type='OPEN'
+      AND expected_exchange_order_id IS NULL
+      AND EXISTS (
+        SELECT 1 FROM quant_live_dispatch_guard g
+        WHERE g.credential_id=quant_live_recovery_case.credential_id
+          AND g.symbol=quant_live_recovery_case.symbol
+          AND g.active_dispatch_key IS NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM quant_order_dispatch_ticket t
+        WHERE t.credential_id=quant_live_recovery_case.credential_id
+          AND t.symbol=quant_live_recovery_case.symbol
+          AND t.idempotency_key=quant_live_recovery_case.dispatch_key
+      )
+      AND EXISTS (
+        SELECT 1 FROM quant_execution_record e
+        WHERE e.credential_id=quant_live_recovery_case.credential_id
+          AND e.symbol=quant_live_recovery_case.symbol
+          AND e.idempotency_key=quant_live_recovery_case.dispatch_key
+          AND e.operation_type='OPEN' AND e.execution_status='UNKNOWN'
+          AND e.exchange_order_id IS NULL
+          AND e.client_order_id=quant_live_recovery_case.expected_client_order_id
+      )
+      AND EXISTS (
+        SELECT 1 FROM quant_strategy_position_state s
+        JOIN quant_execution_record e ON e.strategy_instance_id=s.instance_id
+        WHERE e.credential_id=quant_live_recovery_case.credential_id
+          AND e.symbol=quant_live_recovery_case.symbol
+          AND e.idempotency_key=quant_live_recovery_case.dispatch_key
+          AND s.status='OPEN_PENDING' AND s.pending_action='OPEN'
+          AND s.pending_idempotency_key=e.idempotency_key
+          AND s.pending_client_order_id=e.client_order_id
+          AND s.pending_order_id IS NULL AND s.position_id IS NULL
+          AND s.position_qty>0 AND s.recovery_required='1' AND s.unsafe_recovery='1'
+      )
+    ))
   )]]></update>
     <update id="reject" timeout="3"><![CDATA[UPDATE quant_live_recovery_case
 SET state='REJECTED', reviewed_by=#{reviewerId}, reviewed_at=UTC_TIMESTAMP(6)
 WHERE case_id=#{caseId} AND state='PENDING'
   AND requested_by<>#{reviewerId}
   AND evidence_sha256=#{evidenceHash}]]></update>
-    <select id="findCase" resultType="map" timeout="3"><![CDATA[SELECT case_id, credential_id, symbol, dispatch_key, operation_type,
+    <select id="findCase" resultType="map" timeout="3"><![CDATA[SELECT case_id, credential_id, symbol, dispatch_key, operation_type, recovery_mode,
        requested_by, reviewed_by, evidence_sha256,
        expected_exchange_order_id, expected_client_order_id, state
 FROM quant_live_recovery_case WHERE case_id=#{caseId}]]></select>
@@ -54,7 +129,8 @@ SET state='EXECUTED', completed_at=UTC_TIMESTAMP(6)
 WHERE case_id=#{caseId} AND state='APPROVED'
   AND evidence_sha256=#{evidenceHash}
   AND reviewed_by IS NOT NULL AND reviewed_by<>requested_by
-  AND EXISTS (
+  AND (
+    (recovery_mode='TICKETED' AND EXISTS (
     SELECT 1 FROM quant_live_dispatch_guard g
     JOIN quant_order_dispatch_ticket t
       ON t.credential_id=g.credential_id AND t.symbol=g.symbol
@@ -66,5 +142,42 @@ WHERE case_id=#{caseId} AND state='APPROVED'
       AND t.client_order_id=quant_live_recovery_case.expected_client_order_id
       AND (t.exchange_order_id <=> quant_live_recovery_case.expected_exchange_order_id)
       AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')
+    ))
+    OR
+    (recovery_mode='LEGACY_TESTNET_OPEN' AND operation_type='OPEN'
+      AND expected_exchange_order_id IS NULL
+      AND EXISTS (
+        SELECT 1 FROM quant_live_dispatch_guard g
+        WHERE g.credential_id=quant_live_recovery_case.credential_id
+          AND g.symbol=quant_live_recovery_case.symbol
+          AND g.active_dispatch_key IS NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM quant_order_dispatch_ticket t
+        WHERE t.credential_id=quant_live_recovery_case.credential_id
+          AND t.symbol=quant_live_recovery_case.symbol
+          AND t.idempotency_key=quant_live_recovery_case.dispatch_key
+      )
+      AND EXISTS (
+        SELECT 1 FROM quant_execution_record e
+        WHERE e.credential_id=quant_live_recovery_case.credential_id
+          AND e.symbol=quant_live_recovery_case.symbol
+          AND e.idempotency_key=quant_live_recovery_case.dispatch_key
+          AND e.operation_type='OPEN' AND e.execution_status='FAILED'
+          AND e.exchange_order_id IS NULL
+          AND e.client_order_id=quant_live_recovery_case.expected_client_order_id
+      )
+      AND EXISTS (
+        SELECT 1 FROM quant_strategy_position_state s
+        JOIN quant_execution_record e ON e.strategy_instance_id=s.instance_id
+        WHERE e.credential_id=quant_live_recovery_case.credential_id
+          AND e.symbol=quant_live_recovery_case.symbol
+          AND e.idempotency_key=quant_live_recovery_case.dispatch_key
+          AND s.status='CLOSED' AND s.pending_action IS NULL
+          AND s.pending_idempotency_key IS NULL
+          AND s.pending_client_order_id IS NULL
+          AND s.position_qty=0 AND s.initial_position_qty=0
+      )
+    ))
   )]]></update>
 </mapper>
