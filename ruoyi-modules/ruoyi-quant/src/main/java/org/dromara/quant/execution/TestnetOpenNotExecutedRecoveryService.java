@@ -236,6 +236,13 @@ public class TestnetOpenNotExecutedRecoveryService {
         LocalDateTime updatedAt = LocalDateTime.now(ZoneOffset.UTC);
         LocalDateTime stateUpdatedAt = LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
         transaction.executeWithoutResult(status -> {
+            if (!dispatchTicketPresent) {
+                Map<String, Object> lockedGuard = dispatch.lockGuardState(credentialId, symbol);
+                if (lockedGuard == null || !sameId(lockedGuard.get("inactive"), 1L)
+                    || dispatch.ticketCount(credentialId, symbol, key) != 0) {
+                    throw new IllegalStateException("历史恢复执行期间派发锁或票据状态发生变化，事务回滚");
+                }
+            }
             if (executions.markNotExecutedAfterVerifiedAbsence(record.getId(), credentialId, symbol, key, clientOrderId,
                     "TESTNET 人工核验：精确订单、活动订单、完整历史订单及成交均未发现目标开仓", updatedAt) != 1
                 || positionStates.closeUnexecutedOpenPending(state.getId(), state.getInstanceId(), state.getVersion(), key, clientOrderId, cycleKey, stateUpdatedAt) != 1
