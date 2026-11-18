@@ -40,6 +40,8 @@ class TestnetOpenNotExecutedRecoverySqlContractTest {
         int end = sql.indexOf("</update>", start);
         String update = sql.substring(start, end);
         assertTrue(update.contains("version=version+1"));
+        assertTrue(update.contains("position_qty=0"));
+        assertTrue(update.contains("initial_position_qty=0"));
         assertTrue(update.contains("version=#{version}"));
         assertTrue(update.contains("status='OPEN_PENDING'"));
         assertTrue(update.contains("pending_action='OPEN'"));
