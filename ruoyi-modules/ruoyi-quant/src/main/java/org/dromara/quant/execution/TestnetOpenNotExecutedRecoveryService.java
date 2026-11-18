@@ -163,6 +163,10 @@ public class TestnetOpenNotExecutedRecoveryService {
             }
             dispatchTicketPresent = true;
         }
+        String expectedRecoveryMode = dispatchTicketPresent ? "TICKETED" : "LEGACY_TESTNET_OPEN";
+        if (!expectedRecoveryMode.equals(recoveryCase.get("recovery_mode"))) {
+            throw new IllegalStateException("恢复工单类型与当前派发票据状态不一致");
+        }
 
         Map<String, Object> pre = intents.pending(credentialId, key);
         String intentCycleKey = null;
