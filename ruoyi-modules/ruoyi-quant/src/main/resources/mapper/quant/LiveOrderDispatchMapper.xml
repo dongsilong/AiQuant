@@ -125,6 +125,10 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
     <select id="ticketCount" resultType="int" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_order_dispatch_ticket
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND idempotency_key=#{key}]]></select>
+    <select id="lockGuardState" resultType="map" timeout="3"><![CDATA[SELECT IF(active_dispatch_key IS NULL, 1, 0) AS inactive
+FROM quant_live_dispatch_guard
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+FOR UPDATE]]></select>
     <select id="activeDispatch" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credentialId, g.symbol AS symbol,
        g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
        t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
