@@ -1624,7 +1624,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
                     event -> onEntryMaMarketEvent(runtime, event), ready -> {
                         // MA 就绪由独立的 K 线恢复状态和实时 K 线事件决定，不依赖共享流的 MARK 健康状态。
-                    }, event -> event != null && ("KLINE".equalsIgnoreCase(event.type())
+                    }, event -> event != null && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
                         || "KLINE_READY".equals(event.type()) || "CONNECTED".equals(event.type())
                         || "CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
                         || "ERROR".equals(event.type())));
@@ -1649,14 +1649,14 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if ("KLINE_READY".equals(event.type())) {
             runtime.entryMa.setHistoryReady(true);
             EntryMaSnapshot current = runtime.entryMa.snapshot();
-            log.info("策略1分钟MA K线历史恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7 liveKlineSeen={}",
+            log.info("策略1分钟MA K线历史恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7 liveMarketEventSeen={}",
                 runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), current.closedKlines(),
                 current.eventTime() != null && current.receivedAt() != null);
             return;
         }
-        if (event.kline() != null) {
-            EntryMaSnapshot snapshot = runtime.entryMa.update(event.kline(), event);
-            if (!event.replay() && "KLINE".equalsIgnoreCase(event.type())) {
+        if (event.kline() != null || "MARK".equalsIgnoreCase(event.type())) {
+            EntryMaSnapshot snapshot = runtime.entryMa.update(event);
+            if (!event.replay() && "KLINE".equalsIgnoreCase(event.type()) && event.kline() != null) {
                 log.info("策略1分钟MA收到实时K线 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
                     runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
                     event.receivedAt(), event.kline().closed(), snapshot.closedKlines(), snapshot.ready());
@@ -5573,6 +5573,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private static final class EntryMaState {
         private final MarketRuntime market = new MarketRuntime();
         private boolean historyReady;
+        private BigDecimal ma5;
+        private BigDecimal ma7;
         private Instant eventTime;
         private Instant receivedAt;
 
@@ -5588,14 +5590,21 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
 
         private synchronized void clear() {
             historyReady = false;
+            ma5 = null;
+            ma7 = null;
             eventTime = null;
             receivedAt = null;
             market.clear();
         }
 
-        private synchronized EntryMaSnapshot update(ExchangeGateway.Kline kline, ExchangeGateway.MarketEvent event) {
-            market.updateKline(kline);
-            if (!event.replay() && "KLINE".equalsIgnoreCase(event.type())) {
+        private synchronized EntryMaSnapshot update(ExchangeGateway.MarketEvent event) {
+            if (event.kline() != null) {
+                market.updateKline(event.kline());
+            }
+            ma5 = event.maReady() ? event.ma5() : null;
+            ma7 = event.maReady() ? event.ma7() : null;
+            if (!event.replay() && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type()))
+                && event.eventTime() != null && event.receivedAt() != null) {
                 eventTime = event.eventTime();
                 receivedAt = event.receivedAt();
             }
@@ -5604,8 +5613,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
 
         private synchronized EntryMaSnapshot snapshot() {
             boolean ready = historyReady && eventTime != null && receivedAt != null;
-            return new EntryMaSnapshot(ready, market.movingAverage(5), market.movingAverage(7), eventTime, receivedAt,
-                market.closedKlineCloses.size());
+            return new EntryMaSnapshot(ready, ma5, ma7, eventTime, receivedAt, market.closedKlineCloses.size());
         }
     }
 
@@ -5684,24 +5692,6 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             if (kline.closed()) {
                 previousClosedClose = kline.close();
             }
-        }
-
-        /**
-         * 返回最近指定根数已收盘 K 线收盘价的简单移动平均。
-         */
-        private BigDecimal movingAverage(int period) {
-            if (period <= 0 || closedKlineCloses.size() < period) {
-                return null;
-            }
-            BigDecimal sum = BigDecimal.ZERO;
-            int skip = closedKlineCloses.size() - period;
-            int index = 0;
-            for (BigDecimal close : closedKlineCloses) {
-                if (index++ >= skip) {
-                    sum = sum.add(close);
-                }
-            }
-            return sum.divide(BigDecimal.valueOf(period), 24, RoundingMode.HALF_UP);
         }
 
         /**
