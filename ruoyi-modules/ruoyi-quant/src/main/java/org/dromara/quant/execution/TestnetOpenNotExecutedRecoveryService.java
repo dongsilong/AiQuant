@@ -228,7 +228,7 @@ public class TestnetOpenNotExecutedRecoveryService {
                     "TESTNET 人工核验：精确订单、活动订单、完整历史订单及成交均未发现目标开仓", updatedAt) != 1
                 || positionStates.closeUnexecutedOpenPending(state.getId(), state.getInstanceId(), state.getVersion(), key, clientOrderId, cycleKey, stateUpdatedAt) != 1
                 || cases.markExecuted(caseId, normalizedEvidenceHash) != 1
-                || dispatch.markNotExecuted(credentialId, symbol, key, clientOrderId) != 1
+                || dispatch.markNotExecuted(credentialId, symbol, key, clientOrderId, record.getStrategyInstanceId()) != 1
                 || dispatch.release(credentialId, symbol, key) != 1) {
                 throw new IllegalStateException("TESTNET 未执行恢复 CAS 失败，事务回滚并保留派发阻断");
             }

@@ -125,7 +125,7 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
             .thenReturn(1);
         when(positionStates.closeUnexecutedOpenPending(eq(50L), eq(40L), eq(7), eq("key-1"), eq("client-1"), eq("cycle-1"), any())).thenReturn(1);
         when(cases.markExecuted(1L, "a".repeat(64))).thenReturn(1);
-        when(dispatch.markNotExecuted(20L, "BTCUSDT", "key-1", "client-1")).thenReturn(1);
+        when(dispatch.markNotExecuted(20L, "BTCUSDT", "key-1", "client-1", 40L)).thenReturn(1);
         when(dispatch.release(20L, "BTCUSDT", "key-1")).thenReturn(1);
         when(capacity.releaseFailed(20L, "key-1")).thenReturn(1);
         when(audit.append(anyLong(), eq(1L), eq(12L), eq("EXECUTE_NOT_EXECUTED"), eq("a".repeat(64)), eq("b".repeat(64)))).thenReturn(1);
@@ -138,7 +138,7 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
         service.execute(1L, 12L, "a".repeat(64), "b".repeat(64));
         verify(executions).markNotExecutedAfterVerifiedAbsence(eq(100L), eq(20L), eq("BTCUSDT"), eq("key-1"), eq("client-1"), anyString(), any());
         verify(positionStates).closeUnexecutedOpenPending(50L, 40L, 7, "key-1", "client-1", "cycle-1", any());
-        verify(dispatch).markNotExecuted(20L, "BTCUSDT", "key-1", "client-1");
+        verify(dispatch).markNotExecuted(20L, "BTCUSDT", "key-1", "client-1", 40L);
         verify(dispatch).release(20L, "BTCUSDT", "key-1");
         verify(capacity).releaseFailed(20L, "key-1");
         verify(manager).commit(any());
@@ -161,7 +161,7 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
             new ExchangeGateway.TradeSnapshot("BTCUSDT", 1L, 999L, "BUY", BigDecimal.ONE, BigDecimal.ONE,
                 BigDecimal.ZERO, BigDecimal.ZERO, java.time.Instant.now())));
         assertThrows(IllegalStateException.class, () -> service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
-        verify(dispatch, never()).markNotExecuted(any(), any(), any(), any());
+        verify(dispatch, never()).markNotExecuted(any(), any(), any(), any(), any());
         verify(dispatch, never()).release(any(), any(), any());
         verifyNoInteractions(audit);
         verify(executions, never()).markNotExecutedAfterVerifiedAbsence(any(), any(), any(), any(), any(), any(), any());

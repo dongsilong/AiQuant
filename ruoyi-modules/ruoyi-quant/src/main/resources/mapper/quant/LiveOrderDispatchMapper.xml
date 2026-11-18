@@ -92,6 +92,7 @@ WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
 SET dispatch_status='VERIFIED_NOT_EXECUTED', updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND strategy_instance_id=#{instanceId}
   AND operation_type='OPEN' AND exchange_order_id IS NULL
   AND dispatch_status='UNKNOWN'
   AND EXISTS (SELECT 1 FROM quant_live_dispatch_guard g

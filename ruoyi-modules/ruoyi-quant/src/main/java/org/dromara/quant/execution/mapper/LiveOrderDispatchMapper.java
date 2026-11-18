@@ -72,7 +72,7 @@ public interface LiveOrderDispatchMapper {
     int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
     int markNotExecuted(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
-                        @Param("key") String key, @Param("clientOrderId") String clientOrderId);
+                        @Param("key") String key, @Param("clientOrderId") String clientOrderId, @Param("instanceId") Long instanceId);
 
     int recoverVerified(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("clientOrderId") String clientOrderId, @Param(
         "orderId") Long orderId);
