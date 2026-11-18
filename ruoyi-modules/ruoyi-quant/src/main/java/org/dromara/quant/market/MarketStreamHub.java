@@ -597,19 +597,30 @@ public class MarketStreamHub {
             if (closed || attempt != generation) {
                 return;
             }
+            ExchangeGateway.MarketEvent replayEvent = withOneMinuteMa(event);
             listeners.forEach((id, consumer) -> {
                 Predicate<ExchangeGateway.MarketEvent> filter = listenerFilters.get(id);
-                if (filter == null || !filter.test(event)) {
+                if (filter == null || !filter.test(replayEvent)) {
                     return;
                 }
-                if (event.kline() != null) {
-                    consumedKlineOpens.putIfAbsent(id, event.kline().openTime());
+                if (replayEvent.kline() != null) {
+                    consumedKlineOpens.putIfAbsent(id, replayEvent.kline().openTime());
                 }
-                if (event.sequenceId() != null) {
-                    consumedTradeIds.putIfAbsent(id, event.sequenceId() - 1);
+                if (replayEvent.sequenceId() != null) {
+                    consumedTradeIds.putIfAbsent(id, replayEvent.sequenceId() - 1);
                 }
-                consumer.acceptReplay(new Incoming(attempt, event));
+                consumer.acceptReplay(new Incoming(attempt, replayEvent));
             });
+        }
+
+        private ExchangeGateway.MarketEvent withOneMinuteMa(ExchangeGateway.MarketEvent event) {
+            if (!"1m".equals(key.interval())) {
+                return event;
+            }
+            synchronized (this) {
+                OneMinuteMovingAverage.Snapshot snapshot = OneMinuteMovingAverage.calculate(referenceKlines.values());
+                return event.withOneMinuteMa(snapshot.ma5(), snapshot.ma7(), snapshot.trend(), snapshot.ready());
+            }
         }
 
         /**
@@ -898,18 +909,19 @@ public class MarketStreamHub {
          * 向订阅者分发事件，并隔离单个监听器抛出的异常。
          */
         private void publish(ExchangeGateway.MarketEvent event) {
+            ExchangeGateway.MarketEvent publishedEvent = withOneMinuteMa(event);
             listeners.forEach((id, listener) -> {
                 Predicate<ExchangeGateway.MarketEvent> filter = listenerFilters.get(id);
-                if (filter == null || !filter.test(event)) {
+                if (filter == null || !filter.test(publishedEvent)) {
                     return;
                 }
-                if ("TRADE".equals(event.type()) && event.sequenceId() != null) {
-                    consumedTradeIds.putIfAbsent(id, event.sequenceId() - 1);
+                if ("TRADE".equals(publishedEvent.type()) && publishedEvent.sequenceId() != null) {
+                    consumedTradeIds.putIfAbsent(id, publishedEvent.sequenceId() - 1);
                 }
-                if (event.kline() != null) {
-                    consumedKlineOpens.putIfAbsent(id, event.kline().openTime());
+                if (publishedEvent.kline() != null) {
+                    consumedKlineOpens.putIfAbsent(id, publishedEvent.kline().openTime());
                 }
-                listener.accept(new Incoming(generation, event));
+                listener.accept(new Incoming(generation, publishedEvent));
             });
         }
 
