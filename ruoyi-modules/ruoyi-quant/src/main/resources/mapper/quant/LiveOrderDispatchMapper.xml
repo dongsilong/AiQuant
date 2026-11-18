@@ -88,6 +88,15 @@ WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
 SET dispatch_status='UNKNOWN', updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
   AND dispatch_status='DISPATCHING']]></update>
+    <update id="markNotExecuted" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='VERIFIED_NOT_EXECUTED', updated_at=UTC_TIMESTAMP()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND operation_type='OPEN' AND exchange_order_id IS NULL
+  AND dispatch_status='UNKNOWN'
+  AND EXISTS (SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key})]]></update>
     <update id="release" timeout="3"><![CDATA[UPDATE quant_live_dispatch_guard SET active_dispatch_key=NULL, updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND active_dispatch_key=#{key}]]></update>

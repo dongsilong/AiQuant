@@ -22,6 +22,7 @@ import java.util.Map;
 public class LiveManualRecoveryController {
     private final LiveRecoveryCaseService cases;
     private final LiveManualRecoveryExecutionService executor;
+    private final TestnetOpenNotExecutedRecoveryService testnetOpenRecovery;
     private final LiveRecoveryAuditMapper audit;
 
     private static String value(Map<String, Object> row, String key) {
@@ -77,6 +78,16 @@ public class LiveManualRecoveryController {
     @SaCheckPermission("quant:dispatch:recovery:execute")
     public R<Void> execute(@RequestBody Decision body) {
         executor.execute(parseId(body.caseId()), actor(), body.evidenceSha256(), body.detailSha256());
+        return R.ok();
+    }
+
+    /**
+     * 执行 TESTNET 开仓未执行的独立人工恢复流程。
+     */
+    @PostMapping("/execute-testnet-open-not-executed")
+    @SaCheckPermission("quant:dispatch:recovery:execute")
+    public R<Void> executeTestnetOpenNotExecuted(@RequestBody Decision body) {
+        testnetOpenRecovery.execute(parseId(body.caseId()), actor(), body.evidenceSha256(), body.detailSha256());
         return R.ok();
     }
 
