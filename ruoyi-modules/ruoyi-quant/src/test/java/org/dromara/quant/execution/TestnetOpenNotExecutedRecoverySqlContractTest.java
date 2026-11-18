@@ -61,6 +61,10 @@ class TestnetOpenNotExecutedRecoverySqlContractTest {
         String guardQuery = sql.substring(guardStart, guardEnd);
         assertTrue(guardQuery.contains("quant_live_dispatch_guard"));
         assertTrue(guardQuery.contains("active_dispatch_key IS NULL"));
+        int lockStart = sql.indexOf("id=\"lockGuardState\"");
+        int lockEnd = sql.indexOf("</select>", lockStart);
+        String lockQuery = sql.substring(lockStart, lockEnd);
+        assertTrue(lockQuery.contains("FOR UPDATE"));
 
         int ticketStart = sql.indexOf("id=\"ticketCount\"");
         int ticketEnd = sql.indexOf("</select>", ticketStart);
