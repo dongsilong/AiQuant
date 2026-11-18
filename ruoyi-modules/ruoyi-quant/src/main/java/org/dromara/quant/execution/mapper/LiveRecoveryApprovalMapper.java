@@ -12,6 +12,13 @@ public interface LiveRecoveryApprovalMapper {
     int request(@Param("caseId") long caseId, @Param("credentialId") long credentialId, @Param("symbol") String symbol, @Param("dispatchKey") String dispatchKey, @Param(
         "requesterId") long requesterId, @Param("evidenceHash") String evidenceHash);
 
+    /**
+     * 创建绑定无派发票据的历史 TESTNET OPEN/UNKNOWN 执行记录的恢复工单。
+     */
+    int requestLegacyOpen(@Param("caseId") long caseId, @Param("credentialId") long credentialId, @Param("symbol") String symbol,
+                          @Param("dispatchKey") String dispatchKey, @Param("requesterId") long requesterId,
+                          @Param("evidenceHash") String evidenceHash);
+
     int approve(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId, @Param("evidenceHash") String evidenceHash);
 
     int reject(@Param("caseId") long caseId, @Param("reviewerId") long reviewerId, @Param("evidenceHash") String evidenceHash);
