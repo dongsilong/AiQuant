@@ -10,6 +10,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OneMinuteMovingAverageTest {
@@ -41,9 +42,9 @@ class OneMinuteMovingAverageTest {
 
         assertFalse(snapshot.ready());
         assertEquals(6, snapshot.closedKlines());
-        assertEquals(null, snapshot.ma5());
-        assertEquals(null, snapshot.ma7());
-        assertEquals(null, snapshot.trend());
+        assertNull(snapshot.ma5());
+        assertNull(snapshot.ma7());
+        assertNull(snapshot.trend());
     }
 
     @Test
