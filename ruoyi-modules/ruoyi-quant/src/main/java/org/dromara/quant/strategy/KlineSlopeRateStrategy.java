@@ -1,6 +1,7 @@
 package org.dromara.quant.strategy;
 
 import lombok.extern.slf4j.Slf4j;
+import org.dromara.quant.market.OneMinuteMovingAverage;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -359,8 +360,7 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         }
         EntrySignal entry = signal.get();
         int comparison = ma5.compareTo(ma7);
-        boolean directionApproved = entry.direction() == EntrySignal.Direction.LONG ? comparison > 0
-            : entry.direction() == EntrySignal.Direction.SHORT && comparison < 0;
+        boolean directionApproved = OneMinuteMovingAverage.directionApproved(entry.direction() == EntrySignal.Direction.LONG, ma5, ma7);
         if (!directionApproved) {
             if (shouldLogMaDirection(context.symbol(), System.currentTimeMillis())) {
                 String directionText = entry.direction() == EntrySignal.Direction.LONG ? "LONG" : "SHORT";
