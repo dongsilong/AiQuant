@@ -1515,7 +1515,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                     // 错误码已确认是 -2013；消息解析失败不改变订单事实判断。
                 }
                 if (responseMessage != null) {
-                    responseMessage = responseMessage.replace('\\r', ' ').replace('\\n', ' ');
+                    responseMessage = responseMessage.replace('\r', ' ').replace('\n', ' ');
                     responseMessage = responseMessage.substring(0, Math.min(responseMessage.length(), 300));
                 }
                 log.warn("Binance 条件单精确查询返回订单不存在，转查历史记录 runMode={} symbol={} clientAlgoId={} orderId={} httpStatus={} binanceCode={} message={}",
