@@ -1507,6 +1507,19 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 if (!isProtectionOrderAbsent(ex)) {
                     throw ex;
                 }
+                String responseMessage = null;
+                try {
+                    JsonObject error = com.google.gson.JsonParser.parseString(ex.getResponseBody()).getAsJsonObject();
+                    responseMessage = error.has("msg") && !error.get("msg").isJsonNull() ? error.get("msg").getAsString() : null;
+                } catch (RuntimeException ignored) {
+                    // 错误码已确认是 -2013；消息解析失败不改变订单事实判断。
+                }
+                if (responseMessage != null) {
+                    responseMessage = responseMessage.replace('\\r', ' ').replace('\\n', ' ');
+                    responseMessage = responseMessage.substring(0, Math.min(responseMessage.length(), 300));
+                }
+                log.warn("Binance 条件单精确查询返回订单不存在，转查历史记录 runMode={} symbol={} clientAlgoId={} orderId={} httpStatus={} binanceCode={} message={}",
+                    credential.runMode(), symbol, clientOrderId, orderId, ex.getCode(), errorCode(ex), responseMessage);
                 // Binance 的精确查询可能已不再返回已结束的 Algo 单；历史记录必须按订单身份精确匹配。
                 // 未命中只有在本地创建时间处于 3 天完整保留窗口且分页完整时才确认不存在，否则保持未知。
                 return queryProtectionOrderHistoryTimed(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis, timing);
@@ -1602,9 +1615,17 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         // A full page at one millisecond resolution may still be truncated.
         // In that case absence and uniqueness are unknowable, so stay fail closed.
         if (!result.complete()) {
+            log.warn("Binance 条件单历史查询未能完整覆盖，保持核验未知 runMode={} symbol={} clientAlgoId={} orderId={} historyComplete=false absenceProvable={}",
+                credential.runMode(), symbol, clientOrderId, orderId, absenceCanBeProven);
             return null;
         }
+        long clientAlgoIdMatches = result.orders().stream()
+            .filter(item -> item != null && symbol.equalsIgnoreCase(item.getSymbol())
+                && clientOrderId != null && clientOrderId.equals(item.getClientAlgoId()))
+            .count();
         ProtectionOrderSnapshot exact = findExactAlgoHistory(result.orders(), symbol, orderId, clientOrderId);
+        log.warn("Binance 条件单历史查询核验结果 runMode={} symbol={} clientAlgoId={} orderId={} historyComplete=true historyRecordCount={} clientAlgoIdMatches={} exactIdentityMatched={} absenceProvable={}",
+            credential.runMode(), symbol, clientOrderId, orderId, result.orders().size(), clientAlgoIdMatches, exact != null, absenceCanBeProven);
         if (exact != null) {
             return exact;
         }
