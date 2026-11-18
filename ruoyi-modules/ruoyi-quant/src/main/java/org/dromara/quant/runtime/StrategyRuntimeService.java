@@ -1623,7 +1623,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (runtime.entryMaSubscription == null) {
                 runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
                     event -> onEntryMaMarketEvent(runtime, event), ready -> {
-                        // MA 就绪由独立的 K 线恢复状态和实时 K 线事件决定，不依赖共享流的 MARK 健康状态。
+                        // MA 就绪由独立的 K 线恢复状态和新鲜实时 KLINE/MARK 事件共同确认。
                     }, event -> event != null && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
                         || "KLINE_READY".equals(event.type()) || "CONNECTED".equals(event.type())
                         || "CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
@@ -1693,7 +1693,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             + "；eventTime=" + snapshot.eventTime()
             + "；receivedAt=" + snapshot.receivedAt()
             + "；eventAgeMillis=" + (snapshot.eventTime() == null ? null : java.time.Duration.between(snapshot.eventTime(), now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()))).toMillis())
-            + "；queueWaitMillis=" + (snapshot.receivedAt() == null ? null : java.time.Duration.between(snapshot.receivedAt(), now).toMillis())
+            + "；receivedAgeMillis=" + (snapshot.receivedAt() == null ? null : java.time.Duration.between(snapshot.receivedAt(), now).toMillis())
             + "；maxEventAgeMillis=" + Math.max(1, properties.getMarket().getMaxEventAgeMillis());
     }
 
