@@ -161,6 +161,21 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
     }
 
     @Test
+    void historicalUnknownOpenWithoutTicketRejectsGuardClaimedBeforeTransaction() {
+        stubVerifiedAbsence();
+        when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
+        when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(1);
+        when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(0);
+        when(dispatch.lockGuardState(20L, "BTCUSDT")).thenReturn(Map.of("inactive", 0));
+
+        assertThrows(IllegalStateException.class, () -> service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
+
+        verify(executions, never()).markNotExecutedAfterVerifiedAbsence(any(), any(), any(), any(), any(), any(), any());
+        verify(positionStates, never()).closeUnexecutedOpenPending(any(), any(), any(), any(), any(), any(), any());
+        verifyNoInteractions(audit);
+    }
+
+    @Test
     void historicalUnknownOpenWithoutTicketRejectsMissingGuardOrExistingTicket() {
         stubVerifiedAbsence();
         when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
