@@ -16,6 +16,7 @@ import org.apache.ibatis.session.Configuration;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -193,6 +194,49 @@ class ExecutionRecoveryServiceTest {
         verify(recovery).markRecovered(record, 123L, "FILLED");
         verify(gateway, never()).placeOrder(any());
     }
+    @Test
+    void recoversUnknownOrderFromHistoricalOrderWhenExactLookupReportsAbsent() {
+        var records = mock(QuantExecutionRecordMapper.class);
+        var credentials = mock(QuantCredentialMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var recordService = mock(ExecutionRecordService.class);
+        var ledger = mock(OrderLedgerService.class);
+
+        var record = new QuantExecutionRecord();
+        record.setId(10L);
+        record.setCredentialId(1L);
+        record.setSymbol("PIPPINUSDT");
+        record.setIdempotencyKey("entry-history-fallback");
+        record.setClientOrderId("client-history-fallback");
+        record.setOperationType("OPEN");
+        record.setExecutionStatus("UNKNOWN");
+        record.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC).minusMinutes(2));
+        record.setRecoveryAttempts(4);
+        when(records.selectList(any())).thenReturn(List.of(record));
+
+        var credential = new QuantCredential();
+        credential.setApiKey("test");
+        credential.setSecretKey("test");
+        credential.setRunMode("TESTNET");
+        when(credentials.selectById(1L)).thenReturn(credential);
+        var historical = new ExchangeGateway.OrderSnapshot("PIPPINUSDT", 321L, "client-history-fallback", "BUY", "MARKET", "FILLED",
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, Instant.now());
+        when(gateway.queryOrder(any(), eq("PIPPINUSDT"), isNull(), eq("client-history-fallback"))).thenReturn(null);
+        when(gateway.queryOrderHistory(any(), eq("PIPPINUSDT"), any(), eq(1000L))).thenReturn(List.of(historical));
+        doAnswer(invocation -> {
+            record.setRecoveryAttempts(5);
+            return null;
+        }).when(recordService).markRecoveryAttempt(record);
+
+        var service = new ExecutionRecoveryService(records, credentials, gateway, recordService, ledger, new QuantProperties());
+        service.recover();
+
+        verify(gateway).queryOrderHistory(any(), eq("PIPPINUSDT"), any(), eq(1000L));
+        verify(ledger).syncSnapshot(1L, historical);
+        verify(recordService).markRecovered(record, 321L, "FILLED");
+        verify(gateway, never()).placeOrder(any());
+    }
+
     @Test
     void nullUnresolvedScanDoesNotAttemptToReleaseStrandedDispatches() {
         var records = mock(QuantExecutionRecordMapper.class);
