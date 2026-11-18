@@ -12,6 +12,8 @@ import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
 import org.dromara.quant.runtime.mapper.QuantStrategyPositionStateMapper;
+import org.dromara.quant.order.domain.QuantOrder;
+import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -40,13 +42,14 @@ public class TestnetOpenNotExecutedRecoveryService {
     private final QuantCredentialMapper credentials;
     private final StrategyOrderIntentMapper intents;
     private final QuantStrategyPositionStateMapper positionStates;
+    private final QuantOrderMapper orders;
     private final OpenCapacityMapper capacity;
     private final ExchangeGateway gateway;
     private final TransactionTemplate transaction;
 
     public TestnetOpenNotExecutedRecoveryService(LiveRecoveryApprovalMapper cases, LiveRecoveryAuditMapper audit,
             LiveOrderDispatchMapper dispatch, QuantExecutionRecordMapper executions, QuantCredentialMapper credentials,
-            StrategyOrderIntentMapper intents, QuantStrategyPositionStateMapper positionStates, OpenCapacityMapper capacity,
+            StrategyOrderIntentMapper intents, QuantStrategyPositionStateMapper positionStates, QuantOrderMapper orders, OpenCapacityMapper capacity,
             ExchangeGateway gateway, PlatformTransactionManager manager) {
         this.cases = Objects.requireNonNull(cases);
         this.audit = Objects.requireNonNull(audit);
@@ -55,6 +58,7 @@ public class TestnetOpenNotExecutedRecoveryService {
         this.credentials = Objects.requireNonNull(credentials);
         this.intents = Objects.requireNonNull(intents);
         this.positionStates = Objects.requireNonNull(positionStates);
+        this.orders = Objects.requireNonNull(orders);
         this.capacity = Objects.requireNonNull(capacity);
         this.gateway = Objects.requireNonNull(gateway);
         this.transaction = new TransactionTemplate(Objects.requireNonNull(manager));
@@ -126,6 +130,14 @@ public class TestnetOpenNotExecutedRecoveryService {
             || record.getStrategyId() == null || record.getStrategyInstanceId() == null || record.getCreatedAt() == null) {
             throw new IllegalStateException("本地执行账本不是匹配的 OPEN/UNKNOWN 未确认记录");
         }
+        QuantOrder localOrder = orders.selectOne(new LambdaQueryWrapper<QuantOrder>()
+            .eq(QuantOrder::getCredentialId, credentialId)
+            .eq(QuantOrder::getSymbol, symbol)
+            .eq(QuantOrder::getClientOrderId, clientOrderId));
+        if (localOrder != null) {
+            throw new IllegalStateException("本地订单账本已存在目标客户端订单号，不能按未执行恢复");
+        }
+
         Instant now = Instant.now();
         Instant createdAt = record.getCreatedAt().toInstant(ZoneOffset.UTC);
         if (!createdAt.isAfter(now.minus(MAX_HISTORY_AGE).plusSeconds(10)) || createdAt.isAfter(now.plusSeconds(5))) {
@@ -179,6 +191,7 @@ public class TestnetOpenNotExecutedRecoveryService {
         var history = gateway.queryOrderHistoryComplete(exchangeCredential, symbol, range, 1000L);
         if (history == null || history.stream().anyMatch(order -> order == null || order.symbol() == null
             || !symbol.equalsIgnoreCase(order.symbol()) || order.createTime() == null
+            || order.clientOrderId() == null || order.clientOrderId().isBlank()
             || clientOrderId.equals(order.clientOrderId()))) {
             throw new IllegalStateException("历史订单查询不完整、身份字段缺失或已发现目标订单");
         }

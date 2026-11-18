@@ -11,6 +11,7 @@ import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.dromara.quant.risk.mapper.OpenCapacityMapper;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
 import org.dromara.quant.runtime.mapper.QuantStrategyPositionStateMapper;
+import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -36,11 +37,12 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
     private final QuantCredentialMapper credentials = mock(QuantCredentialMapper.class);
     private final StrategyOrderIntentMapper intents = mock(StrategyOrderIntentMapper.class);
     private final QuantStrategyPositionStateMapper positionStates = mock(QuantStrategyPositionStateMapper.class);
+    private final QuantOrderMapper orders = mock(QuantOrderMapper.class);
     private final OpenCapacityMapper capacity = mock(OpenCapacityMapper.class);
     private final ExchangeGateway gateway = mock(ExchangeGateway.class);
     private final PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
     private final TestnetOpenNotExecutedRecoveryService service = new TestnetOpenNotExecutedRecoveryService(
-        cases, audit, dispatch, executions, credentials, intents, positionStates, capacity, gateway, manager);
+        cases, audit, dispatch, executions, credentials, intents, positionStates, orders, capacity, gateway, manager);
 
     private Map<String, Object> approvedCase() {
         Map<String, Object> row = new HashMap<>();
