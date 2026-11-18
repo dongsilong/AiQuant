@@ -5653,7 +5653,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
          * 最近一次收到 K 线事件的时间。
          */
         private Instant lastKlineEventAt;
-        /** 最近 7 根已收盘 K 线的收盘价，用于移动平均计算。 */
+        /** 最近 7 根已收盘 K 线的收盘价，用于确认均线窗口完整性。 */
         private final Deque<BigDecimal> closedKlineCloses = new ArrayDeque<>();
         private Instant lastClosedKlineOpenTime;
 
