@@ -52,6 +52,22 @@ class TestnetOpenNotExecutedRecoverySqlContractTest {
     }
 
     @Test
+    void legacyRecoveryRequiresAnExistingInactiveGuardAndNoDispatchTicket() throws Exception {
+        String sql = resource("mapper/quant/LiveOrderDispatchMapper.xml");
+        int guardStart = sql.indexOf("id=\"inactiveGuardCount\"");
+        int guardEnd = sql.indexOf("</select>", guardStart);
+        String guardQuery = sql.substring(guardStart, guardEnd);
+        assertTrue(guardQuery.contains("quant_live_dispatch_guard"));
+        assertTrue(guardQuery.contains("active_dispatch_key IS NULL"));
+
+        int ticketStart = sql.indexOf("id=\"ticketCount\"");
+        int ticketEnd = sql.indexOf("</select>", ticketStart);
+        String ticketQuery = sql.substring(ticketStart, ticketEnd);
+        assertTrue(ticketQuery.contains("quant_order_dispatch_ticket"));
+        assertTrue(ticketQuery.contains("idempotency_key=#{key}"));
+    }
+
+    @Test
     void ticketCanOnlyBeMarkedNotExecutedWhileItsUnknownGuardIsStillHeld() throws Exception {
         String sql = resource("mapper/quant/LiveOrderDispatchMapper.xml");
         int start = sql.indexOf("id=\"markNotExecuted\"");
