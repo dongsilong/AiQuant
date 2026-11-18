@@ -165,14 +165,23 @@ public class TestnetOpenNotExecutedRecoveryService {
         }
 
         Map<String, Object> pre = intents.pending(credentialId, key);
-        if (pre == null || !sameId(pre.get("strategy_id"), record.getStrategyId())
-            || !sameId(pre.get("strategy_instance_id"), record.getStrategyInstanceId())
-            || !symbol.equalsIgnoreCase(Objects.toString(pre.get("symbol"), ""))
-            || !clientOrderId.equals(pre.get("client_order_id")) || !"OPEN".equals(pre.get("operation_type"))
-            || !(pre.get("position_cycle_key") instanceof String cycleKey) || cycleKey.isBlank()
-            || !Set.of("LONG", "SHORT").contains(Objects.toString(pre.get("position_side"), ""))
-            || !("LONG".equals(pre.get("position_side")) ? "BUY" : "SELL").equals(pre.get("exchange_side"))) {
-            throw new IllegalStateException("不可变发单前意图缺失或与执行账本冲突");
+        String intentCycleKey = null;
+        String intentPositionSide = null;
+        if (dispatchTicketPresent) {
+            if (pre == null || !sameId(pre.get("strategy_id"), record.getStrategyId())
+                || !sameId(pre.get("strategy_instance_id"), record.getStrategyInstanceId())
+                || !symbol.equalsIgnoreCase(Objects.toString(pre.get("symbol"), ""))
+                || !clientOrderId.equals(pre.get("client_order_id")) || !"OPEN".equals(pre.get("operation_type"))
+                || !(pre.get("position_cycle_key") instanceof String cycleKey) || cycleKey.isBlank()
+                || !Set.of("LONG", "SHORT").contains(Objects.toString(pre.get("position_side"), ""))
+                || !("LONG".equals(pre.get("position_side")) ? "BUY" : "SELL").equals(pre.get("exchange_side"))) {
+                throw new IllegalStateException("不可变发单前意图缺失或与执行账本冲突");
+            }
+            intentCycleKey = (String) pre.get("position_cycle_key");
+            intentPositionSide = Objects.toString(pre.get("position_side"), "");
+        } else if (pre != null) {
+            // 预派发意图对派发票据有外键约束；无票据的历史记录不能同时存在该意图。
+            throw new IllegalStateException("无派发票据的历史执行记录存在不一致的预派发意图");
         }
 
         QuantStrategyPositionState state = positionStates.selectOne(new LambdaQueryWrapper<QuantStrategyPositionState>()
@@ -182,9 +191,13 @@ public class TestnetOpenNotExecutedRecoveryService {
             || state.getPendingOrderId() != null || state.getPositionId() != null || state.getPositionQty() == null
             || state.getPositionQty().signum() <= 0 || state.getVersion() == null
             || !Boolean.TRUE.equals(state.getRecoveryRequired()) || !Boolean.TRUE.equals(state.getUnsafeRecovery())
-            || !cycleKey.equals(state.getPositionCycleKey()) || !pre.get("position_side").equals(state.getDirection())) {
-            throw new IllegalStateException("策略 OPEN_PENDING 状态与发单前意图不一致");
+            || state.getPositionCycleKey() == null || state.getPositionCycleKey().isBlank()
+            || !Set.of("LONG", "SHORT").contains(Objects.toString(state.getDirection(), ""))
+            || (dispatchTicketPresent && (!intentCycleKey.equals(state.getPositionCycleKey())
+                || !intentPositionSide.equals(state.getDirection())))) {
+            throw new IllegalStateException("策略 OPEN_PENDING 状态与执行记录或发单前意图不一致");
         }
+        String cycleKey = dispatchTicketPresent ? intentCycleKey : state.getPositionCycleKey();
 
         // -2013/空结果只是一项证据；还必须通过活动订单、完整历史订单、完整成交及账户持仓核验。
         if (gateway.queryOrder(exchangeCredential, symbol, null, clientOrderId) != null) {
