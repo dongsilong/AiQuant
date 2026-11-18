@@ -228,10 +228,17 @@ public class TestnetOpenNotExecutedRecoveryService {
                 || positionStates.closeUnexecutedOpenPending(state.getId(), state.getInstanceId(), state.getVersion(), key, clientOrderId, cycleKey, updatedAt) != 1
                 || cases.markExecuted(caseId, normalizedEvidenceHash) != 1
                 || dispatch.markNotExecuted(credentialId, symbol, key, clientOrderId) != 1
-                || dispatch.release(credentialId, symbol, key) != 1
-                || capacity.releaseFailed(credentialId, key) != 1
-                || audit.append(IdWorker.getId(), caseId, actorId, "EXECUTE_NOT_EXECUTED", normalizedEvidenceHash, normalizedDetailHash) != 1) {
-                throw new IllegalStateException("TESTNET 未执行恢复 CAS 或审计写入失败，事务回滚并保留派发阻断");
+                || dispatch.release(credentialId, symbol, key) != 1) {
+                throw new IllegalStateException("TESTNET 未执行恢复 CAS 失败，事务回滚并保留派发阻断");
+            }
+            int released = capacity.releaseFailed(credentialId, key);
+            var remainingReservations = capacity.reservedSlots(credentialId);
+            if (released < 0 || released > 1 || remainingReservations == null
+                || remainingReservations.stream().anyMatch(row -> key.equals(row.get("idempotency_key")))) {
+                throw new IllegalStateException("开仓容量预留仍未可靠释放，事务回滚");
+            }
+            if (audit.append(IdWorker.getId(), caseId, actorId, "EXECUTE_NOT_EXECUTED", normalizedEvidenceHash, normalizedDetailHash) != 1) {
+                throw new IllegalStateException("TESTNET 未执行恢复审计写入失败，事务回滚并保留派发阻断");
             }
         });
     }
