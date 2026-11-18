@@ -135,7 +135,8 @@ public class TestnetOpenNotExecutedRecoveryService {
         Map<String, Object> active = dispatch.activeDispatch(credentialId, symbol);
         if (active == null || !key.equals(active.get("dispatchKey")) || !clientOrderId.equals(active.get("clientOrderId"))
             || !"OPEN".equals(active.get("operationType")) || !"UNKNOWN".equals(active.get("dispatchStatus"))
-            || active.get("exchangeOrderId") != null) {
+            || active.get("exchangeOrderId") != null
+            || !sameId(active.get("strategyInstanceId"), record.getStrategyInstanceId())) {
             throw new IllegalStateException("账户交易对派发锁或票据与恢复目标不一致");
         }
 
@@ -156,6 +157,7 @@ public class TestnetOpenNotExecutedRecoveryService {
             || !key.equals(state.getPendingIdempotencyKey()) || !clientOrderId.equals(state.getPendingClientOrderId())
             || state.getPendingOrderId() != null || state.getPositionId() != null || state.getPositionQty() == null
             || state.getPositionQty().signum() <= 0 || state.getVersion() == null
+            || !Boolean.TRUE.equals(state.getRecoveryRequired()) || !Boolean.TRUE.equals(state.getUnsafeRecovery())
             || !cycleKey.equals(state.getPositionCycleKey()) || !pre.get("position_side").equals(state.getDirection())) {
             throw new IllegalStateException("策略 OPEN_PENDING 状态与发单前意图不一致");
         }
@@ -165,8 +167,10 @@ public class TestnetOpenNotExecutedRecoveryService {
             throw new IllegalStateException("交易所精确查询已找到目标订单，不能按未执行恢复");
         }
         var activeOrders = gateway.queryOrders(exchangeCredential, symbol);
-        if (activeOrders == null || activeOrders.stream().anyMatch(order -> order != null
-            && clientOrderId.equals(order.clientOrderId()))) {
+        if (activeOrders == null || activeOrders.stream().anyMatch(order -> order == null || order.symbol() == null
+            || !symbol.equalsIgnoreCase(order.symbol()) || order.orderId() == null || order.orderId() <= 0
+            || order.clientOrderId() == null || order.clientOrderId().isBlank()
+            || clientOrderId.equals(order.clientOrderId()))) {
             throw new IllegalStateException("活动订单查询失败或仍存在目标客户端订单号");
         }
 
@@ -204,7 +208,8 @@ public class TestnetOpenNotExecutedRecoveryService {
         String normalizedDetailHash = detailHash.toLowerCase(Locale.ROOT);
         LocalDateTime updatedAt = LocalDateTime.now(ZoneOffset.UTC);
         transaction.executeWithoutResult(status -> {
-            if (executions.markNotExecutedAfterVerifiedAbsence(record.getId(), "TESTNET 人工核验：精确订单、活动订单、完整历史订单及成交均未发现目标开仓", updatedAt) != 1
+            if (executions.markNotExecutedAfterVerifiedAbsence(record.getId(), credentialId, symbol, key, clientOrderId,
+                    "TESTNET 人工核验：精确订单、活动订单、完整历史订单及成交均未发现目标开仓", updatedAt) != 1
                 || positionStates.closeUnexecutedOpenPending(state.getId(), state.getInstanceId(), state.getVersion(), key, clientOrderId, cycleKey, updatedAt) != 1
                 || cases.markExecuted(caseId, normalizedEvidenceHash) != 1
                 || dispatch.markNotExecuted(credentialId, symbol, key, clientOrderId) != 1
