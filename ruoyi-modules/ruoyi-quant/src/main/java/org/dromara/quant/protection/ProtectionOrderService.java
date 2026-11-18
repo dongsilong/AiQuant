@@ -324,6 +324,22 @@ public class ProtectionOrderService {
                 .filter(order -> ACTIVE_STATUSES.contains(order.getStatus()))
                 .toList();
             if (!activeCycleOrders.isEmpty()) {
+                for (QuantProtectionOrder sibling : activeCycleOrders) {
+                    try {
+                        ExchangeGateway.ProtectionOrderSnapshot actual = gateway.queryProtectionOrder(
+                            executionApplicationService.toCredential(executionApplicationService.requireCredential(active.credentialId())),
+                            sibling.getExchangeOrderId(), sibling.getClientOrderId(), sibling.getSymbol(), sibling.getCreatedAtEpochMillis());
+                        boolean identityMatches = matchesProtectionIdentity(sibling, actual);
+                        log.warn("UNKNOWN 保护创建票据同周期保护单交易所核验结果 accountId={} symbol={} protectionId={} protectionType={} clientAlgoId={} exchangeOrderId={} exchangeStatus={} exchangeAlgoId={} exchangeClientAlgoId={} identityMatches={}",
+                            active.credentialId(), active.symbol(), sibling.getId(), sibling.getProtectionType(), sibling.getClientOrderId(),
+                            sibling.getExchangeOrderId(), actual == null ? "NOT_FOUND" : actual.status(),
+                            actual == null ? null : actual.algoId(), actual == null ? null : actual.clientAlgoId(), identityMatches);
+                    } catch (RuntimeException ex) {
+                        log.warn("UNKNOWN 保护创建票据同周期保护单交易所核验失败 accountId={} symbol={} protectionId={} protectionType={} clientAlgoId={} exchangeOrderId={} errorType={} errorMessage={}",
+                            active.credentialId(), active.symbol(), sibling.getId(), sibling.getProtectionType(), sibling.getClientOrderId(),
+                            sibling.getExchangeOrderId(), ex.getClass().getSimpleName(), Objects.toString(ex.getMessage(), ""));
+                    }
+                }
                 log.warn("UNKNOWN 保护创建票据不能按 SUPERSEDED 终结，同周期仍有活动保护单 accountId={} symbol={} positionId={} cycleKey={} clientAlgoId={} activeOrders={}",
                     active.credentialId(), active.symbol(), local.getPositionId(), local.getPositionCycleKey(), active.clientOrderId(),
                     activeCycleOrders.stream().map(order -> order.getId() + ":" + order.getProtectionType() + ":" + order.getStatus()
