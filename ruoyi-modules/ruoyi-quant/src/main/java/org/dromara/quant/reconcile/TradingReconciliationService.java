@@ -926,7 +926,8 @@ public class TradingReconciliationService {
             List<ExchangeGateway.OrderSnapshot> history = List.of();
             ExchangeMarketPort.RequestDeferredException deferredHistoryRead = null;
             try {
-                history = List.copyOf(gateway.queryOrderHistory(exchangeCredential, null, range, 1000L));
+                history = ExchangeHistoryCollector.collect(range.from(), range.to(), pageRange ->
+                    gateway.queryOrderHistory(exchangeCredential, null, pageRange, 1000L));
             } catch (ExchangeMarketPort.RequestDeferredException deferred) {
                 deferredHistoryRead = deferred;
                 log.warn("Binance 历史订单查询被本地 REST 调度器延期；继续核对已有交易对成交事实 credentialId={} kind={} reason={} retryAfterMs={}",
