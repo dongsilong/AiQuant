@@ -54,8 +54,15 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
         row.put("symbol", "BTCUSDT");
         row.put("dispatch_key", "key-1");
         row.put("operation_type", "OPEN");
+        row.put("recovery_mode", "TICKETED");
         row.put("expected_client_order_id", "client-1");
         row.put("expected_exchange_order_id", null);
+        return row;
+    }
+
+    private Map<String, Object> legacyApprovedCase() {
+        Map<String, Object> row = approvedCase();
+        row.put("recovery_mode", "LEGACY_TESTNET_OPEN");
         return row;
     }
 
@@ -147,6 +154,7 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
     @Test
     void historicalUnknownOpenWithoutTicketCanRecoverOnlyWithAnExistingInactiveGuard() {
         stubVerifiedAbsence();
+        when(cases.findCase(1L)).thenReturn(legacyApprovedCase());
         when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
         when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(1);
         when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(0);
@@ -164,6 +172,7 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
     @Test
     void historicalUnknownOpenWithoutTicketRejectsAnUnexpectedPreDispatchIntent() {
         stubVerifiedAbsence();
+        when(cases.findCase(1L)).thenReturn(legacyApprovedCase());
         when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
         when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(1);
         when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(0);
@@ -177,6 +186,7 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
     @Test
     void historicalUnknownOpenWithoutTicketRejectsGuardClaimedBeforeTransaction() {
         stubVerifiedAbsence();
+        when(cases.findCase(1L)).thenReturn(legacyApprovedCase());
         when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
         when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(1);
         when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(0);
@@ -193,6 +203,7 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
     @Test
     void historicalUnknownOpenWithoutTicketRejectsMissingGuardOrExistingTicket() {
         stubVerifiedAbsence();
+        when(cases.findCase(1L)).thenReturn(legacyApprovedCase());
         when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
         when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(0);
         when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(0);
