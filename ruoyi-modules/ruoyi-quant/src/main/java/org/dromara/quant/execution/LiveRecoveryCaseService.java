@@ -72,6 +72,26 @@ public class LiveRecoveryCaseService {
     }
 
     /**
+     * 为历史 TESTNET OPEN/UNKNOWN 且不存在派发票据的记录创建独立恢复工单。
+     */
+    public long requestLegacyOpen(long credentialId, String symbol, String dispatchKey, long requesterId, String evidenceHash, String detailHash) {
+        validateActor(requesterId);
+        validateHash(evidenceHash);
+        validateHash(detailHash);
+        if (credentialId <= 0 || symbol == null || !symbol.matches("[A-Za-z0-9]{2,32}") || dispatchKey == null || dispatchKey.isBlank() || dispatchKey.length() > 160) {
+            throw new IllegalArgumentException("Invalid legacy recovery identity");
+        }
+        long caseId = IdWorker.getId();
+        tx.executeWithoutResult(status -> {
+            if (cases.requestLegacyOpen(caseId, credentialId, symbol.toUpperCase(Locale.ROOT), dispatchKey, requesterId, evidenceHash.toLowerCase(Locale.ROOT)) != 1) {
+                throw new IllegalStateException("No uniquely eligible historical TESTNET OPEN/UNKNOWN execution without a dispatch ticket");
+            }
+            append(caseId, requesterId, "REQUEST_LEGACY_TESTNET_OPEN", evidenceHash, detailHash);
+        });
+        return caseId;
+    }
+
+    /**
      * 审批恢复工单并记录审批人的证据摘要。
      */
     public void approve(long caseId, long reviewerId, String evidenceHash, String detailHash) {
