@@ -87,6 +87,10 @@ public interface LiveOrderDispatchMapper {
 
     java.util.Map<String, Object> activeDispatch(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
+    int inactiveGuardCount(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
+    int ticketCount(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
+
     java.util.List<java.util.Map<String, Object>> activeProtectionCancels(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
     java.util.List<java.util.Map<String, Object>> activeProtectionDispatches(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
