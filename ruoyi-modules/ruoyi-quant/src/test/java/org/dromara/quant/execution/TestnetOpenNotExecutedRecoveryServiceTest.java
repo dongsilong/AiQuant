@@ -152,6 +152,20 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
     }
 
     @Test
+    void ticketedCaseCannotUseLegacyNoTicketExecutionBranch() {
+        stubVerifiedAbsence();
+        when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
+        when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(1);
+        when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(0);
+        when(intents.pending(20L, "key-1")).thenReturn(null);
+
+        assertThrows(IllegalStateException.class, () -> service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
+
+        verify(gateway, never()).queryOrder(any(), anyString(), any(), anyString());
+        verify(executions, never()).markNotExecutedAfterVerifiedAbsence(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void historicalUnknownOpenWithoutTicketCanRecoverOnlyWithAnExistingInactiveGuard() {
         stubVerifiedAbsence();
         when(cases.findCase(1L)).thenReturn(legacyApprovedCase());
