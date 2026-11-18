@@ -150,6 +150,7 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
         when(dispatch.activeDispatch(20L, "BTCUSDT")).thenReturn(null);
         when(dispatch.inactiveGuardCount(20L, "BTCUSDT")).thenReturn(1);
         when(dispatch.ticketCount(20L, "BTCUSDT", "key-1")).thenReturn(0);
+        when(dispatch.lockGuardState(20L, "BTCUSDT")).thenReturn(Map.of("inactive", 1));
 
         service.execute(1L, 12L, "a".repeat(64), "b".repeat(64));
 
