@@ -286,7 +286,9 @@ public class MarketStreamHub {
                         consumer.accept(new Incoming(generation, event));
                     }
                 }
-                ExchangeGateway.MarketEvent statusEvent = status(terminalFailure ? "ERROR" : connected ? "CONNECTED" : "CONNECTING");
+                ExchangeGateway.MarketEvent statusEvent = connected
+                    ? status("CONNECTED", lastEventTime.get("MARK"), lastReceived.get("MARK"))
+                    : status(terminalFailure ? "ERROR" : "CONNECTING");
                 if (filter.test(statusEvent)) {
                     consumer.accept(new Incoming(generation, statusEvent));
                 }
@@ -848,7 +850,7 @@ public class MarketStreamHub {
                     properties.getMarket().getMaxEventAgeMillis())))) {
                     connected = true;
                     log.info("行情已就绪: symbol={}, interval={}, klineOpen={}, networkLagMs={}, queueLagMs={}", key.symbol(), key.interval(), lastKlineOpen, networkLag, queueLag);
-                    publish(status("CONNECTED"));
+                    publish(status("CONNECTED", processingEventTime, receivedAt));
                 }
                 publish(event);
             }
@@ -903,6 +905,10 @@ public class MarketStreamHub {
          */
         private ExchangeGateway.MarketEvent status(String type) {
             return new ExchangeGateway.MarketEvent(type, key.symbol(), key.interval(), null, null, Instant.now());
+        }
+
+        private ExchangeGateway.MarketEvent status(String type, Instant eventTime, Instant receivedAt) {
+            return new ExchangeGateway.MarketEvent(type, key.symbol(), key.interval(), null, null, eventTime, null, receivedAt, false);
         }
 
         /**
