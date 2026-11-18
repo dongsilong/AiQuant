@@ -1420,8 +1420,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             return false;
         }
         long middle = startTime + (endTime - startTime) / 2L;
-        return collectOrderHistoryRange(startTime, middle, query, orders, queryCount)
-            && collectOrderHistoryRange(middle + 1L, endTime, query, orders, queryCount);
+        return collectOrderHistoryRange(startTime, middle, pageSize, query, orders, queryCount)
+            && collectOrderHistoryRange(middle + 1L, endTime, pageSize, query, orders, queryCount);
     }
 
     record OrderHistoryResult(List<OrderSnapshot> orders, boolean complete, int queryCount) {
