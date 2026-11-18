@@ -87,11 +87,6 @@ WHERE case_id=#{caseId} AND state='PENDING'
           AND q.run_mode='TESTNET' AND q.del_flag='0'
       )
       AND EXISTS (
-        SELECT 1 FROM quant_credential q
-        WHERE q.id=quant_live_recovery_case.credential_id
-          AND q.run_mode='TESTNET' AND q.del_flag='0'
-      )
-      AND EXISTS (
         SELECT 1 FROM quant_live_dispatch_guard g
         WHERE g.credential_id=quant_live_recovery_case.credential_id
           AND g.symbol=quant_live_recovery_case.symbol
@@ -157,6 +152,11 @@ WHERE case_id=#{caseId} AND state='APPROVED'
     OR
     (recovery_mode='LEGACY_TESTNET_OPEN' AND operation_type='OPEN'
       AND expected_exchange_order_id IS NULL
+      AND EXISTS (
+        SELECT 1 FROM quant_credential q
+        WHERE q.id=quant_live_recovery_case.credential_id
+          AND q.run_mode='TESTNET' AND q.del_flag='0'
+      )
       AND EXISTS (
         SELECT 1 FROM quant_live_dispatch_guard g
         WHERE g.credential_id=quant_live_recovery_case.credential_id
