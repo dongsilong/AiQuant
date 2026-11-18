@@ -850,7 +850,7 @@ public class MarketStreamHub {
                     properties.getMarket().getMaxEventAgeMillis())))) {
                     connected = true;
                     log.info("行情已就绪: symbol={}, interval={}, klineOpen={}, networkLagMs={}, queueLagMs={}", key.symbol(), key.interval(), lastKlineOpen, networkLag, queueLag);
-                    publish(status("CONNECTED", processingEventTime, receivedAt));
+                    publish(status("CONNECTED", lastEventTime.get("MARK"), lastReceived.get("MARK")));
                 }
                 publish(event);
             }
