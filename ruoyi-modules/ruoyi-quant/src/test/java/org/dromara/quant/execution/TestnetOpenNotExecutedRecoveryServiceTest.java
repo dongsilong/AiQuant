@@ -161,7 +161,9 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
             new ExchangeGateway.TradeSnapshot("BTCUSDT", 1L, 999L, "BUY", BigDecimal.ONE, BigDecimal.ONE,
                 BigDecimal.ZERO, BigDecimal.ZERO, java.time.Instant.now())));
         assertThrows(IllegalStateException.class, () -> service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
-        verifyNoInteractions(dispatch, audit);
+        verify(dispatch, never()).markNotExecuted(any(), any(), any(), any());
+        verify(dispatch, never()).release(any(), any(), any());
+        verifyNoInteractions(audit);
         verify(executions, never()).markNotExecutedAfterVerifiedAbsence(any(), any(), any(), any(), any(), any(), any());
     }
 
