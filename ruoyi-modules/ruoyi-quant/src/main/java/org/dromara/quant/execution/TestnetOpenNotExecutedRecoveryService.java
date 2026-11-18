@@ -202,7 +202,9 @@ public class TestnetOpenNotExecutedRecoveryService {
             }
         }
         var trades = gateway.queryTrades(exchangeCredential, symbol, range);
-        if (trades == null || trades.stream().anyMatch(trade -> trade == null || trade.orderId() == null
+        if (trades == null || trades.stream().anyMatch(trade -> trade == null || trade.tradeId() == null
+            || trade.symbol() == null || !symbol.equalsIgnoreCase(trade.symbol()) || trade.time() == null
+            || trade.time().isBefore(historyStart) || trade.time().isAfter(now) || trade.orderId() == null
             || !historicalOrders.containsKey(trade.orderId()))) {
             throw new IllegalStateException("历史成交查询不完整，或成交无法关联到完整历史订单");
         }
