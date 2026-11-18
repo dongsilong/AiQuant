@@ -11,6 +11,7 @@ import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.decision.DecisionLogCursor;
 import org.dromara.quant.decision.DecisionLogEvent;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.ExchangeHistoryCollector;
 import org.dromara.quant.exchange.ExchangeTradingPort;
 import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.dromara.quant.execution.ExecutionRecordService;
@@ -3702,8 +3703,8 @@ snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol()
         if (from.isBefore(now.minusSeconds(6 * 24 * 3600L))) {
             from = now.minusSeconds(6 * 24 * 3600L);
         }
-        List<ExchangeGateway.OrderSnapshot> history = gateway.queryOrderHistory(
-            credential, symbol, new ExchangeGateway.TimeRange(from, now), 1000L);
+        List<ExchangeGateway.OrderSnapshot> history = ExchangeHistoryCollector.collect(from, now, range ->
+            gateway.queryOrderHistory(credential, symbol, range, 1000L));
         if (history == null || history.isEmpty()) {
             return null;
         }
