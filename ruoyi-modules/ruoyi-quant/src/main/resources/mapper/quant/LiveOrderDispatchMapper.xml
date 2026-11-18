@@ -119,6 +119,12 @@ JOIN quant_order_dispatch_ticket t ON t.credential_id=g.credential_id
 WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
   AND t.client_order_id=#{clientOrderId} AND t.operation_type=#{operation}
   AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')]]></select>
+    <select id="inactiveGuardCount" resultType="int" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_live_dispatch_guard
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND active_dispatch_key IS NULL]]></select>
+    <select id="ticketCount" resultType="int" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_order_dispatch_ticket
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND idempotency_key=#{key}]]></select>
     <select id="activeDispatch" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credentialId, g.symbol AS symbol,
        g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
        t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
