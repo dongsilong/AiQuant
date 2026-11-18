@@ -1315,37 +1315,63 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 查询历史订单；分页触顶时递归缩小时间窗口，无法证明完整则失败关闭。
+     * 查询历史订单，保留普通查询原有的单次分页行为。
      */
     @Override
     public List<OrderSnapshot> queryOrderHistory(Credential credential, String symbol, TimeRange range, Long limit) {
         requireCredential(credential);
         String querySymbol = symbol == null || symbol.isBlank() ? null : symbol.trim();
+        Long start = range == null || range.from() == null ? null : range.from().toEpochMilli();
+        Long end = range == null || range.to() == null ? null : range.to().toEpochMilli();
+        var data = signedRead(credential, RestRequestScheduler.Kind.BACKGROUND,
+            client -> client.allOrders(querySymbol, null, start, end, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData());
+        if (data == null) {
+            throw new IllegalStateException("Binance 历史订单响应缺少数据载荷，无法确认查询完整性");
+        }
+        long missingCreateTimeCount = data.stream().filter(item -> item.getTime() == null).count();
+        if (missingCreateTimeCount > 0) {
+            log.warn("Binance 历史订单响应缺少创建时间 symbol={} orderCount={} missingCreateTimeCount={} startTime={} endTime={}",
+                querySymbol, data.size(), missingCreateTimeCount, start, end);
+        }
+        return data.stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(), item.getStatus(),
+            decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item, "getAvgPrice")),
+            string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(item.getTime()),
+            nullableBoolean(item, "getClosePosition"))).toList();
+    }
+
+    /**
+     * 查询历史订单；分页触顶时递归缩小时间窗口，无法证明完整则失败关闭。
+     */
+    @Override
+    public List<OrderSnapshot> queryOrderHistoryComplete(Credential credential, String symbol, TimeRange range, Long limit) {
+        requireCredential(credential);
+        String querySymbol = symbol == null || symbol.isBlank() ? null : symbol.trim();
         if (range == null || range.from() == null || range.to() == null || range.from().isAfter(range.to())) {
             throw new IllegalArgumentException("查询历史订单必须指定有效时间范围");
         }
-        if (limit != null && limit != ALGO_HISTORY_PAGE_SIZE) {
-            throw new IllegalArgumentException("完整历史订单查询固定使用 1000 条分页上限");
+        int pageSize = limit == null ? ALGO_HISTORY_PAGE_SIZE : Math.toIntExact(limit);
+        if (pageSize <= 0 || pageSize > ALGO_HISTORY_PAGE_SIZE) {
+            throw new IllegalArgumentException("历史订单分页大小必须在 1 到 1000 之间");
         }
         long start = range.from().toEpochMilli();
         long end = range.to().toEpochMilli();
-        OrderHistoryResult result = collectCompleteOrderHistory(start, end, (from, to) ->
+        OrderHistoryResult result = collectCompleteOrderHistory(start, end, pageSize, (from, to) ->
             signedRead(credential, RestRequestScheduler.Kind.BACKGROUND,
-                client -> client.allOrders(querySymbol, null, from, to, (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS).getData()));
+                client -> client.allOrders(querySymbol, null, from, to, (long) pageSize, RECV_WINDOW_MILLIS).getData()));
         if (!result.complete()) {
             throw new IllegalStateException("Binance 历史订单查询无法证明完整：时间窗口分页达到查询上限或单毫秒窗口仍被截断");
         }
         return result.orders();
     }
 
-    static OrderHistoryResult collectCompleteOrderHistory(long startTime, long endTime,
+    static OrderHistoryResult collectCompleteOrderHistory(long startTime, long endTime, int pageSize,
                                                             java.util.function.BiFunction<Long, Long, List<OrderSnapshot>> query) {
-        if (startTime < 0 || endTime < startTime || query == null) {
+        if (startTime < 0 || endTime < startTime || pageSize <= 0 || pageSize > ALGO_HISTORY_PAGE_SIZE || query == null) {
             return new OrderHistoryResult(List.of(), false, 0);
         }
         List<OrderSnapshot> orders = new ArrayList<>();
         int[] queryCount = {0};
-        boolean complete = collectOrderHistoryRange(startTime, endTime, query, orders, queryCount);
+        boolean complete = collectOrderHistoryRange(startTime, endTime, pageSize, query, orders, queryCount);
         if (!complete) {
             return new OrderHistoryResult(List.of(), false, queryCount[0]);
         }
@@ -1360,7 +1386,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return new OrderHistoryResult(List.copyOf(unique.values()), true, queryCount[0]);
     }
 
-    private static boolean collectOrderHistoryRange(long startTime, long endTime,
+    private static boolean collectOrderHistoryRange(long startTime, long endTime, int pageSize,
                                                       java.util.function.BiFunction<Long, Long, List<OrderSnapshot>> query,
                                                       List<OrderSnapshot> orders, int[] queryCount) {
         if (++queryCount[0] > ALGO_HISTORY_MAX_QUERIES) {
@@ -1370,14 +1396,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         long maxInterval = java.time.Duration.ofDays(7).toMillis() - 1L;
         if (endTime - startTime > maxInterval) {
             long middle = startTime + maxInterval;
-            return collectOrderHistoryRange(startTime, middle, query, orders, queryCount)
-                && collectOrderHistoryRange(middle + 1L, endTime, query, orders, queryCount);
+            return collectOrderHistoryRange(startTime, middle, pageSize, query, orders, queryCount)
+                && collectOrderHistoryRange(middle + 1L, endTime, pageSize, query, orders, queryCount);
         }
         List<OrderSnapshot> page = query.apply(startTime, endTime);
         if (page == null) {
             return false;
         }
-        if (page.size() < ALGO_HISTORY_PAGE_SIZE) {
+        if (page.size() < pageSize) {
             orders.addAll(page);
             return true;
         }

@@ -12,6 +12,13 @@ public interface ExchangeTradingPort {
 
     List<ExchangeGateway.OrderSnapshot> queryOrderHistory(ExchangeGateway.Credential credential, String symbol, ExchangeGateway.TimeRange range, Long limit);
 
+    /**
+     * 完整历史订单核验；无法证明分页覆盖完整时必须抛出异常。
+     */
+    default List<ExchangeGateway.OrderSnapshot> queryOrderHistoryComplete(ExchangeGateway.Credential credential, String symbol, ExchangeGateway.TimeRange range, Long limit) {
+        throw new UnsupportedOperationException("交易所网关未实现完整历史订单核验");
+    }
+
     List<ExchangeGateway.TradeSnapshot> queryTrades(ExchangeGateway.Credential credential, String symbol, ExchangeGateway.TimeRange range);
 
     List<ExchangeGateway.TradeSnapshot> queryTradesByOrder(ExchangeGateway.Credential credential, String symbol, Long orderId, ExchangeGateway.TimeRange range, Long limit);
