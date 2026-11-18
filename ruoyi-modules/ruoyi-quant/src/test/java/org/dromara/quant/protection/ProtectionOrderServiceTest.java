@@ -1754,6 +1754,7 @@ class ProtectionOrderServiceTest {
         local.setExecutedQuantity(BigDecimal.ZERO);
         QuantProtectionOrder hardStop = scopedStop("HARD_STOP", "99");
         hardStop.setId(9L);
+        hardStop.setPositionCycleKey("closed-cycle");
         hardStop.setExchangeOrderId(66L);
         hardStop.setStatus("WORKING");
         var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "create-key", "PROTECT_CREATE",
