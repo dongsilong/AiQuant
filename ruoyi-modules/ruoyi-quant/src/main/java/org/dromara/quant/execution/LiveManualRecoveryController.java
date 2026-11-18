@@ -52,6 +52,16 @@ public class LiveManualRecoveryController {
     }
 
     /**
+     * 为历史 TESTNET OPEN/UNKNOWN 且无派发票据的执行记录申请独立恢复工单。
+     */
+    @PostMapping("/request-testnet-open-not-executed")
+    @SaCheckPermission("quant:dispatch:recovery:request")
+    public R<CreatedCase> requestTestnetOpenNotExecuted(@RequestBody RequestCase body) {
+        long id = cases.requestLegacyOpen(parseId(body.credentialId()), body.symbol(), body.dispatchKey(), actor(), body.evidenceSha256(), body.detailSha256());
+        return R.ok(new CreatedCase(Long.toString(id)));
+    }
+
+    /**
      * 审批恢复工单；请求必须携带与工单匹配的证据摘要。
      */
     @PostMapping("/approve")
