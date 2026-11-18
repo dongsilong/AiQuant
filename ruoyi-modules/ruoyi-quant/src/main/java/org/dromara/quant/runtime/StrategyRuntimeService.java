@@ -1654,7 +1654,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 current.eventTime() != null && current.receivedAt() != null);
             return;
         }
-        if (event.kline() != null || "MARK".equalsIgnoreCase(event.type())) {
+        if (event.kline() != null || "MARK".equalsIgnoreCase(event.type()) || "CONNECTED".equals(event.type())) {
             EntryMaSnapshot snapshot = runtime.entryMa.update(event);
             if (!event.replay() && "KLINE".equalsIgnoreCase(event.type()) && event.kline() != null) {
                 log.info("策略1分钟MA收到实时K线 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
@@ -5573,6 +5573,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private static final class EntryMaState {
         private final MarketRuntime market = new MarketRuntime();
         private boolean historyReady;
+        private boolean streamReady;
         private BigDecimal ma5;
         private BigDecimal ma7;
         private Instant eventTime;
@@ -5584,12 +5585,14 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
 
         private synchronized void markUnready() {
             historyReady = false;
+            streamReady = false;
             eventTime = null;
             receivedAt = null;
         }
 
         private synchronized void clear() {
             historyReady = false;
+            streamReady = false;
             ma5 = null;
             ma7 = null;
             eventTime = null;
@@ -5601,10 +5604,15 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             if (event.kline() != null) {
                 market.updateKline(event.kline());
             }
-            ma5 = event.maReady() ? event.ma5() : null;
-            ma7 = event.maReady() ? event.ma7() : null;
-            if (!event.replay() && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type()))
-                && event.eventTime() != null && event.receivedAt() != null) {
+            if (event.kline() != null || "MARK".equalsIgnoreCase(event.type())) {
+                ma5 = event.maReady() ? event.ma5() : null;
+                ma7 = event.maReady() ? event.ma7() : null;
+            }
+            if (!event.replay() && "CONNECTED".equals(event.type()) && event.eventTime() != null && event.receivedAt() != null) {
+                streamReady = true;
+            }
+            if (!event.replay() && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
+                || "CONNECTED".equals(event.type())) && event.eventTime() != null && event.receivedAt() != null) {
                 eventTime = event.eventTime();
                 receivedAt = event.receivedAt();
             }
@@ -5612,7 +5620,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         }
 
         private synchronized EntryMaSnapshot snapshot() {
-            boolean ready = historyReady && eventTime != null && receivedAt != null;
+            boolean ready = historyReady && streamReady && eventTime != null && receivedAt != null;
             return new EntryMaSnapshot(ready, ma5, ma7, eventTime, receivedAt, market.closedKlineCloses.size());
         }
     }
