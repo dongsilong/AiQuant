@@ -73,7 +73,7 @@ class BinanceGatewayAdapterTest {
         var second = new ExchangeGateway.OrderSnapshot("BTCUSDT", 2L, "b", "BUY", "LIMIT", "FILLED",
             java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, Instant.EPOCH,
             java.math.BigDecimal.ONE, "LONG", false, Instant.ofEpochMilli(2), false);
-        var result = BinanceGatewayAdapter.collectCompleteOrderHistory(0L, 2L, (from, to) -> {
+        var result = BinanceGatewayAdapter.collectCompleteOrderHistory(0L, 2L, 1000, (from, to) -> {
             if (from == 0L && to == 2L) return java.util.Collections.nCopies(1000, first);
             if (from == 0L && to == 1L) return List.of(first);
             if (from == 2L && to == 2L) return List.of(second);
@@ -88,7 +88,7 @@ class BinanceGatewayAdapterTest {
         var order = new ExchangeGateway.OrderSnapshot("BTCUSDT", 1L, "a", "BUY", "LIMIT", "FILLED",
             java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, Instant.EPOCH,
             java.math.BigDecimal.ONE, "LONG", false, Instant.EPOCH, false);
-        var result = BinanceGatewayAdapter.collectCompleteOrderHistory(1L, 1L, (from, to) -> java.util.Collections.nCopies(1000, order));
+        var result = BinanceGatewayAdapter.collectCompleteOrderHistory(1L, 1L, 1000, (from, to) -> java.util.Collections.nCopies(1000, order));
         assertFalse(result.complete());
         assertTrue(result.orders().isEmpty());
     }
@@ -97,7 +97,7 @@ class BinanceGatewayAdapterTest {
     void rejectsOrderHistoryRowsWithoutCreateTimeOrWithDuplicateOrderIds() {
         var missingTime = new ExchangeGateway.OrderSnapshot("BTCUSDT", 1L, "a", "BUY", "LIMIT", "NEW",
             java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ZERO, Instant.EPOCH);
-        assertFalse(BinanceGatewayAdapter.collectCompleteOrderHistory(0L, 10L, (from, to) -> List.of(missingTime)).complete());
+        assertFalse(BinanceGatewayAdapter.collectCompleteOrderHistory(0L, 10L, 1000, (from, to) -> List.of(missingTime)).complete());
 
         var first = new ExchangeGateway.OrderSnapshot("BTCUSDT", 1L, "a", "BUY", "LIMIT", "NEW",
             java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ZERO, Instant.EPOCH,
@@ -105,7 +105,7 @@ class BinanceGatewayAdapterTest {
         var duplicate = new ExchangeGateway.OrderSnapshot("BTCUSDT", 1L, "b", "BUY", "LIMIT", "NEW",
             java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ZERO, Instant.EPOCH,
             java.math.BigDecimal.ONE, "LONG", false, Instant.ofEpochMilli(2), false);
-        assertFalse(BinanceGatewayAdapter.collectCompleteOrderHistory(0L, 10L, (from, to) -> List.of(first, duplicate)).complete());
+        assertFalse(BinanceGatewayAdapter.collectCompleteOrderHistory(0L, 10L, 1000, (from, to) -> List.of(first, duplicate)).complete());
     }
 
     @Test
