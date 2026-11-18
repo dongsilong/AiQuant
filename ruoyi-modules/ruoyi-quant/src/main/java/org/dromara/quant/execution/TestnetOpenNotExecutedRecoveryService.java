@@ -145,11 +145,23 @@ public class TestnetOpenNotExecutedRecoveryService {
         }
 
         Map<String, Object> active = dispatch.activeDispatch(credentialId, symbol);
-        if (active == null || !key.equals(active.get("dispatchKey")) || !clientOrderId.equals(active.get("clientOrderId"))
-            || !"OPEN".equals(active.get("operationType")) || !"UNKNOWN".equals(active.get("dispatchStatus"))
-            || active.get("exchangeOrderId") != null
-            || !sameId(active.get("strategyInstanceId"), record.getStrategyInstanceId())) {
-            throw new IllegalStateException("账户交易对派发锁或票据与恢复目标不一致");
+        boolean dispatchTicketPresent;
+        if (active == null) {
+            // 历史记录可能产生于持久化派发票据机制之前；只有 guard 行确实存在且已空、
+            // 同时目标幂等键完全没有票据时，才允许走无票据恢复分支。
+            if (dispatch.inactiveGuardCount(credentialId, symbol) != 1
+                || dispatch.ticketCount(credentialId, symbol, key) != 0) {
+                throw new IllegalStateException("派发锁未明确处于空闲状态，或目标派发票据仍然存在");
+            }
+            dispatchTicketPresent = false;
+        } else {
+            if (!key.equals(active.get("dispatchKey")) || !clientOrderId.equals(active.get("clientOrderId"))
+                || !"OPEN".equals(active.get("operationType")) || !"UNKNOWN".equals(active.get("dispatchStatus"))
+                || active.get("exchangeOrderId") != null
+                || !sameId(active.get("strategyInstanceId"), record.getStrategyInstanceId())) {
+                throw new IllegalStateException("账户交易对派发锁或票据与恢复目标不一致");
+            }
+            dispatchTicketPresent = true;
         }
 
         Map<String, Object> pre = intents.pending(credentialId, key);
@@ -228,8 +240,8 @@ public class TestnetOpenNotExecutedRecoveryService {
                     "TESTNET 人工核验：精确订单、活动订单、完整历史订单及成交均未发现目标开仓", updatedAt) != 1
                 || positionStates.closeUnexecutedOpenPending(state.getId(), state.getInstanceId(), state.getVersion(), key, clientOrderId, cycleKey, stateUpdatedAt) != 1
                 || cases.markExecuted(caseId, normalizedEvidenceHash) != 1
-                || dispatch.markNotExecuted(credentialId, symbol, key, clientOrderId, record.getStrategyInstanceId()) != 1
-                || dispatch.release(credentialId, symbol, key) != 1) {
+                || (dispatchTicketPresent && dispatch.markNotExecuted(credentialId, symbol, key, clientOrderId, record.getStrategyInstanceId()) != 1)
+                || (dispatchTicketPresent && dispatch.release(credentialId, symbol, key) != 1)) {
                 throw new IllegalStateException("TESTNET 未执行恢复 CAS 失败，事务回滚并保留派发阻断");
             }
             int released = capacity.releaseFailed(credentialId, key);
