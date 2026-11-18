@@ -120,6 +120,21 @@ class BinanceGatewayAdapterTest {
     }
 
     @Test
+    void preservesSafeTransportExceptionTypesWithoutLeakingExceptionMessages() {
+        var failure = new IllegalStateException("authorization=do-not-log", new java.io.IOException("secret=do-not-log"));
+        var adapter = new BinanceGatewayAdapter(new org.dromara.quant.config.QuantProperties());
+
+        RuntimeException mapped = org.springframework.test.util.ReflectionTestUtils.invokeMethod(adapter, "requestFailure", "PLACE_ORDER", failure);
+
+        var diagnostic = assertInstanceOf(org.dromara.quant.exchange.ExchangeTradingPort.ExchangeRequestException.class, mapped);
+        assertEquals(IllegalStateException.class.getName(), diagnostic.exceptionType());
+        assertEquals(java.io.IOException.class.getName(), diagnostic.rootCauseType());
+        assertTrue(diagnostic.getMessage().contains("sdkException=java.lang.IllegalStateException"));
+        assertTrue(diagnostic.getMessage().contains("rootCause=java.io.IOException"));
+        assertFalse(diagnostic.getMessage().contains("do-not-log"));
+    }
+
+    @Test
     void classifiesBinanceInvalidSymbolResponseFromWrappedSdkException() {
         ApiException invalidSymbol = new ApiException(400, "Bad Request", java.util.Map.of(), "{\"code\":-1121,\"msg\":\"Invalid symbol.\"}");
         ApiException otherError = new ApiException(400, "Bad Request", java.util.Map.of(), "{\"code\":-1003,\"msg\":\"Too many requests.\"}");

@@ -244,6 +244,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     /**
      * 将 SDK 异常映射为带阶段信息的安全错误，不输出认证数据。
      */
+    private static String rootCauseType(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current.getClass().getName();
+    }
+
     private RuntimeException requestFailure(String stage, RuntimeException ex) {
         if (ex instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
             return deferred;
@@ -272,7 +280,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             restScheduler.deferFor(retryAfterMillis);
             return new ExchangeMarketPort.RateLimitException(stage, error.getCode(), errorCode(error), message, retryAfterMillis);
         }
-        return new ExchangeRequestException(stage, error == null ? null : error.getCode(), error == null ? null : errorCode(error), message);
+        return new ExchangeRequestException(stage, error == null ? null : error.getCode(), error == null ? null : errorCode(error), message,
+            ex.getClass().getName(), rootCauseType(ex));
     }
 
     private static long retryAfterMillis(com.binance.connector.client.common.ApiException error) {

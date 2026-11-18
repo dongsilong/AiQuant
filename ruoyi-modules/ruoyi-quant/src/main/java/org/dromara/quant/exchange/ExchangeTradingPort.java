@@ -51,11 +51,22 @@ public interface ExchangeTradingPort {
     class ExchangeRequestException extends IllegalStateException {
         private final Integer httpStatus;
         private final Integer code;
+        private final String exceptionType;
+        private final String rootCauseType;
 
         public ExchangeRequestException(String stage, Integer httpStatus, Integer code, String message) {
-            super("stage=" + stage + " httpStatus=" + httpStatus + " binanceCode=" + code + " msg=" + sanitize(message));
+            this(stage, httpStatus, code, message, null, null);
+        }
+
+        public ExchangeRequestException(String stage, Integer httpStatus, Integer code, String message, String exceptionType, String rootCauseType) {
+            super("stage=" + stage + " httpStatus=" + httpStatus + " binanceCode=" + code
+                + (exceptionType == null ? "" : " sdkException=" + safeType(exceptionType))
+                + (rootCauseType == null ? "" : " rootCause=" + safeType(rootCauseType))
+                + " msg=" + sanitize(message));
             this.httpStatus = httpStatus;
             this.code = code;
+            this.exceptionType = exceptionType;
+            this.rootCauseType = rootCauseType;
         }
 
         public Integer httpStatus() {
@@ -64,6 +75,18 @@ public interface ExchangeTradingPort {
 
         public Integer code() {
             return code;
+        }
+
+        public String exceptionType() {
+            return exceptionType;
+        }
+
+        public String rootCauseType() {
+            return rootCauseType;
+        }
+
+        private static String safeType(String value) {
+            return value.replaceAll("[^A-Za-z0-9_.$]", "").substring(0, Math.min(value.length(), 128));
         }
 
         private static String sanitize(String message) {
