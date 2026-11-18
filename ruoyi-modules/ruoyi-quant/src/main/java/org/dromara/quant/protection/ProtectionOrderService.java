@@ -278,8 +278,12 @@ public class ProtectionOrderService {
         } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException | org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException ex) {
             throw ex;
         } catch (RuntimeException ex) {
-            log.warn("策略启动前保护创建事实核实失败，保持启动阻断 accountId={} symbol={} clientAlgoId={} errorType={}", active.credentialId(), active.symbol(),
-                active.clientOrderId(), ex.getClass().getSimpleName());
+            String errorMessage = Objects.toString(ex.getMessage(), "");
+            if (errorMessage.length() > 1000) {
+                errorMessage = errorMessage.substring(0, 1000);
+            }
+            log.warn("策略启动前保护创建事实核实失败，保持启动阻断 accountId={} symbol={} clientAlgoId={} errorType={} errorMessage={}",
+                active.credentialId(), active.symbol(), active.clientOrderId(), ex.getClass().getSimpleName(), errorMessage);
             return false;
         }
     }
@@ -310,8 +314,20 @@ public class ProtectionOrderService {
                 .eq(QuantProtectionOrder::getCredentialId, active.credentialId())
                 .eq(QuantProtectionOrder::getPositionId, local.getPositionId())
                 .eq(QuantProtectionOrder::getPositionCycleKey, local.getPositionCycleKey()));
-            if (cycleOrders == null || cycleOrders.stream().anyMatch(order -> !Objects.equals(order.getId(), local.getId())
-                && ACTIVE_STATUSES.contains(order.getStatus()))) {
+            if (cycleOrders == null) {
+                log.warn("UNKNOWN 保护创建票据无法读取同周期保护单账本，继续保持派发阻断 accountId={} symbol={} positionId={} cycleKey={} clientAlgoId={}",
+                    active.credentialId(), active.symbol(), local.getPositionId(), local.getPositionCycleKey(), active.clientOrderId());
+                return false;
+            }
+            List<QuantProtectionOrder> activeCycleOrders = cycleOrders.stream()
+                .filter(order -> !Objects.equals(order.getId(), local.getId()))
+                .filter(order -> ACTIVE_STATUSES.contains(order.getStatus()))
+                .toList();
+            if (!activeCycleOrders.isEmpty()) {
+                log.warn("UNKNOWN 保护创建票据不能按 SUPERSEDED 终结，同周期仍有活动保护单 accountId={} symbol={} positionId={} cycleKey={} clientAlgoId={} activeOrders={}",
+                    active.credentialId(), active.symbol(), local.getPositionId(), local.getPositionCycleKey(), active.clientOrderId(),
+                    activeCycleOrders.stream().map(order -> order.getId() + ":" + order.getProtectionType() + ":" + order.getStatus()
+                        + ":exchangeOrderId=" + order.getExchangeOrderId()).toList());
                 return false;
             }
             ExchangeGateway.Credential credential = executionApplicationService.toCredential(
@@ -322,6 +338,11 @@ public class ProtectionOrderService {
             if (exchangePositions == null || !exchangePositions.isEmpty()
                 || exchangeOrders == null || !exchangeOrders.isEmpty()
                 || exchangeProtections == null || !exchangeProtections.isEmpty()) {
+                log.warn("UNKNOWN 保护创建票据不能按 SUPERSEDED 终结，交易所仍有持仓或活动委托 accountId={} symbol={} positions={} orders={} protections={}",
+                    active.credentialId(), active.symbol(),
+                    exchangePositions == null ? "UNKNOWN" : exchangePositions.size(),
+                    exchangeOrders == null ? "UNKNOWN" : exchangeOrders.size(),
+                    exchangeProtections == null ? "UNKNOWN" : exchangeProtections.size());
                 return false;
             }
             if ("UNKNOWN".equals(local.getStatus())) {
@@ -346,8 +367,12 @@ public class ProtectionOrderService {
         } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException | org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException ex) {
             throw ex;
         } catch (RuntimeException ex) {
-            log.warn("保护创建票据当前空闲状态核验失败，继续保持调度阻断 accountId={} symbol={} dispatchKey={} errorType={}",
-                active.credentialId(), active.symbol(), active.dispatchKey(), ex.getClass().getSimpleName());
+            String errorMessage = Objects.toString(ex.getMessage(), "");
+            if (errorMessage.length() > 1000) {
+                errorMessage = errorMessage.substring(0, 1000);
+            }
+            log.warn("保护创建票据当前空闲状态核验失败，继续保持调度阻断 accountId={} symbol={} dispatchKey={} errorType={} errorMessage={}",
+                active.credentialId(), active.symbol(), active.dispatchKey(), ex.getClass().getSimpleName(), errorMessage);
             return false;
         }
     }
