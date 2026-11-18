@@ -70,6 +70,7 @@ class LiveRecoveryApprovalSqlContractTest {
         assertTrue(approve.contains("e.execution_status='UNKNOWN'"));
         assertTrue(approve.contains("s.status='OPEN_PENDING'"));
         assertTrue(markExecuted.contains("recovery_mode='LEGACY_TESTNET_OPEN'"));
+        assertTrue(markExecuted.contains("q.run_mode='TESTNET'"));
         assertTrue(markExecuted.contains("e.execution_status='FAILED'"));
         assertTrue(markExecuted.contains("s.status='CLOSED'"));
         assertTrue(markExecuted.contains("g.active_dispatch_key IS NULL"));
