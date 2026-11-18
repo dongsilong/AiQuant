@@ -222,10 +222,11 @@ public class TestnetOpenNotExecutedRecoveryService {
         String normalizedEvidenceHash = evidenceHash.toLowerCase(Locale.ROOT);
         String normalizedDetailHash = detailHash.toLowerCase(Locale.ROOT);
         LocalDateTime updatedAt = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime stateUpdatedAt = LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
         transaction.executeWithoutResult(status -> {
             if (executions.markNotExecutedAfterVerifiedAbsence(record.getId(), credentialId, symbol, key, clientOrderId,
                     "TESTNET 人工核验：精确订单、活动订单、完整历史订单及成交均未发现目标开仓", updatedAt) != 1
-                || positionStates.closeUnexecutedOpenPending(state.getId(), state.getInstanceId(), state.getVersion(), key, clientOrderId, cycleKey, updatedAt) != 1
+                || positionStates.closeUnexecutedOpenPending(state.getId(), state.getInstanceId(), state.getVersion(), key, clientOrderId, cycleKey, stateUpdatedAt) != 1
                 || cases.markExecuted(caseId, normalizedEvidenceHash) != 1
                 || dispatch.markNotExecuted(credentialId, symbol, key, clientOrderId) != 1
                 || dispatch.release(credentialId, symbol, key) != 1) {
