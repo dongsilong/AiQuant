@@ -7,6 +7,7 @@ import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.ExchangeHistoryCollector;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,7 +15,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -107,10 +110,55 @@ public class ExecutionRecoveryService {
                 ExchangeGateway.Credential c = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(),
                     credential.getRunMode());
                 ExchangeGateway.OrderSnapshot exact = null;
+                boolean exactLookupFailed = false;
                 try {
                     exact = gateway.queryOrder(c, record.getSymbol(), record.getExchangeOrderId(), record.getClientOrderId());
-                } catch (RuntimeException ignored) {
-                    // 精确订单不存在或交易所暂时不可用时，继续使用当前挂单兜底查询。
+                } catch (RuntimeException lookupFailure) {
+                    exactLookupFailed = true;
+                    log.warn("Binance 精确订单恢复查询失败，继续使用只读兜底查询 executionId={} credentialId={} symbol={} errorType={}",
+                        record.getId(), record.getCredentialId(), record.getSymbol(), lookupFailure.getClass().getSimpleName());
+                }
+                // 精确订单接口明确返回不存在时，按执行记录创建时间补查历史订单。
+                // 每 5 次恢复尝试查询一次，避免大量 UNKNOWN 记录持续放大 REST 请求量。
+                if (exact == null && !exactLookupFailed && record.getCreatedAt() != null
+                    && record.getRecoveryAttempts() != null && record.getRecoveryAttempts() % 5 == 0
+                    && (record.getClientOrderId() != null || record.getExchangeOrderId() != null)) {
+                    Instant createdAt = record.getCreatedAt().toInstant(ZoneOffset.UTC);
+                    Instant historyFrom = createdAt.minus(Duration.ofMinutes(1));
+                    Instant historyTo = createdAt.plus(Duration.ofMinutes(15));
+                    Instant exchangeNow = Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(credential.getRunMode()));
+                    if (historyTo.isAfter(exchangeNow)) {
+                        historyTo = exchangeNow;
+                    }
+                    if (!historyFrom.isAfter(historyTo)) {
+                        List<ExchangeGateway.OrderSnapshot> history = List.of();
+                        boolean historyReadSucceeded = false;
+                        try {
+                            history = ExchangeHistoryCollector.collect(historyFrom, historyTo, range ->
+                                gateway.queryOrderHistory(c, record.getSymbol(), range, 1000L));
+                            historyReadSucceeded = true;
+                        } catch (RuntimeException historyFailure) {
+                            log.warn("Binance 历史订单恢复查询失败，继续保持未确认状态 executionId={} credentialId={} symbol={} errorType={}",
+                                record.getId(), record.getCredentialId(), record.getSymbol(), historyFailure.getClass().getSimpleName());
+                        }
+                        if (historyReadSucceeded) {
+                            List<ExchangeGateway.OrderSnapshot> matches = history.stream().filter(order ->
+                                order != null && order.orderId() != null && order.orderId() > 0
+                                    && order.symbol() != null && record.getSymbol().equalsIgnoreCase(order.symbol())
+                                    && order.status() != null && !order.status().isBlank()
+                                    && (record.getClientOrderId() == null || record.getClientOrderId().equals(order.clientOrderId()))
+                                    && (record.getExchangeOrderId() == null || record.getExchangeOrderId().equals(order.orderId()))
+                            ).toList();
+                            if (matches.size() > 1) {
+                                throw new IllegalStateException("Binance 历史订单恢复返回多个匹配订单，保持执行恢复阻断");
+                            }
+                            if (matches.size() == 1) {
+                                exact = matches.getFirst();
+                                log.info("已从 Binance 历史订单找到待恢复执行事实 executionId={} credentialId={} symbol={} orderId={} status={}",
+                                    record.getId(), record.getCredentialId(), record.getSymbol(), exact.orderId(), exact.status());
+                            }
+                        }
+                    }
                 }
                 if (exact != null) {
                     if (exact.symbol() == null || !record.getSymbol().equalsIgnoreCase(exact.symbol()) || record.getExchangeOrderId() != null && !record.getExchangeOrderId().equals(exact.orderId()) || record.getClientOrderId() != null && !record.getClientOrderId().equals(exact.clientOrderId())) {
