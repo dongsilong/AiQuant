@@ -93,6 +93,9 @@ public class LiveManualRecoveryExecutionService {
         String key = required(c, "dispatch_key");
         String operation = required(c, "operation_type");
         String clientId = required(c, "expected_client_order_id");
+        if (!"TICKETED".equals(c.get("recovery_mode"))) {
+            throw new IllegalStateException("历史无票据工单不能进入普通 LIVE 订单恢复流程");
+        }
         if (!Set.of("OPEN", "CLOSE", "CANCEL").contains(operation)) {
             throw new IllegalStateException("Configuration/protection orders need separate procedures");
         }
