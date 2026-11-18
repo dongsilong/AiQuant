@@ -86,7 +86,8 @@ public interface ExchangeTradingPort {
         }
 
         private static String safeType(String value) {
-            return value.replaceAll("[^A-Za-z0-9_.$]", "").substring(0, Math.min(value.length(), 128));
+            String safe = value.replaceAll("[^A-Za-z0-9_.$]", "");
+            return safe.substring(0, Math.min(safe.length(), 128));
         }
 
         private static String sanitize(String message) {
