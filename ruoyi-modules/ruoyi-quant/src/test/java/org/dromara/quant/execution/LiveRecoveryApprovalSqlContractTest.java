@@ -1,11 +1,12 @@
 package org.dromara.quant.execution;
 
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Update;
 import org.dromara.quant.execution.mapper.LiveRecoveryApprovalMapper;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -13,24 +14,70 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Tag("dev")
 class LiveRecoveryApprovalSqlContractTest {
+    private static String mapper() throws IOException {
+        try (InputStream input = LiveRecoveryApprovalSqlContractTest.class.getClassLoader()
+            .getResourceAsStream("mapper/quant/LiveRecoveryApprovalMapper.xml")) {
+            if (input == null) throw new IOException("Missing recovery approval mapper");
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private static String statement(String xml, String id, String closingTag) {
+        int start = xml.indexOf("id=\"" + id + "\"");
+        int end = xml.indexOf(closingTag, start);
+        if (start < 0 || end < 0) throw new IllegalStateException("Missing mapper statement: " + id);
+        return xml.substring(start, end);
+    }
+
     @Test
-    void approvalIsTwoPersonCasAndCannotReleaseDispatchGuard() throws Exception {
-        String request = String.join(" ",
-            LiveRecoveryApprovalMapper.class.getMethod("request", long.class, long.class, String.class, String.class, long.class, String.class).getAnnotation(Insert.class).value());
-        String approve = String.join(" ", LiveRecoveryApprovalMapper.class.getMethod("approve", long.class, long.class, String.class).getAnnotation(Update.class).value());
-        assertTrue(request.contains("active_dispatch_key=#{dispatchKey}"));
+    void ordinaryRecoveryRemainsBoundToItsActiveTicket() throws Exception {
+        String xml = mapper();
+        String request = statement(xml, "request", "</insert>");
+        String approve = statement(xml, "approve", "</update>");
+        String markExecuted = statement(xml, "markExecuted", "</update>");
+        assertTrue(request.contains("'TICKETED'"));
+        assertTrue(request.contains("g.active_dispatch_key=#{dispatchKey}"));
         assertTrue(request.contains("t.dispatch_status IN ('UNKNOWN','DISPATCHING')"));
-        assertTrue(request.contains("t.operation_type IN ('OPEN','CLOSE','CANCEL')"));
-        assertTrue(request.contains("NOT EXISTS"));
-        assertTrue(approve.contains("requested_by<>#{reviewerId}"));
-        assertTrue(approve.contains("state='PENDING'"));
-        assertTrue(approve.contains("evidence_sha256=#{evidenceHash}"));
+        assertTrue(approve.contains("recovery_mode='TICKETED'"));
         assertTrue(approve.contains("g.active_dispatch_key=quant_live_recovery_case.dispatch_key"));
-        assertTrue(approve.contains("t.dispatch_status IN ('UNKNOWN','DISPATCHING')"));
-        assertTrue(approve.contains("t.operation_type=quant_live_recovery_case.operation_type"));
-        assertTrue(approve.contains("t.client_order_id=quant_live_recovery_case.expected_client_order_id"));
-        assertTrue(approve.contains("t.exchange_order_id <=> quant_live_recovery_case.expected_exchange_order_id"));
-        assertFalse(Arrays.stream(LiveRecoveryApprovalMapper.class.getMethods()).map(m -> m.getName().toLowerCase()).anyMatch(name -> name.contains("unlock") || name.contains(
-            "release")));
+        assertTrue(markExecuted.contains("recovery_mode='TICKETED'"));
+        assertTrue(markExecuted.contains("g.active_dispatch_key=quant_live_recovery_case.dispatch_key"));
+    }
+
+    @Test
+    void legacyRequestRequiresUnknownOpenPendingAndNoTicket() throws Exception {
+        String xml = mapper();
+        String request = statement(xml, "requestLegacyOpen", "</insert>");
+        assertTrue(request.contains("'LEGACY_TESTNET_OPEN'"));
+        assertTrue(request.contains("e.execution_status='UNKNOWN'"));
+        assertTrue(request.contains("e.operation_type='OPEN'"));
+        assertTrue(request.contains("e.exchange_order_id IS NULL"));
+        assertTrue(request.contains("g.active_dispatch_key IS NULL"));
+        assertTrue(request.contains("s.status='OPEN_PENDING'"));
+        assertTrue(request.contains("s.pending_idempotency_key=e.idempotency_key"));
+        assertTrue(request.contains("NOT EXISTS"));
+        assertTrue(request.contains("quant_order_dispatch_ticket"));
+    }
+
+    @Test
+    void legacyApprovalAndCompletionCannotFallThroughTicketedPath() throws Exception {
+        String xml = mapper();
+        String approve = statement(xml, "approve", "</update>");
+        String markExecuted = statement(xml, "markExecuted", "</update>");
+        assertTrue(approve.contains("recovery_mode='LEGACY_TESTNET_OPEN'"));
+        assertTrue(approve.contains("e.execution_status='UNKNOWN'"));
+        assertTrue(approve.contains("s.status='OPEN_PENDING'"));
+        assertTrue(markExecuted.contains("recovery_mode='LEGACY_TESTNET_OPEN'"));
+        assertTrue(markExecuted.contains("e.execution_status='FAILED'"));
+        assertTrue(markExecuted.contains("s.status='CLOSED'"));
+        assertTrue(markExecuted.contains("g.active_dispatch_key IS NULL"));
+        assertTrue(markExecuted.contains("NOT EXISTS"));
+    }
+
+    @Test
+    void mapperDoesNotExposeUnlockOperations() {
+        assertFalse(Arrays.stream(LiveRecoveryApprovalMapper.class.getMethods())
+            .map(method -> method.getName().toLowerCase())
+            .anyMatch(name -> name.contains("unlock") || name.contains("release")));
     }
 }
