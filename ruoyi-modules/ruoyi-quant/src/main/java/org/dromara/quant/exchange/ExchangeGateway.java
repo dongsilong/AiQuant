@@ -102,9 +102,19 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param kline     行情事件携带的 K 线快照
      * @param eventTime 当前行情事件时间
      */
-    record MarketEvent(String type, String symbol, String interval, BigDecimal price, Kline kline, Instant eventTime, Long sequenceId, Instant receivedAt, boolean replay) {
+    record MarketEvent(String type, String symbol, String interval, BigDecimal price, Kline kline, Instant eventTime, Long sequenceId, Instant receivedAt, boolean replay,
+                       BigDecimal ma5, BigDecimal ma7, String maTrend, boolean maReady) {
+        public MarketEvent(String type, String symbol, String interval, BigDecimal price, Kline kline, Instant eventTime, Long sequenceId, Instant receivedAt,
+                           boolean replay) {
+            this(type, symbol, interval, price, kline, eventTime, sequenceId, receivedAt, replay, null, null, null, false);
+        }
+
         public MarketEvent(String type, String symbol, String interval, BigDecimal price, Kline kline, Instant eventTime) {
-            this(type, symbol, interval, price, kline, eventTime, null, Instant.now(), false);
+            this(type, symbol, interval, price, kline, eventTime, null, Instant.now(), false, null, null, null, false);
+        }
+
+        public MarketEvent withOneMinuteMa(BigDecimal ma5, BigDecimal ma7, String maTrend, boolean maReady) {
+            return new MarketEvent(type, symbol, interval, price, kline, eventTime, sequenceId, receivedAt, replay, ma5, ma7, maTrend, maReady);
         }
     }
 
