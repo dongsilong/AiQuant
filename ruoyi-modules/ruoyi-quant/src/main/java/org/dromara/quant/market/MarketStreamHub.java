@@ -614,7 +614,7 @@ public class MarketStreamHub {
         }
 
         private ExchangeGateway.MarketEvent withOneMinuteMa(ExchangeGateway.MarketEvent event) {
-            if (!"1m".equals(key.interval())) {
+            if (!"1m".equals(key.interval()) || (!"KLINE".equals(event.type()) && !"MARK".equals(event.type()))) {
                 return event;
             }
             synchronized (this) {
