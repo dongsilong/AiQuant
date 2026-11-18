@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Server-authenticated three-person LIVE recovery case API.
+ * Server-authenticated three-person dispatch recovery case API.
  * Never accepts an actor ID from the request. Permissions are separate for
  * requester, independent reviewer and final executor.
  * IDs are JSON strings so browsers cannot round 64-bit Snowflake IDs.

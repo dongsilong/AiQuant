@@ -168,6 +168,36 @@ class TestnetOpenNotExecutedRecoveryServiceTest {
     }
 
     @Test
+    void localOrderLedgerMatchPreventsNotExecutedRecovery() {
+        stubVerifiedAbsence();
+        when(orders.selectOne(any())).thenReturn(new org.dromara.quant.order.domain.QuantOrder());
+        assertThrows(IllegalStateException.class, () -> service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
+        verify(gateway, never()).queryOrder(any(), anyString(), any(), anyString());
+        verify(dispatch, never()).markNotExecuted(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void activeExchangeOrderPreventsNotExecutedRecovery() {
+        stubVerifiedAbsence();
+        when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of(
+            new ExchangeGateway.OrderSnapshot("BTCUSDT", 33L, "client-1", "BUY", "LIMIT", "NEW",
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, java.time.Instant.now())));
+        assertThrows(IllegalStateException.class, () -> service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
+        verify(gateway, never()).queryOrderHistoryComplete(any(), anyString(), any(), any());
+        verify(dispatch, never()).markNotExecuted(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void incompleteHistoricalOrderQueryPreventsNotExecutedRecovery() {
+        stubVerifiedAbsence();
+        when(gateway.queryOrderHistoryComplete(any(), eq("BTCUSDT"), any(), eq(1000L)))
+            .thenThrow(new IllegalStateException("history incomplete"));
+        assertThrows(IllegalStateException.class, () -> service.execute(1L, 12L, "a".repeat(64), "b".repeat(64)));
+        verify(dispatch, never()).markNotExecuted(any(), any(), any(), any(), any());
+        verifyNoInteractions(audit);
+    }
+
+    @Test
     void sameApplicantOrReviewerCannotExecuteRecovery() {
         when(cases.findCase(1L)).thenReturn(approvedCase());
         assertThrows(IllegalStateException.class, () -> service.execute(1L, 11L, "a".repeat(64), "b".repeat(64)));

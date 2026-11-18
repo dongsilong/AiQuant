@@ -30,6 +30,7 @@ class TestnetOpenNotExecutedRecoverySqlContractTest {
         assertTrue(update.contains("exchange_order_id IS NULL"));
         assertTrue(update.contains("idempotency_key=#{key}"));
         assertTrue(update.contains("client_order_id=#{clientOrderId}"));
+        assertTrue(update.contains("strategy_instance_id=#{instanceId}"));
     }
 
     @Test
