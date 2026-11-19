@@ -1533,8 +1533,8 @@ class ProtectionOrderServiceTest {
 
         var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "cancel-key", local.getClientOrderId());
         assertFalse(result.recovered());
-        assertEquals("PROTECTION_NOT_CONFIRMED", result.code());
-        assertEquals("VERIFY_PROTECTION_FACTS", result.stage());
+        assertEquals("PROTECTION_TERMINAL_NOT_PERSISTED", result.code());
+        assertEquals("VERIFY_AND_PERSIST_TERMINAL", result.stage());
 
         verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
     }
@@ -1648,6 +1648,26 @@ class ProtectionOrderServiceTest {
         verify(gateway).setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
         verify(gateway).setLeverage(any(), eq("BTCUSDT"), eq(10));
         verify(dispatcher, never()).recoveredConfigurationFromExchange(any(), any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void manualRecheckReportsExchangeQueryFailureStageForProtectionCancel() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "cancel-key", "PROTECT_CANCEL",
+            local.getClientOrderId(), "UNKNOWN", 55L);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any()))
+            .thenThrow(new IllegalStateException("exchange query timeout"));
+
+        var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "cancel-key", local.getClientOrderId());
+
+        assertFalse(result.recovered());
+        assertEquals("EXCHANGE_PROTECTION_NOT_CONFIRMED", result.code());
+        assertEquals("QUERY_EXCHANGE_PROTECTION", result.stage());
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+        verify(gateway, never()).cancelProtectionOrder(any());
     }
 
     @Test
