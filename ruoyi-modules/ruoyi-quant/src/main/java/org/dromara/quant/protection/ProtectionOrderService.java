@@ -224,6 +224,11 @@ public class ProtectionOrderService {
     }
 
     private boolean recoverProtectionCreate(LiveOrderDispatcher.ActiveDispatch active) {
+        return recoverProtectionCreate(active, stage -> { });
+    }
+
+    private boolean recoverProtectionCreate(LiveOrderDispatcher.ActiveDispatch active, java.util.function.Consumer<String> stageObserver) {
+        stageObserver.accept("LOAD_LOCAL_INTENT");
         QuantProtectionOrder local = mapper.selectOne(new LambdaQueryWrapper<QuantProtectionOrder>()
             .eq(QuantProtectionOrder::getCredentialId, active.credentialId())
             .eq(QuantProtectionOrder::getSymbol, active.symbol())
@@ -234,7 +239,9 @@ public class ProtectionOrderService {
             return false;
         }
         try {
+            stageObserver.accept("VERIFY_EXCHANGE_PROTECTION");
             confirmOnExchange(active.credentialId(), local, false);
+            stageObserver.accept("RELEASE_DISPATCH_GATE");
             boolean recovered = requireLiveDispatcher().activeDispatch(active.credentialId(), active.symbol()) == null;
             if (!recovered) {
                 log.warn("策略启动前保护创建票据仍未恢复，保持启动阻断 accountId={} symbol={} clientAlgoId={}", active.credentialId(), active.symbol(), active.clientOrderId());
@@ -243,21 +250,26 @@ public class ProtectionOrderService {
         } catch (ProtectionOrderDefinitelyAbsentException absent) {
             // An exact absence proof is not a rejection fact. Retire only when this exact cycle
             // and every exchange open-state query independently prove that no exposure or order remains.
-            return supersedeInactiveProtectionCreate(active, local);
+            stageObserver.accept("VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS");
+            return supersedeInactiveProtectionCreate(active, local, stageObserver);
         } catch (ProtectionConfirmationPendingException pending) {
             // An inconclusive historical lookup is not proof of rejection or cancellation.
             // Retire only when both local and exchange state prove this exact cycle is flat and idle.
-            return supersedeInactiveProtectionCreate(active, local);
+            stageObserver.accept("VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS");
+            return supersedeInactiveProtectionCreate(active, local, stageObserver);
         } catch (ProtectionExecutionPendingException pending) {
-            if (supersedeInactiveProtectionCreate(active, local)) {
+            stageObserver.accept("VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS");
+            if (supersedeInactiveProtectionCreate(active, local, stageObserver)) {
                 return true;
             }
             // Algo FINISHED alone is not enough. Verify the exact child order before recording a fill.
             try {
+                stageObserver.accept("VERIFY_TRIGGERED_CHILD_AND_PERSIST_TERMINAL");
                 ExchangeGateway.Credential credential = executionApplicationService.toCredential(
                     executionApplicationService.requireCredential(active.credentialId()));
                 Long terminalAlgoId = persistVerifiedTriggeredProtection(active.credentialId(), local, credential);
-                boolean recovered = requireLiveDispatcher().recoveredFromExchange(active.credentialId(), active.symbol(),
+                stageObserver.accept("RELEASE_DISPATCH_GATE");
+                boolean recovered = requireLiveDispatcher().recoveredFromExchange(active.credentialId(), active.symbol(), 
                     active.dispatchKey(), active.clientOrderId(), terminalAlgoId);
                 if (!recovered) {
                     log.warn("保护单已触发并核验，但派发票据未能恢复，继续保持调度阻断 accountId={} symbol={} dispatchKey={} clientAlgoId={} algoId={}",
@@ -294,6 +306,12 @@ public class ProtectionOrderService {
      * SUPERSEDED means no current exposure or active order remains; it does not claim the historical Algo was rejected, canceled, or unfilled.
      */
     private boolean supersedeInactiveProtectionCreate(LiveOrderDispatcher.ActiveDispatch active, QuantProtectionOrder local) {
+        return supersedeInactiveProtectionCreate(active, local, stage -> { });
+    }
+
+    private boolean supersedeInactiveProtectionCreate(LiveOrderDispatcher.ActiveDispatch active, QuantProtectionOrder local,
+                                                       java.util.function.Consumer<String> stageObserver) {
+        stageObserver.accept("VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS");
         QuantPositionMapper positions = positionMapper;
         if (active == null || local == null || positions == null
             || !"PROTECT_CREATE".equals(active.operationType()) || !"UNKNOWN".equals(active.dispatchStatus())
@@ -351,6 +369,7 @@ public class ProtectionOrderService {
                         + ":exchangeOrderId=" + order.getExchangeOrderId()).toList());
                 return false;
             }
+            stageObserver.accept("VERIFY_EXCHANGE_FLAT_AND_IDLE");
             ExchangeGateway.Credential credential = executionApplicationService.toCredential(
                 executionApplicationService.requireCredential(active.credentialId()));
             List<ExchangeGateway.PositionSnapshot> exchangePositions = gateway.queryPositions(credential, active.symbol());
@@ -366,6 +385,7 @@ public class ProtectionOrderService {
                     exchangeProtections == null ? "UNKNOWN" : exchangeProtections.size());
                 return false;
             }
+            stageObserver.accept("PERSIST_SUPERSEDED_INTENT");
             if ("UNKNOWN".equals(local.getStatus())) {
                 QuantProtectionOrder update = new QuantProtectionOrder();
                 update.setStatus("SUPERSEDED");
@@ -378,7 +398,8 @@ public class ProtectionOrderService {
                 }
                 local.setStatus("SUPERSEDED");
             }
-            boolean superseded = requireLiveDispatcher().supersedeProtectionCreate(active.credentialId(), active.symbol(),
+            stageObserver.accept("RELEASE_DISPATCH_GATE");
+            boolean superseded = requireLiveDispatcher().supersedeProtectionCreate(active.credentialId(), active.symbol(), 
                 active.dispatchKey(), active.clientOrderId());
             if (superseded) {
                 log.info("已结束持仓周期的保护创建票据按本地与交易所空闲事实终结，未将历史结果伪装为已成交/已撤销 accountId={} symbol={} dispatchKey={} clientAlgoId={}",
@@ -467,6 +488,32 @@ public class ProtectionOrderService {
             return new ManualDispatchRecheckResult(false, "UNSUPPORTED_OPERATION", "VALIDATE_OPERATION",
                 "当前派发操作类型不支持人工恢复：" + active.operationType() + "；调度阻断保持不变。");
         }
+        if ("PROTECT_CREATE".equals(active.operationType())) {
+            java.util.concurrent.atomic.AtomicReference<String> failedStage = new java.util.concurrent.atomic.AtomicReference<>("LOAD_LOCAL_INTENT");
+            boolean recovered = retryDeferredManualRecheck(() -> recoverProtectionCreate(active, failedStage::set));
+            if (recovered) {
+                return new ManualDispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE", "交易所保护单事实已核验，派发阻断已解除。");
+            }
+            String stage = failedStage.get();
+            return switch (stage) {
+                case "LOAD_LOCAL_INTENT" -> new ManualDispatchRecheckResult(false, "LOCAL_PROTECTION_INTENT_MISSING", stage,
+                    "未找到与派发票据完全匹配的本地保护单意图，派发阻断保持不变。");
+                case "VERIFY_EXCHANGE_PROTECTION" -> new ManualDispatchRecheckResult(false, "EXCHANGE_PROTECTION_NOT_CONFIRMED", stage,
+                    "交易所保护单身份或当前状态未能确认，派发阻断保持不变。");
+                case "VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS" -> new ManualDispatchRecheckResult(false, "SIBLING_PROTECTION_NOT_CONFIRMED", stage,
+                    "本地持仓周期或同周期其他保护单仍活动/无法核实，派发阻断保持不变。");
+                case "VERIFY_EXCHANGE_FLAT_AND_IDLE" -> new ManualDispatchRecheckResult(false, "EXCHANGE_EXPOSURE_OR_ORDER_REMAINS", stage,
+                    "交易所持仓、普通委托或保护单未能证明全部为空，派发阻断保持不变。");
+                case "PERSIST_SUPERSEDED_INTENT" -> new ManualDispatchRecheckResult(false, "LOCAL_TERMINAL_PERSIST_FAILED", stage,
+                    "本地保护创建意图未能可靠写入终态，派发阻断保持不变。");
+                case "VERIFY_TRIGGERED_CHILD_AND_PERSIST_TERMINAL" -> new ManualDispatchRecheckResult(false, "TRIGGERED_CHILD_OR_TERMINAL_NOT_CONFIRMED", stage,
+                    "保护单触发后的实际子订单身份、完整成交或本地终态未能确认，派发阻断保持不变。");
+                case "RELEASE_DISPATCH_GATE" -> new ManualDispatchRecheckResult(false, "DISPATCH_GATE_RELEASE_FAILED", stage,
+                    "保护单事实已处理，但派发门禁未能解除，派发阻断保持不变。");
+                default -> new ManualDispatchRecheckResult(false, "PROTECTION_CREATE_NOT_CONFIRMED", "VERIFY_PROTECTION_CREATE",
+                    "保护单创建事实未满足恢复要求，派发阻断保持不变。");
+            };
+        }
         if ("PROTECT_CANCEL".equals(active.operationType())) {
             java.util.concurrent.atomic.AtomicReference<String> failedStage = new java.util.concurrent.atomic.AtomicReference<>("LOAD_CREDENTIAL");
             boolean recovered = retryDeferredManualRecheck(() -> recoverProtectionCancel(active, failedStage::set));
@@ -489,11 +536,7 @@ public class ProtectionOrderService {
                     "保护单事实未满足恢复要求，派发阻断保持不变。");
             };
         }
-        boolean recovered = retryDeferredManualRecheck(() -> recoverProtectionCreate(active));
-        return recovered
-            ? new ManualDispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE", "交易所保护单事实已核验，派发阻断已解除。")
-            : new ManualDispatchRecheckResult(false, "PROTECTION_CREATE_NOT_CONFIRMED", "VERIFY_PROTECTION_CREATE",
-                "保护单创建意图、交易所订单或触发子订单未满足恢复要求，派发阻断保持不变。");
+        throw new IllegalStateException("不支持的保护派发操作类型");
     }
 
     /**
