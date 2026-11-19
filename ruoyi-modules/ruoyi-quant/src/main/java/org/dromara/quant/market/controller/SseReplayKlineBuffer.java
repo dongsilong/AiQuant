@@ -5,6 +5,7 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 /** Bounds the historical K-line burst sent to a terminal SSE subscriber. */
@@ -13,7 +14,7 @@ final class SseReplayKlineBuffer {
     private static final int MAX_ONE_MINUTE_REPLAY_KLINES = 8;
     private final ArrayDeque<ExchangeGateway.MarketEvent> replayKlines = new ArrayDeque<>(MAX_REPLAY_KLINES);
 
-    void publish(ExchangeGateway.MarketEvent event, Consumer<ExchangeGateway.MarketEvent> downstream) {
+    void publish(ExchangeGateway.MarketEvent event, Consumer<Object> downstream) {
         long startedAt = System.nanoTime();
         int replayCount = 0;
         synchronized (this) {
@@ -29,7 +30,15 @@ final class SseReplayKlineBuffer {
                 List<ExchangeGateway.MarketEvent> buffered = new ArrayList<>(replayKlines);
                 replayKlines.clear();
                 replayCount = buffered.size();
-                buffered.forEach(downstream);
+                if (!buffered.isEmpty()) {
+                    ExchangeGateway.MarketEvent first = buffered.get(0);
+                    downstream.accept(Map.of(
+                        "type", "KLINE_SNAPSHOT",
+                        "symbol", first.symbol(),
+                        "interval", first.interval(),
+                        "klines", buffered.stream().map(ExchangeGateway.MarketEvent::kline).toList()
+                    ));
+                }
             }
             downstream.accept(event);
         }
