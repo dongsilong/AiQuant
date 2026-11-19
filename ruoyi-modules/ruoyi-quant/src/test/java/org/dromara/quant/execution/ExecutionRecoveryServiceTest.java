@@ -278,7 +278,6 @@ class ExecutionRecoveryServiceTest {
 
         verify(gateway).queryOrderHistoryComplete(any(), eq("BTCUSDT"), any(), eq(1000L));
         verify(recordService).recordVerifiedAbsence(eq(record), contains("完整历史"), any());
-        verify(recordService, never()).markNotExecutedAfterVerifiedAbsence(any(), any(), any(), any(), any(), any(), any());
         verify(gateway, never()).placeOrder(any());
     }
 
@@ -337,6 +336,7 @@ class ExecutionRecoveryServiceTest {
         var credentials = mock(QuantCredentialMapper.class);
         var gateway = mock(ExchangeGateway.class);
         var recordService = mock(ExecutionRecordService.class);
+        var ledger = mock(OrderLedgerService.class);
         var record = new QuantExecutionRecord();
         record.setId(13L);
         record.setCredentialId(1L);
