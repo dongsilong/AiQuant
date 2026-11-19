@@ -4,7 +4,7 @@
     <update id="markAccepted" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET execution_status='CONFIRMED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
     exchange_order_status=#{exchangeStatus},
-    error_message=CASE WHEN error_message LIKE 'VERIFIED_ABSENCE_PENDING:%' THEN NULL ELSE error_message END,
+    error_message=CASE WHEN LEFT(error_message, 25) = 'VERIFIED_ABSENCE_PENDING:' THEN NULL ELSE error_message END,
     updated_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN')
   AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
@@ -27,12 +27,12 @@ WHERE id=#{id} AND credential_id=#{credentialId} AND symbol=#{symbol}
   AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
   AND execution_status='UNKNOWN' AND operation_type='OPEN'
   AND exchange_order_id IS NULL
-  AND error_message LIKE 'VERIFIED_ABSENCE_PENDING:%'
+  AND LEFT(error_message, 25) = 'VERIFIED_ABSENCE_PENDING:'
   AND updated_at <= DATE_SUB(#{now}, INTERVAL 1 MINUTE)]]></update>
     <update id="markRecoveredAfterFact" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET execution_status='RECOVERED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
     exchange_order_status=COALESCE(#{exchangeStatus},exchange_order_status),
-    error_message=CASE WHEN error_message LIKE 'VERIFIED_ABSENCE_PENDING:%' THEN NULL ELSE error_message END,
+    error_message=CASE WHEN LEFT(error_message, 25) = 'VERIFIED_ABSENCE_PENDING:' THEN NULL ELSE error_message END,
     updated_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN','CONFIRMED','RECOVERED')
   AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
