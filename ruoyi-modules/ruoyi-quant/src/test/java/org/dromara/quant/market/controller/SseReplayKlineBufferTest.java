@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class SseReplayKlineBufferTest {
     @Test
-    void emitsLatestEightReplayKlinesWhenMarketBecomesReady() {
+    void emitsLatestEightReplayKlinesWhenKlinesBecomeReady() {
         SseReplayKlineBuffer buffer = new SseReplayKlineBuffer();
         List<ExchangeGateway.MarketEvent> delivered = new ArrayList<>();
         for (int index = 0; index < 200; index++) {
@@ -20,11 +20,11 @@ class SseReplayKlineBufferTest {
         }
         assertEquals(0, delivered.size());
 
-        buffer.publish(status("CONNECTED"), delivered::add);
+        buffer.publish(status("KLINE_READY"), delivered::add);
 
         assertEquals(List.of(192, 193, 194, 195, 196, 197, 198, 199).stream().map(index -> kline(index).kline().openTime()).toList(),
             delivered.subList(0, 8).stream().map(event -> event.kline().openTime()).toList());
-        assertEquals("CONNECTED", delivered.get(8).type());
+        assertEquals("KLINE_READY", delivered.get(8).type());
         assertEquals(9, delivered.size());
     }
 
