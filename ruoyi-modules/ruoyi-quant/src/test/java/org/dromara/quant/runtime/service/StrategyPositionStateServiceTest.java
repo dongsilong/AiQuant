@@ -41,7 +41,7 @@ class StrategyPositionStateServiceTest {
     }
 
     @Test
-    void flatSnapshotClosesOnlyCleanOpenState() {
+    void flatSnapshotClosesOpenQuantityButPreservesRecoveryFence() {
         var cleanOpen = state("OPEN", null, false, false);
         var opening = state("OPEN_PENDING", "OPEN", false, false);
         var recovery = state("OPEN", null, true, false);
@@ -57,9 +57,13 @@ class StrategyPositionStateServiceTest {
         assertEquals(true, cleanOpen.getUnsafeRecovery(), "entries must remain blocked until the close candle is fenced and protections are checked");
         assertEquals("OPEN_PENDING", opening.getStatus());
         assertEquals("OPEN", opening.getPendingAction());
-        assertEquals("OPEN", recovery.getStatus());
+        assertEquals("CLOSED", recovery.getStatus(), "a flat account snapshot must close stale OPEN quantity even when recovery remains required");
+        assertEquals(BigDecimal.ZERO, recovery.getPositionQty());
+        assertEquals(true, recovery.getRecoveryRequired(), "closing stale quantity must not clear unresolved recovery");
+        assertEquals(true, recovery.getUnsafeRecovery(), "closing stale quantity must not release the entry gate");
         assertEquals("PROTECTION_CLEANUP", cleanup.getStatus());
         verify(mapper, times(1)).updateById(cleanOpen);
+        verify(mapper, times(1)).updateById(recovery);
     }
 
     private QuantStrategyPositionState state(String status, String pendingAction, boolean recoveryRequired, boolean unsafeRecovery) {
