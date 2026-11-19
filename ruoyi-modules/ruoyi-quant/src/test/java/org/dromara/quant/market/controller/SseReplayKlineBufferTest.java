@@ -9,12 +9,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 class SseReplayKlineBufferTest {
     @Test
     void emitsLatestEightReplayKlinesWhenKlinesBecomeReady() {
         SseReplayKlineBuffer buffer = new SseReplayKlineBuffer();
-        List<ExchangeGateway.MarketEvent> delivered = new ArrayList<>();
+        List<Object> delivered = new ArrayList<>();
         for (int index = 0; index < 200; index++) {
             buffer.publish(kline(index), delivered::add);
         }
@@ -22,10 +23,16 @@ class SseReplayKlineBufferTest {
 
         buffer.publish(status("KLINE_READY"), delivered::add);
 
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> snapshot = assertInstanceOf(java.util.Map.class, delivered.get(0));
+        assertEquals("KLINE_SNAPSHOT", snapshot.get("type"));
+        assertEquals("BTCUSDT", snapshot.get("symbol"));
+        assertEquals("1m", snapshot.get("interval"));
+        List<ExchangeGateway.Kline> klines = (List<ExchangeGateway.Kline>) snapshot.get("klines");
         assertEquals(List.of(192, 193, 194, 195, 196, 197, 198, 199).stream().map(index -> kline(index).kline().openTime()).toList(),
-            delivered.subList(0, 8).stream().map(event -> event.kline().openTime()).toList());
-        assertEquals("KLINE_READY", delivered.get(8).type());
-        assertEquals(9, delivered.size());
+            klines.stream().map(ExchangeGateway.Kline::openTime).toList());
+        assertEquals("KLINE_READY", ((ExchangeGateway.MarketEvent) delivered.get(1)).type());
+        assertEquals(2, delivered.size());
     }
 
     @Test
@@ -38,9 +45,13 @@ class SseReplayKlineBufferTest {
 
         buffer.publish(status("CONNECTED"), delivered::add);
 
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> snapshot = assertInstanceOf(java.util.Map.class, delivered.get(0));
+        List<ExchangeGateway.Kline> klines = (List<ExchangeGateway.Kline>) snapshot.get("klines");
         assertEquals(List.of(16, 17, 18, 19).stream().map(index -> kline(index, "15m").kline().openTime()).toList(),
-            delivered.subList(0, 4).stream().map(event -> event.kline().openTime()).toList());
-        assertEquals(5, delivered.size());
+            klines.stream().map(ExchangeGateway.Kline::openTime).toList());
+        assertEquals("CONNECTED", ((ExchangeGateway.MarketEvent) delivered.get(1)).type());
+        assertEquals(2, delivered.size());
     }
 
     private ExchangeGateway.MarketEvent kline(int minute) {
