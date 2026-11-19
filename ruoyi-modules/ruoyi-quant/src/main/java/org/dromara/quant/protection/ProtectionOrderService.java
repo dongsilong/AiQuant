@@ -605,10 +605,15 @@ public class ProtectionOrderService {
     }
 
     private boolean recoverProtectionCancel(LiveOrderDispatcher.ActiveDispatch active) {
-        return recoverProtectionCancel(active, stage -> { });
+        return recoverProtectionCancel(active, stage -> { }, Set.of("CANCELED", "EXPIRED", "REJECTED"), true);
     }
 
     private boolean recoverProtectionCancel(LiveOrderDispatcher.ActiveDispatch active, java.util.function.Consumer<String> stageObserver) {
+        return recoverProtectionCancel(active, stageObserver, Set.of("CANCELED", "EXPIRED", "REJECTED"), true);
+    }
+
+    private boolean recoverProtectionCancel(LiveOrderDispatcher.ActiveDispatch active, java.util.function.Consumer<String> stageObserver,
+                                            Set<String> allowedTerminalStatuses, boolean requireUnfilled) {
         if (active == null || active.credentialId() == null || active.symbol() == null || active.dispatchKey() == null || active.clientOrderId() == null) {
             return false;
         }
@@ -652,8 +657,9 @@ public class ProtectionOrderService {
             stage = "VERIFY_AND_PERSIST_TERMINAL";
             stageObserver.accept(stage);
             Long terminalAlgoId = "FINISHED".equalsIgnoreCase(current == null ? null : current.status())
+                && allowedTerminalStatuses.contains("FINISHED")
                 ? persistVerifiedTriggeredProtection(active.credentialId(), local, credential)
-                : persistVerifiedCancelledProtection(active.credentialId(), local, credential, Set.of("CANCELED", "EXPIRED", "REJECTED"), true);
+                : persistVerifiedCancelledProtection(active.credentialId(), local, credential, allowedTerminalStatuses, requireUnfilled);
             if (terminalAlgoId == null) {
                 return false;
             }
@@ -1298,23 +1304,19 @@ public class ProtectionOrderService {
             return mapper.updateById(local) == 1;
         }
         var dispatcher = requireLiveDispatcher();
-        // Never resend a cancel when this precise algo order has an unresolved
-        // dispatch ticket. First query and reconcile the exchange terminal fact.
+        // An unresolved cancel must use the same exact-identity recovery path as
+        // dispatch recovery: if Binance still reports the order as working, retry
+        // the original cancel before deciding whether the dispatch gate can be released.
         String unresolved = dispatcher.activeProtectionTicket(credentialId, local.getSymbol(), local.getClientOrderId(), "PROTECT_CANCEL");
         if (unresolved != null) {
-            try {
-                Long terminalAlgoId = persistVerifiedCancelledProtection(credentialId, local, credential, allowedTerminalStatuses, requireUnfilled);
-                if (terminalAlgoId == null) {
-                    log.warn("未知保护撤单尚无可释放派发票据的精确终态事实: accountId={}, symbol={}, clientAlgoId={}, runMode={}", credentialId, local.getSymbol(),
-                        local.getClientOrderId(), credential.runMode());
-                    return false;
-                }
-                return dispatcher.recoveredFromExchange(credentialId, local.getSymbol(), unresolved, local.getClientOrderId(), terminalAlgoId);
-            } catch (RuntimeException ex) {
-                log.warn("既有保护撤单仍未知，继续保留调度占用: accountId={}, symbol={}, clientAlgoId={}, runMode={}, errorType={}", credentialId, local.getSymbol(),
-                    local.getClientOrderId(), credential.runMode(), ex.getClass().getSimpleName());
+            LiveOrderDispatcher.ActiveDispatch active = dispatcher.activeDispatch(credentialId, local.getSymbol());
+            if (active == null || !unresolved.equals(active.dispatchKey()) || !"PROTECT_CANCEL".equals(active.operationType())
+                || !local.getClientOrderId().equals(active.clientOrderId())) {
+                log.warn("既有保护撤单票据身份与账户交易对活动派发不一致，继续保留调度占用: accountId={}, symbol={}, clientAlgoId={}, runMode={}",
+                    credentialId, local.getSymbol(), local.getClientOrderId(), credential.runMode());
                 return false;
             }
+            return recoverProtectionCancel(active, stage -> { }, allowedTerminalStatuses, requireUnfilled);
         }
         final LiveOrderDispatcher.Ticket ticket;
         try {
