@@ -194,7 +194,8 @@ public class StrategyPositionStateService {
     }
 
     private boolean isClosableFromFlatPositionSnapshot(QuantStrategyPositionState state) {
-        return "OPEN".equals(state.getStatus()) && state.getPendingAction() == null && !Boolean.TRUE.equals(state.getRecoveryRequired())
-            && !Boolean.TRUE.equals(state.getUnsafeRecovery());
+        return "OPEN".equals(state.getStatus()) && state.getPendingAction() == null
+            && state.getPendingClientOrderId() == null && state.getPendingOrderId() == null
+            && state.getPendingOrderTime() == null && state.getPendingIdempotencyKey() == null;
     }
 }
