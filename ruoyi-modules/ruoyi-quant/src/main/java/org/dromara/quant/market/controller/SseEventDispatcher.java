@@ -33,6 +33,7 @@ final class SseEventDispatcher implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean failureNotified = new AtomicBoolean();
     private final AtomicLong nextDelayWarningAt = new AtomicLong();
+    private final AtomicLong nextDispatchDiagnosticAt = new AtomicLong();
     private final AtomicLong coalescedCount = new AtomicLong();
     private Thread worker;
     private int consecutiveReliableWrites;
@@ -176,7 +177,14 @@ final class SseEventDispatcher implements AutoCloseable {
                         pending.eventName(), eventType(pending), queueDelayMillis, reliableSize, latestSize,
                         reliableSize + latestSize, oldestEventAgeMs, coalescedCount.get());
                 }
-                if (!responseReady.awaitReady()) return;
+                long responseReadyStartedAt = System.nanoTime();
+                if (!responseReady.awaitReady()) {
+                    long responseReadyWaitMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - responseReadyStartedAt);
+                    long totalDispatchWaitMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pending.queuedAtNanos());
+                    logDispatchDiagnostic(pending, responseReadyWaitMs, -1L, totalDispatchWaitMs);
+                    return;
+                }
+                long responseReadyWaitMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - responseReadyStartedAt);
                 long sendStartedAt = System.nanoTime();
                 if (pending.comment() != null) {
                     emitter.send(SseEmitter.event().comment(pending.comment()));
@@ -184,12 +192,8 @@ final class SseEventDispatcher implements AutoCloseable {
                     emitter.send(SseEmitter.event().name(pending.eventName()).data(pending.data()));
                 }
                 long sendDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - sendStartedAt);
-                if (sendDurationMs >= 500) {
-                    synchronized (queueLock) {
-                        log.warn("SSE 下游写出耗时偏高 eventName={} eventType={} sendDurationMs={} reliableQueueSize={} latestStateQueueSize={}",
-                            pending.eventName(), eventType(pending), sendDurationMs, reliableQueue.size(), latestStateQueue.size());
-                    }
-                }
+                long totalDispatchWaitMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pending.queuedAtNanos());
+                logDispatchDiagnostic(pending, responseReadyWaitMs, sendDurationMs, totalDispatchWaitMs);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 return;
@@ -198,6 +202,29 @@ final class SseEventDispatcher implements AutoCloseable {
                 return;
             }
         }
+    }
+
+    private void logDispatchDiagnostic(Pending pending, long responseReadyWaitMs, long sendDurationMs, long totalDispatchWaitMs) {
+        if (responseReadyWaitMs < 100 && sendDurationMs < 100 && totalDispatchWaitMs < 1_000) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long nextWarningAt = nextDispatchDiagnosticAt.get();
+        if (now < nextWarningAt || !nextDispatchDiagnosticAt.compareAndSet(nextWarningAt, now + 10_000L)) {
+            return;
+        }
+        int reliableSize;
+        int latestSize;
+        Map<String, Integer> queuedEventTypes = new LinkedHashMap<>();
+        synchronized (queueLock) {
+            reliableSize = reliableQueue.size();
+            latestSize = latestStateQueue.size();
+            reliableQueue.forEach(item -> queuedEventTypes.merge(eventType(item), 1, Integer::sum));
+            latestStateQueue.values().forEach(item -> queuedEventTypes.merge(eventType(item), 1, Integer::sum));
+        }
+        log.warn("SSE 下游发送耗时拆分 eventName={} eventType={} responseReadyWaitMs={} sendDurationMs={} totalDispatchWaitMs={} reliableQueueSize={} latestStateQueueSize={} queuedEventTypes={}",
+            pending.eventName(), eventType(pending), responseReadyWaitMs, sendDurationMs, totalDispatchWaitMs,
+            reliableSize, latestSize, queuedEventTypes);
     }
 
     private long oldestEventAgeMillis() {
