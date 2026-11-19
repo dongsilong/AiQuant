@@ -1715,9 +1715,37 @@ class ProtectionOrderServiceTest {
 
         var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "create-key", local.getClientOrderId());
         assertFalse(result.recovered());
-        assertEquals("TRIGGERED_CHILD_OR_TERMINAL_NOT_CONFIRMED", result.code());
-        assertEquals("VERIFY_TRIGGERED_CHILD_AND_PERSIST_TERMINAL", result.stage());
+        assertEquals("TRIGGERED_CHILD_NOT_CONFIRMED", result.code());
+        assertEquals("VERIFY_TRIGGERED_CHILD", result.stage());
 
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void manualRecheckKeepsDispatchBlockedWhenTriggeredProtectionTerminalCannotBePersisted() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        local.setPositionSide("LONG");
+        local.setPositionCycleKey("cycle-1");
+        local.setStatus("UNKNOWN");
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "create-key", "PROTECT_CREATE",
+            local.getClientOrderId(), "UNKNOWN", 55L);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(mapper.selectList(any())).thenReturn(List.of(local));
+        when(mapper.updateById(any())).thenReturn(1, 0);
+        var algo = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, local.getClientOrderId(), "FINISHED", "SELL", "BOTH",
+            "STOP_MARKET", BigDecimal.ONE, new BigDecimal("99"), Instant.now(), BigDecimal.ONE, true, false, 77L, new BigDecimal("99"));
+        var child = new ExchangeGateway.OrderSnapshot("BTCUSDT", 77L, local.getClientOrderId(), "SELL", "MARKET", "FILLED",
+            BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, Instant.now(), new BigDecimal("99"), "BOTH", true, Instant.now(), false);
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(algo, algo);
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(77L), isNull())).thenReturn(child, child);
+
+        var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "create-key", local.getClientOrderId());
+
+        assertFalse(result.recovered());
+        assertEquals("PROTECTION_TERMINAL_PERSIST_FAILED", result.code());
+        assertEquals("PERSIST_TRIGGERED_TERMINAL", result.stage());
         verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
     }
 
