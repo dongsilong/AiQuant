@@ -51,6 +51,18 @@ class QuantMarketStreamControllerTest {
     }
 
     @Test
+    void closesSubscriptionWhenClientHasAlreadyClosedBeforeRegistration() {
+        var closed = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var subscriptions = new java.util.ArrayList<AutoCloseable>();
+        var released = new java.util.concurrent.atomic.AtomicBoolean();
+
+        ReflectionTestUtils.invokeMethod(controller, "addSubscription", subscriptions, closed, (AutoCloseable) () -> released.set(true));
+
+        assertTrue(released.get());
+        assertTrue(subscriptions.isEmpty());
+    }
+
+    @Test
     void waitsUntilServletAsyncResponseHasStartedBeforeDeliveringEvents() throws Exception {
         var request = new MockHttpServletRequest();
         var gate = new SseResponseReadyGate(request);
