@@ -122,6 +122,7 @@ public class QuantMarketStreamController {
         });
         dispatcher.set(delivery);
         delivery.start();
+        // 避免上游订阅初始化阻塞 Servlet 异步响应启动。
         Thread.ofVirtual().name("quant-market-subscribe").start(() -> {
             try {
                 AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
@@ -182,6 +183,7 @@ public class QuantMarketStreamController {
         });
         dispatcher.set(delivery);
         delivery.start();
+        // 避免批量上游订阅初始化阻塞 Servlet 异步响应启动。
         Thread.ofVirtual().name("quant-market-batch-subscribe").start(() -> {
             for (int index = 0; index < symbols.size() && !closed.get(); index++) {
                 String symbol = symbols.get(index).trim();
