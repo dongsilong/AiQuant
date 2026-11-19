@@ -317,7 +317,8 @@ class ExecutionRecoveryServiceTest {
             return null;
         }).when(recordService).markRecoveryAttempt(record);
         when(recordService.hasVerifiedAbsenceMatured(eq(record), any())).thenReturn(true);
-        when(dispatcher.verifiedNotExecuted(1L, "BTCUSDT", "strategy-open-absence-live", "client-open-absence-live", 3L)).thenReturn(true);
+        when(dispatcher.verifiedNotExecuted(1L, "BTCUSDT", "strategy-open-absence-live", "client-open-absence-live", 3L, any()))
+            .thenAnswer(invocation -> ((java.util.function.BooleanSupplier) invocation.getArgument(5)).getAsBoolean());
         when(recordService.recordVerifiedAbsence(eq(record), anyString(), any())).thenReturn(true);
 
         var service = new ExecutionRecoveryService(records, credentials, gateway, recordService, ledger, new QuantProperties());
@@ -325,7 +326,7 @@ class ExecutionRecoveryServiceTest {
         service.recover();
 
         org.mockito.InOrder order = inOrder(dispatcher, recordService);
-        order.verify(dispatcher).verifiedNotExecuted(1L, "BTCUSDT", "strategy-open-absence-live", "client-open-absence-live", 3L);
+        order.verify(dispatcher).verifiedNotExecuted(1L, "BTCUSDT", "strategy-open-absence-live", "client-open-absence-live", 3L, any());
         order.verify(recordService).recordVerifiedAbsence(eq(record), anyString(), any());
         verify(gateway, never()).placeOrder(any());
     }

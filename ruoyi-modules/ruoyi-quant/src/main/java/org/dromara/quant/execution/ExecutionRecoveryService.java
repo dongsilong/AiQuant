@@ -238,14 +238,20 @@ public class ExecutionRecoveryService {
                         && record.getStrategyId() != null && record.getStrategyInstanceId() != null
                         && record.getExchangeOrderId() == null && record.getClientOrderId() != null) {
                         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-                        if (recordService.hasVerifiedAbsenceMatured(record, now)
-                            && "LIVE".equalsIgnoreCase(credential.getRunMode())
-                            && (liveOrderDispatcher == null || !liveOrderDispatcher.verifiedNotExecuted(
+                        String absenceReason = "交易所精确查询、活动订单及完整历史均确认 OPEN 订单不存在";
+                        boolean finalized;
+                        if (recordService.hasVerifiedAbsenceMatured(record, now) && "LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                            finalized = liveOrderDispatcher != null && liveOrderDispatcher.verifiedNotExecuted(
                                 record.getCredentialId(), record.getSymbol(), record.getIdempotencyKey(),
-                                record.getClientOrderId(), record.getStrategyInstanceId()))) {
-                            throw new IllegalStateException("已核实 OPEN 订单不存在，但 LIVE 派发票据或账户交易对锁无法安全释放");
+                                record.getClientOrderId(), record.getStrategyInstanceId(),
+                                () -> recordService.recordVerifiedAbsence(record, absenceReason, now));
+                            if (!finalized) {
+                                throw new IllegalStateException("已核实 OPEN 订单不存在，但 LIVE 派发票据、账户交易对锁或执行状态无法原子终结");
+                            }
+                        } else {
+                            finalized = recordService.recordVerifiedAbsence(record, absenceReason, now);
                         }
-                        if (recordService.recordVerifiedAbsence(record, "交易所精确查询、活动订单及完整历史均确认 OPEN 订单不存在", now)) {
+                        if (finalized) {
                             log.info("OPEN 执行已通过两次完整交易所核验确认未执行 executionId={} credentialId={} symbol={} clientOrderId={}",
                                 record.getId(), record.getCredentialId(), record.getSymbol(), record.getClientOrderId());
                         }

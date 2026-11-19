@@ -253,9 +253,10 @@ public class LiveOrderDispatcher {
      * 没有对应票据且账户交易对锁也未被该幂等键占用时，视为无需释放；
      * 孤立锁、身份不匹配或其他状态均保持阻断。
      */
-    public boolean verifiedNotExecuted(Long credentialId, String symbol, String key, String clientOrderId, Long instanceId) {
+    public boolean verifiedNotExecuted(Long credentialId, String symbol, String key, String clientOrderId, Long instanceId,
+                                        java.util.function.BooleanSupplier finalizeExecution) {
         if (credentialId == null || symbol == null || symbol.isBlank() || key == null || key.isBlank()
-            || clientOrderId == null || clientOrderId.isBlank() || instanceId == null) {
+            || clientOrderId == null || clientOrderId.isBlank() || instanceId == null || finalizeExecution == null) {
             throw new IllegalArgumentException("Cannot verify a LIVE dispatch ticket without exact strategy identity");
         }
         String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
@@ -265,17 +266,23 @@ public class LiveOrderDispatcher {
                 if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
                     throw new IllegalStateException("已核实 OPEN 未执行，但 LIVE 账户交易对锁未能安全释放");
                 }
-                return true;
+            } else {
+                String ticketStatus = mapper.notExecutedTicketStatus(credentialId, normalizedSymbol, key, clientOrderId, instanceId);
+                if (!"VERIFIED_NOT_EXECUTED".equalsIgnoreCase(ticketStatus)) {
+                    if (ticketStatus != null) {
+                        return false;
+                    }
+                    java.util.Map<String, Object> active = mapper.activeDispatch(credentialId, normalizedSymbol);
+                    if (active != null && key.equals(stringValue(active, "dispatchKey"))) {
+                        return false;
+                    }
+                }
             }
-            String ticketStatus = mapper.notExecutedTicketStatus(credentialId, normalizedSymbol, key, clientOrderId, instanceId);
-            if ("VERIFIED_NOT_EXECUTED".equalsIgnoreCase(ticketStatus)) {
-                return true;
-            }
-            if (ticketStatus != null) {
+            if (!finalizeExecution.getAsBoolean()) {
+                status.setRollbackOnly();
                 return false;
             }
-            java.util.Map<String, Object> active = mapper.activeDispatch(credentialId, normalizedSymbol);
-            return active == null || !key.equals(stringValue(active, "dispatchKey"));
+            return true;
         }));
     }
 
