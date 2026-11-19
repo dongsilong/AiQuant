@@ -1531,7 +1531,10 @@ class ProtectionOrderServiceTest {
         when(gateway.queryProtectionOrder(any(), eq(55L), eq(local.getClientOrderId()), eq("BTCUSDT"), any()))
             .thenReturn(mismatched, mismatched);
 
-        assertFalse(service.recheckProtectionDispatch(1L, "BTCUSDT", "cancel-key", local.getClientOrderId()));
+        var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "cancel-key", local.getClientOrderId());
+        assertFalse(result.recovered());
+        assertEquals("PROTECTION_NOT_CONFIRMED", result.code());
+        assertEquals("VERIFY_PROTECTION_FACTS", result.stage());
 
         verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
     }
