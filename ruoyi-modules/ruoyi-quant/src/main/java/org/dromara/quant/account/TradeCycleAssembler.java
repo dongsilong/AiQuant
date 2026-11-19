@@ -19,6 +19,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Deterministically reconstructs account position lifecycles from ordered exchange fills.
@@ -40,10 +42,12 @@ public final class TradeCycleAssembler {
         List<TradeCycleFillRecord> allocations = new ArrayList<>();
         Map<String, Cycle> explicitCycles = new LinkedHashMap<>();
         int incompleteCount = 0;
-        boolean blocked = false;
+        boolean globallyBlocked = false;
+        Set<String> blockedHedgeFlows = new HashSet<>();
 
         for (TradeCycleSourceFill fill : fills) {
-            if (blocked) {
+            String hedgeFlow = hedgeFlowKey(fill);
+            if (globallyBlocked || (hedgeFlow != null && blockedHedgeFlows.contains(hedgeFlow))) {
                 continue;
             }
             try {
@@ -59,16 +63,22 @@ public final class TradeCycleAssembler {
                 }
             } catch (IllegalStateException conflict) {
                 incompleteCount = 1;
+                String reason = safeReason(conflict.getMessage());
+                if (hedgeFlow == null) {
+                    globallyBlocked = true;
+                } else {
+                    blockedHedgeFlows.add(hedgeFlow);
+                }
                 for (Cycle cycle : cycles) {
-                    if (cycle.remainingQuantity.signum() > 0) {
+                    if (cycle.remainingQuantity.signum() > 0
+                        && (hedgeFlow == null || hedgeFlow.equals(cycle.oneWay ? null : "HEDGE:" + cycle.positionSide))) {
                         cycle.reconciliationStatus = "RECONCILE_REQUIRED";
-                        cycle.reconciliationReason = safeReason(conflict.getMessage());
+                        cycle.reconciliationReason = reason;
                     }
                 }
-                Cycle issue = Cycle.issue(fill, safeReason(conflict.getMessage()));
+                Cycle issue = Cycle.issue(fill, reason);
                 cycles.add(issue);
                 allocations.add(issue.allocation(fill, 0, "UNKNOWN", fill.getQuantity(), null, null));
-                blocked = true;
             }
         }
 
