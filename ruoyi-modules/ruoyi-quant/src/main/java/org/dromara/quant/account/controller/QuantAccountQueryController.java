@@ -86,11 +86,11 @@ public class QuantAccountQueryController {
         long startedAt = System.nanoTime();
         long credentialStartedAt = startedAt;
         try {
-            QuantCredential credential = credential(credentialId);
+            ExchangeGateway.Credential credential = credential(credentialId);
             long credentialElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - credentialStartedAt);
             long exchangeStartedAt = System.nanoTime();
             try {
-                return R.ok(gateway.queryAccount(executionCredential(credential)));
+                return R.ok(gateway.queryAccount(credential));
             } finally {
                 long totalElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
                 long exchangeElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - exchangeStartedAt);
@@ -161,7 +161,7 @@ public class QuantAccountQueryController {
             long credentialElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - credentialStartedAt);
             long exchangeStartedAt = System.nanoTime();
             try {
-                return ResponseEntity.ok(R.ok(gateway.queryPositions(executionCredential(credential), symbol)));
+                return ResponseEntity.ok(R.ok(gateway.queryPositions(credential, symbol)));
             } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
                 long retryAfterMillis = deferred.retryAfterMillis();
                 ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE);
