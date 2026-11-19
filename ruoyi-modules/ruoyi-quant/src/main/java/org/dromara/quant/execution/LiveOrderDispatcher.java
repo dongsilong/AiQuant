@@ -249,6 +249,37 @@ public class LiveOrderDispatcher {
     }
 
     /**
+     * 仅在两次完整交易所核验均确认 OPEN 不存在后，终结对应 LIVE 票据。
+     * 没有对应票据且账户交易对锁也未被该幂等键占用时，视为无需释放；
+     * 孤立锁、身份不匹配或其他状态均保持阻断。
+     */
+    public boolean verifiedNotExecuted(Long credentialId, String symbol, String key, String clientOrderId, Long instanceId) {
+        if (credentialId == null || symbol == null || symbol.isBlank() || key == null || key.isBlank()
+            || clientOrderId == null || clientOrderId.isBlank() || instanceId == null) {
+            throw new IllegalArgumentException("Cannot verify a LIVE dispatch ticket without exact strategy identity");
+        }
+        String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            int updated = mapper.markNotExecuted(credentialId, normalizedSymbol, key, clientOrderId, instanceId);
+            if (updated == 1) {
+                if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                    throw new IllegalStateException("已核实 OPEN 未执行，但 LIVE 账户交易对锁未能安全释放");
+                }
+                return true;
+            }
+            String ticketStatus = mapper.notExecutedTicketStatus(credentialId, normalizedSymbol, key, clientOrderId, instanceId);
+            if ("VERIFIED_NOT_EXECUTED".equalsIgnoreCase(ticketStatus)) {
+                return true;
+            }
+            if (ticketStatus != null) {
+                return false;
+            }
+            java.util.Map<String, Object> active = mapper.activeDispatch(credentialId, normalizedSymbol);
+            return active == null || !key.equals(stringValue(active, "dispatchKey"));
+        }));
+    }
+
+    /**
      * Called ONLY after querying the exact Binance order and durably reconciling
      * the local order ledger. Legacy (pre-migration) orders have no ticket.
      * Never release on an absent/ambiguous exchange response.

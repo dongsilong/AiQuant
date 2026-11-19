@@ -94,7 +94,7 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
   AND strategy_instance_id=#{instanceId}
   AND operation_type='OPEN' AND exchange_order_id IS NULL
-  AND dispatch_status='UNKNOWN'
+  AND dispatch_status IN ('UNKNOWN','DISPATCHING')
   AND EXISTS (SELECT 1 FROM quant_live_dispatch_guard g
     WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
       AND g.active_dispatch_key=#{key})]]></update>
@@ -170,6 +170,11 @@ ORDER BY g.updated_at ASC
 LIMIT 100]]></select>
     <select id="ticketStatus" resultType="java.lang.String" timeout="3"><![CDATA[SELECT dispatch_status FROM quant_order_dispatch_ticket
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}]]></select>
+    <select id="notExecutedTicketStatus" resultType="java.lang.String" timeout="3"><![CDATA[SELECT dispatch_status FROM quant_order_dispatch_ticket
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND strategy_instance_id=#{instanceId} AND operation_type='OPEN'
+LIMIT 1]]></select>
     <select id="unresolvedDispatches" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credential_id, g.symbol AS symbol,
        g.active_dispatch_key AS dispatch_key, g.updated_at AS blocked_at,
        t.operation_type AS operation_type, t.client_order_id AS client_order_id,

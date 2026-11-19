@@ -16,6 +16,8 @@ import java.time.ZoneOffset;
 @RequiredArgsConstructor
 @Service
 public class ExecutionRecordService {
+    private static final String VERIFIED_ABSENCE_PREFIX = "VERIFIED_ABSENCE_PENDING:";
+
     /**
      * 当前领域 Mapper。
      */
@@ -73,15 +75,53 @@ public class ExecutionRecordService {
     }
 
     /**
-     * 记录一次执行恢复尝试。
+     * 记录一次执行恢复尝试。重试计数不修改 updatedAt，后者用于记录首次完整未执行核验时间。
      */
     public void markRecoveryAttempt(QuantExecutionRecord entity) {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         if (mapper.recordRecoveryAttempt(entity.getId(), now) == 1) {
             entity.setRecoveryAttempts((entity.getRecoveryAttempts() == null ? 0 : entity.getRecoveryAttempts()) + 1);
             entity.setLastRecoveryAt(now);
+        }
+    }
+
+    public boolean hasVerifiedAbsencePending(QuantExecutionRecord entity) {
+        return entity.getErrorMessage() != null && entity.getErrorMessage().startsWith(VERIFIED_ABSENCE_PREFIX);
+    }
+
+    public boolean hasVerifiedAbsenceMatured(QuantExecutionRecord entity, LocalDateTime now) {
+        return hasVerifiedAbsencePending(entity) && entity.getUpdatedAt() != null
+            && !entity.getUpdatedAt().isAfter(now.minusMinutes(1));
+    }
+
+    /**
+     * OPEN 必须经过两次相隔至少一分钟的完整交易所核验，才允许 UNKNOWN 转为 FAILED。
+     */
+    public boolean recordVerifiedAbsence(QuantExecutionRecord entity, String message, LocalDateTime now) {
+        String reason = message == null ? "交易所完整核验确认 OPEN 订单不存在" : message;
+        if (hasVerifiedAbsenceMatured(entity, now)) {
+            if (mapper.markNotExecutedAfterVerifiedAbsence(entity.getId(), entity.getCredentialId(), entity.getSymbol(),
+                entity.getIdempotencyKey(), entity.getClientOrderId(), reason, now) == 1) {
+                entity.setExecutionStatus("FAILED");
+                entity.setErrorMessage(reason);
+                entity.setUpdatedAt(now);
+                return true;
+            }
+            QuantExecutionRecord latest = mapper.selectById(entity.getId());
+            if (latest != null) {
+                entity.setExecutionStatus(latest.getExecutionStatus());
+                entity.setErrorMessage(latest.getErrorMessage());
+                entity.setUpdatedAt(latest.getUpdatedAt());
+                return "FAILED".equalsIgnoreCase(latest.getExecutionStatus());
+            }
+            return false;
+        }
+        if (mapper.recordVerifiedAbsence(entity.getId(), entity.getCredentialId(), entity.getSymbol(),
+            entity.getIdempotencyKey(), entity.getClientOrderId(), VERIFIED_ABSENCE_PREFIX + reason, now) == 1) {
+            entity.setErrorMessage(VERIFIED_ABSENCE_PREFIX + reason);
             entity.setUpdatedAt(now);
         }
+        return false;
     }
 
     /**

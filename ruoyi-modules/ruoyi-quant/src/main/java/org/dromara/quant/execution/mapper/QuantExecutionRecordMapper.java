@@ -22,6 +22,11 @@ public interface QuantExecutionRecordMapper extends BaseMapperPlus<QuantExecutio
 
     int markRecoveredAfterFact(@Param("id") Long id, @Param("orderId") Long orderId, @Param("exchangeStatus") String exchangeStatus, @Param("now") LocalDateTime now);
 
+    int recordVerifiedAbsence(@Param("id") Long id, @Param("credentialId") Long credentialId,
+                              @Param("symbol") String symbol, @Param("key") String key,
+                              @Param("clientOrderId") String clientOrderId,
+                              @Param("message") String message, @Param("now") LocalDateTime now);
+
     int markNotExecutedAfterVerifiedAbsence(@Param("id") Long id, @Param("credentialId") Long credentialId,
                                             @Param("symbol") String symbol, @Param("key") String key,
                                             @Param("clientOrderId") String clientOrderId,
