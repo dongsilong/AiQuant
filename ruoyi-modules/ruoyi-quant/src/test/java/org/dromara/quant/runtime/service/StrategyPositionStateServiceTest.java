@@ -45,8 +45,9 @@ class StrategyPositionStateServiceTest {
         var cleanOpen = state("OPEN", null, false, false);
         var opening = state("OPEN_PENDING", "OPEN", false, false);
         var recovery = state("OPEN", null, true, false);
+        var unsafeRecovery = state("OPEN", null, false, true);
         var cleanup = state("PROTECTION_CLEANUP", null, false, false);
-        when(mapper.selectList(any())).thenReturn(List.of(cleanOpen, opening, recovery, cleanup));
+        when(mapper.selectList(any())).thenReturn(List.of(cleanOpen, opening, recovery, unsafeRecovery, cleanup));
         when(mapper.updateById(any(QuantStrategyPositionState.class))).thenReturn(1);
 
         service.markClosedByPositionId(7L);
@@ -61,9 +62,14 @@ class StrategyPositionStateServiceTest {
         assertEquals(BigDecimal.ZERO, recovery.getPositionQty());
         assertEquals(true, recovery.getRecoveryRequired(), "closing stale quantity must not clear unresolved recovery");
         assertEquals(true, recovery.getUnsafeRecovery(), "closing stale quantity must not release the entry gate");
+        assertEquals("CLOSED", unsafeRecovery.getStatus(), "unsafe recovery must not leave stale quantity in OPEN status");
+        assertEquals(BigDecimal.ZERO, unsafeRecovery.getPositionQty());
+        assertEquals(true, unsafeRecovery.getRecoveryRequired());
+        assertEquals(true, unsafeRecovery.getUnsafeRecovery());
         assertEquals("PROTECTION_CLEANUP", cleanup.getStatus());
         verify(mapper, times(1)).updateById(cleanOpen);
         verify(mapper, times(1)).updateById(recovery);
+        verify(mapper, times(1)).updateById(unsafeRecovery);
     }
 
     private QuantStrategyPositionState state(String status, String pendingAction, boolean recoveryRequired, boolean unsafeRecovery) {
