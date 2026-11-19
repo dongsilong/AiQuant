@@ -164,7 +164,6 @@ public class QuantAccountStreamController {
             } catch (RuntimeException ex) {
                 log.warn("账户 SSE 初始委托快照失败 credentialId={} error={}", credential.getId(), ex.getMessage());
             }
-            payload.put("accountSnapshotSkipped", true);
             payload.put("positionsSnapshotSkipped", true);
             payload.put("accountSnapshotAvailable", false);
             payload.put("positionsSnapshotAvailable", false);
