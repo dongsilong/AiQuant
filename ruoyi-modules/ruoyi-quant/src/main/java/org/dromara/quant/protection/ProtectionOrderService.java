@@ -481,8 +481,8 @@ public class ProtectionOrderService {
                     "交易所保护单身份或当前状态未能确认，派发阻断保持不变。");
                 case "RETRY_EXCHANGE_CANCEL" -> new ManualDispatchRecheckResult(false, "EXCHANGE_CANCEL_NOT_CONFIRMED", stage,
                     "原保护单仍活动，重试撤单未获得可确认结果，派发阻断保持不变。");
-                case "VERIFY_AND_PERSIST_TERMINAL" -> new ManualDispatchRecheckResult(false, "PROTECTION_TERMINAL_NOT_PERSISTED", stage,
-                    "交易所保护单终态或本地终态写入未满足恢复要求，派发阻断保持不变。");
+                case "VERIFY_AND_PERSIST_TERMINAL" -> new ManualDispatchRecheckResult(false, "PROTECTION_TERMINAL_NOT_CONFIRMED", stage,
+                    "交易所保护单终态事实或本地终态持久化未满足恢复要求，派发阻断保持不变。");
                 case "RELEASE_DISPATCH_GATE" -> new ManualDispatchRecheckResult(false, "DISPATCH_GATE_RELEASE_FAILED", stage,
                     "保护单终态已核验，但派发门禁未能解除，派发阻断保持不变。");
                 default -> new ManualDispatchRecheckResult(false, "PROTECTION_NOT_CONFIRMED", "VERIFY_PROTECTION_FACTS",
