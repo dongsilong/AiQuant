@@ -14,6 +14,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TradeCycleMapperSqlContractTest {
 
     @Test
+    void projectionDetectsFilledOrdersWhoseExecutedQuantityHasNoMatchingFillRows() throws IOException {
+        String mapperXml;
+        try (InputStream input = getClass().getResourceAsStream("/mapper/quant/TradeCycleMapper.xml")) {
+            if (input == null) {
+                throw new IllegalStateException("TradeCycleMapper.xml is not on the test classpath");
+            }
+            mapperXml = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        int selectStart = mapperXml.indexOf("<select id=\"countOrdersWithMissingFills\"");
+        int selectEnd = mapperXml.indexOf("</select>", selectStart);
+        assertTrue(selectStart >= 0 && selectEnd > selectStart, "missing-fill order query must exist");
+        String sql = mapperXml.substring(selectStart, selectEnd);
+
+        assertTrue(sql.contains("FROM quant_order o"));
+        assertTrue(sql.contains("LEFT JOIN quant_trade t"));
+        assertTrue(sql.contains("SUM(t.quantity)"));
+        assertTrue(sql.contains("o.executed_quantity"));
+        assertTrue(sql.contains("COALESCE"));
+        assertTrue(sql.contains("o.credential_id=#{credentialId}"));
+        assertTrue(sql.contains("o.symbol=#{symbol}"));
+        assertTrue(sql.contains("o.executed_quantity>0"));
+    }
+
+    @Test
     void closeAccountBalancesUseOnlySnapshotForFinalCloseOrder() throws IOException {
         String mapperXml;
         try (InputStream input = getClass().getResourceAsStream("/mapper/quant/TradeCycleMapper.xml")) {
