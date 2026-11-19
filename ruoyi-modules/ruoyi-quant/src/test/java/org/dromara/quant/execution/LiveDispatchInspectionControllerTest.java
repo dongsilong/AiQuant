@@ -46,22 +46,25 @@ class LiveDispatchInspectionControllerTest {
         assertEquals(SystemConstants.SUPER_ADMIN_ROLE_KEY, recheck.getAnnotation(SaCheckRole.class).value()[0]);
         assertEquals(BusinessType.UPDATE, recheck.getAnnotation(Log.class).businessType());
 
-        when(protectionOrders.recheckProtectionDispatch(1L, "BTCUSDT", "key-1", "client-1")).thenReturn(true);
+        when(protectionOrders.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "key-1", "client-1"))
+            .thenReturn(new ProtectionOrderService.ManualDispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE", "交易所事实核验完成，派发阻断已解除。"));
         var response = controller.recheck(new LiveDispatchInspectionController.RecheckRequest("1", "BTCUSDT", "key-1", "client-1"));
         var success = response.getClass().getMethod("getData").invoke(response);
         assertEquals(Boolean.TRUE, success.getClass().getMethod("recovered").invoke(success));
         assertEquals("RECOVERED", success.getClass().getMethod("code").invoke(success));
         assertEquals("RELEASE_DISPATCH_GATE", success.getClass().getMethod("stage").invoke(success));
-        verify(protectionOrders).recheckProtectionDispatch(1L, "BTCUSDT", "key-1", "client-1");
+        verify(protectionOrders).recheckProtectionDispatchDetailed(1L, "BTCUSDT", "key-1", "client-1");
 
-        when(protectionOrders.recheckProtectionDispatch(1L, "BTCUSDT", "key-2", "client-2")).thenReturn(false);
+        when(protectionOrders.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "key-2", "client-2"))
+            .thenReturn(new ProtectionOrderService.ManualDispatchRecheckResult(false, "TICKET_IDENTITY_MISMATCH", "VERIFY_TICKET_IDENTITY",
+                "当前活动派发票据不存在或票据身份已变化，请刷新待核查列表；调度阻断状态未被本次操作修改。"));
         var notConfirmedResponse = controller.recheck(new LiveDispatchInspectionController.RecheckRequest("1", "BTCUSDT", "key-2", "client-2"));
         var notConfirmed = notConfirmedResponse.getClass().getMethod("getData").invoke(notConfirmedResponse);
         assertEquals(Boolean.FALSE, notConfirmed.getClass().getMethod("recovered").invoke(notConfirmed));
-        assertEquals("RECHECK_NOT_CONFIRMED", notConfirmed.getClass().getMethod("code").invoke(notConfirmed));
-        assertEquals("VERIFY_EXCHANGE_FACTS", notConfirmed.getClass().getMethod("stage").invoke(notConfirmed));
+        assertEquals("TICKET_IDENTITY_MISMATCH", notConfirmed.getClass().getMethod("code").invoke(notConfirmed));
+        assertEquals("VERIFY_TICKET_IDENTITY", notConfirmed.getClass().getMethod("stage").invoke(notConfirmed));
 
-        when(protectionOrders.recheckProtectionDispatch(1L, "BTCUSDT", "key-3", "client-3"))
+        when(protectionOrders.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "key-3", "client-3"))
             .thenThrow(new IllegalStateException("Binance REST 当前处于限流状态，派发阻断保持不变。"));
         var blockedResponse = controller.recheck(new LiveDispatchInspectionController.RecheckRequest("1", "BTCUSDT", "key-3", "client-3"));
         var blocked = blockedResponse.getClass().getMethod("getData").invoke(blockedResponse);
