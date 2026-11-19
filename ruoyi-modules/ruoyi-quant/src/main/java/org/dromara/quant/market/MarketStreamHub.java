@@ -377,7 +377,7 @@ public class MarketStreamHub {
                 }
                 do {
                     Instant from = cursor;
-                    List<ExchangeGateway.Kline> history = recoveryRead(attempt, "KLINE", () -> from == null ? history(null, 200) : history(from, 1000));
+                    List<ExchangeGateway.Kline> history = recoveryRead(attempt, "KLINE", () -> from == null ? history(null, 8) : history(from, 1000));
                     if (history == null || history.isEmpty()) {
                         throw new IllegalStateException("K线历史为空，不能确认行情已就绪");
                     }
