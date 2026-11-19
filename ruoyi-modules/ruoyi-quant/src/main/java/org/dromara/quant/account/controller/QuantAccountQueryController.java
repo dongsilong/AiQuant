@@ -157,7 +157,7 @@ public class QuantAccountQueryController {
         long startedAt = System.nanoTime();
         long credentialStartedAt = startedAt;
         try {
-            QuantCredential credential = credential(credentialId);
+            ExchangeGateway.Credential credential = credential(credentialId);
             long credentialElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - credentialStartedAt);
             long exchangeStartedAt = System.nanoTime();
             try {
