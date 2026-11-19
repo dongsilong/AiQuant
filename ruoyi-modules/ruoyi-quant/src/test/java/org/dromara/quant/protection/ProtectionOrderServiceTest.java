@@ -1713,8 +1713,27 @@ class ProtectionOrderServiceTest {
         when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(algo, algo);
         when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(77L), isNull())).thenReturn(child, child);
 
-        assertFalse(service.recheckProtectionDispatch(1L, "BTCUSDT", "create-key", local.getClientOrderId()));
+        var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "create-key", local.getClientOrderId());
+        assertFalse(result.recovered());
+        assertEquals("TRIGGERED_CHILD_OR_TERMINAL_NOT_CONFIRMED", result.code());
+        assertEquals("VERIFY_TRIGGERED_CHILD_AND_PERSIST_TERMINAL", result.stage());
 
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void manualRecheckReportsMissingLocalProtectionIntent() {
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "create-key", "PROTECT_CREATE",
+            "QFTP_missing", "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(null);
+
+        var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "create-key", "QFTP_missing");
+
+        assertFalse(result.recovered());
+        assertEquals("LOCAL_PROTECTION_INTENT_MISSING", result.code());
+        assertEquals("LOAD_LOCAL_INTENT", result.stage());
+        verify(gateway, never()).queryProtectionOrder(any(), any(), any(), any(), any());
         verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
     }
 
