@@ -134,7 +134,9 @@ public class ExecutionRecoveryService {
                     if (historyTo.isAfter(exchangeNow)) {
                         historyTo = exchangeNow;
                     }
-                    Instant historyRetentionStart = ExchangeHistoryCollector.recent90DaysStart(exchangeNow);
+                    // Binance may remove canceled/expired orders without fills after 3 days;
+                    // older absence cannot be proven from allOrders and must remain UNKNOWN.
+                    Instant historyRetentionStart = exchangeNow.minus(Duration.ofDays(3)).plus(Duration.ofMinutes(1));
                     if (!historyFrom.isAfter(historyTo) && (!verifyOpenAbsence || !historyFrom.isBefore(historyRetentionStart))) {
                         try {
                             List<ExchangeGateway.OrderSnapshot> history;

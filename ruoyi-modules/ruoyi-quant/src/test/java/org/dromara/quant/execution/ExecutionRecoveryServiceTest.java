@@ -371,6 +371,46 @@ class ExecutionRecoveryServiceTest {
         verify(recordService).markUnknown(eq(record), contains("90 秒"));
     }
 
+
+    @Test
+    void doesNotInferOpenAbsenceAfterExchangeOrderHistoryRetentionExpires() {
+        var records = mock(QuantExecutionRecordMapper.class);
+        var credentials = mock(QuantCredentialMapper.class);
+        var gateway = mock(ExchangeGateway.class);
+        var recordService = mock(ExecutionRecordService.class);
+        var ledger = mock(OrderLedgerService.class);
+        var record = new QuantExecutionRecord();
+        record.setId(14L);
+        record.setCredentialId(1L);
+        record.setStrategyId(2L);
+        record.setStrategyInstanceId(3L);
+        record.setSymbol("BTCUSDT");
+        record.setIdempotencyKey("strategy-open-expired-history");
+        record.setClientOrderId("client-open-expired-history");
+        record.setOperationType("OPEN");
+        record.setExecutionStatus("UNKNOWN");
+        record.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC).minusDays(4));
+        record.setRecoveryAttempts(4);
+        when(records.selectList(any())).thenReturn(List.of(record));
+        var credential = new QuantCredential();
+        credential.setApiKey("test");
+        credential.setSecretKey("test");
+        credential.setRunMode("TESTNET");
+        when(credentials.selectById(1L)).thenReturn(credential);
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), isNull(), eq("client-open-expired-history"))).thenReturn(null);
+        when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        doAnswer(invocation -> {
+            record.setRecoveryAttempts(5);
+            return null;
+        }).when(recordService).markRecoveryAttempt(record);
+
+        var service = new ExecutionRecoveryService(records, credentials, gateway, recordService, ledger, new QuantProperties());
+        service.recover();
+
+        verify(gateway, never()).queryOrderHistoryComplete(any(), any(), any(), any());
+        verify(recordService, never()).recordVerifiedAbsence(any(), anyString(), any());
+    }
+
     @Test
     void nullUnresolvedScanDoesNotAttemptToReleaseStrandedDispatches() {
         var records = mock(QuantExecutionRecordMapper.class);
