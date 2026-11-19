@@ -363,6 +363,21 @@ public final class TradeCycleAssembler {
         return "LONG".equals(normalized) || "SHORT".equals(normalized) ? normalized : null;
     }
 
+    private static String hedgeFlowKey(TradeCycleSourceFill fill) {
+        if (fill == null || Boolean.TRUE.equals(fill.getSourceConflict())
+            || fill.getCredentialId() == null || fill.getExchangeTradeId() == null
+            || fill.getSymbol() == null || fill.getSymbol().isBlank()) {
+            return null;
+        }
+        String exchangePositionSide = upper(fill.getExchangePositionSide());
+        String positionSide = logicalSide(fill.getPositionSide());
+        if (!("LONG".equals(exchangePositionSide) || "SHORT".equals(exchangePositionSide))
+            || (positionSide != null && !positionSide.equals(exchangePositionSide))) {
+            return null;
+        }
+        return "HEDGE:" + exchangePositionSide;
+    }
+
     private static String upper(String value) {
         return value == null ? null : value.trim().toUpperCase(Locale.ROOT);
     }
