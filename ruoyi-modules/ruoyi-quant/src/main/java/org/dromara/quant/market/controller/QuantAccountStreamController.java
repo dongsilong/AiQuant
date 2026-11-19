@@ -154,20 +154,12 @@ public class QuantAccountStreamController {
         payload.put("credentialId", credential.getId().toString());
         payload.put("eventTime", BeijingTime.format(event.eventTime() == null ? Instant.now() : event.eventTime()));
         if ("SNAPSHOT".equals(event.eventType())) {
-            // 账户资金和当前持仓由终端初始化 REST 请求负责，避免与 SSE 快照重复查询交易所。
-            // SSE 仍负责恢复委托；断线重连时前端会重新读取账户和持仓。
-            ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
-            boolean ordersAvailable = false;
-            try {
-                payload.put("orders", gateway.queryOrders(exchangeCredential, null));
-                ordersAvailable = true;
-            } catch (RuntimeException ex) {
-                log.warn("账户 SSE 初始委托快照失败 credentialId={} error={}", credential.getId(), ex.getMessage());
-            }
+            // 账户资金、当前持仓和委托均由终端按需通过 REST 加载，避免 SSE 初始快照重复消耗交易所请求权重。
             payload.put("positionsSnapshotSkipped", true);
             payload.put("accountSnapshotAvailable", false);
             payload.put("positionsSnapshotAvailable", false);
-            payload.put("ordersSnapshotAvailable", ordersAvailable);
+            payload.put("ordersSnapshotSkipped", true);
+            payload.put("ordersSnapshotAvailable", false);
             payload.put("snapshotAvailable", false);
         } else if ("ACCOUNT_UPDATE".equals(event.eventType()) || "ORDER_TRADE_UPDATE".equals(event.eventType()) || "ALGO_UPDATE".equals(event.eventType())) {
             // 实时事件直接转发原始用户数据，不再为每条事件查询三次 REST。
