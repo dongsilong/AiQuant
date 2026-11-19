@@ -71,6 +71,9 @@ public class ExecutionRecordService {
         entity.setExchangeOrderId(exchangeOrderId);
         entity.setExecutionStatus("CONFIRMED");
         entity.setExchangeOrderStatus(status);
+        if (hasVerifiedAbsencePending(entity)) {
+            entity.setErrorMessage(null);
+        }
         entity.setUpdatedAt(now);
     }
 
@@ -165,6 +168,9 @@ public class ExecutionRecordService {
         entity.setExecutionStatus("RECOVERED");
         if (exchangeStatus != null) {
             entity.setExchangeOrderStatus(exchangeStatus);
+        }
+        if (hasVerifiedAbsencePending(entity)) {
+            entity.setErrorMessage(null);
         }
         entity.setUpdatedAt(now);
     }

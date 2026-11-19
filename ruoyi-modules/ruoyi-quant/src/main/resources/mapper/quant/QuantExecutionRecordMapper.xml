@@ -3,7 +3,9 @@
 <mapper namespace="org.dromara.quant.execution.mapper.QuantExecutionRecordMapper">
     <update id="markAccepted" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET execution_status='CONFIRMED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
-    exchange_order_status=#{exchangeStatus}, updated_at=#{now}
+    exchange_order_status=#{exchangeStatus},
+    error_message=CASE WHEN error_message LIKE 'VERIFIED_ABSENCE_PENDING:%' THEN NULL ELSE error_message END,
+    updated_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN')
   AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
   AND #{orderId} IS NOT NULL AND #{orderId}>0]]></update>
@@ -29,7 +31,9 @@ WHERE id=#{id} AND credential_id=#{credentialId} AND symbol=#{symbol}
   AND updated_at <= DATE_SUB(#{now}, INTERVAL 1 MINUTE)]]></update>
     <update id="markRecoveredAfterFact" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET execution_status='RECOVERED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
-    exchange_order_status=COALESCE(#{exchangeStatus},exchange_order_status), updated_at=#{now}
+    exchange_order_status=COALESCE(#{exchangeStatus},exchange_order_status),
+    error_message=CASE WHEN error_message LIKE 'VERIFIED_ABSENCE_PENDING:%' THEN NULL ELSE error_message END,
+    updated_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN','CONFIRMED','RECOVERED')
   AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
   AND (
