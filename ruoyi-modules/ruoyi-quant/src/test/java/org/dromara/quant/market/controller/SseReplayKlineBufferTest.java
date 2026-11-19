@@ -17,11 +17,11 @@ class SseReplayKlineBufferTest {
         SseReplayKlineBuffer buffer = new SseReplayKlineBuffer();
         List<Object> delivered = new ArrayList<>();
         for (int index = 0; index < 200; index++) {
-            buffer.publish(kline(index), delivered::add);
+            buffer.publish(kline(index), delivered::add, true);
         }
         assertEquals(0, delivered.size());
 
-        buffer.publish(status("KLINE_READY"), delivered::add);
+        buffer.publish(status("KLINE_READY"), delivered::add, true);
 
         @SuppressWarnings("unchecked")
         java.util.Map<String, Object> snapshot = assertInstanceOf(java.util.Map.class, delivered.get(0));
@@ -40,10 +40,10 @@ class SseReplayKlineBufferTest {
         SseReplayKlineBuffer buffer = new SseReplayKlineBuffer();
         List<Object> delivered = new ArrayList<>();
         for (int index = 0; index < 20; index++) {
-            buffer.publish(kline(index, "15m"), delivered::add);
+            buffer.publish(kline(index, "15m"), delivered::add, true);
         }
 
-        buffer.publish(status("CONNECTED"), delivered::add);
+        buffer.publish(status("CONNECTED"), delivered::add, true);
 
         @SuppressWarnings("unchecked")
         java.util.Map<String, Object> snapshot = assertInstanceOf(java.util.Map.class, delivered.get(0));
