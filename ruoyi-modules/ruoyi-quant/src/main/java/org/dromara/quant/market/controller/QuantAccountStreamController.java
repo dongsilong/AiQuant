@@ -99,8 +99,6 @@ public class QuantAccountStreamController {
             heartbeat.set(heartbeatScheduler.scheduleAtFixedRate(() -> {
                 if (!closed.get()) writer.offerComment("heartbeat", "keepalive");
             }, 15, 15, TimeUnit.SECONDS));
-            accountSubscription.set(userDataStreamHub.subscribe(credential,
-                event -> send(payload -> writer.offer("quant.account", payload), credential, event)));
             performanceSubscription.set(performanceHub.subscribe(credentialId, event -> {
                 if (!closed.get()) {
                     String key = "position-performance:" + event.instanceId() + ":" + event.positionCycleKey();
@@ -108,7 +106,26 @@ public class QuantAccountStreamController {
                         "type", "POSITION_MAX_RETURN", "credentialId", credentialId.toString(), "performance", event));
                 }
             }));
-            send(payload -> writer.offer("quant.account", payload), credential, new ExchangeGateway.UserDataEvent("SNAPSHOT", Instant.now(), null));
+            // 建立交易所私有流和初始账户快照可能触发阻塞式网络请求，不能占用
+            // Servlet 请求线程，否则异步响应尚未启动，SSE writer 会一直等待 responseReady。
+            Thread.ofVirtual().name("quant-account-stream-init").start(() -> {
+                try {
+                    if (closed.get()) return;
+                    AutoCloseable subscription = userDataStreamHub.subscribe(credential,
+                        event -> send(payload -> writer.offer("quant.account", payload), credential, event));
+                    accountSubscription.set(subscription);
+                    if (closed.get()) {
+                        closeSubscription(accountSubscription.getAndSet(null));
+                        return;
+                    }
+                    send(payload -> writer.offer("quant.account", payload), credential,
+                        new ExchangeGateway.UserDataEvent("SNAPSHOT", Instant.now(), null));
+                } catch (RuntimeException ex) {
+                    log.warn("账户 SSE 初始化失败 credentialId={}", credentialId, ex);
+                    cleanup.run();
+                    emitter.complete();
+                }
+            });
             if (closed.get()) {
                 closeSubscription(accountSubscription.getAndSet(null));
                 closeSubscription(performanceSubscription.getAndSet(null));
