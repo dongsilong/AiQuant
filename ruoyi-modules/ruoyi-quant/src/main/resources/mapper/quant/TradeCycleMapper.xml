@@ -47,7 +47,6 @@ LEFT JOIN (
     AND t.exchange_order_id=o.exchange_order_id
 WHERE o.credential_id=#{credentialId}
   AND o.symbol=#{symbol}
-  AND o.exchange_order_id IS NOT NULL
   AND (o.executed_quantity>0 OR UPPER(o.status)='FILLED')
   AND (o.executed_quantity IS NULL OR o.executed_quantity<>COALESCE(t.fill_quantity,0))
 ]]></select>
