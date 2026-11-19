@@ -1050,7 +1050,10 @@ class ProtectionOrderServiceTest {
         local.setPositionSide("LONG");
         local.setStatus("MISSING");
         when(mapper.selectList(any())).thenReturn(List.of(local));
+        when(mapper.selectOne(any())).thenReturn(local);
         when(dispatcher.activeProtectionTicket(1L, "BTCUSDT", local.getClientOrderId(), "PROTECT_CANCEL")).thenReturn("pending-protection-cancel");
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(
+            new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "pending-protection-cancel", "PROTECT_CANCEL", local.getClientOrderId(), "UNKNOWN", 55L));
         when(gateway.queryProtectionOrder(any(), eq(55L), eq(local.getClientOrderId()), eq("BTCUSDT"), any()))
             .thenReturn(snapshot(55L, local.getClientOrderId(), BigDecimal.ONE, "CANCELED", BigDecimal.ZERO));
         when(dispatcher.recoveredFromExchange(1L, "BTCUSDT", "pending-protection-cancel", local.getClientOrderId(), 55L)).thenReturn(true);
