@@ -86,6 +86,8 @@ public class TradeCycleProjectionService {
             }
             List<TradeCycleSourceFill> sourceFills = mapper.selectSourceFills(credentialId, symbol);
             TradeCycleAssembler.Result result = TradeCycleAssembler.assemble(sourceFills);
+            long missingOrderFillCount = mapper.countOrdersWithMissingFills(credentialId, symbol);
+            int incompleteCount = Math.addExact(result.incompleteCount(), Math.toIntExact(missingOrderFillCount));
 
             mapper.deleteCycleFills(credentialId, symbol);
             mapper.deleteCycles(credentialId, symbol);
@@ -100,7 +102,7 @@ public class TradeCycleProjectionService {
                 }
             }
             if (mapper.completeProjection(credentialId, symbol, dirtyVersion,
-                result.incompleteCount(), result.inferredCount()) != 1) {
+                incompleteCount, result.inferredCount()) != 1) {
                 throw new IllegalStateException("交易周期投影版本更新失败");
             }
         });
