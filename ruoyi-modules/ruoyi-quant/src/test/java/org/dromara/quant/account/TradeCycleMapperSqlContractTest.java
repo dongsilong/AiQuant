@@ -28,7 +28,7 @@ class TradeCycleMapperSqlContractTest {
         String sql = mapperXml.substring(selectStart, selectEnd);
 
         assertTrue(sql.contains("FROM quant_order o"));
-        assertTrue(sql.contains("LEFT JOIN quant_trade t"));
+        assertTrue(sql.contains("FROM quant_trade"));
         assertTrue(sql.contains("SUM(t.quantity)"));
         assertTrue(sql.contains("o.executed_quantity"));
         assertTrue(sql.contains("COALESCE"));
