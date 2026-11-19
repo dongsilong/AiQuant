@@ -25,7 +25,7 @@ final class SseReplayKlineBuffer {
                 }
                 return;
             }
-            if ("CONNECTED".equals(event.type())) {
+            if ("KLINE_READY".equals(event.type()) || "CONNECTED".equals(event.type())) {
                 List<ExchangeGateway.MarketEvent> buffered = new ArrayList<>(replayKlines);
                 replayKlines.clear();
                 replayCount = buffered.size();
