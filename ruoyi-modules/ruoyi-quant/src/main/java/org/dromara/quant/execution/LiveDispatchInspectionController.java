@@ -49,17 +49,30 @@ public class LiveDispatchInspectionController {
 
     /**
      * 按页面提交的完整票据身份，人工触发一次派发事实核验。
-     * 保护单按精确 Algo 身份核验；配置派发按持久化目标核验实际保证金模式和杠杆，不匹配时仅在交易所确认空仓后按原目标修正并二次回查。
+     * 返回结构化核查结果；未能确认时始终保留原有派发阻断。
      */
     @PostMapping("/recheck")
     @SaCheckRole(SystemConstants.SUPER_ADMIN_ROLE_KEY)
     @SaCheckPermission("quant:dispatch:recover")
     @Log(title = "LIVE 外发订单人工核查", businessType = BusinessType.UPDATE)
-    public R<Boolean> recheck(@RequestBody RecheckRequest body) {
+    public R<DispatchRecheckResult> recheck(@RequestBody RecheckRequest body) {
         long credentialId = parseId(body.credentialId());
-        boolean recovered = protectionOrders.recheckProtectionDispatch(
-            credentialId, body.symbol(), body.dispatchKey(), body.clientOrderId());
-        return R.ok(recovered);
+        try {
+            boolean recovered = protectionOrders.recheckProtectionDispatch(
+                credentialId, body.symbol(), body.dispatchKey(), body.clientOrderId());
+            if (recovered) {
+                return R.ok(new DispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE",
+                    "交易所事实核验完成，派发阻断已解除。"));
+            }
+            String stage = "CONFIG_SETTINGS".equals(body.operation())
+                ? "VERIFY_EXCHANGE_CONFIGURATION" : "VERIFY_EXCHANGE_PROTECTION";
+            return R.ok(new DispatchRecheckResult(false, "RECHECK_NOT_CONFIRMED", stage,
+                "本次未能确认派发恢复条件，调度阻断保持不变。请刷新待核查列表并检查后端核查日志。"));
+        } catch (IllegalStateException ex) {
+            return R.ok(new DispatchRecheckResult(false, "RECHECK_BLOCKED", "BINANCE_RECONCILIATION",
+                ex.getMessage() == null || ex.getMessage().isBlank()
+                    ? "核查未完成，调度阻断保持不变。" : ex.getMessage()));
+        }
     }
 
     private static long parseId(String value) {
@@ -69,7 +82,10 @@ public class LiveDispatchInspectionController {
         return Long.parseLong(value);
     }
 
-    public record RecheckRequest(String credentialId, String symbol, String dispatchKey, String clientOrderId) {
+    public record RecheckRequest(String credentialId, String symbol, String dispatchKey, String clientOrderId, String operation) {
+    }
+
+    public record DispatchRecheckResult(boolean recovered, String code, String stage, String message) {
     }
 
     /**
