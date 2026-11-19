@@ -250,7 +250,7 @@ public class ProtectionOrderService {
         } catch (ProtectionOrderDefinitelyAbsentException absent) {
             // An exact absence proof is not a rejection fact. Retire only when this exact cycle
             // and every exchange open-state query independently prove that no exposure or order remains.
-            stageObserver.accept("VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS");
+            stageObserver.accept("VERIFY_LOCAL_POSITION_CYCLE");
             return supersedeInactiveProtectionCreate(active, local, stageObserver);
         } catch (ProtectionConfirmationPendingException pending) {
             // An inconclusive historical lookup is not proof of rejection or cancellation.
@@ -258,7 +258,7 @@ public class ProtectionOrderService {
             stageObserver.accept("VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS");
             return supersedeInactiveProtectionCreate(active, local, stageObserver);
         } catch (ProtectionExecutionPendingException pending) {
-            stageObserver.accept("VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS");
+            stageObserver.accept("VERIFY_LOCAL_POSITION_CYCLE");
             if (supersedeInactiveProtectionCreate(active, local, stageObserver)) {
                 return true;
             }
@@ -311,7 +311,7 @@ public class ProtectionOrderService {
 
     private boolean supersedeInactiveProtectionCreate(LiveOrderDispatcher.ActiveDispatch active, QuantProtectionOrder local,
                                                        java.util.function.Consumer<String> stageObserver) {
-        stageObserver.accept("VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS");
+        stageObserver.accept("VERIFY_LOCAL_POSITION_CYCLE");
         QuantPositionMapper positions = positionMapper;
         if (active == null || local == null || positions == null
             || !"PROTECT_CREATE".equals(active.operationType()) || !"UNKNOWN".equals(active.dispatchStatus())
@@ -328,6 +328,7 @@ public class ProtectionOrderService {
                 || position.getQuantity() == null || position.getQuantity().signum() != 0) {
                 return false;
             }
+            stageObserver.accept("VERIFY_SIBLING_PROTECTIONS");
             List<QuantProtectionOrder> cycleOrders = mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
                 .eq(QuantProtectionOrder::getCredentialId, active.credentialId())
                 .eq(QuantProtectionOrder::getPositionId, local.getPositionId())
@@ -500,8 +501,10 @@ public class ProtectionOrderService {
                     "未找到与派发票据完全匹配的本地保护单意图，派发阻断保持不变。");
                 case "VERIFY_EXCHANGE_PROTECTION" -> new ManualDispatchRecheckResult(false, "EXCHANGE_PROTECTION_NOT_CONFIRMED", stage,
                     "交易所保护单身份或当前状态未能确认，派发阻断保持不变。");
-                case "VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS" -> new ManualDispatchRecheckResult(false, "SIBLING_PROTECTION_NOT_CONFIRMED", stage,
-                    "本地持仓周期或同周期其他保护单仍活动/无法核实，派发阻断保持不变。");
+                case "VERIFY_LOCAL_POSITION_CYCLE" -> new ManualDispatchRecheckResult(false, "LOCAL_POSITION_CYCLE_NOT_CLOSED", stage,
+                    "本地持仓周期未能证明已结束，派发阻断保持不变。");
+                case "VERIFY_SIBLING_PROTECTIONS" -> new ManualDispatchRecheckResult(false, "SIBLING_PROTECTION_NOT_CONFIRMED", stage,
+                    "同一持仓周期的其他保护单仍活动或无法核实，派发阻断保持不变。");
                 case "VERIFY_EXCHANGE_FLAT_AND_IDLE" -> new ManualDispatchRecheckResult(false, "EXCHANGE_EXPOSURE_OR_ORDER_REMAINS", stage,
                     "交易所持仓、普通委托或保护单未能证明全部为空，派发阻断保持不变。");
                 case "PERSIST_SUPERSEDED_INTENT" -> new ManualDispatchRecheckResult(false, "LOCAL_TERMINAL_PERSIST_FAILED", stage,
@@ -522,8 +525,10 @@ public class ProtectionOrderService {
             }
             String stage = failedStage.get();
             return switch (stage) {
-                case "LOAD_CREDENTIAL" -> new ManualDispatchRecheckResult(false, "LOCAL_INTENT_OR_CREDENTIAL_MISSING", stage,
-                    "本地保护单意图或账户凭据无法读取，派发阻断保持不变。");
+                case "LOAD_LOCAL_INTENT" -> new ManualDispatchRecheckResult(false, "LOCAL_PROTECTION_INTENT_MISSING", stage,
+                    "未找到与派发票据完全匹配的本地保护单意图，派发阻断保持不变。");
+                case "LOAD_CREDENTIAL" -> new ManualDispatchRecheckResult(false, "CREDENTIAL_NOT_AVAILABLE", stage,
+                    "账户凭据无法读取，派发阻断保持不变。");
                 case "QUERY_EXCHANGE_PROTECTION" -> new ManualDispatchRecheckResult(false, "EXCHANGE_PROTECTION_NOT_CONFIRMED", stage,
                     "交易所保护单身份或当前状态未能确认，派发阻断保持不变。");
                 case "RETRY_EXCHANGE_CANCEL" -> new ManualDispatchRecheckResult(false, "EXCHANGE_CANCEL_NOT_CONFIRMED", stage,
@@ -601,6 +606,7 @@ public class ProtectionOrderService {
         if (active == null || active.credentialId() == null || active.symbol() == null || active.dispatchKey() == null || active.clientOrderId() == null) {
             return false;
         }
+        stageObserver.accept("LOAD_LOCAL_INTENT");
         QuantProtectionOrder local = mapper.selectOne(new LambdaQueryWrapper<QuantProtectionOrder>()
             .eq(QuantProtectionOrder::getCredentialId, active.credentialId())
             .eq(QuantProtectionOrder::getSymbol, active.symbol())
