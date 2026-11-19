@@ -1992,10 +1992,17 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 }
                 long proceedNanos = System.nanoTime() - proceedStartedAt;
                 long requestElapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(proceedNanos);
+                boolean terminalSnapshotRequest = "/fapi/v3/account".equals(request.url().encodedPath())
+                    || "/fapi/v3/positionRisk".equals(request.url().encodedPath())
+                    || "/fapi/v2/positionRisk".equals(request.url().encodedPath());
                 if (queueMillis >= 250L) {
                     log.warn("Binance REST 请求排队等待偏高 host={} method={} path={} kind={} requestWeight={} queueMillis={} requestElapsedMillis={} status={} usedWeight1m={} schedulerState={}",
                         request.url().host(), request.method(), request.url().encodedPath(), kind, requestWeight, queueMillis,
                         requestElapsedMillis, response.code(), response.header("X-MBX-USED-WEIGHT-1M"), restScheduler.diagnostics());
+                } else if (terminalSnapshotRequest) {
+                    log.info("交易终端账户快照 REST 耗时 path={} kind={} requestWeight={} queueMillis={} requestElapsedMillis={} status={} usedWeight1m={}",
+                        request.url().encodedPath(), kind, requestWeight, queueMillis, requestElapsedMillis,
+                        response.code(), response.header("X-MBX-USED-WEIGHT-1M"));
                 } else {
                     log.debug("Binance REST 响应 host={} method={} path={} kind={} requestWeight={} queueMillis={} requestElapsedMillis={} status={} usedWeight1m={}",
                         request.url().host(), request.method(), request.url().encodedPath(), kind, requestWeight, queueMillis,
