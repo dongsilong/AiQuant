@@ -264,10 +264,10 @@ public class ProtectionOrderService {
             }
             // Algo FINISHED alone is not enough. Verify the exact child order before recording a fill.
             try {
-                stageObserver.accept("VERIFY_TRIGGERED_CHILD_AND_PERSIST_TERMINAL");
+                stageObserver.accept("VERIFY_TRIGGERED_ALGO");
                 ExchangeGateway.Credential credential = executionApplicationService.toCredential(
                     executionApplicationService.requireCredential(active.credentialId()));
-                Long terminalAlgoId = persistVerifiedTriggeredProtection(active.credentialId(), local, credential);
+                Long terminalAlgoId = persistVerifiedTriggeredProtection(active.credentialId(), local, credential, stageObserver);
                 stageObserver.accept("RELEASE_DISPATCH_GATE");
                 boolean recovered = requireLiveDispatcher().recoveredFromExchange(active.credentialId(), active.symbol(), 
                     active.dispatchKey(), active.clientOrderId(), terminalAlgoId);
@@ -509,8 +509,12 @@ public class ProtectionOrderService {
                     "交易所持仓、普通委托或保护单未能证明全部为空，派发阻断保持不变。");
                 case "PERSIST_SUPERSEDED_INTENT" -> new ManualDispatchRecheckResult(false, "LOCAL_TERMINAL_PERSIST_FAILED", stage,
                     "本地保护创建意图未能可靠写入终态，派发阻断保持不变。");
-                case "VERIFY_TRIGGERED_CHILD_AND_PERSIST_TERMINAL" -> new ManualDispatchRecheckResult(false, "TRIGGERED_CHILD_OR_TERMINAL_NOT_CONFIRMED", stage,
-                    "保护单触发后的实际子订单身份、完整成交或本地终态未能确认，派发阻断保持不变。");
+                case "VERIFY_TRIGGERED_ALGO" -> new ManualDispatchRecheckResult(false, "TRIGGERED_ALGO_NOT_CONFIRMED", stage,
+                    "交易所保护单触发终态及算法订单身份未能确认，派发阻断保持不变。");
+                case "VERIFY_TRIGGERED_CHILD" -> new ManualDispatchRecheckResult(false, "TRIGGERED_CHILD_NOT_CONFIRMED", stage,
+                    "保护单实际子订单身份或完整成交事实未能确认，派发阻断保持不变。");
+                case "PERSIST_TRIGGERED_TERMINAL" -> new ManualDispatchRecheckResult(false, "PROTECTION_TERMINAL_PERSIST_FAILED", stage,
+                    "触发保护单的成交事实已核验，但本地终态未能可靠持久化，派发阻断保持不变。");
                 case "RELEASE_DISPATCH_GATE" -> new ManualDispatchRecheckResult(false, "DISPATCH_GATE_RELEASE_FAILED", stage,
                     "保护单事实已处理，但派发门禁未能解除，派发阻断保持不变。");
                 default -> new ManualDispatchRecheckResult(false, "PROTECTION_CREATE_NOT_CONFIRMED", "VERIFY_PROTECTION_CREATE",
@@ -1362,6 +1366,12 @@ public class ProtectionOrderService {
      * child order is fully filled and the remaining quantity is explained by prior protection fills.
      */
     private Long persistVerifiedTriggeredProtection(Long credentialId, QuantProtectionOrder local, ExchangeGateway.Credential credential) {
+        return persistVerifiedTriggeredProtection(credentialId, local, credential, stage -> { });
+    }
+
+    private Long persistVerifiedTriggeredProtection(Long credentialId, QuantProtectionOrder local, ExchangeGateway.Credential credential,
+                                                       java.util.function.Consumer<String> stageObserver) {
+        stageObserver.accept("VERIFY_TRIGGERED_ALGO");
         ExchangeGateway.ProtectionOrderSnapshot actual = gateway.queryProtectionOrder(credential, local.getExchangeOrderId(),
             local.getClientOrderId(), local.getSymbol(), local.getCreatedAtEpochMillis());
         if (actual == null || !"FINISHED".equalsIgnoreCase(actual.status()) || actual.algoId() == null || actual.algoId() <= 0
@@ -1396,6 +1406,7 @@ public class ProtectionOrderService {
                 + "; priorProtectionExecuted=" + priorExecuted + "; algoQuantity=" + actual.quantity());
         }
 
+        stageObserver.accept("VERIFY_TRIGGERED_CHILD");
         ExchangeGateway.OrderSnapshot child = gateway.queryOrder(credential, local.getSymbol(), actual.actualOrderId(), null);
         if (child == null || !Objects.equals(actual.actualOrderId(), child.orderId())
             || !Objects.equals(local.getClientOrderId(), child.clientOrderId())
@@ -1414,6 +1425,7 @@ public class ProtectionOrderService {
             || !Boolean.TRUE.equals(child.reduceOnly()) || !Boolean.FALSE.equals(child.closePosition())) {
             throw new IllegalStateException("Algo 实际子订单未能证明身份一致且完整成交");
         }
+        stageObserver.accept("PERSIST_TRIGGERED_TERMINAL");
         if (protectionJournal != null) {
             protectionJournal.bindChild(credential, local, actual, child);
         }
