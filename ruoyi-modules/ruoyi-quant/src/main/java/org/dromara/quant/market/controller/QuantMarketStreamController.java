@@ -33,6 +33,16 @@ public class QuantMarketStreamController {
      */
     private final MarketStreamHub hub;
 
+    private static String latestStateKey(ExchangeGateway.MarketEvent item) {
+        if ("TRADE".equals(item.type()) || "MARK".equals(item.type())) {
+            return item.symbol() + ":" + item.interval() + ":" + item.type();
+        }
+        if ("KLINE".equals(item.type()) && !item.replay() && item.kline() != null) {
+            return item.symbol() + ":" + item.interval() + ":KLINE:" + item.kline().openTime();
+        }
+        return null;
+    }
+
     private static void addSubscription(List<AutoCloseable> subscriptions, AtomicBoolean closed, AutoCloseable subscription) {
         synchronized (subscriptions) {
             if (!closed.get()) {
@@ -103,12 +113,7 @@ public class QuantMarketStreamController {
         try {
             subscription.set(hub.subscribe(runMode, symbol, interval, event -> {
                 replayBuffer.publish(event, item -> {
-                    String coalesceKey = null;
-                    if ("TRADE".equals(item.type())) {
-                        coalesceKey = item.symbol() + ":" + item.interval() + ":TRADE";
-                    } else if ("KLINE".equals(item.type()) && !item.replay() && item.kline() != null) {
-                        coalesceKey = item.symbol() + ":" + item.interval() + ":KLINE:" + item.kline().openTime();
-                    }
+                    String coalesceKey = latestStateKey(item);
                     if (coalesceKey == null) delivery.offer("quant.market", item);
                     else delivery.offerLatest(coalesceKey, "quant.market", item);
                 });
@@ -173,12 +178,7 @@ public class QuantMarketStreamController {
                 SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
                 AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
                     if (!closed.get()) replayBuffer.publish(event, item -> {
-                        String coalesceKey = null;
-                        if ("TRADE".equals(item.type())) {
-                            coalesceKey = item.symbol() + ":" + item.interval() + ":TRADE";
-                        } else if ("KLINE".equals(item.type()) && !item.replay() && item.kline() != null) {
-                            coalesceKey = item.symbol() + ":" + item.interval() + ":KLINE:" + item.kline().openTime();
-                        }
+                        String coalesceKey = latestStateKey(item);
                         if (coalesceKey == null) delivery.offer("quant.market", item);
                         else delivery.offerLatest(coalesceKey, "quant.market", item);
                     });
