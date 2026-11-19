@@ -467,11 +467,33 @@ public class ProtectionOrderService {
             return new ManualDispatchRecheckResult(false, "UNSUPPORTED_OPERATION", "VALIDATE_OPERATION",
                 "当前派发操作类型不支持人工恢复：" + active.operationType() + "；调度阻断保持不变。");
         }
-        boolean recovered = retryDeferredManualRecheck(() -> recoverProtectionDispatch(active));
+        if ("PROTECT_CANCEL".equals(active.operationType())) {
+            java.util.concurrent.atomic.AtomicReference<String> failedStage = new java.util.concurrent.atomic.AtomicReference<>("LOAD_CREDENTIAL");
+            boolean recovered = retryDeferredManualRecheck(() -> recoverProtectionCancel(active, failedStage::set));
+            if (recovered) {
+                return new ManualDispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE", "交易所保护单终态已核验，派发阻断已解除。");
+            }
+            String stage = failedStage.get();
+            return switch (stage) {
+                case "LOAD_CREDENTIAL" -> new ManualDispatchRecheckResult(false, "LOCAL_INTENT_OR_CREDENTIAL_MISSING", stage,
+                    "本地保护单意图或账户凭据无法读取，派发阻断保持不变。");
+                case "QUERY_EXCHANGE_PROTECTION" -> new ManualDispatchRecheckResult(false, "EXCHANGE_PROTECTION_NOT_CONFIRMED", stage,
+                    "交易所保护单身份或当前状态未能确认，派发阻断保持不变。");
+                case "RETRY_EXCHANGE_CANCEL" -> new ManualDispatchRecheckResult(false, "EXCHANGE_CANCEL_NOT_CONFIRMED", stage,
+                    "原保护单仍活动，重试撤单未获得可确认结果，派发阻断保持不变。");
+                case "VERIFY_AND_PERSIST_TERMINAL" -> new ManualDispatchRecheckResult(false, "PROTECTION_TERMINAL_NOT_PERSISTED", stage,
+                    "交易所保护单终态或本地终态写入未满足恢复要求，派发阻断保持不变。");
+                case "RELEASE_DISPATCH_GATE" -> new ManualDispatchRecheckResult(false, "DISPATCH_GATE_RELEASE_FAILED", stage,
+                    "保护单终态已核验，但派发门禁未能解除，派发阻断保持不变。");
+                default -> new ManualDispatchRecheckResult(false, "PROTECTION_NOT_CONFIRMED", "VERIFY_PROTECTION_FACTS",
+                    "保护单事实未满足恢复要求，派发阻断保持不变。");
+            };
+        }
+        boolean recovered = retryDeferredManualRecheck(() -> recoverProtectionCreate(active));
         return recovered
             ? new ManualDispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE", "交易所保护单事实已核验，派发阻断已解除。")
-            : new ManualDispatchRecheckResult(false, "PROTECTION_NOT_CONFIRMED", "VERIFY_PROTECTION_FACTS",
-                "保护单身份、交易所状态、成交子订单或本地终态未满足恢复要求，派发阻断保持不变。");
+            : new ManualDispatchRecheckResult(false, "PROTECTION_CREATE_NOT_CONFIRMED", "VERIFY_PROTECTION_CREATE",
+                "保护单创建意图、交易所订单或触发子订单未满足恢复要求，派发阻断保持不变。");
     }
 
     /**
@@ -529,6 +551,10 @@ public class ProtectionOrderService {
     }
 
     private boolean recoverProtectionCancel(LiveOrderDispatcher.ActiveDispatch active) {
+        return recoverProtectionCancel(active, stage -> { });
+    }
+
+    private boolean recoverProtectionCancel(LiveOrderDispatcher.ActiveDispatch active, java.util.function.Consumer<String> stageObserver) {
         if (active == null || active.credentialId() == null || active.symbol() == null || active.dispatchKey() == null || active.clientOrderId() == null) {
             return false;
         }
@@ -543,6 +569,7 @@ public class ProtectionOrderService {
             return false;
         }
         String stage = "LOAD_CREDENTIAL";
+        stageObserver.accept(stage);
         try {
             var credentialEntity = executionApplicationService.requireCredential(active.credentialId());
             ExchangeGateway.Credential credential = executionApplicationService.toCredential(credentialEntity);
@@ -552,12 +579,14 @@ public class ProtectionOrderService {
                 return false;
             }
             stage = "QUERY_EXCHANGE_PROTECTION";
+            stageObserver.accept(stage);
             ExchangeGateway.ProtectionOrderSnapshot current = gateway.queryProtectionOrder(credential, local.getExchangeOrderId(),
                 local.getClientOrderId(), local.getSymbol(), local.getCreatedAtEpochMillis());
             if (isExactUnfilledWorkingProtection(local, current)) {
                 // A precise active-order fact proves that the prior cancel did not reach a terminal state.
                 // Repeating cancellation with the same exchange/client identity is idempotent; never create a new ticket.
                 stage = "RETRY_EXCHANGE_CANCEL";
+                stageObserver.accept(stage);
                 try {
                     gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(credential, local.getExchangeOrderId(), local.getClientOrderId(), true));
                 } catch (RuntimeException retryFailure) {
@@ -566,6 +595,7 @@ public class ProtectionOrderService {
                 }
             }
             stage = "VERIFY_AND_PERSIST_TERMINAL";
+            stageObserver.accept(stage);
             Long terminalAlgoId = "FINISHED".equalsIgnoreCase(current == null ? null : current.status())
                 ? persistVerifiedTriggeredProtection(active.credentialId(), local, credential)
                 : persistVerifiedCancelledProtection(active.credentialId(), local, credential, Set.of("CANCELED", "EXPIRED", "REJECTED"), true);
@@ -573,6 +603,7 @@ public class ProtectionOrderService {
                 return false;
             }
             stage = "RELEASE_DISPATCH_GATE";
+            stageObserver.accept(stage);
             boolean recovered = requireLiveDispatcher().recoveredFromExchange(active.credentialId(), active.symbol(), active.dispatchKey(), active.clientOrderId(), terminalAlgoId);
             if (recovered) {
                 String recoveryType = "FINISHED".equalsIgnoreCase(current == null ? null : current.status()) ? "触发成交" : "撤单";
