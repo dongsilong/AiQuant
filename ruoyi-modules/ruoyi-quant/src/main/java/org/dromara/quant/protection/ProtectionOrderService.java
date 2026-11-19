@@ -434,24 +434,44 @@ public class ProtectionOrderService {
      * 再进入与自动恢复完全相同的核验路径，避免误处理后来产生的新票据。
      */
     public boolean recheckProtectionDispatch(Long credentialId, String symbol, String dispatchKey, String clientOrderId) {
+        return recheckProtectionDispatchDetailed(credentialId, symbol, dispatchKey, clientOrderId).recovered();
+    }
+
+    /**
+     * 人工核查的结构化结果。stage 表示未完成核验所属的责任域，不表示内部执行到的最后一条语句。
+     */
+    public record ManualDispatchRecheckResult(boolean recovered, String code, String stage, String message) {
+    }
+
+    public ManualDispatchRecheckResult recheckProtectionDispatchDetailed(Long credentialId, String symbol, String dispatchKey, String clientOrderId) {
         if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank()
             || dispatchKey == null || dispatchKey.isBlank() || clientOrderId == null || clientOrderId.isBlank()) {
             throw new IllegalArgumentException("派发核查缺少完整票据身份");
         }
         LiveOrderDispatcher.ActiveDispatch active = requireLiveDispatcher().activeDispatch(credentialId, symbol);
         if (active == null || !dispatchKey.equals(active.dispatchKey()) || !clientOrderId.equals(active.clientOrderId())) {
-            return false;
+            return new ManualDispatchRecheckResult(false, "TICKET_IDENTITY_MISMATCH", "VERIFY_TICKET_IDENTITY",
+                "当前活动派发票据不存在或票据身份已变化，请刷新待核查列表；调度阻断状态未被本次操作修改。");
         }
         if ("CONFIG_SETTINGS".equals(active.operationType())) {
             if (!Set.of("DISPATCHING", "UNKNOWN", "CONFIG_APPLIED").contains(active.dispatchStatus())) {
                 throw new IllegalStateException("账户配置派发票据状态不可恢复：" + active.dispatchStatus() + "，派发阻断保持不变。");
             }
-            return retryDeferredManualRecheck(() -> recoverConfigurationSettings(active));
+            boolean recovered = retryDeferredManualRecheck(() -> recoverConfigurationSettings(active));
+            return recovered
+                ? new ManualDispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE", "交易所配置事实已核验，派发阻断已解除。")
+                : new ManualDispatchRecheckResult(false, "CONFIGURATION_NOT_CONFIRMED", "VERIFY_CONFIGURATION_FACTS",
+                    "交易所保证金模式、杠杆或持仓安全条件未满足恢复要求，派发阻断保持不变。");
         }
         if (!Set.of("PROTECT_CREATE", "PROTECT_CANCEL").contains(active.operationType())) {
-            return false;
+            return new ManualDispatchRecheckResult(false, "UNSUPPORTED_OPERATION", "VALIDATE_OPERATION",
+                "当前派发操作类型不支持人工恢复：" + active.operationType() + "；调度阻断保持不变。");
         }
-        return retryDeferredManualRecheck(() -> recoverProtectionDispatch(active));
+        boolean recovered = retryDeferredManualRecheck(() -> recoverProtectionDispatch(active));
+        return recovered
+            ? new ManualDispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE", "交易所保护单事实已核验，派发阻断已解除。")
+            : new ManualDispatchRecheckResult(false, "PROTECTION_NOT_CONFIRMED", "VERIFY_PROTECTION_FACTS",
+                "保护单身份、交易所状态、成交子订单或本地终态未满足恢复要求，派发阻断保持不变。");
     }
 
     /**
