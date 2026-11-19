@@ -255,7 +255,7 @@ public class ProtectionOrderService {
         } catch (ProtectionConfirmationPendingException pending) {
             // An inconclusive historical lookup is not proof of rejection or cancellation.
             // Retire only when both local and exchange state prove this exact cycle is flat and idle.
-            stageObserver.accept("VERIFY_LOCAL_CYCLE_AND_SIBLING_PROTECTIONS");
+            stageObserver.accept("VERIFY_LOCAL_POSITION_CYCLE");
             return supersedeInactiveProtectionCreate(active, local, stageObserver);
         } catch (ProtectionExecutionPendingException pending) {
             stageObserver.accept("VERIFY_LOCAL_POSITION_CYCLE");
