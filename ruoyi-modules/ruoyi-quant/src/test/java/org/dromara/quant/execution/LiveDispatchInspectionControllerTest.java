@@ -70,7 +70,7 @@ class LiveDispatchInspectionControllerTest {
         var blocked = blockedResponse.getClass().getMethod("getData").invoke(blockedResponse);
         assertEquals(Boolean.FALSE, blocked.getClass().getMethod("recovered").invoke(blocked));
         assertEquals("RECHECK_BLOCKED", blocked.getClass().getMethod("code").invoke(blocked));
-        assertEquals("BINANCE_RECONCILIATION", blocked.getClass().getMethod("stage").invoke(blocked));
+        assertEquals("RECOVERY_GUARD", blocked.getClass().getMethod("stage").invoke(blocked));
         assertEquals("Binance REST 当前处于限流状态，派发阻断保持不变。",
             blocked.getClass().getMethod("message").invoke(blocked));
 
