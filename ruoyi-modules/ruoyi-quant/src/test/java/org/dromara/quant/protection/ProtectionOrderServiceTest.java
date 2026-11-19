@@ -1533,7 +1533,7 @@ class ProtectionOrderServiceTest {
 
         var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "cancel-key", local.getClientOrderId());
         assertFalse(result.recovered());
-        assertEquals("PROTECTION_TERMINAL_NOT_PERSISTED", result.code());
+        assertEquals("PROTECTION_TERMINAL_NOT_CONFIRMED", result.code());
         assertEquals("VERIFY_AND_PERSIST_TERMINAL", result.stage());
 
         verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
