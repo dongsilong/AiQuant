@@ -97,7 +97,7 @@ public class QuantTradeVo implements Serializable {
      * 返回给前端的成交时间（北京时间）。
      */
     @JsonProperty("tradeTime")
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     public OffsetDateTime getTradeTimeBeijing() {
         if (tradeTime == null) {
             return null;
