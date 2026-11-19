@@ -124,7 +124,7 @@ public class QuantMarketStreamController {
         delivery.start();
         try {
             AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
-                if (!closed.get()) replayBuffer.publish(event, item -> dispatchMarketEvent(delivery, item));
+                if (!closed.get()) replayBuffer.publish(event, item -> dispatchMarketEvent(delivery, item), false);
             }, ignored -> { });
             addSubscription(subscriptions, closed, subscription);
         } catch (RuntimeException ex) {
@@ -186,7 +186,7 @@ public class QuantMarketStreamController {
             try {
                 SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
                 AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
-                    if (!closed.get()) replayBuffer.publish(event, item -> dispatchMarketEvent(delivery, item));
+                    if (!closed.get()) replayBuffer.publish(event, item -> dispatchMarketEvent(delivery, item), true);
                 }, ignored -> { });
                 addSubscription(subscriptions, closed, subscription);
             } catch (RuntimeException ex) {
