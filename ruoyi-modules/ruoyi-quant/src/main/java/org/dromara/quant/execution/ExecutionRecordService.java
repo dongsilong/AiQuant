@@ -118,6 +118,7 @@ public class ExecutionRecordService {
         }
         if (mapper.recordVerifiedAbsence(entity.getId(), entity.getCredentialId(), entity.getSymbol(),
             entity.getIdempotencyKey(), entity.getClientOrderId(), VERIFIED_ABSENCE_PREFIX + reason, now) == 1) {
+            entity.setExecutionStatus("UNKNOWN");
             entity.setErrorMessage(VERIFIED_ABSENCE_PREFIX + reason);
             entity.setUpdatedAt(now);
         }

@@ -14,10 +14,10 @@ WHERE id=#{id} AND execution_status='PENDING']]></update>
 SET execution_status='UNKNOWN', error_message=#{message}, updated_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN')]]></update>
     <update id="recordVerifiedAbsence" timeout="3"><![CDATA[UPDATE quant_execution_record
-SET error_message=#{message}, updated_at=#{now}
+SET execution_status='UNKNOWN', error_message=#{message}, updated_at=#{now}
 WHERE id=#{id} AND credential_id=#{credentialId} AND symbol=#{symbol}
   AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
-  AND execution_status='UNKNOWN' AND operation_type='OPEN'
+  AND execution_status IN ('PENDING','UNKNOWN') AND operation_type='OPEN'
   AND exchange_order_id IS NULL]]></update>
     <update id="markNotExecutedAfterVerifiedAbsence" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET execution_status='FAILED', error_message=#{message}, updated_at=#{now}
