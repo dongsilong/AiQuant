@@ -58,16 +58,11 @@ public class LiveDispatchInspectionController {
     public R<DispatchRecheckResult> recheck(@RequestBody RecheckRequest body) {
         long credentialId = parseId(body.credentialId());
         try {
-            boolean recovered = protectionOrders.recheckProtectionDispatch(
+            ProtectionOrderService.ManualDispatchRecheckResult outcome = protectionOrders.recheckProtectionDispatchDetailed(
                 credentialId, body.symbol(), body.dispatchKey(), body.clientOrderId());
-            if (recovered) {
-                return R.ok(new DispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE",
-                    "交易所事实核验完成，派发阻断已解除。"));
-            }
-            return R.ok(new DispatchRecheckResult(false, "RECHECK_NOT_CONFIRMED", "VERIFY_EXCHANGE_FACTS",
-                "本次未能确认派发恢复条件，调度阻断保持不变。请刷新待核查列表并检查后端核查日志。"));
+            return R.ok(new DispatchRecheckResult(outcome.recovered(), outcome.code(), outcome.stage(), outcome.message()));
         } catch (IllegalStateException ex) {
-            return R.ok(new DispatchRecheckResult(false, "RECHECK_BLOCKED", "BINANCE_RECONCILIATION",
+            return R.ok(new DispatchRecheckResult(false, "RECHECK_BLOCKED", "RECOVERY_GUARD",
                 ex.getMessage() == null || ex.getMessage().isBlank()
                     ? "核查未完成，调度阻断保持不变。" : ex.getMessage()));
         }
