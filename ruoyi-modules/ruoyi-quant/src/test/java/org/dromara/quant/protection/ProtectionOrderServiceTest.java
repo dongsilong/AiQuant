@@ -2006,4 +2006,45 @@ class ProtectionOrderServiceTest {
         order.setStatus("WORKING");
         return order;
     }
-}
+
+    @Test
+    void manualRecheckDetailedIdentifiesMissingOrChangedTicket() {
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(null);
+
+        var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "stale-key", "stale-client");
+
+        assertFalse(result.recovered());
+        assertEquals("TICKET_IDENTITY_MISMATCH", result.code());
+        assertEquals("VERIFY_TICKET_IDENTITY", result.stage());
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void manualRecheckDetailedRejectsUnsupportedOperationWithoutRecovery() {
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "open-key", "OPEN", "client-open", "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+
+        var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "open-key", "client-open");
+
+        assertFalse(result.recovered());
+        assertEquals("UNSUPPORTED_OPERATION", result.code());
+        assertEquals("VALIDATE_OPERATION", result.stage());
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void manualRecheckDetailedIdentifiesConfigurationFactMismatch() {
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "config-key", "CONFIG_SETTINGS",
+            "SETTINGS:ISOLATED:10", "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(dispatcher.matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 10)).thenReturn(false);
+
+        var result = service.recheckProtectionDispatchDetailed(1L, "BTCUSDT", "config-key", "SETTINGS:ISOLATED:10");
+
+        assertFalse(result.recovered());
+        assertEquals("CONFIGURATION_NOT_CONFIRMED", result.code());
+        assertEquals("VERIFY_CONFIGURATION_FACTS", result.stage());
+        verify(gateway, never()).querySymbolTradingSettings(any(), any());
+        verify(dispatcher, never()).recoveredConfigurationFromExchange(any(), any(), any(), any(), any(), anyInt());
+    }
+}\n
