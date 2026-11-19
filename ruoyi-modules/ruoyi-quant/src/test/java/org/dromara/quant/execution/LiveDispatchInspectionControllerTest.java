@@ -48,8 +48,28 @@ class LiveDispatchInspectionControllerTest {
 
         when(protectionOrders.recheckProtectionDispatch(1L, "BTCUSDT", "key-1", "client-1")).thenReturn(true);
         var response = controller.recheck(new LiveDispatchInspectionController.RecheckRequest("1", "BTCUSDT", "key-1", "client-1"));
-        assertEquals(Boolean.TRUE, response.getClass().getMethod("getData").invoke(response));
+        var success = response.getClass().getMethod("getData").invoke(response);
+        assertEquals(Boolean.TRUE, success.getClass().getMethod("recovered").invoke(success));
+        assertEquals("RECOVERED", success.getClass().getMethod("code").invoke(success));
+        assertEquals("RELEASE_DISPATCH_GATE", success.getClass().getMethod("stage").invoke(success));
         verify(protectionOrders).recheckProtectionDispatch(1L, "BTCUSDT", "key-1", "client-1");
+
+        when(protectionOrders.recheckProtectionDispatch(1L, "BTCUSDT", "key-2", "client-2")).thenReturn(false);
+        var notConfirmedResponse = controller.recheck(new LiveDispatchInspectionController.RecheckRequest("1", "BTCUSDT", "key-2", "client-2"));
+        var notConfirmed = notConfirmedResponse.getClass().getMethod("getData").invoke(notConfirmedResponse);
+        assertEquals(Boolean.FALSE, notConfirmed.getClass().getMethod("recovered").invoke(notConfirmed));
+        assertEquals("RECHECK_NOT_CONFIRMED", notConfirmed.getClass().getMethod("code").invoke(notConfirmed));
+        assertEquals("VERIFY_EXCHANGE_FACTS", notConfirmed.getClass().getMethod("stage").invoke(notConfirmed));
+
+        when(protectionOrders.recheckProtectionDispatch(1L, "BTCUSDT", "key-3", "client-3"))
+            .thenThrow(new IllegalStateException("Binance REST 当前处于限流状态，派发阻断保持不变。"));
+        var blockedResponse = controller.recheck(new LiveDispatchInspectionController.RecheckRequest("1", "BTCUSDT", "key-3", "client-3"));
+        var blocked = blockedResponse.getClass().getMethod("getData").invoke(blockedResponse);
+        assertEquals(Boolean.FALSE, blocked.getClass().getMethod("recovered").invoke(blocked));
+        assertEquals("RECHECK_BLOCKED", blocked.getClass().getMethod("code").invoke(blocked));
+        assertEquals("BINANCE_RECONCILIATION", blocked.getClass().getMethod("stage").invoke(blocked));
+        assertEquals("Binance REST 当前处于限流状态，派发阻断保持不变。",
+            blocked.getClass().getMethod("message").invoke(blocked));
 
         assertFalse(java.util.Arrays.stream(LiveDispatchInspectionController.class.getDeclaredMethods()).anyMatch(m -> m.getName().toLowerCase(java.util.Locale.ROOT).contains(
             "unlock")));
