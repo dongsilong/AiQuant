@@ -83,7 +83,25 @@ public class QuantAccountQueryController {
     @SaCheckPermission(value = {"quant:account:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/account/{credentialId}")
     public R<ExchangeGateway.AccountSnapshot> account(@PathVariable Long credentialId) {
-        return R.ok(gateway.queryAccount(credential(credentialId)));
+        long startedAt = System.nanoTime();
+        long credentialStartedAt = startedAt;
+        try {
+            QuantCredential credential = credential(credentialId);
+            long credentialElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - credentialStartedAt);
+            long exchangeStartedAt = System.nanoTime();
+            try {
+                return R.ok(gateway.queryAccount(executionCredential(credential)));
+            } finally {
+                long totalElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+                long exchangeElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - exchangeStartedAt);
+                log.info("交易终端账户接口耗时 credentialId={} credentialMs={} exchangeMs={} totalMs={}",
+                    credentialId, credentialElapsedMs, exchangeElapsedMs, totalElapsedMs);
+            }
+        } catch (RuntimeException ex) {
+            log.warn("交易终端账户接口失败 credentialId={} totalMs={}", credentialId,
+                java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt), ex);
+            throw ex;
+        }
     }
 
     /**
@@ -93,18 +111,35 @@ public class QuantAccountQueryController {
     @SaCheckPermission(value = {"quant:account:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/account/{credentialId}/daily-baseline")
     public R<DailyAccountBaseline> dailyBaseline(@PathVariable Long credentialId) {
-        credentialEntity(credentialId);
-        LocalDateTime dayStart = LocalDate.now(BEIJING_ZONE).atStartOfDay(BEIJING_ZONE).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
-        QuantAccountSnapshot baseline = accountSnapshotMapper.selectOne(new LambdaQueryWrapper<QuantAccountSnapshot>()
-            .select(QuantAccountSnapshot::getMarginBalance, QuantAccountSnapshot::getObservedAt)
-            .eq(QuantAccountSnapshot::getCredentialId, credentialId)
-            .ge(QuantAccountSnapshot::getObservedAt, dayStart)
-            .lt(QuantAccountSnapshot::getObservedAt, dayStart.plusDays(1))
-            .isNotNull(QuantAccountSnapshot::getMarginBalance)
-            .gt(QuantAccountSnapshot::getMarginBalance, java.math.BigDecimal.ZERO)
-            .orderByAsc(QuantAccountSnapshot::getObservedAt)
-            .last("LIMIT 1"));
-        return R.ok(baseline == null ? null : new DailyAccountBaseline(baseline.getMarginBalance(), baseline.getObservedAt().atOffset(ZoneOffset.UTC).withOffsetSameInstant(ZoneOffset.ofHours(8))));
+        long startedAt = System.nanoTime();
+        long credentialStartedAt = startedAt;
+        try {
+            credentialEntity(credentialId);
+            long credentialElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - credentialStartedAt);
+            long queryStartedAt = System.nanoTime();
+            try {
+                LocalDateTime dayStart = LocalDate.now(BEIJING_ZONE).atStartOfDay(BEIJING_ZONE).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+                QuantAccountSnapshot baseline = accountSnapshotMapper.selectOne(new LambdaQueryWrapper<QuantAccountSnapshot>()
+                    .select(QuantAccountSnapshot::getMarginBalance, QuantAccountSnapshot::getObservedAt)
+                    .eq(QuantAccountSnapshot::getCredentialId, credentialId)
+                    .ge(QuantAccountSnapshot::getObservedAt, dayStart)
+                    .lt(QuantAccountSnapshot::getObservedAt, dayStart.plusDays(1))
+                    .isNotNull(QuantAccountSnapshot::getMarginBalance)
+                    .gt(QuantAccountSnapshot::getMarginBalance, java.math.BigDecimal.ZERO)
+                    .orderByAsc(QuantAccountSnapshot::getObservedAt)
+                    .last("LIMIT 1"));
+                return R.ok(baseline == null ? null : new DailyAccountBaseline(baseline.getMarginBalance(), baseline.getObservedAt().atOffset(ZoneOffset.UTC).withOffsetSameInstant(ZoneOffset.ofHours(8))));
+            } finally {
+                long totalElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+                long queryElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queryStartedAt);
+                log.info("交易终端当日基准接口耗时 credentialId={} credentialMs={} databaseMs={} totalMs={}",
+                    credentialId, credentialElapsedMs, queryElapsedMs, totalElapsedMs);
+            }
+        } catch (RuntimeException ex) {
+            log.warn("交易终端当日基准接口失败 credentialId={} totalMs={}", credentialId,
+                java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt), ex);
+            throw ex;
+        }
     }
 
     /**
@@ -119,16 +154,32 @@ public class QuantAccountQueryController {
     @SaCheckPermission(value = {"quant:position:list", "quant:terminal:list"}, mode = SaMode.OR)
     @GetMapping("/position/{credentialId}")
     public ResponseEntity<R<List<ExchangeGateway.PositionSnapshot>>> positions(@PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
+        long startedAt = System.nanoTime();
+        long credentialStartedAt = startedAt;
         try {
-            return ResponseEntity.ok(R.ok(gateway.queryPositions(credential(credentialId), symbol)));
-        } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
-            long retryAfterMillis = deferred.retryAfterMillis();
-            ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE);
-            if (retryAfterMillis > 0L) {
-                long retryAfterSeconds = Math.max(1L, (retryAfterMillis + 999L) / 1_000L);
-                response.header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
+            QuantCredential credential = credential(credentialId);
+            long credentialElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - credentialStartedAt);
+            long exchangeStartedAt = System.nanoTime();
+            try {
+                return ResponseEntity.ok(R.ok(gateway.queryPositions(executionCredential(credential), symbol)));
+            } catch (org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
+                long retryAfterMillis = deferred.retryAfterMillis();
+                ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE);
+                if (retryAfterMillis > 0L) {
+                    long retryAfterSeconds = Math.max(1L, (retryAfterMillis + 999L) / 1_000L);
+                    response.header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
+                }
+                return response.body(R.fail(HttpStatus.SERVICE_UNAVAILABLE.value(), "交易所查询请求暂被本地调度器延后，请稍后重试"));
+            } finally {
+                long totalElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+                long exchangeElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - exchangeStartedAt);
+                log.info("交易终端持仓接口耗时 credentialId={} symbol={} credentialMs={} exchangeMs={} totalMs={}",
+                    credentialId, symbol, credentialElapsedMs, exchangeElapsedMs, totalElapsedMs);
             }
-            return response.body(R.fail(HttpStatus.SERVICE_UNAVAILABLE.value(), "交易所查询请求暂被本地调度器延后，请稍后重试"));
+        } catch (RuntimeException ex) {
+            log.warn("交易终端持仓接口失败 credentialId={} symbol={} totalMs={}", credentialId, symbol,
+                java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt), ex);
+            throw ex;
         }
     }
 
