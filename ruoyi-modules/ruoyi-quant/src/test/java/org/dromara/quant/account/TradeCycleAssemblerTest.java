@@ -72,6 +72,18 @@ class TradeCycleAssemblerTest {
         assertEquals("UNKNOWN", result.allocations().get(0).getFillRole());
     }
 
+    @Test
+    void unknownPositionModeConflictBlocksBothDirections() {
+        TradeCycleAssembler.Result result = TradeCycleAssembler.assemble(List.of(
+            fill(41L, 141L, "SELL", "LONG", null, true, "1"),
+            fill(42L, 142L, "SELL", "SHORT", "SHORT", false, "2"),
+            fill(43L, 143L, "BUY", "SHORT", "SHORT", true, "2")
+        ));
+
+        assertEquals(1, result.allocations().size());
+        assertEquals("UNKNOWN", result.allocations().get(0).getFillRole());
+    }
+
     private static TradeCycleSourceFill fill(long tradeId, long orderId, String side,
                                              String positionSide, String exchangePositionSide,
                                              boolean reduceOnly, String quantity) {
