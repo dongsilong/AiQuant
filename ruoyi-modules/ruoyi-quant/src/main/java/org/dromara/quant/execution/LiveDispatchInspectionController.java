@@ -80,7 +80,7 @@ public class LiveDispatchInspectionController {
         return Long.parseLong(value);
     }
 
-    public record RecheckRequest(String credentialId, String symbol, String dispatchKey, String clientOrderId, String operation) {
+    public record RecheckRequest(String credentialId, String symbol, String dispatchKey, String clientOrderId) {
     }
 
     public record DispatchRecheckResult(boolean recovered, String code, String stage, String message) {
