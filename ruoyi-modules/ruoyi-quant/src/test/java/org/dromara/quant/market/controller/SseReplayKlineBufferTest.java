@@ -38,7 +38,7 @@ class SseReplayKlineBufferTest {
     @Test
     void keepsFourReplayKlinesForOtherIntervals() {
         SseReplayKlineBuffer buffer = new SseReplayKlineBuffer();
-        List<ExchangeGateway.MarketEvent> delivered = new ArrayList<>();
+        List<Object> delivered = new ArrayList<>();
         for (int index = 0; index < 20; index++) {
             buffer.publish(kline(index, "15m"), delivered::add);
         }
