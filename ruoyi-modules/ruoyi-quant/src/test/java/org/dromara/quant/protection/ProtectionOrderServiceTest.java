@@ -1777,6 +1777,46 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void absentSiblingProtectionIsPersistedTerminalBeforeUnknownCreateIsSuperseded() {
+        QuantProtectionOrder local = order();
+        local.setCredentialId(1L);
+        local.setPositionCycleKey("closed-cycle");
+        local.setStatus("UNKNOWN");
+        local.setExchangeOrderId(null);
+        local.setExecutedQuantity(BigDecimal.ZERO);
+        QuantProtectionOrder hardStop = scopedStop("HARD_STOP", "99");
+        hardStop.setId(9L);
+        hardStop.setPositionCycleKey("closed-cycle");
+        hardStop.setExchangeOrderId(66L);
+        hardStop.setStatus("WORKING");
+        var active = new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "create-key", "PROTECT_CREATE",
+            local.getClientOrderId(), "UNKNOWN", null);
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(active);
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(mapper.selectList(any())).thenReturn(List.of(local, hardStop));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any()))
+            .thenThrow(new org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException())
+            .thenThrow(new org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException());
+        when(gateway.queryPositions(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        QuantPosition closed = new QuantPosition();
+        closed.setId(10L);
+        closed.setCredentialId(1L);
+        closed.setSymbol("BTCUSDT");
+        closed.setQuantity(BigDecimal.ZERO);
+        when(positionMapper.selectById(10L)).thenReturn(closed);
+        when(dispatcher.supersedeProtectionCreate(1L, "BTCUSDT", "create-key", local.getClientOrderId())).thenReturn(true);
+
+        assertTrue(service.recheckProtectionDispatch(1L, "BTCUSDT", "create-key", local.getClientOrderId()));
+
+        assertEquals("MISSING", hardStop.getStatus());
+        assertEquals("SUPERSEDED", local.getStatus());
+        verify(mapper).updateById(hardStop);
+        verify(dispatcher).supersedeProtectionCreate(1L, "BTCUSDT", "create-key", local.getClientOrderId());
+    }
+
+    @Test
     void exactExchangeAbsenceSupersedesUnknownProtectionOnlyWhenCycleAndExchangeAreFlatAndIdle() {
         QuantProtectionOrder local = order();
         local.setCredentialId(1L);
