@@ -1,7 +1,6 @@
 package org.dromara.quant.market.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.dromara.quant.market.MarketStreamHub;
@@ -81,20 +80,18 @@ public class QuantMarketStreamController {
      */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(HttpServletRequest request, HttpServletResponse response, @RequestParam String symbol, @RequestParam(defaultValue = "15m") String interval,
+    public SseEmitter stream(HttpServletResponse response, @RequestParam String symbol, @RequestParam(defaultValue = "15m") String interval,
                              @RequestParam(defaultValue = "LIVE") String runMode) {
         response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("X-Accel-Buffering", "no");
         SseEmitter emitter = new SseEmitter(0L);
-        SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
         AtomicBoolean closed = new AtomicBoolean();
         List<AutoCloseable> subscriptions = new ArrayList<>();
         AtomicReference<SseEventDispatcher> dispatcher = new AtomicReference<>();
         SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
         Runnable cleanup = () -> {
-            responseReady.close();
             SseEventDispatcher activeDispatcher = dispatcher.getAndSet(null);
             if (activeDispatcher != null) activeDispatcher.close();
             List<AutoCloseable> active;
@@ -116,7 +113,7 @@ public class QuantMarketStreamController {
             cleanup.run();
             return emitter;
         }
-        SseEventDispatcher delivery = new SseEventDispatcher(emitter, responseReady, () -> {
+        SseEventDispatcher delivery = new SseEventDispatcher(emitter, () -> {
             cleanup.run();
             emitter.complete();
         });
@@ -139,7 +136,7 @@ public class QuantMarketStreamController {
      */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping(value = "/streams", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streams(HttpServletRequest request, HttpServletResponse response, @RequestParam("symbol") List<String> symbols, @RequestParam("interval") List<String> intervals,
+    public SseEmitter streams(HttpServletResponse response, @RequestParam("symbol") List<String> symbols, @RequestParam("interval") List<String> intervals,
                               @RequestParam(defaultValue = "LIVE") String runMode) {
         validateSubscriptions(symbols, intervals);
         response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
@@ -147,12 +144,10 @@ public class QuantMarketStreamController {
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("X-Accel-Buffering", "no");
         SseEmitter emitter = new SseEmitter(0L);
-        SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
         AtomicBoolean closed = new AtomicBoolean();
         List<AutoCloseable> subscriptions = new ArrayList<>();
         AtomicReference<SseEventDispatcher> dispatcher = new AtomicReference<>();
         Runnable cleanup = () -> {
-            responseReady.close();
             SseEventDispatcher activeDispatcher = dispatcher.getAndSet(null);
             if (activeDispatcher != null) activeDispatcher.close();
             List<AutoCloseable> active;
@@ -174,7 +169,7 @@ public class QuantMarketStreamController {
             cleanup.run();
             return emitter;
         }
-        SseEventDispatcher delivery = new SseEventDispatcher(emitter, responseReady, () -> {
+        SseEventDispatcher delivery = new SseEventDispatcher(emitter, () -> {
             cleanup.run();
             emitter.complete();
         });
