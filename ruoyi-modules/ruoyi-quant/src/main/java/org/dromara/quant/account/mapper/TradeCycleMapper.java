@@ -23,6 +23,8 @@ public interface TradeCycleMapper {
 
     List<TradeCycleSourceFill> selectSourceFills(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
+    long countOrdersWithMissingFills(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
     int deleteCycleFills(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
     int deleteCycles(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
