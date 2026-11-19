@@ -268,7 +268,13 @@ public class LiveOrderDispatcher {
                 }
             } else {
                 String ticketStatus = mapper.notExecutedTicketStatus(credentialId, normalizedSymbol, key, clientOrderId, instanceId);
-                if (!"VERIFIED_NOT_EXECUTED".equalsIgnoreCase(ticketStatus)) {
+                if ("VERIFIED_NOT_EXECUTED".equalsIgnoreCase(ticketStatus)) {
+                    java.util.Map<String, Object> active = mapper.activeDispatch(credentialId, normalizedSymbol);
+                    if (active != null && key.equals(stringValue(active, "dispatchKey"))
+                        && mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                        throw new IllegalStateException("已终结 OPEN 未执行票据，但残留账户交易对锁无法释放");
+                    }
+                } else {
                     if (ticketStatus != null) {
                         return false;
                     }
