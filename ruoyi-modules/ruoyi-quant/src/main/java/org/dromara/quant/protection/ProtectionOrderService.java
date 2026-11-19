@@ -264,7 +264,7 @@ public class ProtectionOrderService {
             }
             // Algo FINISHED alone is not enough. Verify the exact child order before recording a fill.
             try {
-                stageObserver.accept("VERIFY_TRIGGERED_ALGO");
+                stageObserver.accept("LOAD_CREDENTIAL_FOR_TRIGGERED_CHILD");
                 ExchangeGateway.Credential credential = executionApplicationService.toCredential(
                     executionApplicationService.requireCredential(active.credentialId()));
                 Long terminalAlgoId = persistVerifiedTriggeredProtection(active.credentialId(), local, credential, stageObserver);
@@ -509,6 +509,8 @@ public class ProtectionOrderService {
                     "交易所持仓、普通委托或保护单未能证明全部为空，派发阻断保持不变。");
                 case "PERSIST_SUPERSEDED_INTENT" -> new ManualDispatchRecheckResult(false, "LOCAL_TERMINAL_PERSIST_FAILED", stage,
                     "本地保护创建意图未能可靠写入终态，派发阻断保持不变。");
+                case "LOAD_CREDENTIAL_FOR_TRIGGERED_CHILD" -> new ManualDispatchRecheckResult(false, "CREDENTIAL_NOT_AVAILABLE", stage,
+                    "核验保护单触发子订单所需的账户凭据无法读取，派发阻断保持不变。");
                 case "VERIFY_TRIGGERED_ALGO" -> new ManualDispatchRecheckResult(false, "TRIGGERED_ALGO_NOT_CONFIRMED", stage,
                     "交易所保护单触发终态及算法订单身份未能确认，派发阻断保持不变。");
                 case "VERIFY_TRIGGERED_CHILD" -> new ManualDispatchRecheckResult(false, "TRIGGERED_CHILD_NOT_CONFIRMED", stage,
