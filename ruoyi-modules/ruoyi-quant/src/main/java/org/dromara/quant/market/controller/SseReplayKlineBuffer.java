@@ -14,7 +14,7 @@ final class SseReplayKlineBuffer {
     private static final int MAX_ONE_MINUTE_REPLAY_KLINES = 8;
     private final ArrayDeque<ExchangeGateway.MarketEvent> replayKlines = new ArrayDeque<>(MAX_REPLAY_KLINES);
 
-    void publish(ExchangeGateway.MarketEvent event, Consumer<Object> downstream) {
+    void publish(ExchangeGateway.MarketEvent event, Consumer<Object> downstream, boolean compactReplay) {
         long startedAt = System.nanoTime();
         int replayCount = 0;
         synchronized (this) {
@@ -30,7 +30,7 @@ final class SseReplayKlineBuffer {
                 List<ExchangeGateway.MarketEvent> buffered = new ArrayList<>(replayKlines);
                 replayKlines.clear();
                 replayCount = buffered.size();
-                if (!buffered.isEmpty()) {
+                if (compactReplay && !buffered.isEmpty()) {
                     ExchangeGateway.MarketEvent first = buffered.get(0);
                     downstream.accept(Map.of(
                         "type", "KLINE_SNAPSHOT",
@@ -38,6 +38,8 @@ final class SseReplayKlineBuffer {
                         "interval", first.interval(),
                         "klines", buffered.stream().map(ExchangeGateway.MarketEvent::kline).toList()
                     ));
+                } else {
+                    buffered.forEach(downstream);
                 }
             }
             downstream.accept(event);
