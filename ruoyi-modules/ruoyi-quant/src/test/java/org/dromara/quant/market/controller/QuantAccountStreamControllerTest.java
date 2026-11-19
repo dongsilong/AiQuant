@@ -16,6 +16,26 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 @Tag("dev")
 class QuantAccountStreamControllerTest {
+
+    @Test
+    void skipsExchangeRestQueriesForInitialSnapshot() {
+        QuantAccountStreamController controller = new QuantAccountStreamController(null, null, null, null, null);
+        AtomicReference<Map<String, Object>> payload = new AtomicReference<>();
+        QuantCredential credential = new QuantCredential();
+        credential.setId(1L);
+        try {
+            ReflectionTestUtils.invokeMethod(controller, "send", (Consumer<Map<String, Object>>) payload::set, credential,
+                new ExchangeGateway.UserDataEvent("SNAPSHOT", Instant.now(), null));
+            assertNotNull(payload.get());
+            assertEquals(true, payload.get().get("ordersSnapshotSkipped"));
+            assertEquals(false, payload.get().get("ordersSnapshotAvailable"));
+            assertEquals(true, payload.get().get("positionsSnapshotSkipped"));
+            assertEquals(false, payload.get().get("accountSnapshotAvailable"));
+        } finally {
+            controller.destroy();
+        }
+    }
+
     @Test
     void forwardsAlgoUpdatesWithoutRestQueries() {
         QuantAccountStreamController controller = new QuantAccountStreamController(null, null, null, null, null);
