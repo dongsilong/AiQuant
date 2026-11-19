@@ -48,6 +48,20 @@ class TradeCycleAssemblerTest {
     }
 
     @Test
+    void hedgeShortConflictDoesNotBlockLongCycle() {
+        TradeCycleAssembler.Result result = TradeCycleAssembler.assemble(List.of(
+            fill(31L, 131L, "BUY", "SHORT", "SHORT", true, "1"),
+            fill(32L, 132L, "BUY", "LONG", "LONG", false, "2"),
+            fill(33L, 133L, "SELL", "LONG", "LONG", true, "2")
+        ));
+
+        assertEquals(3, result.allocations().size());
+        assertTrue(result.cycles().stream().anyMatch(cycle ->
+            "LONG".equals(cycle.getPositionSide()) && "CLOSED".equals(cycle.getStatus())
+                && cycle.getFillCount() == 2));
+    }
+
+    @Test
     void oneWayConflictStillBlocksTheWholePositionStream() {
         TradeCycleAssembler.Result result = TradeCycleAssembler.assemble(List.of(
             fill(21L, 121L, "SELL", "LONG", "BOTH", true, "1"),
