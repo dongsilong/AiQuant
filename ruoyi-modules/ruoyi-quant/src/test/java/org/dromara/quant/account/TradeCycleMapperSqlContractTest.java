@@ -35,6 +35,7 @@ class TradeCycleMapperSqlContractTest {
         assertTrue(sql.contains("o.credential_id=#{credentialId}"));
         assertTrue(sql.contains("o.symbol=#{symbol}"));
         assertTrue(sql.contains("o.executed_quantity>0"));
+        assertFalse(sql.contains("o.exchange_order_id IS NOT NULL"), "filled orders without an exchange order ID must remain visible as incomplete");
     }
 
     @Test
