@@ -3,13 +3,10 @@ package org.dromara.quant.market.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
-import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,7 +23,7 @@ class QuantMarketStreamControllerTest {
 
     @Test
     void batchEndpointRetainsTerminalPermissionAndRepeatedParameters() throws Exception {
-        var method = QuantMarketStreamController.class.getMethod("streams", jakarta.servlet.http.HttpServletRequest.class, jakarta.servlet.http.HttpServletResponse.class, List.class, List.class,
+        var method = QuantMarketStreamController.class.getMethod("streams", jakarta.servlet.http.HttpServletResponse.class, List.class, List.class,
             String.class);
         assertArrayEquals(new String[]{"quant:terminal:list"}, method.getAnnotation(SaCheckPermission.class).value());
         assertArrayEquals(new String[]{"/streams"}, method.getAnnotation(GetMapping.class).value());
@@ -60,28 +57,6 @@ class QuantMarketStreamControllerTest {
 
         assertTrue(released.get());
         assertTrue(subscriptions.isEmpty());
-    }
-
-    @Test
-    void waitsUntilServletAsyncResponseHasStartedBeforeDeliveringEvents() throws Exception {
-        var request = new MockHttpServletRequest();
-        var gate = new SseResponseReadyGate(request);
-        var ready = CompletableFuture.supplyAsync(gate::awaitReady);
-
-        request.setAsyncStarted(true);
-
-        assertTrue(ready.get(1, TimeUnit.SECONDS));
-        gate.close();
-    }
-
-    @Test
-    void closingBeforeAsyncResponseStartsReleasesWaitingDelivery() throws Exception {
-        var gate = new SseResponseReadyGate(new MockHttpServletRequest());
-        var ready = CompletableFuture.supplyAsync(gate::awaitReady);
-
-        gate.close();
-
-        assertFalse(ready.get(1, TimeUnit.SECONDS));
     }
 
     private void validate(List<String> symbols, List<String> intervals) {
