@@ -79,21 +79,23 @@ public class QuantMarketStreamController {
         response.setHeader("X-Accel-Buffering", "no");
         SseEmitter emitter = new SseEmitter(0L);
         SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
-        AtomicReference<AutoCloseable> subscription = new AtomicReference<>();
+        AtomicBoolean closed = new AtomicBoolean();
+        List<AutoCloseable> subscriptions = new ArrayList<>();
         AtomicReference<SseEventDispatcher> dispatcher = new AtomicReference<>();
         SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
         Runnable cleanup = () -> {
             responseReady.close();
             SseEventDispatcher activeDispatcher = dispatcher.getAndSet(null);
             if (activeDispatcher != null) activeDispatcher.close();
-            AutoCloseable active = subscription.getAndSet(null);
-            if (active != null) {
-                try {
-                    active.close();
-                } catch (Exception ignored) {
-                    // 客户端断开后释放订阅。
+            List<AutoCloseable> active;
+            synchronized (subscriptions) {
+                if (!closed.compareAndSet(false, true)) {
+                    return;
                 }
+                active = new ArrayList<>(subscriptions);
+                subscriptions.clear();
             }
+            closeSubscriptions(active);
         };
         emitter.onCompletion(cleanup);
         emitter.onTimeout(cleanup);
@@ -111,13 +113,14 @@ public class QuantMarketStreamController {
         dispatcher.set(delivery);
         delivery.start();
         try {
-            subscription.set(hub.subscribe(runMode, symbol, interval, event -> {
-                replayBuffer.publish(event, item -> {
+            AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
+                if (!closed.get()) replayBuffer.publish(event, item -> {
                     String coalesceKey = latestStateKey(item);
                     if (coalesceKey == null) delivery.offer("quant.market", item);
                     else delivery.offerLatest(coalesceKey, "quant.market", item);
                 });
-            }, ignored -> { }));
+            }, ignored -> { });
+            addSubscription(subscriptions, closed, subscription);
         } catch (RuntimeException ex) {
             cleanup.run();
             delivery.offer("quant.market", java.util.Map.of("type", "ERROR", "message", "行情订阅失败"));
