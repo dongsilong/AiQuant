@@ -1,7 +1,6 @@
 package org.dromara.quant.market.controller;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
@@ -19,10 +18,29 @@ class SseEventDispatcherTest {
     @Test
     void disconnectedClientDuringFailureCleanupDoesNotEscapeDispatcher() {
         SseEventDispatcher dispatcher = new SseEventDispatcher(
-            new SseEmitter(0L), new SseResponseReadyGate(new MockHttpServletRequest()),
+            new SseEmitter(0L),
             () -> { throw new IllegalStateException("complete failed", new AsyncRequestNotUsableException("connection closed")); });
 
         assertDoesNotThrow(dispatcher::notifyFailure);
+    }
+
+    @Test
+    void dispatchesEventsWithoutServletAsyncStateGate() throws Exception {
+        CountDownLatch writeCompleted = new CountDownLatch(1);
+        SseEmitter emitter = new SseEmitter(0L) {
+            @Override
+            public void send(SseEventBuilder builder) {
+                writeCompleted.countDown();
+            }
+        };
+        SseEventDispatcher dispatcher = new SseEventDispatcher(emitter, () -> { });
+        dispatcher.start();
+        try {
+            assertTrue(dispatcher.offer("quant.market", "early-event"));
+            assertTrue(writeCompleted.await(1, TimeUnit.SECONDS));
+        } finally {
+            dispatcher.close();
+        }
     }
 
     @Test
@@ -42,10 +60,7 @@ class SseEventDispatcherTest {
             }
         };
 
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
-        request.setAsyncStarted(true);
-        SseEventDispatcher dispatcher = new SseEventDispatcher(emitter, responseReady, () -> { });
+        SseEventDispatcher dispatcher = new SseEventDispatcher(emitter, () -> { });
         dispatcher.start();
         try {
             assertTrue(dispatcher.offer("quant.market", "first"));
@@ -56,7 +71,6 @@ class SseEventDispatcherTest {
         } finally {
             releaseWrite.countDown();
             dispatcher.close();
-            responseReady.close();
         }
     }
 
@@ -77,10 +91,7 @@ class SseEventDispatcherTest {
                 }
             }
         };
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setAsyncStarted(true);
-        SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
-        SseEventDispatcher dispatcher = new SseEventDispatcher(emitter, responseReady, failureCalled::countDown);
+        SseEventDispatcher dispatcher = new SseEventDispatcher(emitter, failureCalled::countDown);
         dispatcher.start();
         try {
             assertTrue(dispatcher.offer("quant.market", "in-flight"));
@@ -96,7 +107,6 @@ class SseEventDispatcherTest {
         } finally {
             releaseWrite.countDown();
             dispatcher.close();
-            responseReady.close();
         }
     }
 
@@ -121,10 +131,7 @@ class SseEventDispatcherTest {
                 }
             }
         };
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.setAsyncStarted(true);
-        SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
-        SseEventDispatcher dispatcher = new SseEventDispatcher(emitter, responseReady, () -> { });
+        SseEventDispatcher dispatcher = new SseEventDispatcher(emitter, () -> { });
         dispatcher.start();
         try {
             dispatcher.offer("quant.account", "in-flight");
@@ -141,13 +148,11 @@ class SseEventDispatcherTest {
         } finally {
             releaseFirstWrite.countDown();
             dispatcher.close();
-            responseReady.close();
         }
     }
     @Test
     void reliableEventsDoNotStarveLatestStateEvents() {
-        SseResponseReadyGate responseReady = new SseResponseReadyGate(new MockHttpServletRequest());
-        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L), responseReady, () -> { });
+        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L), () -> { });
         try {
             for (int index = 0; index < 9; index++) {
                 assertTrue(dispatcher.offer("quant.account", "reliable-" + index));
@@ -164,15 +169,13 @@ class SseEventDispatcherTest {
             assertTrue("reliable-8".equals(ReflectionTestUtils.getField(remaining, "data")));
         } finally {
             dispatcher.close();
-            responseReady.close();
         }
     }
 
     @Test
     void latestStateQueueIsBoundedAndOverflowDisconnectsClient() throws Exception {
         CountDownLatch failureCalled = new CountDownLatch(1);
-        SseResponseReadyGate responseReady = new SseResponseReadyGate(new MockHttpServletRequest());
-        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L), responseReady, failureCalled::countDown);
+        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L), failureCalled::countDown);
         try {
             for (int index = 0; index < 256; index++) {
                 assertTrue(dispatcher.offerLatest("state-" + index, "quant.market", index));
@@ -181,7 +184,6 @@ class SseEventDispatcherTest {
             assertTrue(failureCalled.await(1, TimeUnit.SECONDS));
         } finally {
             dispatcher.close();
-            responseReady.close();
         }
     }
 
