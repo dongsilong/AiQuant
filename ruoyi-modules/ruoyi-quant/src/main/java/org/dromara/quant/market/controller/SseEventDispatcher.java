@@ -24,6 +24,7 @@ final class SseEventDispatcher implements AutoCloseable {
     private record Pending(String eventName, Object data, String coalesceKey, String comment, long queuedAtNanos) { }
 
     private final SseEmitter emitter;
+    private final SseResponseReadyGate responseReady;
     private final Runnable failure;
     private final Object queueLock = new Object();
     private final ArrayBlockingQueue<Pending> reliableQueue = new ArrayBlockingQueue<>(RELIABLE_QUEUE_CAPACITY);
@@ -37,8 +38,9 @@ final class SseEventDispatcher implements AutoCloseable {
     private Thread worker;
     private int consecutiveReliableWrites;
 
-    SseEventDispatcher(SseEmitter emitter, Runnable failure) {
+    SseEventDispatcher(SseEmitter emitter, SseResponseReadyGate responseReady, Runnable failure) {
         this.emitter = emitter;
+        this.responseReady = responseReady;
         this.failure = failure;
     }
 
@@ -175,6 +177,14 @@ final class SseEventDispatcher implements AutoCloseable {
                         pending.eventName(), eventType(pending), queueDelayMillis, reliableSize, latestSize,
                         reliableSize + latestSize, oldestEventAgeMs, coalescedCount.get());
                 }
+                long responseReadyStartedAt = System.nanoTime();
+                if (!responseReady.awaitReady()) {
+                    long responseReadyWaitMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - responseReadyStartedAt);
+                    long totalDispatchWaitMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pending.queuedAtNanos());
+                    logDispatchDiagnostic(pending, responseReadyWaitMs, -1L, totalDispatchWaitMs);
+                    return;
+                }
+                long responseReadyWaitMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - responseReadyStartedAt);
                 long sendStartedAt = System.nanoTime();
                 if (pending.comment() != null) {
                     emitter.send(SseEmitter.event().comment(pending.comment()));
@@ -183,7 +193,7 @@ final class SseEventDispatcher implements AutoCloseable {
                 }
                 long sendDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - sendStartedAt);
                 long totalDispatchWaitMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - pending.queuedAtNanos());
-                logDispatchDiagnostic(pending, sendDurationMs, totalDispatchWaitMs);
+                logDispatchDiagnostic(pending, responseReadyWaitMs, sendDurationMs, totalDispatchWaitMs);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 return;
@@ -194,8 +204,8 @@ final class SseEventDispatcher implements AutoCloseable {
         }
     }
 
-    private void logDispatchDiagnostic(Pending pending, long sendDurationMs, long totalDispatchWaitMs) {
-        if (sendDurationMs < 100 && totalDispatchWaitMs < 1_000) {
+    private void logDispatchDiagnostic(Pending pending, long responseReadyWaitMs, long sendDurationMs, long totalDispatchWaitMs) {
+        if (responseReadyWaitMs < 100 && sendDurationMs < 100 && totalDispatchWaitMs < 1_000) {
             return;
         }
         long now = System.currentTimeMillis();
@@ -212,8 +222,8 @@ final class SseEventDispatcher implements AutoCloseable {
             reliableQueue.forEach(item -> queuedEventTypes.merge(eventType(item), 1, Integer::sum));
             latestStateQueue.values().forEach(item -> queuedEventTypes.merge(eventType(item), 1, Integer::sum));
         }
-        log.warn("SSE 下游发送耗时拆分 eventName={} eventType={} sendDurationMs={} totalDispatchWaitMs={} reliableQueueSize={} latestStateQueueSize={} queuedEventTypes={}",
-            pending.eventName(), eventType(pending), sendDurationMs, totalDispatchWaitMs,
+        log.warn("SSE 下游发送耗时拆分 eventName={} eventType={} responseReadyWaitMs={} sendDurationMs={} totalDispatchWaitMs={} reliableQueueSize={} latestStateQueueSize={} queuedEventTypes={}",
+            pending.eventName(), eventType(pending), responseReadyWaitMs, sendDurationMs, totalDispatchWaitMs,
             reliableSize, latestSize, queuedEventTypes);
     }
 
