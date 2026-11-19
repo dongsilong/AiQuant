@@ -308,11 +308,58 @@ class ProtectionOrderServiceTest {
         local.setPositionSide("LONG");
         when(mapper.selectOne(any())).thenReturn(local);
         when(dispatcher.activeProtectionTicket(1L, "BTCUSDT", "QFTP_test", "PROTECT_CANCEL")).thenReturn("pending-protection-cancel");
-        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenReturn(snapshot(55L, "QFTP_test", BigDecimal.ONE, "CANCELED", BigDecimal.ZERO));
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(
+            new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "pending-protection-cancel", "PROTECT_CANCEL", "QFTP_test", "UNKNOWN", 55L));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any()))
+            .thenReturn(snapshot(55L, "QFTP_test", BigDecimal.ONE, "CANCELED", BigDecimal.ZERO),
+                snapshot(55L, "QFTP_test", BigDecimal.ONE, "CANCELED", BigDecimal.ZERO));
         when(dispatcher.recoveredFromExchange(1L, "BTCUSDT", "pending-protection-cancel", "QFTP_test", 55L)).thenReturn(true);
         assertTrue(service.cancelStrategyProtection(1L, position, "FIRST_TP"));
         verify(gateway, never()).cancelProtectionOrder(any());
         verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "pending-protection-cancel", "QFTP_test", 55L);
+    }
+
+    @Test
+    void unresolvedLiveCancelRetriesSameOrderWhenExactExchangeQueryStillReportsNew() {
+        var local = order();
+        local.setPositionSide("LONG");
+        local.setStatus("WORKING");
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(dispatcher.activeProtectionTicket(1L, "BTCUSDT", local.getClientOrderId(), "PROTECT_CANCEL")).thenReturn("pending-protection-cancel");
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(
+            new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "pending-protection-cancel", "PROTECT_CANCEL", local.getClientOrderId(), "UNKNOWN", 55L));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any()))
+            .thenReturn(snapshot(55L, local.getClientOrderId(), BigDecimal.ONE, "NEW", BigDecimal.ZERO),
+                snapshot(55L, local.getClientOrderId(), BigDecimal.ONE, "CANCELED", BigDecimal.ZERO),
+                snapshot(55L, local.getClientOrderId(), BigDecimal.ONE, "CANCELED", BigDecimal.ZERO));
+        when(dispatcher.recoveredFromExchange(1L, "BTCUSDT", "pending-protection-cancel", local.getClientOrderId(), 55L)).thenReturn(true);
+
+        assertTrue(service.cancelStrategyProtection(1L, position, "FIRST_TP"));
+
+        var request = org.mockito.ArgumentCaptor.forClass(ExchangeGateway.CancelProtectionOrderRequest.class);
+        verify(gateway).cancelProtectionOrder(request.capture());
+        assertEquals(55L, request.getValue().orderId());
+        assertEquals(local.getClientOrderId(), request.getValue().clientOrderId());
+        verify(dispatcher).recoveredFromExchange(1L, "BTCUSDT", "pending-protection-cancel", local.getClientOrderId(), 55L);
+    }
+
+    @Test
+    void unresolvedLiveCancelRemainsBlockedWhenRetryStillReportsNew() {
+        var local = order();
+        local.setPositionSide("LONG");
+        local.setStatus("WORKING");
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(dispatcher.activeProtectionTicket(1L, "BTCUSDT", local.getClientOrderId(), "PROTECT_CANCEL")).thenReturn("pending-protection-cancel");
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(
+            new LiveOrderDispatcher.ActiveDispatch(1L, "BTCUSDT", "pending-protection-cancel", "PROTECT_CANCEL", local.getClientOrderId(), "UNKNOWN", 55L));
+        when(gateway.queryProtectionOrder(any(), any(), any(), any(), any()))
+            .thenReturn(snapshot(55L, local.getClientOrderId(), BigDecimal.ONE, "NEW", BigDecimal.ZERO),
+                snapshot(55L, local.getClientOrderId(), BigDecimal.ONE, "NEW", BigDecimal.ZERO));
+
+        assertFalse(service.cancelStrategyProtection(1L, position, "FIRST_TP"));
+
+        verify(gateway).cancelProtectionOrder(any());
+        verify(dispatcher, never()).recoveredFromExchange(any(), any(), any(), any(), any());
     }
 
     @Test
