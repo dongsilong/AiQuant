@@ -64,9 +64,7 @@ public class LiveDispatchInspectionController {
                 return R.ok(new DispatchRecheckResult(true, "RECOVERED", "RELEASE_DISPATCH_GATE",
                     "交易所事实核验完成，派发阻断已解除。"));
             }
-            String stage = "CONFIG_SETTINGS".equals(body.operation())
-                ? "VERIFY_EXCHANGE_CONFIGURATION" : "VERIFY_EXCHANGE_PROTECTION";
-            return R.ok(new DispatchRecheckResult(false, "RECHECK_NOT_CONFIRMED", stage,
+            return R.ok(new DispatchRecheckResult(false, "RECHECK_NOT_CONFIRMED", "VERIFY_EXCHANGE_FACTS",
                 "本次未能确认派发恢复条件，调度阻断保持不变。请刷新待核查列表并检查后端核查日志。"));
         } catch (IllegalStateException ex) {
             return R.ok(new DispatchRecheckResult(false, "RECHECK_BLOCKED", "BINANCE_RECONCILIATION",
