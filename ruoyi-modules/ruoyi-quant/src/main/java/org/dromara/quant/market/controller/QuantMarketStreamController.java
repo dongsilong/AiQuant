@@ -33,6 +33,16 @@ public class QuantMarketStreamController {
      */
     private final MarketStreamHub hub;
 
+    private static void dispatchMarketEvent(SseEventDispatcher delivery, Object item) {
+        if (item instanceof ExchangeGateway.MarketEvent event) {
+            String coalesceKey = latestStateKey(event);
+            if (coalesceKey == null) delivery.offer("quant.market", event);
+            else delivery.offerLatest(coalesceKey, "quant.market", event);
+        } else {
+            delivery.offer("quant.market", item);
+        }
+    }
+
     private static String latestStateKey(ExchangeGateway.MarketEvent item) {
         if ("TRADE".equals(item.type()) || "MARK".equals(item.type())) {
             return item.symbol() + ":" + item.interval() + ":" + item.type();
@@ -114,11 +124,7 @@ public class QuantMarketStreamController {
         delivery.start();
         try {
             AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
-                if (!closed.get()) replayBuffer.publish(event, item -> {
-                    String coalesceKey = latestStateKey(item);
-                    if (coalesceKey == null) delivery.offer("quant.market", item);
-                    else delivery.offerLatest(coalesceKey, "quant.market", item);
-                });
+                if (!closed.get()) replayBuffer.publish(event, item -> dispatchMarketEvent(delivery, item));
             }, ignored -> { });
             addSubscription(subscriptions, closed, subscription);
         } catch (RuntimeException ex) {
@@ -180,11 +186,7 @@ public class QuantMarketStreamController {
             try {
                 SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
                 AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
-                    if (!closed.get()) replayBuffer.publish(event, item -> {
-                        String coalesceKey = latestStateKey(item);
-                        if (coalesceKey == null) delivery.offer("quant.market", item);
-                        else delivery.offerLatest(coalesceKey, "quant.market", item);
-                    });
+                    if (!closed.get()) replayBuffer.publish(event, item -> dispatchMarketEvent(delivery, item));
                 }, ignored -> { });
                 addSubscription(subscriptions, closed, subscription);
             } catch (RuntimeException ex) {
