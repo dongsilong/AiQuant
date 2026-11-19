@@ -33,6 +33,24 @@ class QuantMarketStreamControllerTest {
     }
 
     @Test
+    void coalescesMarkUpdatesBySymbolAndIntervalButKeepsReplayKlinesSeparate() {
+        var mark = new org.dromara.quant.exchange.ExchangeGateway.MarketEvent(
+            "MARK", "BTCUSDT", "1m", java.math.BigDecimal.ONE, null, java.time.Instant.now());
+        var otherSymbolMark = new org.dromara.quant.exchange.ExchangeGateway.MarketEvent(
+            "MARK", "ETHUSDT", "1m", java.math.BigDecimal.ONE, null, java.time.Instant.now());
+        var replayKline = new org.dromara.quant.exchange.ExchangeGateway.MarketEvent(
+            "KLINE", "BTCUSDT", "1m", null,
+            new org.dromara.quant.exchange.ExchangeGateway.Kline(java.time.Instant.EPOCH, java.time.Instant.EPOCH,
+                java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ONE,
+                java.math.BigDecimal.ZERO, true),
+            java.time.Instant.EPOCH, null, java.time.Instant.EPOCH, true);
+
+        assertEquals("BTCUSDT:1m:MARK", ReflectionTestUtils.invokeMethod(controller, "latestStateKey", mark));
+        assertEquals("ETHUSDT:1m:MARK", ReflectionTestUtils.invokeMethod(controller, "latestStateKey", otherSymbolMark));
+        assertNull(ReflectionTestUtils.invokeMethod(controller, "latestStateKey", replayKline));
+    }
+
+    @Test
     void waitsUntilServletAsyncResponseHasStartedBeforeDeliveringEvents() throws Exception {
         var request = new MockHttpServletRequest();
         var gate = new SseResponseReadyGate(request);
