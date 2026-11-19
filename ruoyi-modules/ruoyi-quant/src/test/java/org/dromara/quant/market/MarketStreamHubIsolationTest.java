@@ -39,8 +39,8 @@ class MarketStreamHubIsolationTest {
             BigDecimal.ONE, true), new ExchangeGateway.Kline(open, open.plusSeconds(60), BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, false));
         var testHistory = liveHistory.stream().map(c -> new ExchangeGateway.Kline(c.openTime(), c.closeTime(), BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN, BigDecimal.TEN,
             BigDecimal.ONE, c.closed())).toList();
-        when(gateway.queryKlines("BTCUSDT", "1m", 200)).thenReturn(liveHistory);
-        when(gateway.queryKlines("TESTNET", "BTCUSDT", "1m", 200)).thenReturn(testHistory);
+        when(gateway.queryKlines("BTCUSDT", "1m", 8)).thenReturn(liveHistory);
+        when(gateway.queryKlines("TESTNET", "BTCUSDT", "1m", 8)).thenReturn(testHistory);
         when(gateway.subscribeMarket(eq("BTCUSDT"), eq("1m"), any())).thenAnswer(invocation -> {
             liveCallback.set(invocation.getArgument(2));
             return mock(ExchangeGateway.MarketStreamSession.class);
