@@ -3603,7 +3603,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                             timing.positionSnapshotQueries++;
                         }
                         closedOpenProven =
-    snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
+                            snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
                     }
                 }
             }
