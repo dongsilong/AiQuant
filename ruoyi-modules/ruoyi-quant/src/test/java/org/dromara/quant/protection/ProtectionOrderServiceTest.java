@@ -473,6 +473,8 @@ class ProtectionOrderServiceTest {
             return null;
         }).when(lease).markOrderTerminal(any(QuantProtectionOrder.class));
         doAnswer(call -> {
+            assertNull(targetState.get().pendingOrderId());
+            assertNull(targetState.get().previousOrderId());
             QuantProtectionOrder candidate = call.getArgument(0);
             candidate.setTargetVersion(targetState.get().version() + 1);
             java.util.function.Consumer<QuantProtectionOrder> insert = call.getArgument(3);
