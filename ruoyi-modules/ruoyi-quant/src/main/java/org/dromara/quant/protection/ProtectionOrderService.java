@@ -654,6 +654,7 @@ public class ProtectionOrderService {
         if (!validPosition(position)) {
             return null;
         }
+        reconcileTerminalPreviousTarget(credentialId, position);
         BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), live);
         BigDecimal stopPrice = normalizeProtectionPrice(credentialId, position, hardStopPrice(position, marginLossRatio), "STOP_MARKET", live);
         QuantProtectionOrder existing = findActive(credentialId, position, "HARD_STOP");
@@ -1174,6 +1175,7 @@ public class ProtectionOrderService {
         // as already quiesced; querying or canceling by client ID could create a
         // false UNKNOWN dispatch guard for an algo order that never existed.
         if ("NOT_SENT".equals(local.getStatus())) {
+            markTerminalTargetReference(credentialId, local);
             return true;
         }
         if (Set.of("PREPARED", "REJECTED").contains(Objects.toString(local.getStatus(), "")) && local.getExchangeOrderId() == null) {
@@ -1191,7 +1193,11 @@ public class ProtectionOrderService {
         if (!exchangeBacked) {
             gateway.cancelProtectionOrder(new ExchangeGateway.CancelProtectionOrderRequest(credential, local.getExchangeOrderId(), local.getClientOrderId(), false));
             local.setStatus("CANCELED");
-            return mapper.updateById(local) == 1;
+            if (mapper.updateById(local) != 1) {
+                return false;
+            }
+            markTerminalTargetReference(credentialId, local);
+            return true;
         }
         var dispatcher = requireLiveDispatcher();
         // Never resend a cancel when this precise algo order has an unresolved
@@ -1328,31 +1334,74 @@ public class ProtectionOrderService {
         if (mapper.updateById(local) != 1) {
             throw new IllegalStateException("Algo 触发成交终态未可靠写入本地账本");
         }
-        markTerminalTargetReference(local);
+        markTerminalTargetReference(credentialId, local);
         log.info("保护单 Algo 已触发且实际子订单完整成交，持久化终态并准备释放派发门禁 accountId={} symbol={} clientAlgoId={} algoId={} actualOrderId={} executedQuantity={}",
             credentialId, local.getSymbol(), local.getClientOrderId(), actual.algoId(), actual.actualOrderId(), child.executedQuantity());
         return actual.algoId();
     }
 
-    /** 在独立恢复线程中清除仍精确引用该终态保护单的目标关联。 */
-    private void markTerminalTargetReference(QuantProtectionOrder local) {
-        if (targets == null || local.getCredentialId() == null || local.getPositionId() == null
+    /** 终态事实落库后，清除仍精确引用该订单的目标关联。 */
+    private void markTerminalTargetReference(Long credentialId, QuantProtectionOrder local) {
+        if (targets == null || credentialId == null || local == null || local.getId() == null || local.getPositionId() == null
             || local.getPositionCycleKey() == null || local.getPositionSide() == null || local.getProtectionType() == null) {
+            return;
+        }
+        ProtectionTargetCoordinator.Lease currentLease = targetLease.get();
+        if (currentLease != null) {
+            clearTerminalTargetReference(currentLease, local);
             return;
         }
         QuantPosition position = new QuantPosition();
         position.setId(local.getPositionId());
         position.setProtectionCycleKey(local.getPositionCycleKey());
         position.setPositionSide(local.getPositionSide());
-        try (ProtectionTargetCoordinator.Lease lease = targets.acquire(local.getCredentialId(), position, local.getProtectionType())) {
-            ProtectionTargetCoordinator.State state = lease.state();
-            if (Objects.equals(state.pendingOrderId(), local.getId())) {
-                lease.terminal(local);
-            }
-            if (Objects.equals(state.currentOrderId(), local.getId()) || Objects.equals(state.previousOrderId(), local.getId())) {
-                lease.markOrderTerminal(local);
-            }
+        try (ProtectionTargetCoordinator.Lease lease = targets.acquire(credentialId, position, local.getProtectionType())) {
+            clearTerminalTargetReference(lease, local);
         }
+    }
+
+    private void clearTerminalTargetReference(ProtectionTargetCoordinator.Lease lease, QuantProtectionOrder local) {
+        ProtectionTargetCoordinator.State state = lease.state();
+        if (Objects.equals(state.pendingOrderId(), local.getId())) {
+            lease.terminal(local);
+            state = lease.state();
+        }
+        if (Objects.equals(state.currentOrderId(), local.getId()) || Objects.equals(state.previousOrderId(), local.getId())) {
+            lease.markOrderTerminal(local);
+        }
+    }
+
+    /**
+     * 硬止损创建前恢复历史终态引用。必须先核对本地记录属于当前持仓周期，再通过交易所精确查询确认终态。
+     */
+    private void reconcileTerminalPreviousTarget(Long credentialId, QuantPosition position) {
+        ProtectionTargetCoordinator.Lease lease = targetLease.get();
+        if (lease == null) {
+            return;
+        }
+        Long previousOrderId = lease.state().previousOrderId();
+        if (previousOrderId == null) {
+            return;
+        }
+        QuantProtectionOrder previous = mapper.selectById(previousOrderId);
+        if (previous == null || !Objects.equals(previous.getCredentialId(), credentialId)
+            || !Objects.equals(previous.getPositionId(), position.getId())
+            || !Objects.equals(previous.getPositionCycleKey(), position.getProtectionCycleKey())
+            || previous.getPositionSide() == null || !previous.getPositionSide().equalsIgnoreCase(position.getPositionSide())
+            || previous.getSymbol() == null || !previous.getSymbol().equalsIgnoreCase(position.getSymbol())
+            || !"HARD_STOP".equals(previous.getProtectionType())) {
+            log.warn("硬止损历史 previous 引用缺少匹配的本地订单身份，保持保护目标阻断 accountId={} positionId={} symbol={} previousOrderId={}",
+                credentialId, position.getId(), position.getSymbol(), previousOrderId);
+            return;
+        }
+        if ("NOT_SENT".equals(previous.getStatus())) {
+            markTerminalTargetReference(credentialId, previous);
+            return;
+        }
+        if (!Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED").contains(previous.getStatus())) {
+            return;
+        }
+        confirmOnExchange(credentialId, previous, false, position.getQuantity());
     }
 
     /**
@@ -1410,6 +1459,7 @@ public class ProtectionOrderService {
         if (mapper.updateById(local) != 1) {
             throw new IllegalStateException("保护撤单终态未可靠写入本地账本");
         }
+        markTerminalTargetReference(credentialId, local);
         return actual.algoId();
     }
 
@@ -1542,30 +1592,7 @@ public class ProtectionOrderService {
                 if (mapper.updateById(local) != 1) {
                     throw new IllegalStateException("保护单实际子订单已终态，但本地保护账本更新失败");
                 }
-                if (targetLease.get() != null) {
-                    ProtectionTargetCoordinator.State target = targetLease.get().state();
-                    if (Objects.equals(target.pendingOrderId(), local.getId())) {
-                        targetLease.get().terminal(local);
-                    }
-                    if (Objects.equals(target.currentOrderId(), local.getId()) || Objects.equals(target.previousOrderId(), local.getId())) {
-                        targetLease.get().markOrderTerminal(local);
-                    }
-                } else if (targets != null && local.getPositionCycleKey() != null) {
-                    QuantPosition scope = new QuantPosition();
-                    scope.setId(local.getPositionId());
-                    scope.setPositionSide(local.getPositionSide());
-                    scope.setProtectionCycleKey(local.getPositionCycleKey());
-                    coordinated(credentialId, scope, local.getProtectionType(), () -> {
-                        ProtectionTargetCoordinator.State target = targetLease.get().state();
-                        if (Objects.equals(target.pendingOrderId(), local.getId())) {
-                            targetLease.get().terminal(local);
-                        }
-                        if (Objects.equals(target.currentOrderId(), local.getId()) || Objects.equals(target.previousOrderId(), local.getId())) {
-                            targetLease.get().markOrderTerminal(local);
-                        }
-                        return null;
-                    });
-                }
+                markTerminalTargetReference(credentialId, local);
             }
             throw new ProtectionExecutionPendingException();
         }
@@ -1584,6 +1611,9 @@ public class ProtectionOrderService {
             }
             if (targetLease.get() != null) {
                 targetLease.get().terminal(local);
+            }
+            if (Set.of("CANCELED", "EXPIRED", "REJECTED").contains(actual.status()) && matchesProtectionIdentity(local, actual)) {
+                markTerminalTargetReference(credentialId, local);
             }
             if (!"PAPER".equalsIgnoreCase(credential.runMode()) && Set.of("CANCELED", "EXPIRED", "REJECTED").contains(actual.status())
                 && actual.executedQuantity() != null && actual.executedQuantity().signum() == 0) {
@@ -1648,9 +1678,7 @@ public class ProtectionOrderService {
         }
         local.setStatus("NOT_SENT");
         local.setExecutedQuantity(BigDecimal.ZERO);
-        if (targetLease.get() != null) {
-            targetLease.get().terminal(local);
-        }
+        markTerminalTargetReference(credentialId, local);
         return true;
     }
 
