@@ -32,6 +32,7 @@ class StrategyRuntimeSafetyTest {
         openPosition.put("positionStatus", "OPEN");
         openPosition.put("strategyQty", new BigDecimal("0.0100"));
         openPosition.put("localPositionQty", new BigDecimal("0.0100"));
+        openPosition.put("openedAt", java.time.LocalDateTime.of(2026, 11, 20, 14, 30, 15));
         openPosition.put("positionId", 101L);
         openPosition.put("instanceId", 201L);
 
@@ -41,13 +42,17 @@ class StrategyRuntimeSafetyTest {
         pendingPosition.put("positionStatus", "OPEN_PENDING");
         pendingPosition.put("strategyQty", new BigDecimal("0.25"));
         pendingPosition.put("pendingAction", "OPEN");
+        pendingPosition.put("openedAt", java.time.LocalDateTime.of(2026, 11, 20, 14, 29, 0));
         pendingPosition.put("instanceId", 202L);
 
         String details = StrategyRuntimeService.formatStrategyExposureDetails(List.of(openPosition, pendingPosition));
+        String pendingDetails = StrategyRuntimeService.formatStrategyExposureDetails(List.of(pendingPosition));
 
         assertTrue(details.contains("BTCUSDT 多头"));
         assertTrue(details.contains("状态=OPEN"));
+        assertTrue(details.contains("开仓时间=2026-11-20 14:30:15"));
         assertTrue(details.contains("策略数量=0.01"));
+        assertFalse(pendingDetails.contains("开仓时间="));
         assertTrue(details.contains("持仓ID=101"));
         assertTrue(details.contains("实例ID=201"));
         assertTrue(details.contains("ETHUSDT 空头"));
