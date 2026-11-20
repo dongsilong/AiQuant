@@ -13,7 +13,8 @@ WHERE i.strategy_id=#{strategyId} AND i.credential_id=#{credentialId}
        s.position_qty AS strategyQty, s.pending_action AS pendingAction,
        s.pending_order_id AS pendingOrderId, s.pending_client_order_id AS pendingClientOrderId,
        COALESCE(p.symbol, qs.symbol) AS symbol, COALESCE(p.position_side, s.direction) AS positionSide,
-       p.quantity AS localPositionQty
+       p.quantity AS localPositionQty,
+       CASE WHEN s.status = 'OPEN_PENDING' THEN NULL ELSE s.opened_at END AS openedAt
 FROM quant_strategy_position_state s
 JOIN quant_strategy_instance i ON i.id=s.instance_id
 LEFT JOIN quant_position p ON p.id=s.position_id
