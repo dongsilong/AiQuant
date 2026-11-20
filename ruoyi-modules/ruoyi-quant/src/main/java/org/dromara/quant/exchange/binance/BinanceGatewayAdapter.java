@@ -1444,19 +1444,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * 查询交易所条件/保护订单。
      */
     @Override
-    public List<ProtectionOrderSnapshot> queryProtectionOrders(Credential credential, String symbol) {
-        requireCredential(credential);
-        var data = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
-            client -> client.currentAllAlgoOpenOrders("CONDITIONAL", symbol, null, RECV_WINDOW_MILLIS).getData());
-        if (data == null) {
-            throw new IllegalStateException("Binance 条件单活动列表响应缺少数据载荷，无法确认保护单清理状态");
-        }
-        return data.stream().map(item -> new ProtectionOrderSnapshot(string(item, "getSymbol"), number(item, "getAlgoId"), string(item, "getClientAlgoId"), normalizeAlgoStatus(string(item,
-            "getAlgoStatus")), string(item, "getSide"), string(item, "getPositionSide"), string(item, "getOrderType"), decimal(string(item, "getQuantity")), decimal(string(item,
-            "getTriggerPrice")), instant(number(item, "getUpdateTime")), null, Boolean.valueOf(string(item, "getReduceOnly")), Boolean.valueOf(string(item, "getClosePosition")))).filter(item -> symbol == null || symbol.equalsIgnoreCase(item.symbol())).toList();
-    }
-
-    /**
+(sec)=>{
+  const old=`Boolean.valueOf(string(item, "getClosePosition"))))`;
+  const count=sec.split(old).length-1;if(count!==1)throw new Error(`adapter active snapshot closePosition occurrence ${count}`);
+  return sec.replace(old,`Boolean.valueOf(string(item, "getClosePosition")), null, null, instantNullable(number(item, "getCreateTime"))))`);
+}    /**
      * Verify order identity using only fields returned by the exchange; never
      * fill missing response fields from the query arguments.
      */
@@ -1546,7 +1538,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), status, string(data, "getSide"), string(data,
                 "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")), decimal(string(data, "getTriggerPrice")),
                 instant(number(data, "getUpdateTime")), protectionExecutedQuantity(status, decimal(string(data, "getActualQty"))), nullableBoolean(data, "getReduceOnly"), nullableBoolean(data, "getClosePosition"), number(data, "getActualOrderId"),
-                decimal(string(data, "getActualPrice")));
+                decimal(string(data, "getActualPrice")), instantNullable(number(data, "getCreateTime")));
         } finally {
             long totalNanos = System.nanoTime() - totalStartedAt;
             long totalMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(totalNanos);
@@ -1709,7 +1701,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         Long updateTime = item.getUpdateTime() == null ? item.getCreateTime() : item.getUpdateTime();
         return new ProtectionOrderSnapshot(item.getSymbol(), item.getAlgoId(), item.getClientAlgoId(), status, item.getSide(), item.getPositionSide(), item.getOrderType(),
             decimal(item.getQuantity()), decimal(item.getTriggerPrice()), instant(updateTime), executedQuantity, item.getReduceOnly(), item.getClosePosition(),
-            number(item, "getActualOrderId"), decimal(item.getActualPrice()));
+            number(item, "getActualOrderId"), decimal(item.getActualPrice()), instantNullable(item.getCreateTime()));
     }
 
     private static boolean isProtectionOrderAbsent(com.binance.connector.client.common.ApiException exception) {
