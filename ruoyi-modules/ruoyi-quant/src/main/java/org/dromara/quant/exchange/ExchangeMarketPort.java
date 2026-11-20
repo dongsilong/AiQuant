@@ -29,6 +29,13 @@ public interface ExchangeMarketPort {
         return null;
     }
 
+    /**
+     * 获取保护单专用交易规则；网关可将缓存未命中的读取提升到保护校验优先级。
+     */
+    default ExchangeGateway.SymbolRule queryTradingRuleForProtection(ExchangeGateway.Credential credential, String symbol) {
+        return queryTradingRule(credential, symbol);
+    }
+
     List<ExchangeGateway.Kline> queryKlines(String symbol, String interval, int limit);
 
     /**
