@@ -27,12 +27,18 @@ public class QuantTimeZoneFilter extends OncePerRequestFilter {
         return !("/quant".equals(requestPath) || requestPath.startsWith("/quant/"));
     }
 
+    private static String browserTimeZone(ZoneId zone) {
+        String normalized = zone.normalized().getId();
+        return "Z".equals(normalized) ? "UTC" : normalized;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
         throws ServletException, IOException {
-        String timeZone = ZoneId.of(quantProperties.getTimeZone()).normalized().getId();
+        String timeZone = browserTimeZone(ZoneId.of(quantProperties.getTimeZone()));
+        String serverTimeZone = browserTimeZone(ZoneId.systemDefault());
         response.setHeader("X-Quant-Time-Zone", timeZone);
-        response.setHeader("X-Quant-Server-Time-Zone", ZoneId.systemDefault().normalized().getId());
+        response.setHeader("X-Quant-Server-Time-Zone", serverTimeZone);
         response.addHeader("Access-Control-Expose-Headers", "X-Quant-Time-Zone, X-Quant-Server-Time-Zone");
         filterChain.doFilter(request, response);
     }
