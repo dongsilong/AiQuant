@@ -13,6 +13,7 @@ import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.dromara.quant.market.domain.QuantSymbol;
@@ -36,6 +37,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.*;
 
 /**
@@ -46,6 +50,7 @@ import java.util.*;
 @RequestMapping("/quant")
 public class QuantAdminController {
     private final QuantCredentialMapper credentialMapper;
+    private final QuantProperties quantProperties;
     private final QuantSymbolMapper symbolMapper;
     private final QuantStrategyMapper strategyMapper;
     private final QuantStrategySymbolMapper strategySymbolMapper;
@@ -238,7 +243,7 @@ public class QuantAdminController {
             row.put("recoveryRequired", item.getRecoveryRequired());
             row.put("recoveryRequiredLabel", Boolean.TRUE.equals(item.getRecoveryRequired()) ? "是" : "否");
             row.put("unsafeRecovery", item.getUnsafeRecovery());
-            row.put("updatedAt", item.getUpdatedAt());
+            row.put("updatedAt", item.getUpdatedAt() == null ? null : item.getUpdatedAt().atOffset(ZoneOffset.UTC));
             return row;
         }).toList();
         return R.ok(PageResult.build(rows, page.getTotal()));
@@ -253,11 +258,14 @@ public class QuantAdminController {
                                                         @RequestParam(required = false) String executionStatus, @RequestParam(required = false) String symbol,
                                                         @RequestParam(required = false) String exchangeOrderStatus,
                                                         @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime startTime, @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime endTime) {
-        var until = endTime == null ? java.time.LocalDateTime.now() : endTime;
-        var from = startTime == null ? until.minusHours(24) : startTime;
-        if (from.isAfter(until)) {
+        ZoneId displayZone = ZoneId.of(quantProperties.getTimeZone());
+        LocalDateTime displayUntil = endTime == null ? LocalDateTime.now(displayZone) : endTime;
+        LocalDateTime displayFrom = startTime == null ? displayUntil.minusHours(24) : startTime;
+        if (displayFrom.isAfter(displayUntil)) {
             throw new ServiceException("开始时间不能晚于结束时间");
         }
+        LocalDateTime from = displayFrom.atZone(displayZone).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        LocalDateTime until = displayUntil.atZone(displayZone).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
         List<Long> ids = scopedIds(credentialId);
         if (ids.isEmpty()) {
             return R.ok(emptyPage());
@@ -281,7 +289,7 @@ public class QuantAdminController {
                 item.getErrorMessage())));
             row.put("operationType", item.getOperationType());
             row.put("idempotencyKey", item.getIdempotencyKey());
-            row.put("createdAt", item.getCreatedAt());
+            row.put("createdAt", item.getCreatedAt() == null ? null : item.getCreatedAt().atOffset(ZoneOffset.UTC));
             row.put("updatedAt", item.getUpdatedAt());
             return row;
         }).toList();
