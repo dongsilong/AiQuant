@@ -6,6 +6,7 @@ import lombok.Data;
 import org.dromara.common.translation.annotation.Translation;
 import org.dromara.common.translation.constant.TransConstant;
 import org.dromara.quant.account.domain.QuantTrade;
+import org.dromara.quant.account.mapper.QuantTradeTimeMapper;
 
 import java.io.Serial;
 import java.io.Serializable;
