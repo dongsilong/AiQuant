@@ -5,19 +5,18 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 
 /**
- * UI-facing timestamp conversion only. Never use this for Binance request signing.
+ * 量化接口时间格式化。仅用于对外展示，不得用于 Binance 请求签名或交易计算。
  */
 public final class BeijingTime {
-    public static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
-    private static final DateTimeFormatter DISPLAY = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ssXXX").withZone(ZONE);
+    private static final DateTimeFormatter DISPLAY = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
 
     private BeijingTime() {
     }
 
     /**
-     * Include +08:00 to eliminate client-local timezone guessing.
+     * 输出带目标时区偏移量的 ISO-8601 时间，避免客户端按本地时区猜测。
      */
-    public static String format(Instant instant) {
-        return instant == null ? null : DISPLAY.format(instant);
+    public static String format(Instant instant, ZoneId zone) {
+        return instant == null ? null : DISPLAY.format(instant.atZone(zone));
     }
 }
