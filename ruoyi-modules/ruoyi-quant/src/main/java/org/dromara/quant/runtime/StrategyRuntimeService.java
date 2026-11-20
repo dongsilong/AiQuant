@@ -3158,7 +3158,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                     log.error("本地保护兜底等待恢复 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol(), ex);
                 } finally {
                     renewing.set(false);
-                    heartbeat.interrupt();
+                    // 不主动中断心跳线程，避免在 JDBC 调用期间关闭数据库 Socket。
                     boolean interrupted = false;
                     for (; ; ) {
                         try {
@@ -5371,7 +5371,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 } finally {
                     renewing.set(false);
                     if (heartbeat != null) {
-                        heartbeat.interrupt();
+                        // 不主动中断心跳线程，避免在 JDBC 调用期间关闭数据库 Socket。
                         boolean interrupted = false;
                         for (; ; ) {
                             try {
