@@ -2720,6 +2720,37 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void legacyFlatExitWithoutOriginalIdempotencyKeyStillCancelsExactOrder() throws Exception {
+        Fixture f = fixture();
+        try {
+            Instant now = Instant.now();
+            var active = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "NEW",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, now);
+            var canceled = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "CANCELED",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, now);
+            var trades = List.of(
+                new ExchangeGateway.TradeSnapshot("BTCUSDT", 11L, 11L, "BUY", BigDecimal.ONE, new BigDecimal("100"),
+                    BigDecimal.ZERO, BigDecimal.ZERO, now.minusSeconds(20)),
+                new ExchangeGateway.TradeSnapshot("BTCUSDT", 12L, 66L, "SELL", BigDecimal.ONE, new BigDecimal("101"),
+                    BigDecimal.ZERO, BigDecimal.ZERO, now.minusSeconds(10)));
+            configureFlatLiveCloseRecovery(f, active, canceled, trades);
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            state.setPendingIdempotencyKey(null);
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+            when(execution.cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55"))
+                .thenReturn(new org.dromara.quant.execution.ExecutionResult(true, "CANCEL_ACCEPTED", 55L, "close-client"));
+
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+
+            verify(execution).cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55");
+            verify((org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService"))
+                .markClosed(state);
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void liveFlatExitKeepsCapacityBlockedWhenTradeHistoryIsIncomplete() throws Exception {
         Fixture f = fixture();
         try {
