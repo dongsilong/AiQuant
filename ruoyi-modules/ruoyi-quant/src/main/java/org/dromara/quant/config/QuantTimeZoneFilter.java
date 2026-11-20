@@ -32,7 +32,8 @@ public class QuantTimeZoneFilter extends OncePerRequestFilter {
         throws ServletException, IOException {
         String timeZone = ZoneId.of(quantProperties.getTimeZone()).getId();
         response.setHeader("X-Quant-Time-Zone", timeZone);
-        response.addHeader("Access-Control-Expose-Headers", "X-Quant-Time-Zone");
+        response.setHeader("X-Quant-Server-Time-Zone", ZoneId.systemDefault().getId());
+        response.addHeader("Access-Control-Expose-Headers", "X-Quant-Time-Zone, X-Quant-Server-Time-Zone");
         filterChain.doFilter(request, response);
     }
 }
