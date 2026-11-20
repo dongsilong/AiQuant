@@ -443,6 +443,73 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void hardStopReconcilesStalePreviousReferenceOnlyAfterExactExchangeTerminalConfirmation() {
+        position.setProtectionCycleKey("cycle-test");
+        QuantProtectionOrder previous = order();
+        previous.setId(77L);
+        previous.setCredentialId(1L);
+        previous.setPositionId(10L);
+        previous.setPositionCycleKey("cycle-test");
+        previous.setPositionSide("LONG");
+        previous.setProtectionType("HARD_STOP");
+        previous.setClientOrderId("QHARD_stale");
+        previous.setExchangeOrderId(44L);
+        previous.setStopPrice(new BigDecimal("99"));
+        previous.setStatus("CANCELED");
+        previous.setExecutedQuantity(BigDecimal.ZERO);
+
+        ProtectionTargetCoordinator coordinator = mock(ProtectionTargetCoordinator.class);
+        ProtectionTargetCoordinator.Lease lease = mock(ProtectionTargetCoordinator.Lease.class);
+        when(coordinator.acquire(eq(1L), any(QuantPosition.class), eq("HARD_STOP"))).thenReturn(lease);
+        var targetState = new java.util.concurrent.atomic.AtomicReference<>(
+            new ProtectionTargetCoordinator.State(2, 0, 0, 77L, null, 77L, BigDecimal.ONE, new BigDecimal("99"), "STOP_MARKET"));
+        when(lease.state()).thenAnswer(call -> targetState.get());
+        doAnswer(call -> {
+            var old = targetState.get();
+            Long orderId = call.<QuantProtectionOrder>getArgument(0).getId();
+            targetState.set(new ProtectionTargetCoordinator.State(old.version(), old.stepIndex(), old.confirmedStep(),
+                java.util.Objects.equals(old.currentOrderId(), orderId) ? null : old.currentOrderId(), old.pendingOrderId(),
+                java.util.Objects.equals(old.previousOrderId(), orderId) ? null : old.previousOrderId(), old.quantity(), old.triggerPrice(), old.orderType()));
+            return null;
+        }).when(lease).markOrderTerminal(any(QuantProtectionOrder.class));
+        doAnswer(call -> {
+            QuantProtectionOrder candidate = call.getArgument(0);
+            candidate.setTargetVersion(targetState.get().version() + 1);
+            java.util.function.Consumer<QuantProtectionOrder> insert = call.getArgument(3);
+            insert.accept(candidate);
+            return null;
+        }).when(lease).prepare(any(QuantProtectionOrder.class), anyInt(),
+            org.mockito.ArgumentMatchers.<QuantProtectionOrder>nullable(QuantProtectionOrder.class), any());
+
+        var coordinatedService = new ProtectionOrderService(gateway, mapper, execution, coordinator);
+        coordinatedService.setLiveOrderDispatcher(dispatcher);
+        coordinatedService.setExchangeTradingRuleCache(new org.dromara.quant.exchange.ExchangeTradingRuleCache(gateway));
+        when(mapper.selectById(77L)).thenReturn(previous);
+        when(mapper.selectList(any())).thenReturn(List.of());
+        when(gateway.queryProtectionOrder(any(), eq(44L), eq("QHARD_stale"), eq("BTCUSDT"), any()))
+            .thenReturn(snapshot(44L, "QHARD_stale", BigDecimal.ONE, "CANCELED", BigDecimal.ZERO));
+        var submittedRequest = new java.util.concurrent.atomic.AtomicReference<ExchangeGateway.ProtectionOrderRequest>();
+        when(gateway.placeProtectionOrder(any())).thenAnswer(call -> {
+            ExchangeGateway.ProtectionOrderRequest request = call.getArgument(0);
+            submittedRequest.set(request);
+            return new ExchangeGateway.ProtectionOrderResult(55L, request.clientOrderId(), "NEW");
+        });
+        when(gateway.queryProtectionOrder(any(), eq(55L), any(), eq("BTCUSDT"), any())).thenAnswer(call -> {
+            ExchangeGateway.ProtectionOrderRequest request = submittedRequest.get();
+            return new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 55L, request.clientOrderId(), "NEW", "SELL", "BOTH",
+                request.orderType(), request.quantity(), request.stopPrice(), Instant.now(), BigDecimal.ZERO, true, false);
+        });
+
+        QuantProtectionOrder replacement = coordinatedService.ensureMarginHardStop(1L, position, new BigDecimal("0.1"), true);
+
+        assertEquals(8L, replacement.getId());
+        assertNull(targetState.get().currentOrderId());
+        assertNull(targetState.get().previousOrderId());
+        verify(lease).markOrderTerminal(previous);
+        verify(gateway).placeProtectionOrder(any());
+    }
+
+    @Test
     void fixedHardStopDoesNotMoveWithMarginFluctuation() {
         QuantProtectionOrder local = order();
         local.setPositionSide("LONG");
