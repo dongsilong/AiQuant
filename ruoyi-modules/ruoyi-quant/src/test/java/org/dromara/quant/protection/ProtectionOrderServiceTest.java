@@ -1994,6 +1994,22 @@ class ProtectionOrderServiceTest {
         verify(gateway, never()).placeProtectionOrder(any());
     }
 
+    @Test
+    void entryProtectionCleanupKeepsIndependentPreAndPostExchangeVerification() {
+        when(mapper.selectList(any())).thenReturn(List.of());
+        when(gateway.queryPositions(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryProtectionOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(dispatcher.activeDispatch(1L, "BTCUSDT")).thenReturn(null);
+
+        assertTrue(service.prepareEntryProtectionCleanup(1L, "BTCUSDT", true));
+
+        verify(gateway, times(2)).queryPositions(any(), eq("BTCUSDT"));
+        verify(gateway, times(2)).queryOrders(any(), eq("BTCUSDT"));
+        verify(gateway, times(2)).queryProtectionOrders(any(), eq("BTCUSDT"));
+        verify(dispatcher, times(2)).activeDispatch(1L, "BTCUSDT");
+    }
+
     private List<QuantProtectionOrder> selectedStops(org.mockito.invocation.InvocationOnMock call, List<QuantProtectionOrder> rows) {
         var query = call.<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QuantProtectionOrder>>getArgument(0);
         String sql = query.getSqlSegment();
