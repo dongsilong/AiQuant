@@ -69,12 +69,14 @@ public class ProtectionOrderJournalService {
             if (!local.getSymbol().equalsIgnoreCase(actual.symbol())) conflicts.add("algoSymbol");
             if (!local.getSymbol().equalsIgnoreCase(child.symbol())) conflicts.add("childSymbol");
             if (child.clientOrderId() == null || child.clientOrderId().isBlank()) conflicts.add("childClientOrderIdMissing");
-            boolean quantityMatches = local.getQuantity() != null && actual.quantity() != null
+            BigDecimal priorExecuted = priorCycleExecuted;
+            boolean quantityMatches = priorExecuted != null && priorExecuted.signum() == 0
+                && local.getQuantity() != null && actual.quantity() != null
                 && local.getQuantity().compareTo(actual.quantity()) == 0;
-            BigDecimal priorExecuted = priorCycleExecuted == null ? BigDecimal.ZERO : priorCycleExecuted;
-            boolean reducedQuantityProvenByFilledChild = actual.actualOrderId() != null && actual.actualOrderId().equals(child.orderId())
+            boolean reducedQuantityProvenByFilledChild = priorExecuted != null && priorExecuted.signum() > 0
+                && actual.actualOrderId() != null && actual.actualOrderId().equals(child.orderId())
                 && local.getQuantity() != null && actual.quantity() != null && actual.quantity().signum() > 0
-                && local.getQuantity().compareTo(actual.quantity()) > 0
+                && local.getQuantity().subtract(priorExecuted).compareTo(actual.quantity()) == 0
                 && child.originalQuantity() != null && child.originalQuantity().compareTo(actual.quantity()) == 0
                 && child.executedQuantity() != null && child.executedQuantity().compareTo(child.originalQuantity()) == 0
                 && "FILLED".equalsIgnoreCase(child.status())
