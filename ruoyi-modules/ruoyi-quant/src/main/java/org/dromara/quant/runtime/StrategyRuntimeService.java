@@ -2413,7 +2413,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         runtime.strategy.getId(), runtime.credential.getId(), ex.getMessage());
                 }
                 logEntryDecision(runtime, context, "MAX_POSITIONS", reason);
-                log.warn("策略开仓跳过：达到最大持仓数 instanceId={} symbol={} openCount={} maxOpenCount={}", runtime.instance.getId(), runtime.symbol.getSymbol(), openCount, maxOpenCount);
+                log.warn("策略开仓跳过：达到最大持仓数 instanceId={} symbol={} openCount={} maxOpenCount={} reason={}", runtime.instance.getId(), runtime.symbol.getSymbol(), openCount, maxOpenCount, reason);
                 logExposureDiagnostic(runtime, openCount, maxOpenCount, exposures);
                 return;
             }
