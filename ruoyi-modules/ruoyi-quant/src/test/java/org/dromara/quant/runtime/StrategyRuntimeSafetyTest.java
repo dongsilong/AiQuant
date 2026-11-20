@@ -65,6 +65,23 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void matchesHedgeModePositionByPositionSideRatherThanQuantitySign() {
+        Instant attempt = Instant.parse("2026-11-20T09:23:23Z");
+        Instant from = attempt.minusSeconds(1);
+        Instant to = attempt.plusSeconds(30);
+        BigDecimal quantity = new BigDecimal("100");
+        var hedgeShort = new ExchangeGateway.PositionSnapshot("JCTUSDT", "SHORT", quantity,
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            10, null, null);
+
+        var proof = StrategyRuntimeService.evaluatePendingCloseNotExecutedProof(
+            "JCTUSDT", "SHORT", quantity, new ExchangeGateway.PositionMode(true),
+            List.of(), List.of(), List.of(hedgeShort), attempt, from, to);
+
+        assertTrue(proof.proven());
+    }
+
+    @Test
     void rejectsCloseNonExecutionProofWhenPositionOrOrdersAreNotUnambiguous() {
         Instant attempt = Instant.parse("2026-11-20T09:23:23Z");
         Instant from = attempt.minusSeconds(1);

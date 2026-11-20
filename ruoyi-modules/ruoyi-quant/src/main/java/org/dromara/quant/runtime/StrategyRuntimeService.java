@@ -4082,12 +4082,12 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             return new CloseNotExecutedProofResult(false, "POSITION_DIRECTION_AMBIGUOUS", trades.size());
         }
         ExchangeGateway.PositionSnapshot position = nonZeroPositions.get(0);
-        boolean directionMatches = "LONG".equalsIgnoreCase(direction)
-            ? position.quantity().signum() > 0 : position.quantity().signum() < 0;
-        boolean sideMatches = positionMode.hedgeMode()
+        boolean positionDirectionMatches = positionMode.hedgeMode()
             ? direction.equalsIgnoreCase(position.side())
-            : "BOTH".equalsIgnoreCase(position.side());
-        if (!directionMatches || !sideMatches
+            : "BOTH".equalsIgnoreCase(position.side())
+                && ("LONG".equalsIgnoreCase(direction)
+                    ? position.quantity().signum() > 0 : position.quantity().signum() < 0);
+        if (!positionDirectionMatches
             || position.quantity().abs().compareTo(expectedRemainingQuantity) != 0) {
             return new CloseNotExecutedProofResult(false, "POSITION_QUANTITY_OR_DIRECTION_CHANGED", trades.size());
         }
