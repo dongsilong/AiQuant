@@ -166,6 +166,15 @@ public class TradeExecutionApplicationService {
     }
 
     /**
+     * 由策略 Runtime 撤销已经确认身份的待处理订单。
+     */
+    public ExecutionResult cancelByRuntime(Long credentialId, String symbol, Long orderId, String clientOrderId, String idempotencyKey) {
+        QuantCredential credential = requireCredential(credentialId);
+        return executionPort.cancel(new CancelOrderCommand(credential.getId(), toCredential(credential), symbol, orderId, clientOrderId,
+            idempotencyKey, credential.getRunMode()));
+    }
+
+    /**
      * 由策略 Runtime 发起统一平仓执行。
      */
     public ExecutionResult closeByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
