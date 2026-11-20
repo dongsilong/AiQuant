@@ -1444,11 +1444,20 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * 查询交易所条件/保护订单。
      */
     @Override
-(sec)=>{
-  const old=`Boolean.valueOf(string(item, "getClosePosition"))))`;
-  const count=sec.split(old).length-1;if(count!==1)throw new Error(`adapter active snapshot closePosition occurrence ${count}`);
-  return sec.replace(old,`Boolean.valueOf(string(item, "getClosePosition")), null, null, instantNullable(number(item, "getCreateTime"))))`);
-}    /**
+    public List<ProtectionOrderSnapshot> queryProtectionOrders(Credential credential, String symbol) {
+        requireCredential(credential);
+        var data = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
+            client -> client.currentAllAlgoOpenOrders("CONDITIONAL", symbol, null, RECV_WINDOW_MILLIS).getData());
+        if (data == null) {
+            throw new IllegalStateException("Binance 条件单活动列表响应缺少数据载荷，无法确认保护单清理状态");
+        }
+        return data.stream().map(item -> new ProtectionOrderSnapshot(string(item, "getSymbol"), number(item, "getAlgoId"), string(item, "getClientAlgoId"), normalizeAlgoStatus(string(item,
+            "getAlgoStatus")), string(item, "getSide"), string(item, "getPositionSide"), string(item, "getOrderType"), decimal(string(item, "getQuantity")), decimal(string(item,
+            "getTriggerPrice")), instant(number(item, "getUpdateTime")), null, Boolean.valueOf(string(item, "getReduceOnly")), Boolean.valueOf(string(item, "getClosePosition")),
+            null, null, instantNullable(number(item, "getCreateTime")))).filter(item -> symbol == null || symbol.equalsIgnoreCase(item.symbol())).toList();
+    }
+
+    /**
      * Verify order identity using only fields returned by the exchange; never
      * fill missing response fields from the query arguments.
      */
