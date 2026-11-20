@@ -2,8 +2,6 @@
 spring.servlet.multipart.location: /ruoyi/server/temp
 
 quant:
-  # 时间展示时区；默认北京时间，可通过 QUANT_TIME_ZONE 统一调整
-  time-zone: ${QUANT_TIME_ZONE:Asia/Shanghai}
   binance:
     # RAW_OKHTTP / BINANCE_SDK; SDK 路径需通过集成验证后逐步启用。
     websocket-transport: ${QUANT_BINANCE_WEBSOCKET_TRANSPORT:BINANCE_SDK}
