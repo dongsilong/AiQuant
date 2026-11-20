@@ -2195,7 +2195,8 @@ public class ProtectionOrderService {
         long dispatchRecoveryMs = 0L;
         long localReadMs = 0L;
         long initialAlgoQueryMs = 0L;
-        long cancellationMs = 0L;
+        long exchangeCancellationMs = 0L;
+        long localCancellationMs = 0L;
         long finalFlatCheckMs = 0L;
         long finalDispatchCheckMs = 0L;
         long finalAlgoQueryMs = 0L;
@@ -2240,38 +2241,45 @@ public class ProtectionOrderService {
                 exchangeProtectionCount = active.size();
                 stage = "CANCEL_EXCHANGE_PROTECTIONS";
                 phaseStartedAt = System.nanoTime();
-                for (var actual : active) {
-                    if (!symbol.equals(actual.symbol())) {
-                        return false;
-                    }
-                    var matches = locals.stream().filter(local -> actual.clientAlgoId() != null && actual.clientAlgoId().equals(local.getClientOrderId())
-                        || actual.algoId() != null && actual.algoId().equals(local.getExchangeOrderId())).toList();
-                    if (matches.isEmpty()) {
-                        if (systemProtectionId(actual.clientAlgoId())) {
+                try {
+                    for (var actual : active) {
+                        if (!symbol.equals(actual.symbol())) {
                             return false;
                         }
-                        continue;
+                        var matches = locals.stream().filter(local -> actual.clientAlgoId() != null && actual.clientAlgoId().equals(local.getClientOrderId())
+                            || actual.algoId() != null && actual.algoId().equals(local.getExchangeOrderId())).toList();
+                        if (matches.isEmpty()) {
+                            if (systemProtectionId(actual.clientAlgoId())) {
+                                return false;
+                            }
+                            continue;
+                        }
+                        if (matches.size() != 1 || "NOT_SENT".equals(matches.getFirst().getStatus())
+                            || !Objects.equals(matches.getFirst().getClientOrderId(), actual.clientAlgoId())
+                            || matches.getFirst().getExchangeOrderId() != null && !matches.getFirst().getExchangeOrderId().equals(actual.algoId())
+                            || !cancelOne(credentialId, matches.getFirst(), true)) {
+                            return false;
+                        }
+                        canceledProtectionCount++;
                     }
-                    if (matches.size() != 1 || "NOT_SENT".equals(matches.getFirst().getStatus())
-                        || !Objects.equals(matches.getFirst().getClientOrderId(), actual.clientAlgoId())
-                        || matches.getFirst().getExchangeOrderId() != null && !matches.getFirst().getExchangeOrderId().equals(actual.algoId())
-                        || !cancelOne(credentialId, matches.getFirst(), true)) {
-                        return false;
-                    }
-                    canceledProtectionCount++;
+                } finally {
+                    exchangeCancellationMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
                 }
             }
             stage = "CANCEL_REMAINING_LOCAL_PROTECTIONS";
             phaseStartedAt = System.nanoTime();
-            for (var local : locals) {
-                if (ACTIVE_STATUSES.contains(local.getStatus()) || "MISSING".equals(local.getStatus())) {
-                    if (!cancelOne(credentialId, local, live)) {
-                        return false;
+            try {
+                for (var local : locals) {
+                    if (ACTIVE_STATUSES.contains(local.getStatus()) || "MISSING".equals(local.getStatus())) {
+                        if (!cancelOne(credentialId, local, live)) {
+                            return false;
+                        }
+                        canceledProtectionCount++;
                     }
-                    canceledProtectionCount++;
                 }
+            } finally {
+                localCancellationMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             }
-            cancellationMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
             if (!live) {
                 stage = "COMPLETE";
                 return true;
@@ -2302,8 +2310,8 @@ public class ProtectionOrderService {
             return clean;
         } finally {
             long totalMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - totalStartedAt);
-            log.info("开仓前保护清理分阶段耗时 credentialId={} symbol={} live={} stage={} preflightMs={} dispatchRecoveryMs={} localReadMs={} initialAlgoQueryMs={} cancellationMs={} finalFlatCheckMs={} finalDispatchCheckMs={} finalAlgoQueryMs={} localProtectionCount={} exchangeProtectionCount={} canceledProtectionCount={} totalMs={}",
-                credentialId, symbol, live, stage, preflightMs, dispatchRecoveryMs, localReadMs, initialAlgoQueryMs, cancellationMs, finalFlatCheckMs,
+            log.info("开仓前保护清理分阶段耗时 credentialId={} symbol={} live={} stage={} preflightMs={} dispatchRecoveryMs={} localReadMs={} initialAlgoQueryMs={} exchangeCancellationMs={} localCancellationMs={} finalFlatCheckMs={} finalDispatchCheckMs={} finalAlgoQueryMs={} localProtectionCount={} exchangeProtectionCount={} canceledProtectionCount={} totalMs={}",
+                credentialId, symbol, live, stage, preflightMs, dispatchRecoveryMs, localReadMs, initialAlgoQueryMs, exchangeCancellationMs, localCancellationMs, finalFlatCheckMs,
                 finalDispatchCheckMs, finalAlgoQueryMs, localProtectionCount, exchangeProtectionCount, canceledProtectionCount, totalMs);
         }
     }
