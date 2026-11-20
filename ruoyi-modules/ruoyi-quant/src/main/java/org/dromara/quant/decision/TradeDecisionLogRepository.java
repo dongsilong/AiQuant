@@ -2,6 +2,8 @@ package org.dromara.quant.decision;
 
 import org.dromara.common.core.domain.PageResult;
 import org.dromara.quant.decision.mapper.TradeDecisionLogMapper;
+import org.dromara.quant.config.QuantProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.annotation.Propagation;
@@ -11,6 +13,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.*;
 
@@ -21,7 +24,10 @@ import java.util.*;
 @Slf4j
 public class TradeDecisionLogRepository {
     private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+    private static final ZoneId STORAGE_ZONE = ZoneId.of("Asia/Shanghai");
     private final TradeDecisionLogMapper mapper;
+    @Autowired
+    private QuantProperties quantProperties;
 
     public TradeDecisionLogRepository(TradeDecisionLogMapper mapper) {
         this.mapper = Objects.requireNonNull(mapper);
@@ -95,7 +101,7 @@ public class TradeDecisionLogRepository {
     }
 
     private static Timestamp timestamp(Instant instant) {
-        return instant == null ? null : Timestamp.valueOf(LocalDateTime.ofInstant(instant, ZoneId.of("Asia/Shanghai")));
+        return instant == null ? null : Timestamp.valueOf(LocalDateTime.ofInstant(instant, STORAGE_ZONE));
     }
 
     private static String percent(BigDecimal rate) {
@@ -526,11 +532,14 @@ public class TradeDecisionLogRepository {
      * 按查询条件分页读取决策日志。
      */
     public PageResult<Map<String, Object>> list(TradeDecisionQuery q) {
-        LocalDateTime to = q.getTo() == null ? LocalDateTime.now(ZoneId.of("Asia/Shanghai")) : q.getTo();
-        LocalDateTime from = q.getFrom() == null ? to.minusHours(24) : q.getFrom();
-        if (from.isAfter(to)) {
+        ZoneId displayZone = ZoneId.of(quantProperties.getTimeZone());
+        LocalDateTime displayTo = q.getTo() == null ? LocalDateTime.now(displayZone) : q.getTo();
+        LocalDateTime displayFrom = q.getFrom() == null ? displayTo.minusHours(24) : q.getFrom();
+        if (displayFrom.isAfter(displayTo)) {
             throw new org.dromara.common.core.exception.ServiceException("开始时间不能晚于结束时间");
         }
+        LocalDateTime from = LocalDateTime.ofInstant(displayFrom.atZone(displayZone).toInstant(), STORAGE_ZONE);
+        LocalDateTime to = LocalDateTime.ofInstant(displayTo.atZone(displayZone).toInstant(), STORAGE_ZONE);
         int size = Math.clamp(q.getPageSize() == null ? 20 : q.getPageSize(), 1, 100);
         long page = Math.max(1, q.getPageNum() == null ? 1 : q.getPageNum());
         Long total = mapper.countLogs(q, from, to);
@@ -544,6 +553,10 @@ public class TradeDecisionLogRepository {
     public Map<String, Object> detail(Long id) {
         var rows = mapper.selectDetail(id);
         return rows.isEmpty() ? null : display(rows.getFirst());
+    }
+
+    private static boolean isTimeColumn(String column) {
+        return Set.of("event_time", "trade_time", "kline_time", "last_time", "created_at", "updated_at").contains(column);
     }
 
     private Map<String, Object> display(Map<String, Object> row) {
@@ -560,11 +573,10 @@ public class TradeDecisionLogRepository {
             if (value instanceof BigDecimal) {
                 value = value.toString();
             }
-            if (value instanceof Timestamp t) {
-                value = t.toLocalDateTime().toString().replace('T', ' ');
-            }
-            if (value instanceof LocalDateTime t) {
-                value = t.toString().replace('T', ' ');
+            if (isTimeColumn(column) && value instanceof Timestamp t) {
+                value = t.toLocalDateTime().atZone(STORAGE_ZONE).withZoneSameInstant(ZoneId.of(quantProperties.getTimeZone())).toOffsetDateTime();
+            } else if (isTimeColumn(column) && value instanceof LocalDateTime t) {
+                value = t.atZone(STORAGE_ZONE).withZoneSameInstant(ZoneId.of(quantProperties.getTimeZone())).toOffsetDateTime();
             }
             result.put(name.toString(), value);
         });
