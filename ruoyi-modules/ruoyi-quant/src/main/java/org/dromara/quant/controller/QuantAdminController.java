@@ -243,7 +243,7 @@ public class QuantAdminController {
             row.put("recoveryRequired", item.getRecoveryRequired());
             row.put("recoveryRequiredLabel", Boolean.TRUE.equals(item.getRecoveryRequired()) ? "是" : "否");
             row.put("unsafeRecovery", item.getUnsafeRecovery());
-            row.put("updatedAt", item.getUpdatedAt() == null ? null : item.getUpdatedAt().atOffset(ZoneOffset.UTC));
+            row.put("updatedAt", item.getUpdatedAt());
             return row;
         }).toList();
         return R.ok(PageResult.build(rows, page.getTotal()));
@@ -290,7 +290,7 @@ public class QuantAdminController {
             row.put("operationType", item.getOperationType());
             row.put("idempotencyKey", item.getIdempotencyKey());
             row.put("createdAt", item.getCreatedAt() == null ? null : item.getCreatedAt().atOffset(ZoneOffset.UTC));
-            row.put("updatedAt", item.getUpdatedAt());
+            row.put("updatedAt", item.getUpdatedAt() == null ? null : item.getUpdatedAt().atOffset(ZoneOffset.UTC));
             return row;
         }).toList();
         return R.ok(PageResult.build(rows, page.getTotal()));
