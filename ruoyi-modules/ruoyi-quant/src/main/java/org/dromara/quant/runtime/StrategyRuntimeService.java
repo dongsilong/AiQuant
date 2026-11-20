@@ -1681,8 +1681,26 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         Instant now = Instant.now();
         Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
-        return MarketEventFreshness.isFresh(snapshot.eventTime(), snapshot.receivedAt(), now, exchangeNow,
-            Math.max(1, properties.getMarket().getMaxEventAgeMillis())) ? null : "STALE_EVENT";
+        if (!MarketEventFreshness.isFresh(snapshot.eventTime(), snapshot.receivedAt(), now, exchangeNow,
+            Math.max(1, properties.getMarket().getMaxEventAgeMillis()))) {
+            return "STALE_EVENT";
+        }
+        Instant lastClosedKlineOpenTime = snapshot.lastClosedKlineOpenTime();
+        if (lastClosedKlineOpenTime == null) {
+            return "LATEST_CLOSED_KLINE_MISSING";
+        }
+        Instant currentMinuteOpen = exchangeNow.truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
+        Instant expectedLastClosedKlineOpenTime = currentMinuteOpen.minusSeconds(60L);
+        if (!lastClosedKlineOpenTime.equals(expectedLastClosedKlineOpenTime)) {
+            // Binance 1m K线的 closeTime 是开盘时间后 59.999 秒；兼容刚好处于分钟结束边界的最终收盘事件。
+            Instant currentMinuteCloseTime = currentMinuteOpen.plusSeconds(60L).minusMillis(1L);
+            boolean justClosedCurrentMinute = lastClosedKlineOpenTime.equals(currentMinuteOpen)
+                && !exchangeNow.isBefore(currentMinuteCloseTime);
+            if (!justClosedCurrentMinute) {
+                return "LATEST_CLOSED_KLINE_STALE";
+            }
+        }
+        return null;
     }
 
     /** 将均线阻断原因与同一版本的行情快照写入决策日志。 */
@@ -1691,6 +1709,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         return "1分钟均线行情不可用，禁止开仓；原因=" + blockReason
             + "；streamReady=" + snapshot.ready()
             + "；closedKlines=" + snapshot.closedKlines() + "/7"
+            + "；lastClosedKlineOpenTime=" + snapshot.lastClosedKlineOpenTime()
             + "；eventTime=" + snapshot.eventTime()
             + "；receivedAt=" + snapshot.receivedAt()
             + "；eventAgeMillis=" + (snapshot.eventTime() == null ? null : java.time.Duration.between(snapshot.eventTime(), now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()))).toMillis())
@@ -6109,7 +6128,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private record QuantExecutionRecordStatus(String value) {
     }
 
-    private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines) {
+    private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines, Instant lastClosedKlineOpenTime) {
     }
 
     /**
@@ -6166,7 +6185,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
 
         private synchronized EntryMaSnapshot snapshot() {
             boolean ready = historyReady && streamReady && eventTime != null && receivedAt != null;
-            return new EntryMaSnapshot(ready, ma5, ma7, eventTime, receivedAt, market.closedKlineCloses.size());
+            return new EntryMaSnapshot(ready, ma5, ma7, eventTime, receivedAt, market.closedKlineCloses.size(), market.lastClosedKlineOpenTime);
         }
     }
 

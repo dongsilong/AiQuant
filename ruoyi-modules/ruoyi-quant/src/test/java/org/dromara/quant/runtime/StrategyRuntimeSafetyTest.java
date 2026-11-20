@@ -319,34 +319,52 @@ class StrategyRuntimeSafetyTest {
             KlineSlopeRateStrategy slopePlugin = org.mockito.Mockito.spy(new KlineSlopeRateStrategy());
             ReflectionTestUtils.setField(f.runtime, "plugin", slopePlugin);
             ReflectionTestUtils.setField(f.runtime, "params", Map.of("entryAngleDegrees", 30));
+            ReflectionTestUtils.setField(f.runtime, "entryMaEnabled", true);
 
-            Instant firstOpen = Instant.now().minusSeconds(7 * 60L);
+            Instant latestClosedOpen = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MINUTES).minusSeconds(60L);
+            List<ExchangeGateway.Kline> closedKlines = new ArrayList<>();
             for (int i = 1; i <= 7; i++) {
-                Instant open = firstOpen.plusSeconds((i - 1L) * 60L);
-                Instant now = Instant.now();
+                Instant open = latestClosedOpen.minusSeconds((7L - i) * 60L);
                 var kline = new ExchangeGateway.Kline(open, open.plusSeconds(59), BigDecimal.ONE, BigDecimal.TEN,
                     BigDecimal.ZERO, BigDecimal.valueOf(i), BigDecimal.ONE, true);
-                var event = new ExchangeGateway.MarketEvent("KLINE", "BTCUSDT", "1m", null, kline, now, null, now, false);
+                closedKlines.add(kline);
+                var ma = org.dromara.quant.market.OneMinuteMovingAverage.calculate(closedKlines);
+                Instant now = Instant.now();
+                var event = new ExchangeGateway.MarketEvent("KLINE", "BTCUSDT", "1m", null, kline, now, null, now, false)
+                    .withOneMinuteMa(ma.ma5(), ma.ma7(), ma.trend(), ma.ready());
                 ReflectionTestUtils.invokeMethod(f.service, "onEntryMaMarketEvent", f.runtime, event);
             }
 
-            Instant currentOpen = firstOpen.plusSeconds(7 * 60L);
+            Instant currentOpen = latestClosedOpen.plusSeconds(60L);
             Instant currentEventTime = Instant.now();
             var formingKline = new ExchangeGateway.Kline(currentOpen, currentOpen.plusSeconds(59), BigDecimal.ONE, BigDecimal.TEN,
                 BigDecimal.ZERO, new BigDecimal("100"), BigDecimal.ONE, false);
+            var ma = org.dromara.quant.market.OneMinuteMovingAverage.calculate(closedKlines);
             ReflectionTestUtils.invokeMethod(f.service, "onEntryMaMarketEvent", f.runtime,
-                new ExchangeGateway.MarketEvent("KLINE", "BTCUSDT", "1m", null, formingKline, currentEventTime, null, currentEventTime, false));
+                new ExchangeGateway.MarketEvent("KLINE", "BTCUSDT", "1m", null, formingKline, currentEventTime, null, currentEventTime, false)
+                    .withOneMinuteMa(ma.ma5(), ma.ma7(), ma.trend(), ma.ready()));
+            Instant readyAt = Instant.now();
+            ReflectionTestUtils.invokeMethod(f.service, "onEntryMaMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("KLINE_READY", "BTCUSDT", "1m", null, null, readyAt, null, readyAt, false));
+            ReflectionTestUtils.invokeMethod(f.service, "onEntryMaMarketEvent", f.runtime,
+                new ExchangeGateway.MarketEvent("CONNECTED", "BTCUSDT", "1m", null, null, readyAt, null, readyAt, false));
 
-            Object maMarket = ReflectionTestUtils.getField(f.runtime, "entryMaMarket");
-            assertEquals(0, new BigDecimal("5").compareTo((BigDecimal) ReflectionTestUtils.invokeMethod(maMarket, "movingAverage", 5)));
-            assertEquals(0, new BigDecimal("4").compareTo((BigDecimal) ReflectionTestUtils.invokeMethod(maMarket, "movingAverage", 7)));
-            assertNull(ReflectionTestUtils.invokeMethod(ReflectionTestUtils.getField(f.runtime, "market"), "movingAverage", 7),
-                "1m candles must not be mixed into the strategy's primary interval market state");
-            assertFalse((boolean) ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketReady", f.runtime),
-                "the MA feed must remain blocked until the stream recovery callback marks it ready");
+            Object entryMa = ReflectionTestUtils.getField(f.runtime, "entryMa");
+            Object snapshot = ReflectionTestUtils.invokeMethod(entryMa, "snapshot");
+            assertTrue((boolean) ReflectionTestUtils.invokeMethod(snapshot, "ready"));
+            assertEquals(0, new BigDecimal("5").compareTo((BigDecimal) ReflectionTestUtils.invokeMethod(snapshot, "ma5")));
+            assertEquals(0, new BigDecimal("4").compareTo((BigDecimal) ReflectionTestUtils.invokeMethod(snapshot, "ma7")));
+            assertEquals(latestClosedOpen, ReflectionTestUtils.invokeMethod(snapshot, "lastClosedKlineOpenTime"));
 
-            ReflectionTestUtils.setField(f.runtime, "entryMaStreamReady", true);
-            assertTrue((boolean) ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketReady", f.runtime));
+            Object maMarket = ReflectionTestUtils.getField(entryMa, "market");
+            @SuppressWarnings("unchecked")
+            Deque<BigDecimal> closedCloses = (Deque<BigDecimal>) ReflectionTestUtils.getField(maMarket, "closedKlineCloses");
+            assertEquals(7, closedCloses.size());
+            @SuppressWarnings("unchecked")
+            Deque<BigDecimal> primaryCloses = (Deque<BigDecimal>) ReflectionTestUtils.getField(
+                ReflectionTestUtils.getField(f.runtime, "market"), "closedKlineCloses");
+            assertTrue(primaryCloses.isEmpty(), "1m candles must not be mixed into the strategy's primary interval market state");
+            assertNull(ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason", f.runtime, snapshot));
 
             ((QuantStrategySymbol) ReflectionTestUtils.getField(f.runtime, "strategySymbol")).setIntervalCode("15m");
             ReflectionTestUtils.setField(f.runtime, "position", null);
@@ -3161,31 +3179,56 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
-    void entryMaBlockReasonIdentifiesStreamWarmupAndStaleData() throws Exception {
+    void entryMaBlockReasonRequiresLatestClosedOneMinuteKlineTime() throws Exception {
         Fixture f = fixture();
         try {
-            ReflectionTestUtils.setField(f.runtime, "plugin", new KlineSlopeRateStrategy());
-            Object market = ReflectionTestUtils.getField(f.runtime, "entryMaMarket");
+            ((QuantCredential) ReflectionTestUtils.getField(f.runtime, "credential")).setRunMode("LIVE");
+            ExchangeGateway gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+            when(gateway.exchangeTimeOffsetMillis("LIVE")).thenReturn(0L);
 
-            assertEquals("STREAM_NOT_READY", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason", f.runtime));
+            Object entryMa = ReflectionTestUtils.getField(f.runtime, "entryMa");
+            Object market = ReflectionTestUtils.getField(entryMa, "market");
+            assertEquals("STREAM_NOT_READY", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason",
+                f.runtime, ReflectionTestUtils.invokeMethod(entryMa, "snapshot")));
 
-            ReflectionTestUtils.setField(f.runtime, "entryMaStreamReady", true);
+            ReflectionTestUtils.setField(entryMa, "historyReady", true);
+            ReflectionTestUtils.setField(entryMa, "streamReady", true);
+            Instant now = Instant.now();
+            ReflectionTestUtils.setField(entryMa, "eventTime", now);
+            ReflectionTestUtils.setField(entryMa, "receivedAt", now);
+
             @SuppressWarnings("unchecked")
             Deque<BigDecimal> closes = (Deque<BigDecimal>) ReflectionTestUtils.getField(market, "closedKlineCloses");
             for (int i = 1; i <= 6; i++) {
                 closes.addLast(BigDecimal.valueOf(i));
             }
-            assertEquals("INSUFFICIENT_CLOSED_KLINES", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason", f.runtime));
+            assertEquals("INSUFFICIENT_CLOSED_KLINES", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason",
+                f.runtime, ReflectionTestUtils.invokeMethod(entryMa, "snapshot")));
 
             closes.addLast(BigDecimal.valueOf(7));
-            ReflectionTestUtils.setField(f.runtime, "entryMaLastEventTime", null);
-            ReflectionTestUtils.setField(f.runtime, "entryMaLastReceivedAt", Instant.now());
-            assertEquals("EVENT_TIME_MISSING", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason", f.runtime));
+            ReflectionTestUtils.setField(entryMa, "ma5", new BigDecimal("5"));
+            ReflectionTestUtils.setField(entryMa, "ma7", new BigDecimal("4"));
+            assertEquals("LATEST_CLOSED_KLINE_MISSING", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason",
+                f.runtime, ReflectionTestUtils.invokeMethod(entryMa, "snapshot")));
 
-            Instant now = Instant.now();
-            ReflectionTestUtils.setField(f.runtime, "entryMaLastEventTime", now.minusSeconds(60));
-            ReflectionTestUtils.setField(f.runtime, "entryMaLastReceivedAt", now);
-            assertEquals("STALE_EVENT", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason", f.runtime));
+            Instant expectedLatestClosedOpen = now.truncatedTo(java.time.temporal.ChronoUnit.MINUTES).minusSeconds(60L);
+            ReflectionTestUtils.setField(market, "lastClosedKlineOpenTime", expectedLatestClosedOpen.minusSeconds(60L));
+            assertEquals("LATEST_CLOSED_KLINE_STALE", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason",
+                f.runtime, ReflectionTestUtils.invokeMethod(entryMa, "snapshot")));
+
+            ReflectionTestUtils.setField(market, "lastClosedKlineOpenTime", expectedLatestClosedOpen);
+            ReflectionTestUtils.setField(entryMa, "eventTime", null);
+            assertEquals("EVENT_TIME_MISSING", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason",
+                f.runtime, ReflectionTestUtils.invokeMethod(entryMa, "snapshot")));
+
+            ReflectionTestUtils.setField(entryMa, "eventTime", now.minusSeconds(60L));
+            assertEquals("STALE_EVENT", ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason",
+                f.runtime, ReflectionTestUtils.invokeMethod(entryMa, "snapshot")));
+
+            ReflectionTestUtils.setField(entryMa, "eventTime", Instant.now());
+            ReflectionTestUtils.setField(entryMa, "receivedAt", Instant.now());
+            assertNull(ReflectionTestUtils.invokeMethod(f.service, "entryMaMarketBlockReason",
+                f.runtime, ReflectionTestUtils.invokeMethod(entryMa, "snapshot")));
         } finally {
             f.service.destroy();
         }
