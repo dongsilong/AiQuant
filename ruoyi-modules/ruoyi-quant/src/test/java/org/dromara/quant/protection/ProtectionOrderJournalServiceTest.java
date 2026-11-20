@@ -57,7 +57,7 @@ class ProtectionOrderJournalServiceTest {
     @Test
     void childRetainsFrozenOwnerAfterRuntimeHasMovedToAnotherCycle() {
         when(orders.insert(any(QuantOrder.class))).thenReturn(1);
-        assertTrue(journal.bindChild(credential, local(), actual("BOTH"), child(91L)));
+        assertTrue(journal.bindChild(credential, local(), actual("BOTH"), child(91L), BigDecimal.ZERO));
         var saved = org.mockito.ArgumentCaptor.forClass(QuantOrder.class);
         verify(orders).insert(saved.capture());
         assertEquals(2L, saved.getValue().getStrategyId());
@@ -71,7 +71,7 @@ class ProtectionOrderJournalServiceTest {
     @Test
     void hedgeChildAlsoRecordsImmutableCloseRole() {
         when(orders.insert(any(QuantOrder.class))).thenReturn(1);
-        assertTrue(journal.bindChild(credential, local(), actual("LONG"), child(91L)));
+        assertTrue(journal.bindChild(credential, local(), actual("LONG"), child(91L), BigDecimal.ZERO));
         verify(intents).recordVerifiedProtectionChild(1L, 2L, 3L, "BTCUSDT", "cycle-a", "LONG", "SELL", 91L, "child-client");
     }
 
@@ -79,9 +79,36 @@ class ProtectionOrderJournalServiceTest {
     void reducedAlgoQuantityIsAcceptedOnlyWhenExactChildProvesFullFill() {
         var parent = local();
         parent.setQuantity(new BigDecimal("2"));
-        assertTrue(journal.bindChild(credential, parent, actual("BOTH"), child(91L)));
+        assertTrue(journal.bindChild(credential, parent, actual("BOTH"), child(91L), BigDecimal.ONE));
         verify(orders).insert(any(QuantOrder.class));
         verify(intents).recordVerifiedProtectionChild(1L, 2L, 3L, "BTCUSDT", "cycle-a", "LONG", "SELL", 91L, "child-client");
+    }
+
+
+    @Test
+    void priorCycleFillExplainsReducedAlgoQuantityWithoutDoubleCountingParentExecutedQuantity() {
+        var parent = local();
+        parent.setQuantity(new BigDecimal("236631"));
+        parent.setExecutedQuantity(new BigDecimal("118316"));
+        var algo = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 81L, "QFTP_test", "FINISHED", "SELL", "BOTH",
+            "TAKE_PROFIT_MARKET", new BigDecimal("118316"), BigDecimal.TEN, Instant.now(), new BigDecimal("118316"),
+            true, false, 91L, BigDecimal.TEN);
+        var filledChild = new ExchangeGateway.OrderSnapshot("BTCUSDT", 91L, "child-client", "SELL", "MARKET", "FILLED",
+            BigDecimal.ZERO, new BigDecimal("118316"), new BigDecimal("118316"), Instant.now(), BigDecimal.TEN);
+        when(orders.insert(any(QuantOrder.class))).thenReturn(1);
+
+        assertTrue(journal.bindChild(credential, parent, algo, filledChild, new BigDecimal("118315")));
+
+        verify(orders).insert(any(QuantOrder.class));
+    }
+
+    @Test
+    void reducedAlgoQuantityIsRejectedWhenPriorCycleFillsDoNotExplainTheRemainder() {
+        var parent = local();
+        parent.setQuantity(new BigDecimal("2"));
+        assertThrows(IllegalStateException.class,
+            () -> journal.bindChild(credential, parent, actual("BOTH"), child(91L), BigDecimal.ZERO));
+        verifyNoInteractions(orders);
     }
 
     @Test
@@ -90,7 +117,7 @@ class ProtectionOrderJournalServiceTest {
         parent.setQuantity(new BigDecimal("2"));
         var partialChild = new ExchangeGateway.OrderSnapshot("BTCUSDT", 91L, "child-client", "SELL", "MARKET", "CANCELED",
             BigDecimal.ZERO, BigDecimal.ONE, new BigDecimal("0.5"), Instant.now(), BigDecimal.TEN);
-        assertThrows(IllegalStateException.class, () -> journal.bindChild(credential, parent, actual("BOTH"), partialChild));
+        assertThrows(IllegalStateException.class, () -> journal.bindChild(credential, parent, actual("BOTH"), partialChild, BigDecimal.ONE));
         verifyNoInteractions(orders);
     }
 
@@ -107,7 +134,7 @@ class ProtectionOrderJournalServiceTest {
 
     @Test
     void wrongChildIdentityCannotReceiveParentAttribution() {
-        assertThrows(IllegalStateException.class, () -> journal.bindChild(credential, local(), actual("BOTH"), child(92L)));
+        assertThrows(IllegalStateException.class, () -> journal.bindChild(credential, local(), actual("BOTH"), child(92L), BigDecimal.ZERO));
         verifyNoInteractions(orders);
     }
 
@@ -117,7 +144,7 @@ class ProtectionOrderJournalServiceTest {
         local.setStrategyId(null);
         local.setStrategyInstanceId(null);
         when(protections.cycleOwners(any(), any(), any(), any(), any())).thenReturn(List.of());
-        assertFalse(journal.bindChild(credential, local, actual("BOTH"), child(91L)));
+        assertFalse(journal.bindChild(credential, local, actual("BOTH"), child(91L), BigDecimal.ZERO));
         verifyNoInteractions(orders);
     }
 
