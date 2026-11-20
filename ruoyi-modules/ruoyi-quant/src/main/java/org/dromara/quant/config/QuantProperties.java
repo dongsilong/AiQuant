@@ -10,6 +10,11 @@ import java.math.BigDecimal;
 @Data
 public class QuantProperties {
     /**
+     * 量化接口时间展示时区，默认北京时间。
+     */
+    private String timeZone = "Asia/Shanghai";
+
+    /**
      * Binance 连接配置。
      */
     private Binance binance = new Binance();
