@@ -1289,11 +1289,15 @@ public class ProtectionOrderService {
         if (local.getPositionId() == null || local.getPositionCycleKey() == null || local.getQuantity() == null) {
             throw new IllegalStateException("保护单缺少持仓周期或原始数量，无法证明 Algo 剩余数量");
         }
-        BigDecimal priorExecuted = priorProtectionExecuted(credentialId, local);
+        BigDecimal priorExecuted = priorProtectionExecuted(credentialId, local, actual.createTime());
+        boolean quantityMatches = local.getQuantity().compareTo(actual.quantity()) == 0;
         BigDecimal expectedRemaining = local.getQuantity().subtract(priorExecuted);
-        if (expectedRemaining.signum() <= 0 || expectedRemaining.compareTo(actual.quantity()) != 0) {
-            throw new IllegalStateException("Algo 数量变化无法由同一持仓周期已确认保护成交解释；localQuantity=" + local.getQuantity()
-                + "; priorProtectionExecuted=" + priorExecuted + "; algoQuantity=" + actual.quantity());
+        boolean reducedQuantityProven = actual.createTime() != null && priorExecuted.signum() > 0
+            && expectedRemaining.signum() > 0 && expectedRemaining.compareTo(actual.quantity()) == 0;
+        if (!quantityMatches && !reducedQuantityProven) {
+            throw new IllegalStateException("Algo 数量变化无法由当前 Algo 创建后已确认的保护成交解释；localQuantity=" + local.getQuantity()
+                + "; postAlgoProtectionExecuted=" + priorExecuted + "; algoQuantity=" + actual.quantity()
+                + "; algoCreateTime=" + actual.createTime());
         }
 
         ExchangeGateway.OrderSnapshot child = gateway.queryOrder(credential, local.getSymbol(), actual.actualOrderId(), null);
@@ -1332,20 +1336,24 @@ public class ProtectionOrderService {
         return actual.algoId();
     }
 
-    /** 同一持仓周期内、当前保护单以外已确认完成的保护成交量。 */
-    private BigDecimal priorProtectionExecuted(Long credentialId, QuantProtectionOrder local) {
-        if (local.getPositionId() == null || local.getPositionCycleKey() == null) {
+    /** 仅累计当前 Binance Algo 创建之后、由精确保护子订单记录证明的其他保护成交。 */
+    private BigDecimal priorProtectionExecuted(Long credentialId, QuantProtectionOrder local, java.time.Instant currentAlgoCreateTime) {
+        if (local.getPositionId() == null || local.getPositionCycleKey() == null || currentAlgoCreateTime == null || protectionJournal == null) {
             return BigDecimal.ZERO;
         }
-        return mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
+        List<QuantProtectionOrder> priorProtections = mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
                 .eq(QuantProtectionOrder::getCredentialId, credentialId)
                 .eq(QuantProtectionOrder::getPositionId, local.getPositionId())
                 .eq(QuantProtectionOrder::getPositionCycleKey, local.getPositionCycleKey()))
             .stream()
             .filter(order -> !Objects.equals(order.getId(), local.getId()))
             .filter(order -> "FINISHED".equalsIgnoreCase(order.getStatus()))
-            .map(order -> order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity())
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
+            .filter(order -> order.getExecutedQuantity() != null && order.getExecutedQuantity().signum() > 0)
+            .toList();
+        if (priorProtections.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        return protectionJournal.priorProtectionExecutedAfter(credentialId, local, priorProtections, currentAlgoCreateTime);
     }
 
     /** 终态事实落库后，清除仍精确引用该订单的目标关联。 */
