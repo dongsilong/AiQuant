@@ -34,6 +34,7 @@ class ProtectionOrderServiceTest {
     void setup() {
         service.setLiveOrderDispatcher(dispatcher);
         service.setQuantPositionMapper(positionMapper);
+        service.setExchangeTradingRuleCache(new org.dromara.quant.exchange.ExchangeTradingRuleCache(gateway));
         when(dispatcher.begin(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.<Long>nullable(Long.class),
             org.mockito.ArgumentMatchers.<Long>nullable(Long.class))).thenAnswer(call -> new LiveOrderDispatcher.Ticket(call.getArgument(0), call.getArgument(1),
             call.getArgument(2)));
@@ -53,7 +54,7 @@ class ProtectionOrderServiceTest {
             ".001"), BigDecimal.ONE, "TRADING"));
         when(execution.requireCredential(1L)).thenReturn(credential);
         when(execution.toCredential(credential)).thenReturn(new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE"));
-        when(gateway.queryTradingRule(any(), any())).thenReturn(new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 3, new BigDecimal("0.01"), new BigDecimal("0.001"),
+        when(gateway.queryTradingRuleForProtection(any(), any())).thenReturn(new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 3, new BigDecimal("0.01"), new BigDecimal("0.001"),
             new BigDecimal("0.001"), BigDecimal.ONE, "TRADING"));
         when(gateway.queryPositionMode(any())).thenReturn(new ExchangeGateway.PositionMode(false));
         doAnswer(invocation -> {
@@ -673,7 +674,7 @@ class ProtectionOrderServiceTest {
 
     @Test
     void protectionUsesActualEnvironmentRuleInsteadOfLocalSymbolRule() {
-        when(gateway.queryTradingRule(any(), any())).thenReturn(new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.1"), BigDecimal.ONE, BigDecimal.ONE,
+        when(gateway.queryTradingRuleForProtection(any(), any())).thenReturn(new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.1"), BigDecimal.ONE, BigDecimal.ONE,
             BigDecimal.ONE, "TRADING"));
         position.setQuantity(new BigDecimal("11233"));
         when(gateway.placeProtectionOrder(any())).thenAnswer(i -> new ExchangeGateway.ProtectionOrderResult(55L,
@@ -694,7 +695,7 @@ class ProtectionOrderServiceTest {
         local.setExchangeOrderId(null);
         position.setQuantity(new BigDecimal("2"));
         when(mapper.selectOne(any())).thenReturn(local);
-        when(gateway.queryTradingRule(any(), any())).thenReturn(new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE,
+        when(gateway.queryTradingRuleForProtection(any(), any())).thenReturn(new ExchangeGateway.SymbolRule("BTCUSDT", "USDT", 2, 0, new BigDecimal("0.01"), BigDecimal.ONE, BigDecimal.ONE,
             BigDecimal.ONE, "TRADING"));
         when(mapper.updateById(any(QuantProtectionOrder.class))).thenReturn(1);
         when(gateway.queryProtectionOrder(any(), any(), any(), any(), any())).thenThrow(new org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException()).thenReturn(snapshot(55L, local.getClientOrderId(), BigDecimal.ONE, "NEW", null));
