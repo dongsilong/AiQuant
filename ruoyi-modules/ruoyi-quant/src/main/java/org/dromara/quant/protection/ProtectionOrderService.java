@@ -1461,7 +1461,9 @@ public class ProtectionOrderService {
         if (mapper.updateById(local) != 1) {
             throw new IllegalStateException("保护撤单终态未可靠写入本地账本");
         }
-        markTerminalTargetReference(credentialId, local);
+        if (Set.of("CANCELED", "EXPIRED", "REJECTED").contains(actual.status())) {
+            markTerminalTargetReference(credentialId, local);
+        }
         return actual.algoId();
     }
 
