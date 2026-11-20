@@ -559,37 +559,50 @@ class ProtectionOrderServiceTest {
                                             ProtectionTargetCoordinator.Lease lease) { }
 
     private TriggeredRecoveryFixture triggeredRecoveryFixture(String childClientOrderId, String childStatus, String childExecutedQuantity) {
+        return triggeredRecoveryFixture(childClientOrderId, childStatus, childExecutedQuantity, "601369", "300685", "300684");
+    }
+
+    private TriggeredRecoveryFixture triggeredRecoveryFixture(String childClientOrderId, String childStatus, String childExecutedQuantity,
+                                                              String localQuantity, String algoQuantity, String priorExecutedQuantity) {
         String clientId = "QHARD_triggered";
         QuantProtectionOrder local = order();
         local.setId(7L);
         local.setCredentialId(1L);
         local.setPositionId(10L);
         local.setPositionCycleKey("cycle-triggered");
+        local.setCreatedAtEpochMillis(1_795_170_673_115L);
         local.setSymbol("JCTUSDT");
         local.setClientOrderId(clientId);
         local.setExchangeOrderId(null);
         local.setProtectionType("HARD_STOP");
         local.setPositionSide("SHORT");
         local.setOrderType("STOP_MARKET");
-        local.setQuantity(new BigDecimal("601369"));
+        local.setQuantity(new BigDecimal(localQuantity));
         local.setStopPrice(new BigDecimal("0.0051900"));
         local.setExecutedQuantity(BigDecimal.ZERO);
 
         QuantProtectionOrder firstTp = new QuantProtectionOrder();
         firstTp.setId(6L);
+        firstTp.setCredentialId(1L);
+        firstTp.setPositionId(10L);
+        firstTp.setPositionCycleKey("cycle-triggered");
+        firstTp.setSymbol("JCTUSDT");
+        firstTp.setPositionSide("SHORT");
         firstTp.setStatus("FINISHED");
-        firstTp.setExecutedQuantity(new BigDecimal("300684"));
+        firstTp.setExecutedQuantity(new BigDecimal(priorExecutedQuantity));
         when(mapper.selectOne(any())).thenReturn(local);
         when(mapper.selectList(any())).thenReturn(List.of(firstTp));
         when(dispatcher.activeDispatch(1L, "JCTUSDT")).thenReturn(
             new LiveOrderDispatcher.ActiveDispatch(1L, "JCTUSDT", "cancel-key", "PROTECT_CANCEL", clientId, "UNKNOWN", null));
 
+        Instant algoCreatedAt = Instant.parse("2026-11-20T10:31:13.115Z");
+        BigDecimal algoQty = new BigDecimal(algoQuantity);
         var algo = new ExchangeGateway.ProtectionOrderSnapshot("JCTUSDT", 1000000282028535L, clientId, "FINISHED",
-            "BUY", "SHORT", "STOP_MARKET", new BigDecimal("300685"), new BigDecimal("0.0051900"), Instant.now(),
-            new BigDecimal("300685"), true, false, 271997586L, new BigDecimal("0.0052680"));
+            "BUY", "SHORT", "STOP_MARKET", algoQty, new BigDecimal("0.0051900"), Instant.now(),
+            algoQty, true, false, 271997586L, new BigDecimal("0.0052680"), algoCreatedAt);
         when(gateway.queryProtectionOrder(any(), org.mockito.ArgumentMatchers.nullable(Long.class), eq(clientId), eq("JCTUSDT"), org.mockito.ArgumentMatchers.nullable(Long.class))).thenReturn(algo, algo);
         var child = new ExchangeGateway.OrderSnapshot("JCTUSDT", 271997586L, childClientOrderId, "BUY", "MARKET", childStatus,
-            BigDecimal.ZERO, new BigDecimal("300685"), new BigDecimal(childExecutedQuantity), Instant.now(), new BigDecimal("0.0052680"),
+            BigDecimal.ZERO, algoQty, new BigDecimal(childExecutedQuantity), Instant.now(), new BigDecimal("0.0052680"),
             "SHORT", true, Instant.now(), false);
         when(gateway.queryOrder(any(), eq("JCTUSDT"), eq(271997586L), isNull())).thenReturn(child);
 
@@ -597,11 +610,138 @@ class ProtectionOrderServiceTest {
         ProtectionTargetCoordinator.Lease lease = mock(ProtectionTargetCoordinator.Lease.class);
         when(coordinator.acquire(eq(1L), any(QuantPosition.class), eq("HARD_STOP"))).thenReturn(lease);
         when(lease.state()).thenReturn(new ProtectionTargetCoordinator.State(2, 0, 0, 7L, null, null,
-            new BigDecimal("300685"), new BigDecimal("0.0051900"), "STOP_MARKET"));
+            algoQty, new BigDecimal("0.0051900"), "STOP_MARKET"));
         var coordinatedService = new ProtectionOrderService(gateway, mapper, execution, coordinator);
         coordinatedService.setLiveOrderDispatcher(dispatcher);
+        ProtectionOrderJournalService journal = mock(ProtectionOrderJournalService.class);
+        when(journal.priorProtectionExecutedAfter(eq(1L), same(local), any(), eq(algoCreatedAt)))
+            .thenReturn(new BigDecimal(priorExecutedQuantity));
+        org.springframework.test.util.ReflectionTestUtils.setField(coordinatedService, "protectionJournal", journal);
         when(dispatcher.recoveredFromExchange(1L, "JCTUSDT", "cancel-key", clientId, 1000000282028535L)).thenReturn(true);
         return new TriggeredRecoveryFixture(coordinatedService, local, lease);
+    }
+
+    @Test
+    void priorProtectionFillBeforeCurrentAlgoCreationIsNotCounted() {
+        var quantOrders = mock(org.dromara.quant.order.mapper.QuantOrderMapper.class);
+        var journal = new ProtectionOrderJournalService(mapper, quantOrders, mock(org.dromara.quant.execution.StrategyOrderIntentService.class));
+        QuantProtectionOrder current = new QuantProtectionOrder();
+        current.setId(2L);
+        current.setCredentialId(1L);
+        current.setPositionId(20L);
+        current.setPositionCycleKey("cycle-pippin");
+        current.setSymbol("PIPPINUSDT");
+        current.setPositionSide("SHORT");
+        QuantProtectionOrder prior = new QuantProtectionOrder();
+        prior.setId(1L);
+        prior.setCredentialId(1L);
+        prior.setPositionId(20L);
+        prior.setPositionCycleKey("cycle-pippin");
+        prior.setSymbol("PIPPINUSDT");
+        prior.setPositionSide("SHORT");
+        prior.setStatus("FINISHED");
+        prior.setExecutedQuantity(new BigDecimal("118565"));
+        org.dromara.quant.order.domain.QuantOrder childOrder = new org.dromara.quant.order.domain.QuantOrder();
+        childOrder.setExchangeOrderId(1267534745L);
+        childOrder.setIdempotencyKey("PROTECTION_CHILD:1:1267534745");
+        childOrder.setStatus("FILLED");
+        childOrder.setOriginalQuantity(new BigDecimal("118565"));
+        childOrder.setExecutedQuantity(new BigDecimal("118565"));
+        childOrder.setReduceOnly(true);
+        childOrder.setClosePosition(false);
+        childOrder.setSide("BUY");
+        childOrder.setPositionSide("SHORT");
+        childOrder.setExchangeCreatedAt(java.time.LocalDateTime.of(2026, 11, 20, 10, 30, 26, 59_000_000));
+        when(quantOrders.selectList(any())).thenReturn(List.of(childOrder));
+
+        BigDecimal executed = journal.priorProtectionExecutedAfter(1L, current, List.of(prior),
+            Instant.parse("2026-11-20T10:31:13.115Z"));
+
+        assertEquals(0, executed.compareTo(BigDecimal.ZERO));
+    }
+
+    @Test
+    void onlyVerifiedProtectionChildCreatedAfterCurrentAlgoExplainsQuantityReduction() {
+        var quantOrders = mock(org.dromara.quant.order.mapper.QuantOrderMapper.class);
+        var journal = new ProtectionOrderJournalService(mapper, quantOrders, mock(org.dromara.quant.execution.StrategyOrderIntentService.class));
+        QuantProtectionOrder current = new QuantProtectionOrder();
+        current.setId(2L);
+        current.setCredentialId(1L);
+        current.setPositionId(20L);
+        current.setPositionCycleKey("cycle-pippin");
+        current.setSymbol("PIPPINUSDT");
+        current.setPositionSide("SHORT");
+        QuantProtectionOrder prior = new QuantProtectionOrder();
+        prior.setId(1L);
+        prior.setCredentialId(1L);
+        prior.setPositionId(20L);
+        prior.setPositionCycleKey("cycle-pippin");
+        prior.setSymbol("PIPPINUSDT");
+        prior.setPositionSide("SHORT");
+        prior.setStatus("FINISHED");
+        prior.setExecutedQuantity(new BigDecimal("300684"));
+        org.dromara.quant.order.domain.QuantOrder childOrder = new org.dromara.quant.order.domain.QuantOrder();
+        childOrder.setExchangeOrderId(1267534745L);
+        childOrder.setIdempotencyKey("PROTECTION_CHILD:1:1267534745");
+        childOrder.setStatus("FILLED");
+        childOrder.setOriginalQuantity(new BigDecimal("300684"));
+        childOrder.setExecutedQuantity(new BigDecimal("300684"));
+        childOrder.setReduceOnly(true);
+        childOrder.setClosePosition(false);
+        childOrder.setSide("BUY");
+        childOrder.setPositionSide("SHORT");
+        childOrder.setExchangeCreatedAt(java.time.LocalDateTime.of(2026, 11, 20, 10, 31, 14));
+        when(quantOrders.selectList(any())).thenReturn(List.of(childOrder));
+
+        BigDecimal executed = journal.priorProtectionExecutedAfter(1L, current, List.of(prior),
+            Instant.parse("2026-11-20T10:31:13.115Z"));
+
+        assertEquals(0, executed.compareTo(new BigDecimal("300684")));
+    }
+
+    @Test
+    void journalAcceptsExactAlgoQuantityEvenWhenPriorProtectionFillExists() {
+        var quantOrders = mock(org.dromara.quant.order.mapper.QuantOrderMapper.class);
+        var journal = new ProtectionOrderJournalService(mapper, quantOrders, mock(org.dromara.quant.execution.StrategyOrderIntentService.class));
+        QuantProtectionOrder local = new QuantProtectionOrder();
+        local.setId(2L);
+        local.setCredentialId(1L);
+        local.setStrategyId(11L);
+        local.setStrategyInstanceId(12L);
+        local.setPositionId(20L);
+        local.setPositionCycleKey("cycle-pippin");
+        local.setSymbol("PIPPINUSDT");
+        local.setPositionSide("SHORT");
+        local.setClientOrderId("QSTEP_test");
+        local.setProtectionType("STEP_TP");
+        local.setOrderType("STOP_MARKET");
+        local.setQuantity(new BigDecimal("118565"));
+        local.setStopPrice(new BigDecimal("0.005"));
+        ExchangeGateway.ProtectionOrderSnapshot actual = new ExchangeGateway.ProtectionOrderSnapshot(
+            "PIPPINUSDT", 33L, "QSTEP_test", "FINISHED", "BUY", "SHORT", "STOP_MARKET",
+            new BigDecimal("118565"), new BigDecimal("0.005"), Instant.now(), new BigDecimal("118565"),
+            true, false, 44L, new BigDecimal("0.0049"), Instant.parse("2026-11-20T10:31:13.115Z"));
+        ExchangeGateway.OrderSnapshot child = new ExchangeGateway.OrderSnapshot(
+            "PIPPINUSDT", 44L, "QSTEP_test", "BUY", "MARKET", "FILLED", BigDecimal.ZERO,
+            new BigDecimal("118565"), new BigDecimal("118565"), Instant.now(), new BigDecimal("0.0049"),
+            "SHORT", true, Instant.now(), false);
+        when(quantOrders.selectOne(any())).thenReturn(null);
+        when(quantOrders.insert(any(org.dromara.quant.order.domain.QuantOrder.class))).thenReturn(1);
+
+        assertTrue(journal.bindChild(new ExchangeGateway.Credential("key", "secret", "HMAC", "TESTNET"),
+            local, actual, child, new BigDecimal("118565")));
+        verify(quantOrders).insert(any(org.dromara.quant.order.domain.QuantOrder.class));
+    }
+
+    @Test
+    void exactAlgoQuantityIsNotReducedAgainByPriorFinishedProtectionFills() {
+        var fixture = triggeredRecoveryFixture("QHARD_triggered", "FILLED", "118565", "118565", "118565", "118565");
+
+        assertTrue(fixture.service().recoverDispatchBeforeStrategyStart(1L, "JCTUSDT"));
+
+        assertEquals("FINISHED", fixture.local().getStatus());
+        assertEquals(new BigDecimal("118565"), fixture.local().getExecutedQuantity());
+        verify(dispatcher).recoveredFromExchange(1L, "JCTUSDT", "cancel-key", "QHARD_triggered", 1000000282028535L);
     }
 
     @Test
