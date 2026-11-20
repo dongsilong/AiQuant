@@ -389,20 +389,27 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
                                    String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity, BigDecimal triggerPrice,
                                    Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
                                    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long actualOrderId,
-                                   BigDecimal actualPrice) {
+                                   BigDecimal actualPrice, Instant createTime) {
+        public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
+                                       BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
+                                       Long actualOrderId, BigDecimal actualPrice) {
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition,
+                actualOrderId, actualPrice, null);
+        }
+
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition) {
-            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition, null, null);
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition, null, null, null);
         }
 
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity) {
-            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, null, null);
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, null, null, null, null, null);
         }
 
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime) {
-            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, null);
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, null, null, null, null, null, null);
         }
     }
 
