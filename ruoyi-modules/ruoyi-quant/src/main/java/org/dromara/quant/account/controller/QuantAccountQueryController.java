@@ -18,6 +18,7 @@ import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.domain.vo.QuantTradeVo;
 import org.dromara.quant.account.mapper.QuantAccountSnapshotMapper;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
+import org.dromara.quant.account.mapper.QuantTradeTimeMapper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
@@ -457,7 +458,7 @@ public class QuantAccountQueryController {
         vo.setPrice(entity.getPrice());
         vo.setCommission(entity.getCommission());
         vo.setRealizedPnl(entity.getRealizedPnl());
-        vo.setTradeTime(entity.getTradeTime() == null ? null : entity.getTradeTime().atOffset(ZoneOffset.UTC).atZoneSameInstant(quantTimeZone()).toOffsetDateTime());
+        vo.setTradeTime(QuantTradeTimeMapper.toOffsetDateTime(entity.getTradeTime()));
         vo.setExchangeTradeId(entity.getExchangeTradeId());
         vo.setExchangeOrderId(entity.getExchangeOrderId());
         return vo;
