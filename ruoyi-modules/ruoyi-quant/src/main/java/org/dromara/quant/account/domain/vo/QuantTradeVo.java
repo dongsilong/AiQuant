@@ -16,7 +16,7 @@ import java.time.OffsetDateTime;
  * 成交记录展示对象。
  */
 @Data
-@AutoMapper(target = QuantTrade.class)
+@AutoMapper(target = QuantTrade.class, uses = {QuantTradeTimeMapper.class})
 public class QuantTradeVo implements Serializable {
 
     @Serial
