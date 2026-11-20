@@ -1289,15 +1289,7 @@ public class ProtectionOrderService {
         if (local.getPositionId() == null || local.getPositionCycleKey() == null || local.getQuantity() == null) {
             throw new IllegalStateException("保护单缺少持仓周期或原始数量，无法证明 Algo 剩余数量");
         }
-        List<QuantProtectionOrder> cycleOrders = mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
-            .eq(QuantProtectionOrder::getCredentialId, credentialId)
-            .eq(QuantProtectionOrder::getPositionId, local.getPositionId())
-            .eq(QuantProtectionOrder::getPositionCycleKey, local.getPositionCycleKey()));
-        BigDecimal priorExecuted = cycleOrders.stream()
-            .filter(order -> !Objects.equals(order.getId(), local.getId()))
-            .filter(order -> "FINISHED".equalsIgnoreCase(order.getStatus()))
-            .map(order -> order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity())
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal priorExecuted = priorProtectionExecuted(credentialId, local);
         BigDecimal expectedRemaining = local.getQuantity().subtract(priorExecuted);
         if (expectedRemaining.signum() <= 0 || expectedRemaining.compareTo(actual.quantity()) != 0) {
             throw new IllegalStateException("Algo 数量变化无法由同一持仓周期已确认保护成交解释；localQuantity=" + local.getQuantity()
@@ -1323,7 +1315,7 @@ public class ProtectionOrderService {
             throw new IllegalStateException("Algo 实际子订单未能证明身份一致且完整成交");
         }
         if (protectionJournal != null) {
-            protectionJournal.bindChild(credential, local, actual, child);
+            protectionJournal.bindChild(credential, local, actual, child, priorExecuted);
         }
         if (decisionLogs != null) {
             decisionLogs.protection(credentialId, local, actual);
@@ -1338,6 +1330,22 @@ public class ProtectionOrderService {
         log.info("保护单 Algo 已触发且实际子订单完整成交，持久化终态并准备释放派发门禁 accountId={} symbol={} clientAlgoId={} algoId={} actualOrderId={} executedQuantity={}",
             credentialId, local.getSymbol(), local.getClientOrderId(), actual.algoId(), actual.actualOrderId(), child.executedQuantity());
         return actual.algoId();
+    }
+
+    /** 同一持仓周期内、当前保护单以外已确认完成的保护成交量。 */
+    private BigDecimal priorProtectionExecuted(Long credentialId, QuantProtectionOrder local) {
+        if (local.getPositionId() == null || local.getPositionCycleKey() == null) {
+            return BigDecimal.ZERO;
+        }
+        return mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
+                .eq(QuantProtectionOrder::getCredentialId, credentialId)
+                .eq(QuantProtectionOrder::getPositionId, local.getPositionId())
+                .eq(QuantProtectionOrder::getPositionCycleKey, local.getPositionCycleKey()))
+            .stream()
+            .filter(order -> !Objects.equals(order.getId(), local.getId()))
+            .filter(order -> "FINISHED".equalsIgnoreCase(order.getStatus()))
+            .map(order -> order.getExecutedQuantity() == null ? BigDecimal.ZERO : order.getExecutedQuantity())
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /** 终态事实落库后，清除仍精确引用该订单的目标关联。 */
@@ -1871,7 +1879,7 @@ public class ProtectionOrderService {
             queryTimes[1] += (System.nanoTime() - startedAt) / 1_000_000L;
         }
         if (child != null && protectionJournal != null) {
-            protectionJournal.bindChild(credential, order, actual, child);
+            protectionJournal.bindChild(credential, order, actual, child, priorProtectionExecuted(order.getCredentialId(), order));
         }
         if (child == null || child.executedQuantity() == null || !Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(child.status())) {
             throw new ProtectionExecutionPendingException();
