@@ -1887,14 +1887,15 @@ public class ProtectionOrderService {
             queryTimes[1] += (System.nanoTime() - startedAt) / 1_000_000L;
         }
         if (child != null && protectionJournal != null) {
-            protectionJournal.bindChild(credential, order, actual, child, priorProtectionExecuted(order.getCredentialId(), order));
+            protectionJournal.bindChild(credential, order, actual, child,
+                priorProtectionExecuted(order.getCredentialId(), order, actual.createTime()));
         }
         if (child == null || child.executedQuantity() == null || !Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(child.status())) {
             throw new ProtectionExecutionPendingException();
         }
         return new ExchangeGateway.ProtectionOrderSnapshot(actual.symbol(), actual.algoId(), actual.clientAlgoId(), "FINISHED", actual.side(), actual.positionSide(),
             actual.type(), actual.quantity(), actual.triggerPrice(), actual.updateTime(), child.executedQuantity(), actual.reduceOnly(), actual.closePosition(),
-            actual.actualOrderId(), child.averagePrice());
+            actual.actualOrderId(), child.averagePrice(), actual.createTime());
     }
 
     /**
