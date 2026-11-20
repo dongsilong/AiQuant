@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
@@ -30,7 +31,7 @@ public class ProtectionOrderJournalService {
      * 使用 Binance 子订单创建时间，而非本地账本更新时间，避免延迟恢复或历史成交误归属。
      */
     public BigDecimal priorProtectionExecutedAfter(Long credentialId, QuantProtectionOrder current,
-                                                    List<QuantProtectionOrder> candidates, java.time.Instant currentAlgoCreateTime) {
+                                                   List<QuantProtectionOrder> candidates, java.time.Instant currentAlgoCreateTime) {
         if (credentialId == null || current == null || current.getPositionId() == null || current.getPositionCycleKey() == null
             || current.getSymbol() == null || current.getPositionSide() == null || currentAlgoCreateTime == null || candidates == null
             || candidates.isEmpty()) {

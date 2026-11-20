@@ -1,7 +1,3 @@
-quant:
-  # 量化接口统一展示时区；默认北京时间，可通过 QUANT_TIME_ZONE 覆盖
-  time-zone: ${QUANT_TIME_ZONE:Asia/Shanghai}
-
 # 开发环境配置
 server:
   # 服务器的HTTP端口，默认为8080

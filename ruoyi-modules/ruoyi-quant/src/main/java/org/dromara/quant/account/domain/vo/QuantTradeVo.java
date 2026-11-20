@@ -1,6 +1,8 @@
 package org.dromara.quant.account.domain.vo;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.github.linpeilie.annotations.AutoMapper;
 import lombok.Data;
 import org.dromara.common.translation.annotation.Translation;
@@ -25,12 +27,12 @@ public class QuantTradeVo implements Serializable {
     /**
      * 主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
     /**
      * 交易凭证主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long credentialId;
     /**
      * 客户名称。
@@ -39,7 +41,7 @@ public class QuantTradeVo implements Serializable {
     /**
      * 用户主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long userId;
     /**
      * 用户名称。
@@ -77,17 +79,17 @@ public class QuantTradeVo implements Serializable {
     /**
      * 以 UTC 偏移量表示的成交时间，前端根据量化时区配置进行展示。
      */
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private OffsetDateTime tradeTime;
     /**
      * 交易所成交主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long exchangeTradeId;
     /**
      * 交易所订单主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long exchangeOrderId;
 
 }
