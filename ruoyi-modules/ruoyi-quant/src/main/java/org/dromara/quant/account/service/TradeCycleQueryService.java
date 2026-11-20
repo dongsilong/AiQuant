@@ -7,9 +7,11 @@ import org.dromara.common.mybatis.core.page.PageQuery;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.account.domain.vo.TradeCyclePageVo;
 import org.dromara.quant.account.mapper.TradeCycleMapper;
+import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -24,7 +26,8 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class TradeCycleQueryService {
-    private static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Shanghai");
+    @Autowired
+    private QuantProperties quantProperties;
 
     private final QuantCredentialMapper credentialMapper;
     private final TradeCycleMapper cycleMapper;
@@ -82,14 +85,14 @@ public class TradeCycleQueryService {
         return new TradeCyclePageVo(rows == null ? List.of() : rows, total, incompleteCount, inferredCount);
     }
 
-    private static LocalDateTime boundary(String date, boolean nextDay) {
+    private LocalDateTime boundary(String date, boolean nextDay) {
         if (date == null || date.isBlank()) {
             return null;
         }
         try {
             LocalDate parsed = LocalDate.parse(date);
             return LocalDateTime.ofInstant(
-                (nextDay ? parsed.plusDays(1) : parsed).atStartOfDay(DISPLAY_ZONE).toInstant(), ZoneOffset.UTC);
+                (nextDay ? parsed.plusDays(1) : parsed).atStartOfDay(ZoneId.of(quantProperties.getTimeZone())).toInstant(), ZoneOffset.UTC);
         } catch (java.time.DateTimeException ex) {
             throw new ServiceException("日期格式应为 yyyy-MM-dd");
         }
