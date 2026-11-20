@@ -1289,8 +1289,8 @@ public class ProtectionOrderService {
         if (local.getPositionId() == null || local.getPositionCycleKey() == null || local.getQuantity() == null) {
             throw new IllegalStateException("保护单缺少持仓周期或原始数量，无法证明 Algo 剩余数量");
         }
-        BigDecimal priorExecuted = priorProtectionExecuted(credentialId, local, actual.createTime());
         boolean quantityMatches = local.getQuantity().compareTo(actual.quantity()) == 0;
+        BigDecimal priorExecuted = quantityMatches ? BigDecimal.ZERO : priorProtectionExecuted(credentialId, local, actual.createTime());
         BigDecimal expectedRemaining = local.getQuantity().subtract(priorExecuted);
         boolean reducedQuantityProven = actual.createTime() != null && priorExecuted.signum() > 0
             && expectedRemaining.signum() > 0 && expectedRemaining.compareTo(actual.quantity()) == 0;
