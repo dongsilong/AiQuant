@@ -2189,64 +2189,156 @@ public class ProtectionOrderService {
      * 手工委托不撤，带本系统前缀但缺少账本归属的委托阻断开仓并等待核查。
      */
     public boolean prepareEntryProtectionCleanup(Long credentialId, String symbol, boolean live) {
-        var credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
-        validateProtectionMode(credential, live);
-        if (live && (!exchangeFlatAndIdle(credential, symbol) || !recoverDispatchBeforeStrategyStart(credentialId, symbol))) {
-            return false;
-        }
-        var locals = mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
-            .eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getSymbol, symbol)).stream()
-            .filter(local -> local.getProtectionType() != null && (STOP_PROTECTION_TYPES.contains(local.getProtectionType()) || "FIRST_TP".equals(local.getProtectionType()))).toList();
-        if (live) {
-            var active = gateway.queryProtectionOrders(credential, symbol);
-            if (active == null) {
-                return false;
-            }
-            for (var actual : active) {
-                if (!symbol.equals(actual.symbol())) {
+        long totalStartedAt = System.nanoTime();
+        long phaseStartedAt = totalStartedAt;
+        long preflightMs = 0L;
+        long dispatchRecoveryMs = 0L;
+        long localReadMs = 0L;
+        long initialAlgoQueryMs = 0L;
+        long cancellationMs = 0L;
+        long finalFlatCheckMs = 0L;
+        long finalDispatchCheckMs = 0L;
+        long finalAlgoQueryMs = 0L;
+        int localProtectionCount = 0;
+        int exchangeProtectionCount = 0;
+        int canceledProtectionCount = 0;
+        String stage = "LOAD_CREDENTIAL";
+        try {
+            var credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
+            validateProtectionMode(credential, live);
+            if (live) {
+                stage = "INITIAL_FLAT_AND_IDLE_CHECK";
+                phaseStartedAt = System.nanoTime();
+                boolean initiallyFlatAndIdle = exchangeFlatAndIdle(credential, symbol);
+                preflightMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+                if (!initiallyFlatAndIdle) {
                     return false;
                 }
-                var matches = locals.stream().filter(local -> actual.clientAlgoId() != null && actual.clientAlgoId().equals(local.getClientOrderId())
-                    || actual.algoId() != null && actual.algoId().equals(local.getExchangeOrderId())).toList();
-                if (matches.isEmpty()) {
-                    if (systemProtectionId(actual.clientAlgoId())) {
+                stage = "RECOVER_DISPATCH";
+                phaseStartedAt = System.nanoTime();
+                boolean dispatchRecovered = recoverDispatchBeforeStrategyStart(credentialId, symbol);
+                dispatchRecoveryMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+                if (!dispatchRecovered) {
+                    return false;
+                }
+            }
+            stage = "LOAD_LOCAL_PROTECTIONS";
+            phaseStartedAt = System.nanoTime();
+            var locals = mapper.selectList(new LambdaQueryWrapper<QuantProtectionOrder>()
+                .eq(QuantProtectionOrder::getCredentialId, credentialId).eq(QuantProtectionOrder::getSymbol, symbol)).stream()
+                .filter(local -> local.getProtectionType() != null && (STOP_PROTECTION_TYPES.contains(local.getProtectionType()) || "FIRST_TP".equals(local.getProtectionType()))).toList();
+            localReadMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            localProtectionCount = locals.size();
+            if (live) {
+                stage = "QUERY_ACTIVE_PROTECTIONS";
+                phaseStartedAt = System.nanoTime();
+                var active = gateway.queryProtectionOrders(credential, symbol);
+                initialAlgoQueryMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+                if (active == null) {
+                    return false;
+                }
+                exchangeProtectionCount = active.size();
+                stage = "CANCEL_EXCHANGE_PROTECTIONS";
+                phaseStartedAt = System.nanoTime();
+                for (var actual : active) {
+                    if (!symbol.equals(actual.symbol())) {
                         return false;
                     }
-                    continue;
-                }
-                if (matches.size() != 1 || "NOT_SENT".equals(matches.getFirst().getStatus())
-                    || !Objects.equals(matches.getFirst().getClientOrderId(), actual.clientAlgoId())
-                    || matches.getFirst().getExchangeOrderId() != null && !matches.getFirst().getExchangeOrderId().equals(actual.algoId())
-                    || !cancelOne(credentialId, matches.getFirst(), true)) {
-                    return false;
+                    var matches = locals.stream().filter(local -> actual.clientAlgoId() != null && actual.clientAlgoId().equals(local.getClientOrderId())
+                        || actual.algoId() != null && actual.algoId().equals(local.getExchangeOrderId())).toList();
+                    if (matches.isEmpty()) {
+                        if (systemProtectionId(actual.clientAlgoId())) {
+                            return false;
+                        }
+                        continue;
+                    }
+                    if (matches.size() != 1 || "NOT_SENT".equals(matches.getFirst().getStatus())
+                        || !Objects.equals(matches.getFirst().getClientOrderId(), actual.clientAlgoId())
+                        || matches.getFirst().getExchangeOrderId() != null && !matches.getFirst().getExchangeOrderId().equals(actual.algoId())
+                        || !cancelOne(credentialId, matches.getFirst(), true)) {
+                        return false;
+                    }
+                    canceledProtectionCount++;
                 }
             }
-        }
-        for (var local : locals) {
-            if ((ACTIVE_STATUSES.contains(local.getStatus()) || "MISSING".equals(local.getStatus())) && !cancelOne(credentialId, local, live)) {
+            stage = "CANCEL_REMAINING_LOCAL_PROTECTIONS";
+            phaseStartedAt = System.nanoTime();
+            for (var local : locals) {
+                if (ACTIVE_STATUSES.contains(local.getStatus()) || "MISSING".equals(local.getStatus())) {
+                    if (!cancelOne(credentialId, local, live)) {
+                        return false;
+                    }
+                    canceledProtectionCount++;
+                }
+            }
+            cancellationMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            if (!live) {
+                stage = "COMPLETE";
+                return true;
+            }
+            stage = "VERIFY_FINAL_FLAT_AND_IDLE";
+            phaseStartedAt = System.nanoTime();
+            boolean finallyFlatAndIdle = exchangeFlatAndIdle(credential, symbol);
+            finalFlatCheckMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            if (!finallyFlatAndIdle) {
                 return false;
             }
+            stage = "VERIFY_FINAL_DISPATCH_IDLE";
+            phaseStartedAt = System.nanoTime();
+            boolean dispatchIdle = requireLiveDispatcher().activeDispatch(credentialId, symbol) == null;
+            finalDispatchCheckMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            if (!dispatchIdle) {
+                return false;
+            }
+            stage = "QUERY_FINAL_PROTECTIONS";
+            phaseStartedAt = System.nanoTime();
+            var remaining = gateway.queryProtectionOrders(credential, symbol);
+            finalAlgoQueryMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - phaseStartedAt);
+            boolean clean = remaining != null && remaining.stream().allMatch(actual -> symbol.equals(actual.symbol())) && remaining.stream().noneMatch(actual ->
+                systemProtectionId(actual.clientAlgoId()) || locals.stream().anyMatch(local ->
+                    actual.clientAlgoId() != null && actual.clientAlgoId().equals(local.getClientOrderId())
+                        || actual.algoId() != null && actual.algoId().equals(local.getExchangeOrderId())));
+            stage = clean ? "COMPLETE" : "FINAL_PROTECTION_REMAINS";
+            return clean;
+        } finally {
+            long totalMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - totalStartedAt);
+            log.info("开仓前保护清理分阶段耗时 credentialId={} symbol={} live={} stage={} preflightMs={} dispatchRecoveryMs={} localReadMs={} initialAlgoQueryMs={} cancellationMs={} finalFlatCheckMs={} finalDispatchCheckMs={} finalAlgoQueryMs={} localProtectionCount={} exchangeProtectionCount={} canceledProtectionCount={} totalMs={}",
+                credentialId, symbol, live, stage, preflightMs, dispatchRecoveryMs, localReadMs, initialAlgoQueryMs, cancellationMs, finalFlatCheckMs,
+                finalDispatchCheckMs, finalAlgoQueryMs, localProtectionCount, exchangeProtectionCount, canceledProtectionCount, totalMs);
         }
-        if (!live) {
-            return true;
-        }
-        if (!exchangeFlatAndIdle(credential, symbol) || requireLiveDispatcher().activeDispatch(credentialId, symbol) != null) {
-            return false;
-        }
-        var remaining = gateway.queryProtectionOrders(credential, symbol);
-        return remaining != null && remaining.stream().allMatch(actual -> symbol.equals(actual.symbol())) && remaining.stream().noneMatch(actual -> systemProtectionId(actual.clientAlgoId())
-            || locals.stream().anyMatch(local -> actual.clientAlgoId() != null && actual.clientAlgoId().equals(local.getClientOrderId())
-                || actual.algoId() != null && actual.algoId().equals(local.getExchangeOrderId())));
     }
 
+    /**
+     * 持仓与普通委托是两项独立的只读事实，并行读取可避免前后置核验串行等待；
+     * 任一查询失败或无法证明空仓/空委托，仍拒绝建立清理证明。
+     */
     private boolean exchangeFlatAndIdle(ExchangeGateway.Credential credential, String symbol) {
-        var positions = gateway.queryPositions(credential, symbol);
-        if (positions == null || positions.stream().anyMatch(position -> !symbol.equals(position.symbol())
-            || position.quantity() == null || position.quantity().signum() != 0)) {
-            return false;
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var positionsQuery = java.util.concurrent.CompletableFuture.supplyAsync(() -> gateway.queryPositions(credential, symbol), executor);
+            var ordersQuery = java.util.concurrent.CompletableFuture.supplyAsync(() -> gateway.queryOrders(credential, symbol), executor);
+            var positions = cleanupQueryResult(positionsQuery);
+            var orders = cleanupQueryResult(ordersQuery);
+            if (positions == null || positions.stream().anyMatch(position -> !symbol.equals(position.symbol())
+                || position.quantity() == null || position.quantity().signum() != 0)) {
+                return false;
+            }
+            return orders != null && orders.isEmpty();
         }
-        var orders = gateway.queryOrders(credential, symbol);
-        return orders != null && orders.isEmpty();
+    }
+
+    private static <T> T cleanupQueryResult(java.util.concurrent.CompletableFuture<T> query) {
+        try {
+            return query.join();
+        } catch (java.util.concurrent.CompletionException ex) {
+            Throwable cause = ex.getCause();
+            if (cause instanceof RuntimeException failure) {
+                throw failure;
+            }
+            if (cause instanceof Error failure) {
+                throw failure;
+            }
+            throw new IllegalStateException("开仓前交易所状态核实失败", cause);
+        }
     }
 
     private boolean systemProtectionId(String clientId) {
