@@ -730,7 +730,9 @@ class ProtectionOrderServiceTest {
 
         assertTrue(journal.bindChild(new ExchangeGateway.Credential("key", "secret", "HMAC", "TESTNET"),
             local, actual, child, new BigDecimal("118565")));
-        verify(quantOrders).insert(any(org.dromara.quant.order.domain.QuantOrder.class));
+        var savedChild = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.order.domain.QuantOrder.class);
+        verify(quantOrders).insert(savedChild.capture());
+        assertEquals(java.time.LocalDateTime.ofInstant(child.createTime(), java.time.ZoneOffset.UTC), savedChild.getValue().getExchangeCreatedAt());
     }
 
     @Test
