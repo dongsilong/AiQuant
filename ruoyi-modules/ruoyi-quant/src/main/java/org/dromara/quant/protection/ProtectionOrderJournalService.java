@@ -51,7 +51,8 @@ public class ProtectionOrderJournalService {
     /** 精确算法单→实际子订单→冻结策略来源在同一事务入账，失败时保留原未知事实。 */
     @Transactional(rollbackFor = Exception.class)
     public boolean bindChild(ExchangeGateway.Credential credential, QuantProtectionOrder parent,
-                             ExchangeGateway.ProtectionOrderSnapshot actual, ExchangeGateway.OrderSnapshot child) {
+                             ExchangeGateway.ProtectionOrderSnapshot actual, ExchangeGateway.OrderSnapshot child,
+                             BigDecimal priorCycleExecuted) {
         // 事务回滚不能把失败的来源绑定留在调用方实体里，随后被状态更新意外写回。
         QuantProtectionOrder local = new QuantProtectionOrder();
         org.springframework.beans.BeanUtils.copyProperties(parent, local);
@@ -70,7 +71,7 @@ public class ProtectionOrderJournalService {
             if (child.clientOrderId() == null || child.clientOrderId().isBlank()) conflicts.add("childClientOrderIdMissing");
             boolean quantityMatches = local.getQuantity() != null && actual.quantity() != null
                 && local.getQuantity().compareTo(actual.quantity()) == 0;
-            BigDecimal priorExecuted = local.getExecutedQuantity() == null ? BigDecimal.ZERO : local.getExecutedQuantity();
+            BigDecimal priorExecuted = priorCycleExecuted == null ? BigDecimal.ZERO : priorCycleExecuted;
             boolean reducedQuantityProvenByFilledChild = actual.actualOrderId() != null && actual.actualOrderId().equals(child.orderId())
                 && local.getQuantity() != null && actual.quantity() != null && actual.quantity().signum() > 0
                 && local.getQuantity().compareTo(actual.quantity()) > 0
@@ -78,7 +79,7 @@ public class ProtectionOrderJournalService {
                 && child.executedQuantity() != null && child.executedQuantity().compareTo(child.originalQuantity()) == 0
                 && "FILLED".equalsIgnoreCase(child.status())
                 && Set.of("TRIGGERED", "FINISHED").contains(actual.status())
-                && priorExecuted.add(child.executedQuantity()).compareTo(local.getQuantity()) <= 0;
+                && priorExecuted.add(child.executedQuantity()).compareTo(local.getQuantity()) == 0;
             if (!quantityMatches && !reducedQuantityProvenByFilledChild) conflicts.add("quantity");
             if (local.getStopPrice() == null || actual.triggerPrice() == null || local.getStopPrice().compareTo(actual.triggerPrice()) != 0) conflicts.add("triggerPrice");
             if (local.getOrderType() == null || !local.getOrderType().equalsIgnoreCase(actual.type())) conflicts.add("orderType");
