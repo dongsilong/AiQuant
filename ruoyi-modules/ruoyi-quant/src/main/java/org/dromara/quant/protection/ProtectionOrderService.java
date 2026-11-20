@@ -1679,7 +1679,7 @@ public class ProtectionOrderService {
         ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
         // 保护单复用环境隔离的交易规则缓存；缓存未命中时使用保护校验优先级刷新。
         ExchangeTradingRuleCache cache = tradingRuleCache;
-        return cache == null ? gateway.queryTradingRuleForProtection(credential, symbol)
+        return cache == null ? gateway.queryTradingRule(credential, symbol)
             : cache.getForProtection(credential.runMode(), credential, symbol);
     }
 
