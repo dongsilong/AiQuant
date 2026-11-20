@@ -65,6 +65,7 @@ public class ProtectionOrderJournalService {
                 || child.getExecutedQuantity().signum() <= 0
                 || child.getOriginalQuantity().compareTo(child.getExecutedQuantity()) != 0
                 || child.getExecutedQuantity().compareTo(candidate.getExecutedQuantity()) != 0
+                || candidate.getClientOrderId() == null || !candidate.getClientOrderId().equals(child.getClientOrderId())
                 || !Boolean.TRUE.equals(child.getReduceOnly()) || !Boolean.FALSE.equals(child.getClosePosition())
                 || child.getSide() == null || !expectedChildSide.equalsIgnoreCase(child.getSide())
                 || child.getPositionSide() == null
