@@ -25,6 +25,38 @@ import static org.mockito.Mockito.*;
 @org.junit.jupiter.api.Tag("dev")
 class StrategyRuntimeSafetyTest {
     @Test
+    void maximumPositionLogListsExistingAndPendingExposures() {
+        Map<String, Object> openPosition = new HashMap<>();
+        openPosition.put("symbol", "BTCUSDT");
+        openPosition.put("positionSide", "LONG");
+        openPosition.put("positionStatus", "OPEN");
+        openPosition.put("strategyQty", new BigDecimal("0.0100"));
+        openPosition.put("localPositionQty", new BigDecimal("0.0100"));
+        openPosition.put("positionId", 101L);
+        openPosition.put("instanceId", 201L);
+
+        Map<String, Object> pendingPosition = new HashMap<>();
+        pendingPosition.put("symbol", "ETHUSDT");
+        pendingPosition.put("positionSide", "SHORT");
+        pendingPosition.put("positionStatus", "OPEN_PENDING");
+        pendingPosition.put("strategyQty", new BigDecimal("0.25"));
+        pendingPosition.put("pendingAction", "OPEN");
+        pendingPosition.put("instanceId", 202L);
+
+        String details = StrategyRuntimeService.formatStrategyExposureDetails(List.of(openPosition, pendingPosition));
+
+        assertTrue(details.contains("BTCUSDT 多头"));
+        assertTrue(details.contains("状态=OPEN"));
+        assertTrue(details.contains("策略数量=0.01"));
+        assertTrue(details.contains("持仓ID=101"));
+        assertTrue(details.contains("实例ID=201"));
+        assertTrue(details.contains("ETHUSDT 空头"));
+        assertTrue(details.contains("状态=OPEN_PENDING"));
+        assertTrue(details.contains("待确认动作=OPEN"));
+        assertTrue(details.contains("实例ID=202"));
+    }
+
+    @Test
     void reportsTheFirstFailedEntryProtectionProofCondition() {
         assertEquals("RUNTIME_CLOSED", StrategyRuntimeService.entryProtectionProofStateFailureReason(
             true, true, true, false, 1L, 2L, "cycle-a", "cycle-b"));
