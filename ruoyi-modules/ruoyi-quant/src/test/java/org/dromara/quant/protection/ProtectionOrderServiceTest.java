@@ -639,10 +639,12 @@ class ProtectionOrderServiceTest {
         prior.setPositionCycleKey("cycle-pippin");
         prior.setSymbol("PIPPINUSDT");
         prior.setPositionSide("SHORT");
+        prior.setClientOrderId("QFTP_child");
         prior.setStatus("FINISHED");
         prior.setExecutedQuantity(new BigDecimal("118565"));
         org.dromara.quant.order.domain.QuantOrder childOrder = new org.dromara.quant.order.domain.QuantOrder();
         childOrder.setExchangeOrderId(1267534745L);
+        childOrder.setClientOrderId("QFTP_child");
         childOrder.setIdempotencyKey("PROTECTION_CHILD:1:1267534745");
         childOrder.setStatus("FILLED");
         childOrder.setOriginalQuantity(new BigDecimal("118565"));
