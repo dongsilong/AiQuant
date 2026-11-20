@@ -197,6 +197,9 @@ public class ProtectionOrderJournalService {
         order.setOriginalQuantity(child.originalQuantity());
         order.setExecutedQuantity(order.getExecutedQuantity() == null ? child.executedQuantity()
             : child.executedQuantity() == null ? order.getExecutedQuantity() : order.getExecutedQuantity().max(child.executedQuantity()));
+        if (child.createTime() != null) {
+            order.setExchangeCreatedAt(LocalDateTime.ofInstant(child.createTime(), ZoneOffset.UTC));
+        }
         order.setUpdatedAt(child.updateTime() == null ? LocalDateTime.now(ZoneOffset.UTC) : LocalDateTime.ofInstant(child.updateTime(), ZoneOffset.UTC));
         if ((order.getId() == null ? orders.insert(order) : orders.updateById(order)) != 1) {
             throw new IllegalStateException("保护单子订单未可靠入账");
