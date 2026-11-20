@@ -2751,6 +2751,32 @@ class StrategyRuntimeSafetyTest {
     }
 
     @Test
+    void liveFlatExitDoesNotCloseWhenCancelAcceptedButOrderRemainsActive() throws Exception {
+        Fixture f = fixture();
+        try {
+            Instant now = Instant.now();
+            var active = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "NEW",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, now);
+            configureFlatLiveCloseRecovery(f, active, active, List.of());
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+            when(execution.cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55"))
+                .thenReturn(new org.dromara.quant.execution.ExecutionResult(true, "CANCEL_ACCEPTED", 55L, "close-client"));
+
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            verify(execution).cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55");
+            verify((org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService"), never())
+                .markClosed(any());
+            assertEquals("CLOSE", state.getPendingAction());
+            assertEquals("EXIT_PENDING", state.getStatus());
+            assertEquals(BigDecimal.ONE, state.getPositionQty());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
     void liveFlatExitKeepsCapacityBlockedWhenTradeHistoryIsIncomplete() throws Exception {
         Fixture f = fixture();
         try {
