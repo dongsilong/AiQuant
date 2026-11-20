@@ -464,10 +464,19 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     @Override
     public synchronized SymbolRule queryTradingRule(Credential credential, String symbol) {
+        return queryTradingRule(credential, symbol, RestRequestScheduler.Kind.BACKGROUND);
+    }
+
+    @Override
+    public synchronized SymbolRule queryTradingRuleForProtection(Credential credential, String symbol) {
+        return queryTradingRule(credential, symbol, RestRequestScheduler.Kind.PROTECTION_VERIFY);
+    }
+
+    private SymbolRule queryTradingRule(Credential credential, String symbol, RestRequestScheduler.Kind requestKind) {
         String environment = credential != null && "TESTNET".equalsIgnoreCase(credential.runMode()) ? "TESTNET" : "LIVE";
         TradingRules cached = tradingRules.get(environment);
         if (cached == null || cached.expiresAt() <= System.currentTimeMillis()) {
-            cached = new TradingRules(System.currentTimeMillis() + 60_000L, queryExchangeInfo(credential));
+            cached = new TradingRules(System.currentTimeMillis() + 60_000L, queryExchangeInfo(credential, requestKind));
             tradingRules.put(environment, cached);
         }
         return cached.info().symbols().stream().filter(rule -> rule.symbol().equalsIgnoreCase(symbol)).findFirst().orElseThrow(() -> new IllegalArgumentException(
@@ -475,8 +484,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     private ExchangeInfo queryExchangeInfo(Credential credential) {
+        return queryExchangeInfo(credential, RestRequestScheduler.Kind.BACKGROUND);
+    }
+
+    private ExchangeInfo queryExchangeInfo(Credential credential, RestRequestScheduler.Kind requestKind) {
         try {
-            ApiResponse<ExchangeInformationResponse> response = api(credential).exchangeInformation();
+            ApiResponse<ExchangeInformationResponse> response = api(credential, requestKind).exchangeInformation();
             List<SymbolRule> rules = new ArrayList<>();
             for (ExchangeInformationResponseSymbolsInner symbol : response.getData().getSymbols()) {
                 if (!"TRADING".equals(symbol.getStatus())) {
