@@ -1,8 +1,6 @@
 package org.dromara.quant.account.domain.vo;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.linpeilie.annotations.AutoMapper;
 import lombok.Data;
 import org.dromara.common.translation.annotation.Translation;
@@ -12,9 +10,7 @@ import org.dromara.quant.account.domain.QuantTrade;
 import java.io.Serial;
 import java.io.Serializable;
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 
 /**
  * 成交记录展示对象。
@@ -78,10 +74,10 @@ public class QuantTradeVo implements Serializable {
      */
     private BigDecimal realizedPnl;
     /**
-     * 数据库中的成交时间（UTC）。
+     * 根据量化时区配置转换后的成交时间。
      */
-    @JsonIgnore
-    private LocalDateTime tradeTime;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX")
+    private OffsetDateTime tradeTime;
     /**
      * 交易所成交主键。
      */
@@ -93,15 +89,4 @@ public class QuantTradeVo implements Serializable {
     @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
     private Long exchangeOrderId;
 
-    /**
-     * 返回给前端的成交时间（北京时间）。
-     */
-    @JsonProperty("tradeTime")
-    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-    public OffsetDateTime getTradeTimeBeijing() {
-        if (tradeTime == null) {
-            return null;
-        }
-        return tradeTime.atOffset(ZoneOffset.UTC).withOffsetSameInstant(ZoneOffset.ofHours(8));
-    }
 }
