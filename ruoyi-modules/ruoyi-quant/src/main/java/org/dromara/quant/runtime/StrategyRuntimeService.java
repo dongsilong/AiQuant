@@ -3554,6 +3554,8 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             expectedDirection = expectedState.getDirection();
         }
         PendingExecutionTiming timing = new PendingExecutionTiming();
+        boolean closeNotExecutedProven = false;
+        String closeNotExecutedReason = "NOT_ELIGIBLE";
         try {
             // 网络读取不持有行情锁；只有读取完成且待确认身份未变时才提交恢复结果。
             String key = (String) expectedPending.get(1);
@@ -3678,8 +3680,6 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             BigDecimal closeProofCloseQuantity = BigDecimal.ZERO;
             BigDecimal closeProofIncreaseQuantity = BigDecimal.ZERO;
             BigDecimal closeProofRemainingQuantity = expectedState.getPositionQty();
-            boolean closeNotExecutedProven = false;
-            String closeNotExecutedReason = "NOT_ELIGIBLE";
             boolean exchangeFlatSnapshot = snapshots != null && snapshots.stream().allMatch(p ->
                 runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
             Instant pendingOrderInstant = expectedState.getPendingOrderTime() == null ? null
