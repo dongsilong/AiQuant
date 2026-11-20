@@ -2689,6 +2689,93 @@ class StrategyRuntimeSafetyTest {
         }
     }
 
+    @Test
+    void liveFlatExitCancelsResidualOrderAndClosesOnlyAfterCompleteTradeProof() throws Exception {
+        Fixture f = fixture();
+        try {
+            Instant now = Instant.now();
+            var active = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "NEW",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, now);
+            var canceled = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "CANCELED",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, now);
+            var trades = List.of(
+                new ExchangeGateway.TradeSnapshot("BTCUSDT", 11L, 11L, "BUY", BigDecimal.ONE, new BigDecimal("100"),
+                    BigDecimal.ZERO, BigDecimal.ZERO, now.minusSeconds(20)),
+                new ExchangeGateway.TradeSnapshot("BTCUSDT", 12L, 66L, "SELL", BigDecimal.ONE, new BigDecimal("101"),
+                    BigDecimal.ZERO, BigDecimal.ZERO, now.minusSeconds(10)));
+            configureFlatLiveCloseRecovery(f, active, canceled, trades);
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+            when(execution.cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55"))
+                .thenReturn(new org.dromara.quant.execution.ExecutionResult(true, "CANCEL_ACCEPTED", 55L, "close-client"));
+
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+
+            verify(execution).cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55");
+            verify((org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService"))
+                .markClosed((QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state"));
+            assertEquals("CLOSED", ((QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state")).getStatus());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
+    void liveFlatExitKeepsCapacityBlockedWhenTradeHistoryIsIncomplete() throws Exception {
+        Fixture f = fixture();
+        try {
+            Instant now = Instant.now();
+            var active = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "NEW",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, now);
+            var canceled = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "CANCELED",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, now);
+            configureFlatLiveCloseRecovery(f, active, canceled, null);
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+            when(execution.cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55"))
+                .thenReturn(new org.dromara.quant.execution.ExecutionResult(true, "CANCEL_ACCEPTED", 55L, "close-client"));
+
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            verify(execution).cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55");
+            verify((org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService"), never())
+                .markClosed(any());
+            assertEquals("CLOSE", state.getPendingAction());
+            assertEquals("EXIT_PENDING", state.getStatus());
+            assertEquals(BigDecimal.ONE, state.getPositionQty());
+            assertTrue(state.getRecoveryRequired());
+            assertTrue(state.getUnsafeRecovery());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
+    @Test
+    void liveFlatExitUsesTheSameIdempotentCancelKeyWhenCancelOutcomeIsUnknown() throws Exception {
+        Fixture f = fixture();
+        try {
+            Instant now = Instant.now();
+            var active = new ExchangeGateway.OrderSnapshot("BTCUSDT", 55L, "close-client", "SELL", "MARKET", "NEW",
+                BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, now);
+            configureFlatLiveCloseRecovery(f, active, active, null);
+            var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+            doThrow(new IllegalStateException("cancel outcome unknown")).when(execution)
+                .cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55");
+
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+            ReflectionTestUtils.invokeMethod(f.service, "reconcilePendingExecution", f.runtime);
+
+            verify(execution, times(2)).cancelByRuntime(3L, "BTCUSDT", 55L, "close-client", "STRATEGY:CANCEL:3:BTCUSDT:55");
+            verify((org.dromara.quant.runtime.service.StrategyPositionStateService) ReflectionTestUtils.getField(f.service, "stateService"), never())
+                .markClosed(any());
+            var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+            assertEquals("CLOSE", state.getPendingAction());
+            assertEquals("EXIT_PENDING", state.getStatus());
+            assertEquals(BigDecimal.ONE, state.getPositionQty());
+        } finally {
+            f.service.destroy();
+        }
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"CANCELED", "EXPIRED", "REJECTED"})
     void terminalPartialOpenReadsFreshPositionBeforeApplyingExecution(String status) throws Exception {
@@ -3155,6 +3242,42 @@ class StrategyRuntimeSafetyTest {
         } finally {
             f.service.destroy();
         }
+    }
+
+    private void configureFlatLiveCloseRecovery(Fixture f, ExchangeGateway.OrderSnapshot active,
+                                                    ExchangeGateway.OrderSnapshot terminal,
+                                                    List<ExchangeGateway.TradeSnapshot> trades) throws Exception {
+        Instant now = Instant.now();
+        var state = (QuantStrategyPositionState) ReflectionTestUtils.getField(f.runtime, "state");
+        state.setStatus("EXIT_PENDING");
+        state.setPositionId(4L);
+        state.setDirection("LONG");
+        state.setPositionQty(BigDecimal.ONE);
+        state.setInitialPositionQty(BigDecimal.ONE);
+        state.setPendingAction("CLOSE");
+        state.setPendingIdempotencyKey("STRATEGY:1:CLOSE:cycle-close");
+        state.setPendingOrderId(55L);
+        state.setPendingClientOrderId("close-client");
+        state.setPendingOrderTime(now.minusSeconds(5).toEpochMilli());
+        state.setOpenedAt(java.time.LocalDateTime.ofInstant(now.minusSeconds(60), java.time.ZoneId.of("Asia/Shanghai")));
+        state.setRecoveryRequired(true);
+        state.setUnsafeRecovery(true);
+        ReflectionTestUtils.setField(f.runtime, "position", null);
+
+        var execution = (org.dromara.quant.execution.TradeExecutionApplicationService) ReflectionTestUtils.getField(f.service, "executionService");
+        when(execution.toCredential(any())).thenReturn(new ExchangeGateway.Credential("", "", "", "LIVE"));
+        var gateway = (ExchangeGateway) ReflectionTestUtils.getField(f.service, "gateway");
+        when(gateway.queryOrder(any(), eq("BTCUSDT"), eq(55L), eq("close-client"))).thenReturn(active, terminal);
+        when(gateway.queryPositionMode(any())).thenReturn(new ExchangeGateway.PositionMode(false));
+        when(gateway.queryOrders(any(), eq("BTCUSDT"))).thenReturn(List.of());
+        when(gateway.queryTrades(any(), eq("BTCUSDT"), any())).thenReturn(trades);
+        var reconciliation = (org.dromara.quant.reconcile.TradingReconciliationService) ReflectionTestUtils.getField(f.service, "reconciliationService");
+        when(reconciliation.refreshSymbolPosition(any(), eq("BTCUSDT"), any())).thenReturn(List.of());
+        var positionMapper = (org.dromara.quant.position.mapper.QuantPositionMapper) ReflectionTestUtils.getField(f.service, "positionMapper");
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+            new org.apache.ibatis.builder.MapperBuilderAssistant(new org.apache.ibatis.session.Configuration(), "test"), QuantPosition.class);
+        when(positionMapper.selectList(any())).thenReturn(List.of());
+        when(f.protection.cancelActiveProtectionOrders(any(), eq(4L), anyBoolean())).thenReturn(true);
     }
 
     private Fixture fixture() throws Exception {
