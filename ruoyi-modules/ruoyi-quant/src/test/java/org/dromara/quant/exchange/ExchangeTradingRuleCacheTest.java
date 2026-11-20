@@ -51,6 +51,38 @@ class ExchangeTradingRuleCacheTest {
         verify(gateway, times(2)).queryTradingRule(live, "ETHUSDT");
     }
 
+    @Test
+    void usesProtectionPriorityLookupOnlyWhenItsSharedCacheMisses() {
+        ExchangeGateway gateway = mock(ExchangeGateway.class);
+        ExchangeTradingRuleCache cache = new ExchangeTradingRuleCache(gateway);
+        ExchangeGateway.Credential testnet = new ExchangeGateway.Credential("test-key", "secret", "HMAC", "TESTNET");
+        ExchangeGateway.SymbolRule rule = rule("BTCUSDT", "TRADING");
+
+        when(gateway.queryTradingRuleForProtection(testnet, "BTCUSDT")).thenReturn(rule);
+
+        assertSame(rule, cache.getForProtection("TESTNET", testnet, "BTCUSDT"));
+        assertSame(rule, cache.getForProtection("TESTNET", testnet, "BTCUSDT"));
+
+        verify(gateway, times(1)).queryTradingRuleForProtection(testnet, "BTCUSDT");
+        verify(gateway, org.mockito.Mockito.never()).queryTradingRule(testnet, "BTCUSDT");
+    }
+
+    @Test
+    void ordinaryAndProtectionLookupsShareTheSameCachedRule() {
+        ExchangeGateway gateway = mock(ExchangeGateway.class);
+        ExchangeTradingRuleCache cache = new ExchangeTradingRuleCache(gateway);
+        ExchangeGateway.Credential live = new ExchangeGateway.Credential("live-key", "secret", "HMAC", "LIVE");
+        ExchangeGateway.SymbolRule rule = rule("ETHUSDT", "TRADING");
+
+        when(gateway.queryTradingRule(live, "ETHUSDT")).thenReturn(rule);
+
+        assertSame(rule, cache.get("LIVE", live, "ETHUSDT"));
+        assertSame(rule, cache.getForProtection("LIVE", live, "ETHUSDT"));
+
+        verify(gateway, times(1)).queryTradingRule(live, "ETHUSDT");
+        verify(gateway, org.mockito.Mockito.never()).queryTradingRuleForProtection(live, "ETHUSDT");
+    }
+
     private static ExchangeGateway.SymbolRule rule(String symbol, String status) {
         return new ExchangeGateway.SymbolRule(symbol, "USDT", 2, 3, new BigDecimal("0.01"),
             new BigDecimal("0.001"), new BigDecimal("0.001"), new BigDecimal("5"), status);
