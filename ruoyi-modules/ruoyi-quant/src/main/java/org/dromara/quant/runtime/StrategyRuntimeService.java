@@ -3643,8 +3643,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             String pendingAction = Objects.toString(expectedPending.get(0), "");
             if (order != null && isActivePendingOrder(order.status()) && !"OPEN".equalsIgnoreCase(pendingAction)
                 && exchangeFlatSnapshot && orderQueryFailure == null
-                && hasExactPendingOrderIdentity(order, runtime.symbol.getSymbol(), orderId, clientOrderId)
-                && expectedState.getPendingIdempotencyKey() != null && !expectedState.getPendingIdempotencyKey().isBlank()) {
+                && hasExactPendingOrderIdentity(order, runtime.symbol.getSymbol(), orderId, clientOrderId)) {
                 boolean leaseAcquired;
                 synchronized (runtime) {
                     if (runtime.closed || runtime.state != expectedState
