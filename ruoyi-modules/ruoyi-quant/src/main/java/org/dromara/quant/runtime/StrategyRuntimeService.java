@@ -3512,7 +3512,13 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                     clientOrderId = execution.getClientOrderId();
                 }
             }
-            var credential = executionService.toCredential(runtime.credential);
+            long credentialStartedAt = System.nanoTime();
+            ExchangeGateway.Credential credential;
+            try {
+                credential = executionService.toCredential(runtime.credential);
+            } finally {
+                timing.credentialResolveMs += pendingExecutionElapsedMillis(credentialStartedAt);
+            }
             ExchangeGateway.OrderSnapshot order = null;
             String orderQueryFailure = null;
             boolean exactOrderQueryAttempted = orderId != null || clientOrderId != null && !clientOrderId.isBlank();
@@ -3700,7 +3706,12 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             timing.orderStatus = order == null ? null : order.status();
             timing.queryFailure = orderQueryFailure;
             if (decisionLogs != null && order != null) {
-                decisionLogs.order(runtime.credential.getId(), order);
+                long decisionLogStartedAt = System.nanoTime();
+                try {
+                    decisionLogs.order(runtime.credential.getId(), order);
+                } finally {
+                    timing.decisionLogMs += pendingExecutionElapsedMillis(decisionLogStartedAt);
+                }
             }
             synchronized (runtime) {
                 if (runtime.closed || runtime.state != expectedState || !Objects.equals(expectedPending, pendingIdentity(runtime.state))) {
@@ -3718,7 +3729,12 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 if (!leaseAcquired) {
                     return true;
                 }
-                return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven, closedCloseProven);
+                long applyStartedAt = System.nanoTime();
+                try {
+                    return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven, closedCloseProven);
+                } finally {
+                    timing.stateApplyMs += pendingExecutionElapsedMillis(applyStartedAt);
+                }
             }
         } catch (RuntimeException ex) {
             timing.failure = ex.getClass().getSimpleName();
@@ -3726,10 +3742,11 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
         } finally {
             long totalMs = pendingExecutionElapsedMillis(timing.startedAt);
             if (totalMs >= 1_000L) {
-                log.warn("待确认执行核实耗时拆分 instanceId={} credentialId={} symbol={} runMode={} action={} totalMs={} executionRecordMs={} exactOrderMs={} openOrdersMs={} historicalOrderMs={} positionSnapshotMs={} positionSnapshotQueries={} positionModeMs={} tradeHistoryMs={} finalLeaseCheckMs={} executionFound={} orderFound={} orderStatus={} queryFailure={} failure={}",
+                log.warn("待确认执行核实耗时拆分 instanceId={} credentialId={} symbol={} runMode={} action={} totalMs={} executionRecordMs={} credentialResolveMs={} exactOrderMs={} openOrdersMs={} historicalOrderMs={} positionSnapshotMs={} positionSnapshotQueries={} positionModeMs={} tradeHistoryMs={} decisionLogMs={} finalLeaseCheckMs={} stateApplyMs={} executionFound={} orderFound={} orderStatus={} queryFailure={} failure={}",
                     runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(), expectedPending.get(0),
-                    totalMs, timing.executionRecordMs, timing.exactOrderMs, timing.openOrdersMs, timing.historicalOrderMs, timing.positionSnapshotMs,
-                    timing.positionSnapshotQueries, timing.positionModeMs, timing.tradeHistoryMs, timing.finalLeaseCheckMs, timing.executionFound,
+                    totalMs, timing.executionRecordMs, timing.credentialResolveMs, timing.exactOrderMs, timing.openOrdersMs, timing.historicalOrderMs,
+                    timing.positionSnapshotMs, timing.positionSnapshotQueries, timing.positionModeMs, timing.tradeHistoryMs, timing.decisionLogMs,
+                    timing.finalLeaseCheckMs, timing.stateApplyMs, timing.executionFound,
                     timing.orderFound, timing.orderStatus, timing.queryFailure, timing.failure);
             }
         }
@@ -3742,6 +3759,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
     private static final class PendingExecutionTiming {
         private final long startedAt = System.nanoTime();
         private long executionRecordMs;
+        private long credentialResolveMs;
         private long exactOrderMs;
         private long openOrdersMs;
         private long historicalOrderMs;
@@ -3749,7 +3767,9 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
         private int positionSnapshotQueries;
         private long positionModeMs;
         private long tradeHistoryMs;
+        private long decisionLogMs;
         private long finalLeaseCheckMs;
+        private long stateApplyMs;
         private boolean executionFound;
         private boolean orderFound;
         private String orderStatus;
