@@ -2402,9 +2402,19 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 return;
             }
             if (openCount != null && openCount >= maxOpenCount) {
-                logEntryDecision(runtime, context, "MAX_POSITIONS", "达到策略最大持仓数");
+                List<Map<String, Object>> exposures = null;
+                String reason = "达到策略最大持仓数";
+                try {
+                    exposures = runtimeLedgerMapper.findStrategyExposures(runtime.strategy.getId(), runtime.credential.getId());
+                    reason += formatStrategyExposureDetails(exposures);
+                } catch (RuntimeException ex) {
+                    reason += "；占用持仓明细查询失败";
+                    log.warn("策略最大持仓占用明细查询失败 instanceId={} strategyId={} credentialId={} error={}", runtime.instance.getId(),
+                        runtime.strategy.getId(), runtime.credential.getId(), ex.getMessage());
+                }
+                logEntryDecision(runtime, context, "MAX_POSITIONS", reason);
                 log.warn("策略开仓跳过：达到最大持仓数 instanceId={} symbol={} openCount={} maxOpenCount={}", runtime.instance.getId(), runtime.symbol.getSymbol(), openCount, maxOpenCount);
-                logExposureDiagnostic(runtime, openCount, maxOpenCount);
+                logExposureDiagnostic(runtime, openCount, maxOpenCount, exposures);
                 return;
             }
         }
@@ -2681,21 +2691,74 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
     }
 
-    private void logExposureDiagnostic(ActiveRuntime runtime, Long openCount, Integer maxOpenCount) {
+    static String formatStrategyExposureDetails(List<Map<String, Object>> exposures) {
+        if (exposures == null) {
+            return "；占用持仓明细暂不可用";
+        }
+        if (exposures.isEmpty()) {
+            return "；占用持仓明细为空";
+        }
+        String details = exposures.stream().map(exposure -> {
+            String symbol = Objects.toString(exposure.get("symbol"), "未知交易对");
+            String side = Objects.toString(exposure.get("positionSide"), "");
+            String status = Objects.toString(exposure.get("positionStatus"), "状态未知");
+            StringBuilder detail = new StringBuilder(symbol);
+            if (!side.isBlank()) {
+                detail.append(" ").append("LONG".equalsIgnoreCase(side) ? "多头" : "SHORT".equalsIgnoreCase(side) ? "空头" : side);
+            }
+            detail.append("（状态=").append(status);
+            String strategyQuantity = formatExposureValue(exposure.get("strategyQty"));
+            if (strategyQuantity != null) {
+                detail.append("，策略数量=").append(strategyQuantity);
+            }
+            String localQuantity = formatExposureValue(exposure.get("localPositionQty"));
+            if (localQuantity != null) {
+                detail.append("，本地数量=").append(localQuantity);
+            }
+            String openTime = "OPEN_PENDING".equalsIgnoreCase(status) ? null : formatExposureOpenTime(exposure.get("openedAt"));
+            if (openTime != null) {
+                detail.append("，开仓时间=").append(openTime);
+            }
+            if (exposure.get("positionId") != null) {
+                detail.append("，持仓ID=").append(exposure.get("positionId"));
+            }
+            if (exposure.get("pendingAction") != null) {
+                detail.append("，待确认动作=").append(exposure.get("pendingAction"));
+            }
+            if (exposure.get("instanceId") != null) {
+                detail.append("，实例ID=").append(exposure.get("instanceId"));
+            }
+            return detail.append("）").toString();
+        }).collect(java.util.stream.Collectors.joining("；"));
+        return "；占用持仓：" + details;
+    }
+
+    private static String formatExposureValue(Object value) {
+        return value instanceof BigDecimal decimal ? decimal.stripTrailingZeros().toPlainString() : Objects.toString(value, null);
+    }
+
+    private static String formatExposureOpenTime(Object value) {
+        if (value instanceof LocalDateTime time) {
+            return time.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return timestamp.toLocalDateTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        }
+        return value == null ? null : Objects.toString(value).replace('T', ' ');
+    }
+
+    private void logExposureDiagnostic(ActiveRuntime runtime, Long openCount, Integer maxOpenCount, List<Map<String, Object>> exposures) {
+        if (exposures == null) {
+            return;
+        }
         long now = System.currentTimeMillis();
         Long nextLogAt = nextExposureDiagnosticLogAt.get(runtime.instance.getId());
         if (nextLogAt != null && now < nextLogAt) {
             return;
         }
         nextExposureDiagnosticLogAt.put(runtime.instance.getId(), now + 60_000L);
-        try {
-            List<Map<String, Object>> exposures = runtimeLedgerMapper.findStrategyExposures(runtime.strategy.getId(), runtime.credential.getId());
-            log.warn("策略最大持仓占用明细 instanceId={} symbol={} runMode={} strategyId={} credentialId={} openCount={} maxOpenCount={} exposures={}", runtime.instance.getId(),
-             runtime.symbol.getSymbol(), runtime.credential.getRunMode(), runtime.strategy.getId(), runtime.credential.getId(), openCount, maxOpenCount, exposures);
-        } catch (RuntimeException ex) {
-            log.warn("策略最大持仓占用明细查询失败 instanceId={} strategyId={} credentialId={} error={}", runtime.instance.getId(), runtime.strategy.getId(), runtime.credential.getId(),
-             ex.getMessage());
-        }
+        log.warn("策略最大持仓占用明细 instanceId={} symbol={} runMode={} strategyId={} credentialId={} openCount={} maxOpenCount={} exposures={}", runtime.instance.getId(),
+            runtime.symbol.getSymbol(), runtime.credential.getRunMode(), runtime.strategy.getId(), runtime.credential.getId(), openCount, maxOpenCount, exposures);
     }
 
     /**
