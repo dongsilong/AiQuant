@@ -3492,234 +3492,234 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
         }
         PendingExecutionTiming timing = new PendingExecutionTiming();
         try {
-        // 网络读取不持有行情锁；只有读取完成且待确认身份未变时才提交恢复结果。
-        String key = (String) expectedPending.get(1);
-        QuantExecutionRecord execution = null;
-        long queryStartedAt = System.nanoTime();
-        try {
-            execution = key == null || key.isBlank() ? null : executionRecordService.find(runtime.credential.getId(), key);
-        } finally {
-            timing.executionRecordMs += pendingExecutionElapsedMillis(queryStartedAt);
-        }
-        timing.executionFound = execution != null;
-        Long orderId = (Long) expectedPending.get(2);
-        String clientOrderId = (String) expectedPending.get(3);
-        if (execution != null) {
-            if (orderId == null) {
-                orderId = execution.getExchangeOrderId();
-            }
-            if (clientOrderId == null || clientOrderId.isBlank()) {
-                clientOrderId = execution.getClientOrderId();
-            }
-        }
-        var credential = executionService.toCredential(runtime.credential);
-        ExchangeGateway.OrderSnapshot order = null;
-        String orderQueryFailure = null;
-        boolean exactOrderQueryAttempted = orderId != null || clientOrderId != null && !clientOrderId.isBlank();
-        if (exactOrderQueryAttempted) {
-            queryStartedAt = System.nanoTime();
+            // 网络读取不持有行情锁；只有读取完成且待确认身份未变时才提交恢复结果。
+            String key = (String) expectedPending.get(1);
+            QuantExecutionRecord execution = null;
+            long queryStartedAt = System.nanoTime();
             try {
-                order = gateway.queryOrder(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
-            } catch (RuntimeException ex) {
-                // 查询异常不是“订单不存在”；记录诊断并保持 UNKNOWN，不因异常尝试重发交易。
-                orderQueryFailure = ex.getClass().getSimpleName();
+                execution = key == null || key.isBlank() ? null : executionRecordService.find(runtime.credential.getId(), key);
             } finally {
-                timing.exactOrderMs += pendingExecutionElapsedMillis(queryStartedAt);
+                timing.executionRecordMs += pendingExecutionElapsedMillis(queryStartedAt);
             }
-            // 当前活动订单列表只是精确订单查询的备用路径，未找到时不必每 5 秒重复扫描。
-            // 每 3 次精确查询才扫描一次活动订单；历史订单则每 6 次查询一次，以控制 REST 权重。
-            int priorNotFound = expectedState.getPendingNotFoundConfirmations() == null ? 0 : expectedState.getPendingNotFoundConfirmations();
-            if (order == null && orderQueryFailure == null && (priorNotFound + 1) % 3 == 0) {
+            timing.executionFound = execution != null;
+            Long orderId = (Long) expectedPending.get(2);
+            String clientOrderId = (String) expectedPending.get(3);
+            if (execution != null) {
+                if (orderId == null) {
+                    orderId = execution.getExchangeOrderId();
+                }
+                if (clientOrderId == null || clientOrderId.isBlank()) {
+                    clientOrderId = execution.getClientOrderId();
+                }
+            }
+            var credential = executionService.toCredential(runtime.credential);
+            ExchangeGateway.OrderSnapshot order = null;
+            String orderQueryFailure = null;
+            boolean exactOrderQueryAttempted = orderId != null || clientOrderId != null && !clientOrderId.isBlank();
+            if (exactOrderQueryAttempted) {
                 queryStartedAt = System.nanoTime();
                 try {
-                    order = findPendingOrderInOpenOrders(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
+                    order = gateway.queryOrder(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
                 } catch (RuntimeException ex) {
-                    orderQueryFailure = "openOrders " + ex.getClass().getSimpleName();
+                    // 查询异常不是“订单不存在”；记录诊断并保持 UNKNOWN，不因异常尝试重发交易。
+                    orderQueryFailure = ex.getClass().getSimpleName();
                 } finally {
-                    timing.openOrdersMs += pendingExecutionElapsedMillis(queryStartedAt);
+                    timing.exactOrderMs += pendingExecutionElapsedMillis(queryStartedAt);
                 }
-            }
-            // 当前活动订单只覆盖仍处于活动态的订单。若下单响应丢失而订单已成交/撤销，
-            // 仅反复查活动订单会永久停留在 UNKNOWN。每 6 次未找到才查询历史，且只接受
-            // 交易对、订单 ID、客户订单 ID 完全匹配的正向事实。
-            if (order == null && orderQueryFailure == null && (priorNotFound + 1) % 6 == 0) {
-                queryStartedAt = System.nanoTime();
-                try {
-                    order = findPendingOrderInHistory(credential, runtime.symbol.getSymbol(), orderId, clientOrderId,
-                        expectedState.getPendingOrderTime());
-                } catch (RuntimeException ex) {
-                    orderQueryFailure = "orderHistory " + ex.getClass().getSimpleName();
-                } finally {
-                    timing.historicalOrderMs += pendingExecutionElapsedMillis(queryStartedAt);
-                }
-            }
-        }
-        List<ExchangeGateway.PositionSnapshot> snapshots = null;
-        if (order == null || "NEW".equalsIgnoreCase(order.status()) || "PARTIALLY_FILLED".equalsIgnoreCase(order.status()) || "FILLED".equalsIgnoreCase(order.status())
-            || Set.of("CANCELED", "EXPIRED", "REJECTED").contains(order.status() == null ? "" : order.status().toUpperCase(java.util.Locale.ROOT))) {
-            // 订单查询之后再读取持仓，防止用成交之前的快照解除待确认保护。
-            queryStartedAt = System.nanoTime();
-            try {
-                snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
-            } finally {
-                timing.positionSnapshotMs += pendingExecutionElapsedMillis(queryStartedAt);
-                timing.positionSnapshotQueries++;
-            }
-        }
-        boolean closedOpenProven = false;
-        if (order != null && "FILLED".equalsIgnoreCase(order.status()) && "OPEN".equals(expectedPending.get(0)) && snapshots != null && snapshots.stream().allMatch(p -> p.quantity() != null && p.quantity().signum() == 0)) {
-            Instant from = expectedPending.get(4) instanceof Long time ? Instant.ofEpochMilli(time) : order.updateTime();
-            Instant to = Instant.now();
-            // 成交接口窗口有限；缺少完整历史或双向持仓归属时保留 pending，不能仅凭空仓放行。
-            queryStartedAt = System.nanoTime();
-            ExchangeGateway.PositionMode positionMode;
-            try {
-                positionMode = gateway.queryPositionMode(credential);
-            } finally {
-                timing.positionModeMs += pendingExecutionElapsedMillis(queryStartedAt);
-            }
-            if (from != null && !from.isAfter(to) && from.isAfter(to.minusSeconds(6 * 24 * 3600)) && positionMode != null && !positionMode.hedgeMode()) {
-                queryStartedAt = System.nanoTime();
-                List<ExchangeGateway.TradeSnapshot> trades;
-                try {
-                    trades = gateway.queryTrades(credential, runtime.symbol.getSymbol(), new ExchangeGateway.TimeRange(from, to));
-                } finally {
-                    timing.tradeHistoryMs += pendingExecutionElapsedMillis(queryStartedAt);
-                }
-                closedOpenProven = closedPendingOpenProven(order, expectedDirection, trades);
-                if (closedOpenProven) {
-                    // 成交证明读取之后再次确认空仓，避免使用旧的持仓快照提交恢复。
+                // 当前活动订单列表只是精确订单查询的备用路径，未找到时不必每 5 秒重复扫描。
+                // 每 3 次精确查询才扫描一次活动订单；历史订单则每 6 次查询一次，以控制 REST 权重。
+                int priorNotFound = expectedState.getPendingNotFoundConfirmations() == null ? 0 : expectedState.getPendingNotFoundConfirmations();
+                if (order == null && orderQueryFailure == null && (priorNotFound + 1) % 3 == 0) {
                     queryStartedAt = System.nanoTime();
                     try {
-                        snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
-                    } finally {
-                        timing.positionSnapshotMs += pendingExecutionElapsedMillis(queryStartedAt);
-                        timing.positionSnapshotQueries++;
-                    }
-                    closedOpenProven =
-snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
-                }
-            }
-        }
-        boolean closedCloseProven = false;
-        String closeProofReason = "NOT_ELIGIBLE";
-        int closeProofTradeCount = 0;
-        BigDecimal closeProofCloseQuantity = BigDecimal.ZERO;
-        BigDecimal closeProofIncreaseQuantity = BigDecimal.ZERO;
-        BigDecimal closeProofRemainingQuantity = expectedState.getPositionQty();
-        boolean exchangeFlatSnapshot = snapshots != null && snapshots.stream().allMatch(p ->
-            runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
-        Instant pendingOrderInstant = expectedState.getPendingOrderTime() == null ? null
-            : Instant.ofEpochMilli(expectedState.getPendingOrderTime());
-        Instant executionCreatedAtInstant = execution == null || execution.getCreatedAt() == null ? null
-            : execution.getCreatedAt().toInstant(java.time.ZoneOffset.UTC);
-        // openedAt is persisted as Beijing local time. Query from one minute before it so the
-        // opening fill is included even when state persistence follows the exchange fill.
-        Instant from = resolveCloseProofStartTime(expectedState.getOpenedAt(), expectedState.getPendingOrderTime(),
-            execution == null ? null : execution.getCreatedAt());
-        String closeProofTimeSource = expectedState.getOpenedAt() != null ? "POSITION_OPENED_AT_SHANGHAI_MINUS_60S"
-            : pendingOrderInstant != null ? "PENDING_ORDER_EPOCH"
-            : executionCreatedAtInstant != null ? "EXECUTION_CREATED_AT_UTC" : "MISSING";
-        Instant to = Instant.now();
-        long closeProofWindowAgeMillis = from == null ? -1L : to.toEpochMilli() - from.toEpochMilli();
-        long closeProofCutoffEpochMillis = to.minusSeconds(6 * 24 * 3600L).toEpochMilli();
-        if (pendingOrderInstant != null && executionCreatedAtInstant != null
-            && Math.abs(pendingOrderInstant.toEpochMilli() - executionCreatedAtInstant.toEpochMilli()) > 60_000L) {
-            log.warn("待确认退出时间字段不一致，优先使用 epoch 时间 instanceId={} symbol={} pendingOrderTime={} executionCreatedAt={} differenceMillis={}",
-                runtime.instance.getId(), runtime.symbol.getSymbol(), pendingOrderInstant, executionCreatedAtInstant,
-                pendingOrderInstant.toEpochMilli() - executionCreatedAtInstant.toEpochMilli());
-        }
-        if (order == null && "TESTNET".equalsIgnoreCase(runtime.credential.getRunMode())
-            && !"OPEN".equalsIgnoreCase((String) expectedPending.get(0)) && exchangeFlatSnapshot
-            && expectedState.getPositionQty() != null && expectedState.getPositionQty().signum() > 0 && from != null) {
-            try {
-                if (from.toEpochMilli() >= closeProofCutoffEpochMillis && !from.isAfter(to)) {
-                    queryStartedAt = System.nanoTime();
-                    ExchangeGateway.PositionMode positionMode;
-                    try {
-                        positionMode = gateway.queryPositionMode(credential);
-                    } finally {
-                        timing.positionModeMs += pendingExecutionElapsedMillis(queryStartedAt);
-                    }
-                    queryStartedAt = System.nanoTime();
-                    List<ExchangeGateway.OrderSnapshot> openOrders;
-                    try {
-                        openOrders = gateway.queryOrders(credential, runtime.symbol.getSymbol());
+                        order = findPendingOrderInOpenOrders(credential, runtime.symbol.getSymbol(), orderId, clientOrderId);
+                    } catch (RuntimeException ex) {
+                        orderQueryFailure = "openOrders " + ex.getClass().getSimpleName();
                     } finally {
                         timing.openOrdersMs += pendingExecutionElapsedMillis(queryStartedAt);
                     }
-                    if (positionMode == null) {
-                        closeProofReason = "POSITION_MODE_UNKNOWN";
-                    } else if (openOrders == null) {
-                        closeProofReason = "OPEN_ORDERS_UNKNOWN";
-                    } else if (!openOrders.isEmpty()) {
-                        closeProofReason = "OPEN_ORDERS_PRESENT";
-                    } else {
-                        queryStartedAt = System.nanoTime();
-                        List<ExchangeGateway.TradeSnapshot> trades;
-                        try {
-                            trades = gateway.queryTrades(credential, runtime.symbol.getSymbol(), new ExchangeGateway.TimeRange(from, to));
-                        } finally {
-                            timing.tradeHistoryMs += pendingExecutionElapsedMillis(queryStartedAt);
-                        }
-                        BigDecimal expectedCycleQuantity = expectedState.getInitialPositionQty() != null
-                            ? expectedState.getInitialPositionQty() : expectedState.getPositionQty();
-                        CloseProofResult proof = evaluatePendingCloseProof(runtime.symbol.getSymbol(), expectedDirection,
-                            expectedCycleQuantity, positionMode, trades, from, to);
-                        closedCloseProven = proof.proven();
-                        closeProofReason = proof.reason();
-                        closeProofTradeCount = proof.tradeCount();
-                        closeProofCloseQuantity = proof.closeQuantity();
-                        closeProofIncreaseQuantity = proof.increaseQuantity();
-                        closeProofRemainingQuantity = proof.remainingQuantity();
-                    }
-                } else {
-                    closeProofReason = "TRADE_TIME_WINDOW_OUT_OF_RANGE";
                 }
-            } catch (RuntimeException ex) {
-                closeProofReason = "EXCHANGE_QUERY_FAILED:" + ex.getClass().getSimpleName();
-                orderQueryFailure = "closeFlatProof " + ex.getClass().getSimpleName();
+                // 当前活动订单只覆盖仍处于活动态的订单。若下单响应丢失而订单已成交/撤销，
+                // 仅反复查活动订单会永久停留在 UNKNOWN。每 6 次未找到才查询历史，且只接受
+                // 交易对、订单 ID、客户订单 ID 完全匹配的正向事实。
+                if (order == null && orderQueryFailure == null && (priorNotFound + 1) % 6 == 0) {
+                    queryStartedAt = System.nanoTime();
+                    try {
+                        order = findPendingOrderInHistory(credential, runtime.symbol.getSymbol(), orderId, clientOrderId,
+                            expectedState.getPendingOrderTime());
+                    } catch (RuntimeException ex) {
+                        orderQueryFailure = "orderHistory " + ex.getClass().getSimpleName();
+                    } finally {
+                        timing.historicalOrderMs += pendingExecutionElapsedMillis(queryStartedAt);
+                    }
+                }
             }
-        } else if (order == null && "TESTNET".equalsIgnoreCase(runtime.credential.getRunMode())) {
-            closeProofReason = !exchangeFlatSnapshot ? "POSITION_NOT_CONFIRMED_FLAT"
-                : expectedState.getPositionQty() == null || expectedState.getPositionQty().signum() <= 0 ? "LOCAL_POSITION_QUANTITY_INVALID"
-                : expectedPending.get(0) == null || "OPEN".equalsIgnoreCase(String.valueOf(expectedPending.get(0))) ? "NOT_A_CLOSE_ACTION"
-                : from == null ? "EXECUTION_TIME_MISSING" : "NOT_ELIGIBLE";
-        }
-        int closeProofConfirmations = expectedState.getPendingNotFoundConfirmations() == null ? 0 : expectedState.getPendingNotFoundConfirmations();
-        if (order == null && "TESTNET".equalsIgnoreCase(runtime.credential.getRunMode()) && closeProofConfirmations % 6 == 0) {
-            log.warn("未知退出恢复核验诊断 instanceId={} symbol={} reason={} flatSnapshot={} tradeCount={} closeQty={} increaseQty={} remainingQty={} expectedCycleQty={} positionOpenedAt={} pendingOrderId={} clientOrderId={} executionId={} timeSource={} pendingOrderTime={} executionCreatedAt={} from={} to={} cutoff={} windowAgeMillis={}",
-                runtime.instance.getId(), runtime.symbol.getSymbol(), closeProofReason, exchangeFlatSnapshot, closeProofTradeCount,
-                closeProofCloseQuantity, closeProofIncreaseQuantity, closeProofRemainingQuantity,
-                expectedState.getInitialPositionQty(), expectedState.getOpenedAt(), orderId, clientOrderId,
-                execution == null ? null : execution.getId(), closeProofTimeSource, pendingOrderInstant, executionCreatedAtInstant,
-                from, to, Instant.ofEpochMilli(closeProofCutoffEpochMillis), closeProofWindowAgeMillis);
-        }
-        runtime.lastPendingOrderQueryFailure = orderQueryFailure;
-        timing.orderFound = order != null;
-        timing.orderStatus = order == null ? null : order.status();
-        timing.queryFailure = orderQueryFailure;
-        if (decisionLogs != null && order != null) {
-            decisionLogs.order(runtime.credential.getId(), order);
-        }
-        synchronized (runtime) {
-            if (runtime.closed || runtime.state != expectedState || !Objects.equals(expectedPending, pendingIdentity(runtime.state))) {
-                runtime.reconcileRequested.set(true);
-                return true;
+            List<ExchangeGateway.PositionSnapshot> snapshots = null;
+            if (order == null || "NEW".equalsIgnoreCase(order.status()) || "PARTIALLY_FILLED".equalsIgnoreCase(order.status()) || "FILLED".equalsIgnoreCase(order.status())
+                || Set.of("CANCELED", "EXPIRED", "REJECTED").contains(order.status() == null ? "" : order.status().toUpperCase(java.util.Locale.ROOT))) {
+                // 订单查询之后再读取持仓，防止用成交之前的快照解除待确认保护。
+                queryStartedAt = System.nanoTime();
+                try {
+                    snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
+                } finally {
+                    timing.positionSnapshotMs += pendingExecutionElapsedMillis(queryStartedAt);
+                    timing.positionSnapshotQueries++;
+                }
             }
-            long leaseStartedAt = System.nanoTime();
-            boolean leaseAcquired;
-            try {
-                leaseAcquired = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
-                    runtime.credential.getCredentialRuntimeVersion());
-            } finally {
-                timing.finalLeaseCheckMs += pendingExecutionElapsedMillis(leaseStartedAt);
+            boolean closedOpenProven = false;
+            if (order != null && "FILLED".equalsIgnoreCase(order.status()) && "OPEN".equals(expectedPending.get(0)) && snapshots != null && snapshots.stream().allMatch(p -> p.quantity() != null && p.quantity().signum() == 0)) {
+                Instant from = expectedPending.get(4) instanceof Long time ? Instant.ofEpochMilli(time) : order.updateTime();
+                Instant to = Instant.now();
+                // 成交接口窗口有限；缺少完整历史或双向持仓归属时保留 pending，不能仅凭空仓放行。
+                queryStartedAt = System.nanoTime();
+                ExchangeGateway.PositionMode positionMode;
+                try {
+                    positionMode = gateway.queryPositionMode(credential);
+                } finally {
+                    timing.positionModeMs += pendingExecutionElapsedMillis(queryStartedAt);
+                }
+                if (from != null && !from.isAfter(to) && from.isAfter(to.minusSeconds(6 * 24 * 3600)) && positionMode != null && !positionMode.hedgeMode()) {
+                    queryStartedAt = System.nanoTime();
+                    List<ExchangeGateway.TradeSnapshot> trades;
+                    try {
+                        trades = gateway.queryTrades(credential, runtime.symbol.getSymbol(), new ExchangeGateway.TimeRange(from, to));
+                    } finally {
+                        timing.tradeHistoryMs += pendingExecutionElapsedMillis(queryStartedAt);
+                    }
+                    closedOpenProven = closedPendingOpenProven(order, expectedDirection, trades);
+                    if (closedOpenProven) {
+                        // 成交证明读取之后再次确认空仓，避免使用旧的持仓快照提交恢复。
+                        queryStartedAt = System.nanoTime();
+                        try {
+                            snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
+                        } finally {
+                            timing.positionSnapshotMs += pendingExecutionElapsedMillis(queryStartedAt);
+                            timing.positionSnapshotQueries++;
+                        }
+                        closedOpenProven =
+    snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
+                    }
+                }
             }
-            if (!leaseAcquired) {
-                return true;
+            boolean closedCloseProven = false;
+            String closeProofReason = "NOT_ELIGIBLE";
+            int closeProofTradeCount = 0;
+            BigDecimal closeProofCloseQuantity = BigDecimal.ZERO;
+            BigDecimal closeProofIncreaseQuantity = BigDecimal.ZERO;
+            BigDecimal closeProofRemainingQuantity = expectedState.getPositionQty();
+            boolean exchangeFlatSnapshot = snapshots != null && snapshots.stream().allMatch(p ->
+                runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
+            Instant pendingOrderInstant = expectedState.getPendingOrderTime() == null ? null
+                : Instant.ofEpochMilli(expectedState.getPendingOrderTime());
+            Instant executionCreatedAtInstant = execution == null || execution.getCreatedAt() == null ? null
+                : execution.getCreatedAt().toInstant(java.time.ZoneOffset.UTC);
+            // openedAt is persisted as Beijing local time. Query from one minute before it so the
+            // opening fill is included even when state persistence follows the exchange fill.
+            Instant from = resolveCloseProofStartTime(expectedState.getOpenedAt(), expectedState.getPendingOrderTime(),
+                execution == null ? null : execution.getCreatedAt());
+            String closeProofTimeSource = expectedState.getOpenedAt() != null ? "POSITION_OPENED_AT_SHANGHAI_MINUS_60S"
+                : pendingOrderInstant != null ? "PENDING_ORDER_EPOCH"
+                : executionCreatedAtInstant != null ? "EXECUTION_CREATED_AT_UTC" : "MISSING";
+            Instant to = Instant.now();
+            long closeProofWindowAgeMillis = from == null ? -1L : to.toEpochMilli() - from.toEpochMilli();
+            long closeProofCutoffEpochMillis = to.minusSeconds(6 * 24 * 3600L).toEpochMilli();
+            if (pendingOrderInstant != null && executionCreatedAtInstant != null
+                && Math.abs(pendingOrderInstant.toEpochMilli() - executionCreatedAtInstant.toEpochMilli()) > 60_000L) {
+                log.warn("待确认退出时间字段不一致，优先使用 epoch 时间 instanceId={} symbol={} pendingOrderTime={} executionCreatedAt={} differenceMillis={}",
+                    runtime.instance.getId(), runtime.symbol.getSymbol(), pendingOrderInstant, executionCreatedAtInstant,
+                    pendingOrderInstant.toEpochMilli() - executionCreatedAtInstant.toEpochMilli());
             }
-            return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven, closedCloseProven);
-        }
+            if (order == null && "TESTNET".equalsIgnoreCase(runtime.credential.getRunMode())
+                && !"OPEN".equalsIgnoreCase((String) expectedPending.get(0)) && exchangeFlatSnapshot
+                && expectedState.getPositionQty() != null && expectedState.getPositionQty().signum() > 0 && from != null) {
+                try {
+                    if (from.toEpochMilli() >= closeProofCutoffEpochMillis && !from.isAfter(to)) {
+                        queryStartedAt = System.nanoTime();
+                        ExchangeGateway.PositionMode positionMode;
+                        try {
+                            positionMode = gateway.queryPositionMode(credential);
+                        } finally {
+                            timing.positionModeMs += pendingExecutionElapsedMillis(queryStartedAt);
+                        }
+                        queryStartedAt = System.nanoTime();
+                        List<ExchangeGateway.OrderSnapshot> openOrders;
+                        try {
+                            openOrders = gateway.queryOrders(credential, runtime.symbol.getSymbol());
+                        } finally {
+                            timing.openOrdersMs += pendingExecutionElapsedMillis(queryStartedAt);
+                        }
+                        if (positionMode == null) {
+                            closeProofReason = "POSITION_MODE_UNKNOWN";
+                        } else if (openOrders == null) {
+                            closeProofReason = "OPEN_ORDERS_UNKNOWN";
+                        } else if (!openOrders.isEmpty()) {
+                            closeProofReason = "OPEN_ORDERS_PRESENT";
+                        } else {
+                            queryStartedAt = System.nanoTime();
+                            List<ExchangeGateway.TradeSnapshot> trades;
+                            try {
+                                trades = gateway.queryTrades(credential, runtime.symbol.getSymbol(), new ExchangeGateway.TimeRange(from, to));
+                            } finally {
+                                timing.tradeHistoryMs += pendingExecutionElapsedMillis(queryStartedAt);
+                            }
+                            BigDecimal expectedCycleQuantity = expectedState.getInitialPositionQty() != null
+                                ? expectedState.getInitialPositionQty() : expectedState.getPositionQty();
+                            CloseProofResult proof = evaluatePendingCloseProof(runtime.symbol.getSymbol(), expectedDirection,
+                                expectedCycleQuantity, positionMode, trades, from, to);
+                            closedCloseProven = proof.proven();
+                            closeProofReason = proof.reason();
+                            closeProofTradeCount = proof.tradeCount();
+                            closeProofCloseQuantity = proof.closeQuantity();
+                            closeProofIncreaseQuantity = proof.increaseQuantity();
+                            closeProofRemainingQuantity = proof.remainingQuantity();
+                        }
+                    } else {
+                        closeProofReason = "TRADE_TIME_WINDOW_OUT_OF_RANGE";
+                    }
+                } catch (RuntimeException ex) {
+                    closeProofReason = "EXCHANGE_QUERY_FAILED:" + ex.getClass().getSimpleName();
+                    orderQueryFailure = "closeFlatProof " + ex.getClass().getSimpleName();
+                }
+            } else if (order == null && "TESTNET".equalsIgnoreCase(runtime.credential.getRunMode())) {
+                closeProofReason = !exchangeFlatSnapshot ? "POSITION_NOT_CONFIRMED_FLAT"
+                    : expectedState.getPositionQty() == null || expectedState.getPositionQty().signum() <= 0 ? "LOCAL_POSITION_QUANTITY_INVALID"
+                    : expectedPending.get(0) == null || "OPEN".equalsIgnoreCase(String.valueOf(expectedPending.get(0))) ? "NOT_A_CLOSE_ACTION"
+                    : from == null ? "EXECUTION_TIME_MISSING" : "NOT_ELIGIBLE";
+            }
+            int closeProofConfirmations = expectedState.getPendingNotFoundConfirmations() == null ? 0 : expectedState.getPendingNotFoundConfirmations();
+            if (order == null && "TESTNET".equalsIgnoreCase(runtime.credential.getRunMode()) && closeProofConfirmations % 6 == 0) {
+                log.warn("未知退出恢复核验诊断 instanceId={} symbol={} reason={} flatSnapshot={} tradeCount={} closeQty={} increaseQty={} remainingQty={} expectedCycleQty={} positionOpenedAt={} pendingOrderId={} clientOrderId={} executionId={} timeSource={} pendingOrderTime={} executionCreatedAt={} from={} to={} cutoff={} windowAgeMillis={}",
+                    runtime.instance.getId(), runtime.symbol.getSymbol(), closeProofReason, exchangeFlatSnapshot, closeProofTradeCount,
+                    closeProofCloseQuantity, closeProofIncreaseQuantity, closeProofRemainingQuantity,
+                    expectedState.getInitialPositionQty(), expectedState.getOpenedAt(), orderId, clientOrderId,
+                    execution == null ? null : execution.getId(), closeProofTimeSource, pendingOrderInstant, executionCreatedAtInstant,
+                    from, to, Instant.ofEpochMilli(closeProofCutoffEpochMillis), closeProofWindowAgeMillis);
+            }
+            runtime.lastPendingOrderQueryFailure = orderQueryFailure;
+            timing.orderFound = order != null;
+            timing.orderStatus = order == null ? null : order.status();
+            timing.queryFailure = orderQueryFailure;
+            if (decisionLogs != null && order != null) {
+                decisionLogs.order(runtime.credential.getId(), order);
+            }
+            synchronized (runtime) {
+                if (runtime.closed || runtime.state != expectedState || !Objects.equals(expectedPending, pendingIdentity(runtime.state))) {
+                    runtime.reconcileRequested.set(true);
+                    return true;
+                }
+                long leaseStartedAt = System.nanoTime();
+                boolean leaseAcquired;
+                try {
+                    leaseAcquired = leaseService.acquireOrRenew(runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
+                        runtime.credential.getCredentialRuntimeVersion());
+                } finally {
+                    timing.finalLeaseCheckMs += pendingExecutionElapsedMillis(leaseStartedAt);
+                }
+                if (!leaseAcquired) {
+                    return true;
+                }
+                return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven, closedCloseProven);
+            }
         } catch (RuntimeException ex) {
             timing.failure = ex.getClass().getSimpleName();
             throw ex;
