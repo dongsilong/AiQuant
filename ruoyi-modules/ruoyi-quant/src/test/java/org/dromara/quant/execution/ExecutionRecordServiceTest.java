@@ -19,6 +19,7 @@ class ExecutionRecordServiceTest {
     @Test
     void recordsFirstVerifiedCloseAbsenceWithoutPrematurelyFailingUnknownExecution() {
         QuantExecutionRecord record = closeRecord();
+        record.setExchangeOrderStatus("");
         LocalDateTime now = LocalDateTime.of(2026, 11, 20, 1, 30);
 
         when(mapper.recordVerifiedCloseAbsence(any(), any(), any(), any(), any(), any(), any(), any()))
