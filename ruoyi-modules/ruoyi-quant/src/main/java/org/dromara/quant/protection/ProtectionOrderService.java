@@ -654,7 +654,7 @@ public class ProtectionOrderService {
         if (!validPosition(position)) {
             return null;
         }
-        reconcileTerminalPreviousTarget(credentialId, position);
+        reconcileTerminalPreviousTarget(credentialId, position, live);
         BigDecimal quantity = normalizeQuantity(credentialId, position.getSymbol(), position.getQuantity(), live);
         BigDecimal stopPrice = normalizeProtectionPrice(credentialId, position, hardStopPrice(position, marginLossRatio), "STOP_MARKET", live);
         QuantProtectionOrder existing = findActive(credentialId, position, "HARD_STOP");
@@ -1374,7 +1374,7 @@ public class ProtectionOrderService {
     /**
      * 硬止损创建前恢复历史终态引用。必须先核对本地记录属于当前持仓周期，再通过交易所精确查询确认终态。
      */
-    private void reconcileTerminalPreviousTarget(Long credentialId, QuantPosition position) {
+    private void reconcileTerminalPreviousTarget(Long credentialId, QuantPosition position, boolean live) {
         ProtectionTargetCoordinator.Lease lease = targetLease.get();
         if (lease == null) {
             return;
@@ -1384,7 +1384,8 @@ public class ProtectionOrderService {
             return;
         }
         QuantProtectionOrder previous = mapper.selectById(previousOrderId);
-        if (previous == null || !Objects.equals(previous.getCredentialId(), credentialId)
+        if (previous == null || !Objects.equals(previous.getId(), previousOrderId)
+            || !Objects.equals(previous.getCredentialId(), credentialId)
             || !Objects.equals(previous.getPositionId(), position.getId())
             || !Objects.equals(previous.getPositionCycleKey(), position.getProtectionCycleKey())
             || previous.getPositionSide() == null || !previous.getPositionSide().equalsIgnoreCase(position.getPositionSide())
@@ -1394,11 +1395,12 @@ public class ProtectionOrderService {
                 credentialId, position.getId(), position.getSymbol(), previousOrderId);
             return;
         }
-        if ("NOT_SENT".equals(previous.getStatus())) {
+        String status = Objects.toString(previous.getStatus(), "");
+        if ("NOT_SENT".equals(status) || !live && Set.of("CANCELED", "EXPIRED", "REJECTED").contains(status)) {
             markTerminalTargetReference(credentialId, previous);
             return;
         }
-        if (!Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED").contains(Objects.toString(previous.getStatus(), ""))) {
+        if (!live || !Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED").contains(status)) {
             return;
         }
         confirmOnExchange(credentialId, previous, false, position.getQuantity());
