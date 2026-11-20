@@ -103,6 +103,21 @@ class ProtectionOrderJournalServiceTest {
     }
 
     @Test
+    void fullAlgoQuantityIsRejectedWhenPriorCycleFillsReduceExpectedRemainingQuantity() {
+        var parent = local();
+        parent.setQuantity(new BigDecimal("236631"));
+        var algo = new ExchangeGateway.ProtectionOrderSnapshot("BTCUSDT", 81L, "QFTP_test", "FINISHED", "SELL", "BOTH",
+            "TAKE_PROFIT_MARKET", new BigDecimal("236631"), BigDecimal.TEN, Instant.now(), new BigDecimal("236631"),
+            true, false, 91L, BigDecimal.TEN);
+        var filledChild = new ExchangeGateway.OrderSnapshot("BTCUSDT", 91L, "child-client", "SELL", "MARKET", "FILLED",
+            BigDecimal.ZERO, new BigDecimal("236631"), new BigDecimal("236631"), Instant.now(), BigDecimal.TEN);
+
+        assertThrows(IllegalStateException.class,
+            () -> journal.bindChild(credential, parent, algo, filledChild, new BigDecimal("118315")));
+        verifyNoInteractions(orders);
+    }
+
+    @Test
     void reducedAlgoQuantityIsRejectedWhenPriorCycleFillsDoNotExplainTheRemainder() {
         var parent = local();
         parent.setQuantity(new BigDecimal("2"));
