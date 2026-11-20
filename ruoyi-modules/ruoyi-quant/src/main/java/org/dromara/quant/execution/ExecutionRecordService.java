@@ -175,7 +175,8 @@ public class ExecutionRecordService {
             || entity.getId() == null || entity.getCredentialId() == null
             || entity.getStrategyInstanceId() == null || entity.getSymbol() == null
             || entity.getIdempotencyKey() == null || entity.getClientOrderId() == null
-            || entity.getExchangeOrderId() != null || entity.getExchangeOrderStatus() != null) {
+            || entity.getExchangeOrderId() != null
+            || entity.getExchangeOrderStatus() != null && !entity.getExchangeOrderStatus().isBlank()) {
             return false;
         }
         if (hasVerifiedCloseAbsence(entity)) {

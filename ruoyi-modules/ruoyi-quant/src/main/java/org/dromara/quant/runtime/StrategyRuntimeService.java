@@ -3765,7 +3765,8 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 && "CLOSE".equalsIgnoreCase(execution.getOperationType())
                 && ("UNKNOWN".equalsIgnoreCase(execution.getExecutionStatus())
                     || executionRecordService.hasVerifiedCloseAbsence(execution))
-                && execution.getExchangeOrderId() == null && execution.getExchangeOrderStatus() == null
+                && execution.getExchangeOrderId() == null
+                && (execution.getExchangeOrderStatus() == null || execution.getExchangeOrderStatus().isBlank())
                 && Objects.equals(execution.getCredentialId(), runtime.credential.getId())
                 && Objects.equals(execution.getStrategyInstanceId(), runtime.instance.getId())
                 && Objects.equals(execution.getSymbol(), runtime.symbol.getSymbol())
