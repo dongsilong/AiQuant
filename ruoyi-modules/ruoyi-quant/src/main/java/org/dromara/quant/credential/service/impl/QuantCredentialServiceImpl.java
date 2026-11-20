@@ -15,6 +15,7 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.domain.bo.QuantCredentialBo;
 import org.dromara.quant.credential.domain.vo.QuantCredentialVo;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.runtime.StrategyRuntimeService;
 import org.dromara.quant.security.CredentialMasker;
@@ -24,6 +25,8 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.List;
 
@@ -43,6 +46,8 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
     private final ExchangeGateway exchangeGateway;
     /** Runtime 生命周期协调。 */
     private final StrategyRuntimeService runtimeService;
+    /** 量化接口统一时间配置。 */
+    private final QuantProperties quantProperties;
 
     static void validateSingleBoundUser(Long ownerUserId) {
         if (ownerUserId == null || ownerUserId <= 0) {
@@ -299,18 +304,18 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
     private QuantCredentialVo toVo(QuantCredential entity) {
         QuantCredentialVo vo = MapstructUtils.convert(entity, QuantCredentialVo.class);
         vo.setMaskedApiKey(CredentialMasker.maskApiKey(entity.getApiKey()));
-        vo.setEffectiveTime(toBeijing(entity.getEffectiveTime()));
+        vo.setEffectiveTime(toDisplay(entity.getEffectiveTime()));
         return vo;
     }
 
-    private static LocalDateTime toUtc(LocalDateTime beijingTime) {
-        return beijingTime == null ? null : beijingTime.atZone(java.time.ZoneId.of("Asia/Shanghai"))
-            .withZoneSameInstant(java.time.ZoneOffset.UTC).toLocalDateTime();
+    private LocalDateTime toUtc(LocalDateTime displayTime) {
+        return displayTime == null ? null : displayTime.atZone(ZoneId.of(quantProperties.getTimeZone()))
+            .withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
     }
 
-    private static LocalDateTime toBeijing(LocalDateTime utcTime) {
-        return utcTime == null ? null : utcTime.atZone(java.time.ZoneOffset.UTC)
-            .withZoneSameInstant(java.time.ZoneId.of("Asia/Shanghai")).toLocalDateTime();
+    private LocalDateTime toDisplay(LocalDateTime utcTime) {
+        return utcTime == null ? null : utcTime.atZone(ZoneOffset.UTC)
+            .withZoneSameInstant(ZoneId.of(quantProperties.getTimeZone())).toLocalDateTime();
     }
 
     private void applyUserScope(LambdaQueryWrapper<QuantCredential> wrapper) {
