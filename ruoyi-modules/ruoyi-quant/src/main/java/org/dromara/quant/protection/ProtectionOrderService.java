@@ -3,6 +3,7 @@ package org.dromara.quant.protection;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.ExchangeTradingRuleCache;
 import org.dromara.quant.exchange.QuantityNormalizer;
 import org.dromara.quant.execution.LiveOrderDispatcher;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
@@ -42,6 +43,7 @@ public class ProtectionOrderService {
     private static final Set<String> STRATEGY_PROTECTION_TYPES = Set.of("LOCAL_STOP", "SYMBOL_STOP", "FIRST_TP", "STEP_TP");
     private static final List<String> STOP_PROTECTION_TYPES = List.of("SYMBOL_STOP", "LOCAL_STOP", "HARD_STOP", "STEP_TP");
     private final ExchangeGateway gateway;
+    private volatile ExchangeTradingRuleCache tradingRuleCache;
     /**
      * 当前领域 Mapper。
      */
@@ -83,6 +85,11 @@ public class ProtectionOrderService {
     @Autowired
     public void setQuantPositionMapper(QuantPositionMapper mapper) {
         this.positionMapper = java.util.Objects.requireNonNull(mapper);
+    }
+
+    @Autowired
+    public void setExchangeTradingRuleCache(ExchangeTradingRuleCache cache) {
+        this.tradingRuleCache = java.util.Objects.requireNonNull(cache);
     }
 
     private LiveOrderDispatcher requireLiveDispatcher() {
@@ -1670,8 +1677,10 @@ public class ProtectionOrderService {
 
     private ExchangeGateway.SymbolRule rule(Long credentialId, String symbol) {
         ExchangeGateway.Credential credential = executionApplicationService.toCredential(executionApplicationService.requireCredential(credentialId));
-        // 网关按 LIVE/TESTNET 缓存实际规则，保护单不能复用本地导入的交易对精度。
-        return gateway.queryTradingRule(credential, symbol);
+        // 保护单复用环境隔离的交易规则缓存；缓存未命中时使用保护校验优先级刷新。
+        ExchangeTradingRuleCache cache = tradingRuleCache;
+        return cache == null ? gateway.queryTradingRuleForProtection(credential, symbol)
+            : cache.getForProtection(credential.runMode(), credential, symbol);
     }
 
     /**
