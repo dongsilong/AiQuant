@@ -27,6 +27,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.Collection;
 import java.util.List;
 
@@ -313,9 +314,9 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             .withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
     }
 
-    private LocalDateTime toDisplay(LocalDateTime utcTime) {
-        return utcTime == null ? null : utcTime.atZone(ZoneOffset.UTC)
-            .withZoneSameInstant(ZoneId.of(quantProperties.getTimeZone())).toLocalDateTime();
+    private String toDisplay(LocalDateTime utcTime) {
+        return utcTime == null ? null : DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(
+            utcTime.atZone(ZoneOffset.UTC).withZoneSameInstant(ZoneId.of(quantProperties.getTimeZone())));
     }
 
     private void applyUserScope(LambdaQueryWrapper<QuantCredential> wrapper) {
