@@ -75,7 +75,7 @@ public class QuantTradeVo implements Serializable {
      */
     private BigDecimal realizedPnl;
     /**
-     * 根据量化时区配置转换后的成交时间。
+     * 以 UTC 偏移量表示的成交时间，前端根据量化时区配置进行展示。
      */
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX")
     private OffsetDateTime tradeTime;
