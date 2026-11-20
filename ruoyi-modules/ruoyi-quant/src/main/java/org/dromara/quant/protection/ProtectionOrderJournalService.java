@@ -25,6 +25,57 @@ public class ProtectionOrderJournalService {
     private final QuantOrderMapper orders;
     private final StrategyOrderIntentService intents;
 
+    /**
+     * 只累计当前 Algo 创建后、由其他已完成保护单的精确成交子订单证明的减仓量。
+     * 使用 Binance 子订单创建时间，而非本地账本更新时间，避免延迟恢复或历史成交误归属。
+     */
+    public BigDecimal priorProtectionExecutedAfter(Long credentialId, QuantProtectionOrder current,
+                                                    List<QuantProtectionOrder> candidates, java.time.Instant currentAlgoCreateTime) {
+        if (credentialId == null || current == null || current.getPositionId() == null || current.getPositionCycleKey() == null
+            || current.getSymbol() == null || current.getPositionSide() == null || currentAlgoCreateTime == null || candidates == null
+            || candidates.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        LocalDateTime algoCreatedAt = LocalDateTime.ofInstant(currentAlgoCreateTime, ZoneOffset.UTC);
+        BigDecimal total = BigDecimal.ZERO;
+        String expectedChildSide = "SHORT".equalsIgnoreCase(current.getPositionSide()) ? "BUY" : "SELL";
+        for (QuantProtectionOrder candidate : candidates) {
+            if (candidate == null || candidate.getId() == null
+                || !Objects.equals(candidate.getCredentialId(), credentialId)
+                || !Objects.equals(candidate.getPositionId(), current.getPositionId())
+                || !Objects.equals(candidate.getPositionCycleKey(), current.getPositionCycleKey())
+                || candidate.getSymbol() == null || !candidate.getSymbol().equalsIgnoreCase(current.getSymbol())
+                || candidate.getPositionSide() == null || !candidate.getPositionSide().equalsIgnoreCase(current.getPositionSide())
+                || !"FINISHED".equalsIgnoreCase(candidate.getStatus())
+                || candidate.getExecutedQuantity() == null || candidate.getExecutedQuantity().signum() <= 0) {
+                continue;
+            }
+            List<QuantOrder> childOrders = orders.selectList(new LambdaQueryWrapper<QuantOrder>()
+                .eq(QuantOrder::getCredentialId, credentialId)
+                .eq(QuantOrder::getSymbol, current.getSymbol())
+                .likeRight(QuantOrder::getIdempotencyKey, "PROTECTION_CHILD:" + candidate.getId() + ":"));
+            if (childOrders.size() != 1) {
+                continue;
+            }
+            QuantOrder child = childOrders.getFirst();
+            if (child.getExchangeOrderId() == null || child.getExchangeOrderId() <= 0
+                || child.getExchangeCreatedAt() == null || !child.getExchangeCreatedAt().isAfter(algoCreatedAt)
+                || !"FILLED".equalsIgnoreCase(child.getStatus())
+                || child.getOriginalQuantity() == null || child.getExecutedQuantity() == null
+                || child.getExecutedQuantity().signum() <= 0
+                || child.getOriginalQuantity().compareTo(child.getExecutedQuantity()) != 0
+                || child.getExecutedQuantity().compareTo(candidate.getExecutedQuantity()) != 0
+                || !Boolean.TRUE.equals(child.getReduceOnly()) || !Boolean.FALSE.equals(child.getClosePosition())
+                || child.getSide() == null || !expectedChildSide.equalsIgnoreCase(child.getSide())
+                || child.getPositionSide() == null
+                || !("BOTH".equalsIgnoreCase(child.getPositionSide()) || current.getPositionSide().equalsIgnoreCase(child.getPositionSide()))) {
+                continue;
+            }
+            total = total.add(candidate.getExecutedQuantity());
+        }
+        return total;
+    }
+
     /** 发送之前随保护意图保存来源；不能证明历史周期的记录保持未归属。 */
     public void captureOwner(QuantProtectionOrder local) {
         if (local.getStrategyId() != null || local.getStrategyInstanceId() != null) {
@@ -70,8 +121,7 @@ public class ProtectionOrderJournalService {
             if (!local.getSymbol().equalsIgnoreCase(child.symbol())) conflicts.add("childSymbol");
             if (child.clientOrderId() == null || child.clientOrderId().isBlank()) conflicts.add("childClientOrderIdMissing");
             BigDecimal priorExecuted = priorCycleExecuted;
-            boolean quantityMatches = priorExecuted != null && priorExecuted.signum() == 0
-                && local.getQuantity() != null && actual.quantity() != null
+            boolean quantityMatches = local.getQuantity() != null && actual.quantity() != null
                 && local.getQuantity().compareTo(actual.quantity()) == 0;
             boolean reducedQuantityProvenByFilledChild = priorExecuted != null && priorExecuted.signum() > 0
                 && actual.actualOrderId() != null && actual.actualOrderId().equals(child.orderId())
