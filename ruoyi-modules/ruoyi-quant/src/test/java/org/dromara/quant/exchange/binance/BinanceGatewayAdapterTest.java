@@ -224,7 +224,7 @@ class BinanceGatewayAdapterTest {
             .algoStatus("CANCELED").updateTime(1_760_760_000_000L);
         QueryAllAlgoOrdersResponseInner match = new QueryAllAlgoOrdersResponseInner().symbol("BTCUSDT").algoId(12L).clientAlgoId("QFTP_exact")
             .orderType("TAKE_PROFIT_MARKET").side("SELL").positionSide("BOTH").quantity("5").triggerPrice("100")
-            .algoStatus("CANCELED").updateTime(1_760_760_001_000L).reduceOnly(true).closePosition(false);
+            .algoStatus("CANCELED").createTime(1_760_759_990_000L).updateTime(1_760_760_001_000L).reduceOnly(true).closePosition(false);
 
         var snapshot = BinanceGatewayAdapter.findExactAlgoHistory(List.of(other, match), "BTCUSDT", null, "QFTP_exact");
 
@@ -233,6 +233,7 @@ class BinanceGatewayAdapterTest {
         assertEquals("QFTP_exact", snapshot.clientAlgoId());
         assertEquals("CANCELED", snapshot.status());
         assertEquals(0, snapshot.executedQuantity().compareTo(java.math.BigDecimal.ZERO));
+        assertEquals(Instant.ofEpochMilli(1_760_759_990_000L), snapshot.createTime());
         assertNull(BinanceGatewayAdapter.findExactAlgoHistory(List.of(match), "BTCUSDT", null, "QFTP_other"));
     }
 
