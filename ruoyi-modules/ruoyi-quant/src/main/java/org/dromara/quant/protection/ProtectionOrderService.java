@@ -1398,7 +1398,7 @@ public class ProtectionOrderService {
             markTerminalTargetReference(credentialId, previous);
             return;
         }
-        if (!Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED").contains(previous.getStatus())) {
+        if (!Set.of("CANCELED", "EXPIRED", "REJECTED", "FINISHED").contains(Objects.toString(previous.getStatus(), ""))) {
             return;
         }
         confirmOnExchange(credentialId, previous, false, position.getQuantity());
