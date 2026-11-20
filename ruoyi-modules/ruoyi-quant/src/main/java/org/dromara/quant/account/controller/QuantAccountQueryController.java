@@ -13,6 +13,7 @@ import org.dromara.common.core.exception.ServiceException;
 import org.dromara.common.mybatis.core.page.PageQuery;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.account.domain.QuantAccountSnapshot;
+import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.domain.vo.QuantTradeVo;
 import org.dromara.quant.account.mapper.QuantAccountSnapshotMapper;
@@ -54,7 +55,12 @@ public class QuantAccountQueryController {
     /**
      * 交易凭证 Mapper。
      */
-    private static final ZoneId BEIJING_ZONE = ZoneId.of("Asia/Shanghai");
+    @Autowired
+    private QuantProperties quantProperties;
+
+    private ZoneId quantTimeZone() {
+        return ZoneId.of(quantProperties.getTimeZone());
+    }
 
     private final QuantCredentialMapper credentialMapper;
     /**
@@ -118,7 +124,7 @@ public class QuantAccountQueryController {
             long credentialElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - credentialStartedAt);
             long queryStartedAt = System.nanoTime();
             try {
-                LocalDateTime dayStart = LocalDate.now(BEIJING_ZONE).atStartOfDay(BEIJING_ZONE).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+                LocalDateTime dayStart = LocalDate.now(quantTimeZone()).atStartOfDay(quantTimeZone()).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
                 QuantAccountSnapshot baseline = accountSnapshotMapper.selectOne(new LambdaQueryWrapper<QuantAccountSnapshot>()
                     .select(QuantAccountSnapshot::getMarginBalance, QuantAccountSnapshot::getObservedAt)
                     .eq(QuantAccountSnapshot::getCredentialId, credentialId)
@@ -128,7 +134,7 @@ public class QuantAccountQueryController {
                     .gt(QuantAccountSnapshot::getMarginBalance, java.math.BigDecimal.ZERO)
                     .orderByAsc(QuantAccountSnapshot::getObservedAt)
                     .last("LIMIT 1"));
-                return R.ok(baseline == null ? null : new DailyAccountBaseline(baseline.getMarginBalance(), baseline.getObservedAt().atOffset(ZoneOffset.UTC).withOffsetSameInstant(ZoneOffset.ofHours(8))));
+                return R.ok(baseline == null ? null : new DailyAccountBaseline(baseline.getMarginBalance(), baseline.getObservedAt().atOffset(ZoneOffset.UTC).atZoneSameInstant(quantTimeZone()).toOffsetDateTime()));
             } finally {
                 long totalElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
                 long queryElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queryStartedAt);
@@ -302,8 +308,8 @@ public class QuantAccountQueryController {
         lqw.eq(StringUtils.isNotBlank(symbol), QuantTrade::getSymbol, symbol);
         lqw.eq(orderId != null, QuantTrade::getExchangeOrderId, orderId);
         lqw.eq(StringUtils.isNotBlank(side), QuantTrade::getSide, side);
-        lqw.ge(StringUtils.isNotBlank(from), QuantTrade::getTradeTime, StringUtils.isBlank(from) ? null : tradeDateBoundary(from, false));
-        lqw.lt(StringUtils.isNotBlank(to), QuantTrade::getTradeTime, StringUtils.isBlank(to) ? null : tradeDateBoundary(to, true));
+        lqw.ge(StringUtils.isNotBlank(from), QuantTrade::getTradeTime, StringUtils.isBlank(from) ? null : tradeDateBoundary(from, false, quantTimeZone()));
+        lqw.lt(StringUtils.isNotBlank(to), QuantTrade::getTradeTime, StringUtils.isBlank(to) ? null : tradeDateBoundary(to, true, quantTimeZone()));
         lqw.orderByDesc(QuantTrade::getTradeTime).orderByDesc(QuantTrade::getId);
         Page<QuantTrade> page = tradeMapper.selectPage(pageQuery.build(), lqw);
         List<QuantTradeVo> rows = page.getRecords().stream().map(item -> toVo(item, credential)).toList();
@@ -360,8 +366,8 @@ public class QuantAccountQueryController {
             .eq(StringUtils.isNotBlank(symbol), QuantTrade::getSymbol, symbol)
             .eq(StringUtils.isNotBlank(side), QuantTrade::getSide, side)
             .eq(orderId != null, QuantTrade::getExchangeOrderId, orderId)
-            .ge(StringUtils.isNotBlank(from), QuantTrade::getTradeTime, StringUtils.isBlank(from) ? null : tradeDateBoundary(from, false))
-            .lt(StringUtils.isNotBlank(to), QuantTrade::getTradeTime, StringUtils.isBlank(to) ? null : tradeDateBoundary(to, true))
+            .ge(StringUtils.isNotBlank(from), QuantTrade::getTradeTime, StringUtils.isBlank(from) ? null : tradeDateBoundary(from, false, quantTimeZone()))
+            .lt(StringUtils.isNotBlank(to), QuantTrade::getTradeTime, StringUtils.isBlank(to) ? null : tradeDateBoundary(to, true, quantTimeZone()))
             .orderByDesc(QuantTrade::getTradeTime).orderByDesc(QuantTrade::getId);
         Page<QuantTrade> page = tradeMapper.selectPage(pageQuery.build(), tradeQuery);
         List<QuantTradeVo> rows = page.getRecords().stream()
@@ -415,12 +421,12 @@ public class QuantAccountQueryController {
         }
     }
 
-    static LocalDateTime tradeDateBoundary(String date, boolean nextDay) {
+    static LocalDateTime tradeDateBoundary(String date, boolean nextDay, ZoneId zone) {
         LocalDate target = LocalDate.parse(date);
         if (nextDay) {
             target = target.plusDays(1);
         }
-        return target.atStartOfDay(BEIJING_ZONE).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        return target.atStartOfDay(zone).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
     }
 
     private ExchangeGateway.Credential credential(Long id) {
@@ -451,7 +457,7 @@ public class QuantAccountQueryController {
         vo.setPrice(entity.getPrice());
         vo.setCommission(entity.getCommission());
         vo.setRealizedPnl(entity.getRealizedPnl());
-        vo.setTradeTime(entity.getTradeTime());
+        vo.setTradeTime(entity.getTradeTime() == null ? null : entity.getTradeTime().atOffset(ZoneOffset.UTC).atZoneSameInstant(quantTimeZone()).toOffsetDateTime());
         vo.setExchangeTradeId(entity.getExchangeTradeId());
         vo.setExchangeOrderId(entity.getExchangeOrderId());
         return vo;
