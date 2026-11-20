@@ -176,7 +176,8 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND strategy_instance_id=#{instanceId} AND operation_type='OPEN'
 LIMIT 1]]></select>
     <select id="unresolvedDispatches" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credential_id, g.symbol AS symbol,
-       g.active_dispatch_key AS dispatch_key, g.updated_at AS blocked_at,
+       g.active_dispatch_key AS dispatch_key,
+       DATE_FORMAT(g.updated_at, '%Y-%m-%dT%H:%i:%sZ') AS blocked_at,
        t.operation_type AS operation_type, t.client_order_id AS client_order_id,
        t.dispatch_status AS dispatch_status, t.exchange_order_id AS exchange_order_id,
        t.strategy_instance_id AS strategy_instance_id,
