@@ -29,6 +29,21 @@ WHERE id=#{id} AND credential_id=#{credentialId} AND symbol=#{symbol}
   AND exchange_order_id IS NULL
   AND LEFT(error_message, 25) = 'VERIFIED_ABSENCE_PENDING:'
   AND updated_at <= DATE_SUB(#{now}, INTERVAL 1 MINUTE)]]></update>
+    <update id="recordVerifiedCloseAbsence" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='UNKNOWN', error_message=#{message}, updated_at=#{now}
+WHERE id=#{id} AND credential_id=#{credentialId} AND strategy_instance_id=#{strategyInstanceId}
+  AND symbol=#{symbol} AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND execution_status='UNKNOWN' AND operation_type='CLOSE'
+  AND exchange_order_id IS NULL AND exchange_order_status IS NULL
+  AND (error_message IS NULL OR LEFT(error_message, 25) <> 'VERIFIED_ABSENCE_PENDING:')]]></update>
+    <update id="markCloseNotExecutedAfterVerifiedAbsence" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='FAILED', error_message=#{message}, updated_at=#{now}
+WHERE id=#{id} AND credential_id=#{credentialId} AND strategy_instance_id=#{strategyInstanceId}
+  AND symbol=#{symbol} AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND execution_status='UNKNOWN' AND operation_type='CLOSE'
+  AND exchange_order_id IS NULL AND exchange_order_status IS NULL
+  AND LEFT(error_message, 25) = 'VERIFIED_ABSENCE_PENDING:'
+  AND updated_at <= DATE_SUB(#{now}, INTERVAL 1 MINUTE)]]></update>
     <update id="markRecoveredAfterFact" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET execution_status='RECOVERED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
     exchange_order_status=COALESCE(#{exchangeStatus},exchange_order_status),

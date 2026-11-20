@@ -3585,6 +3585,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             ExchangeGateway.OrderSnapshot order = null;
             String orderQueryFailure = null;
             boolean exactOrderQueryAttempted = orderId != null || clientOrderId != null && !clientOrderId.isBlank();
+            boolean historicalOrderAbsenceConfirmed = false;
             if (exactOrderQueryAttempted) {
                 queryStartedAt = System.nanoTime();
                 try {
@@ -3621,6 +3622,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                     } finally {
                         timing.historicalOrderMs += pendingExecutionElapsedMillis(queryStartedAt);
                     }
+                    historicalOrderAbsenceConfirmed = order == null && orderQueryFailure == null;
                 }
             }
             List<ExchangeGateway.PositionSnapshot> snapshots = null;
@@ -3676,6 +3678,8 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             BigDecimal closeProofCloseQuantity = BigDecimal.ZERO;
             BigDecimal closeProofIncreaseQuantity = BigDecimal.ZERO;
             BigDecimal closeProofRemainingQuantity = expectedState.getPositionQty();
+            boolean closeNotExecutedProven = false;
+            String closeNotExecutedReason = "NOT_ELIGIBLE";
             boolean exchangeFlatSnapshot = snapshots != null && snapshots.stream().allMatch(p ->
                 runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol()) && p.quantity() != null && p.quantity().signum() == 0);
             Instant pendingOrderInstant = expectedState.getPendingOrderTime() == null ? null
@@ -3755,6 +3759,88 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                     : expectedPending.get(0) == null || "OPEN".equalsIgnoreCase(String.valueOf(expectedPending.get(0))) ? "NOT_A_CLOSE_ACTION"
                     : from == null ? "EXECUTION_TIME_MISSING" : "NOT_ELIGIBLE";
             }
+            if (historicalOrderAbsenceConfirmed && order == null && orderQueryFailure == null
+                && "TESTNET".equalsIgnoreCase(runtime.credential.getRunMode())
+                && execution != null
+                && "CLOSE".equalsIgnoreCase(execution.getOperationType())
+                && ("UNKNOWN".equalsIgnoreCase(execution.getExecutionStatus())
+                    || executionRecordService.hasVerifiedCloseAbsence(execution))
+                && execution.getExchangeOrderId() == null && execution.getExchangeOrderStatus() == null
+                && Objects.equals(execution.getCredentialId(), runtime.credential.getId())
+                && Objects.equals(execution.getStrategyInstanceId(), runtime.instance.getId())
+                && Objects.equals(execution.getSymbol(), runtime.symbol.getSymbol())
+                && Objects.equals(execution.getIdempotencyKey(), expectedState.getPendingIdempotencyKey())
+                && clientOrderId != null && !clientOrderId.isBlank()
+                && Objects.equals(execution.getClientOrderId(), clientOrderId)
+                && orderId == null
+                && expectedState.getPositionId() != null
+                && expectedState.getPositionCycleKey() != null && !expectedState.getPositionCycleKey().isBlank()
+                && expectedState.getPositionQty() != null && expectedState.getPositionQty().signum() > 0
+                && Set.of("LONG", "SHORT").contains(expectedDirection == null ? "" : expectedDirection.toUpperCase(java.util.Locale.ROOT))) {
+                Instant closeAttemptStartedAt = resolvePendingCloseAttemptStartTime(expectedState.getPendingOrderTime(), execution.getCreatedAt());
+                Instant proofTo = Instant.now();
+                Instant proofCutoff = proofTo.minusSeconds(6 * 24 * 3600L);
+                if (closeAttemptStartedAt == null || !closeAttemptStartedAt.isAfter(proofCutoff)
+                    || closeAttemptStartedAt.isAfter(proofTo)) {
+                    closeNotExecutedReason = "CLOSE_ATTEMPT_TIME_OUT_OF_RANGE";
+                } else {
+                    try {
+                        queryStartedAt = System.nanoTime();
+                        ExchangeGateway.PositionMode positionMode;
+                        try {
+                            positionMode = gateway.queryPositionMode(credential);
+                        } finally {
+                            timing.positionModeMs += pendingExecutionElapsedMillis(queryStartedAt);
+                        }
+
+                        queryStartedAt = System.nanoTime();
+                        List<ExchangeGateway.OrderSnapshot> openOrders;
+                        try {
+                            openOrders = gateway.queryOrders(credential, runtime.symbol.getSymbol());
+                        } finally {
+                            timing.openOrdersMs += pendingExecutionElapsedMillis(queryStartedAt);
+                        }
+
+                        queryStartedAt = System.nanoTime();
+                        try {
+                            snapshots = reconciliationService.refreshSymbolPosition(runtime.credential, runtime.symbol.getSymbol(), credential);
+                        } finally {
+                            timing.positionSnapshotMs += pendingExecutionElapsedMillis(queryStartedAt);
+                            timing.positionSnapshotQueries++;
+                        }
+
+                        proofTo = Instant.now();
+                        Instant proofFrom = closeAttemptStartedAt.minusMillis(1_000L);
+                        queryStartedAt = System.nanoTime();
+                        List<ExchangeGateway.TradeSnapshot> trades;
+                        try {
+                            // queryTrades 内部会拆分饱和时间窗口；不完整结果会抛异常，不能被解释为空成交。
+                            trades = gateway.queryTrades(credential, runtime.symbol.getSymbol(), new ExchangeGateway.TimeRange(proofFrom, proofTo));
+                        } finally {
+                            timing.tradeHistoryMs += pendingExecutionElapsedMillis(queryStartedAt);
+                        }
+
+                        CloseNotExecutedProofResult proof = evaluatePendingCloseNotExecutedProof(
+                            runtime.symbol.getSymbol(), expectedDirection, expectedState.getPositionQty(),
+                            positionMode, openOrders, trades, snapshots, closeAttemptStartedAt, proofFrom, proofTo);
+                        closeNotExecutedReason = proof.reason();
+                        if (proof.proven()) {
+                            closeNotExecutedProven = executionRecordService.recordVerifiedCloseAbsence(
+                                execution, "完整交易所核验确认本次 CLOSE 请求未产生任何成交",
+                                LocalDateTime.now(java.time.ZoneOffset.UTC));
+                            if (closeNotExecutedProven) {
+                                closeNotExecutedReason = "VERIFIED_AFTER_TWO_CHECKS";
+                            } else if (executionRecordService.hasVerifiedAbsencePending(execution)) {
+                                closeNotExecutedReason = "FIRST_CONFIRMATION_RECORDED";
+                            } else {
+                                closeNotExecutedReason = "VERIFICATION_NOT_PERSISTED";
+                            }
+                        }
+                    } catch (RuntimeException ex) {
+                        closeNotExecutedReason = "EXCHANGE_QUERY_FAILED:" + ex.getClass().getSimpleName();
+                    }
+                }
+            }
             int closeProofConfirmations = expectedState.getPendingNotFoundConfirmations() == null ? 0 : expectedState.getPendingNotFoundConfirmations();
             if (order == null && "TESTNET".equalsIgnoreCase(runtime.credential.getRunMode()) && closeProofConfirmations % 6 == 0) {
                 log.warn("未知退出恢复核验诊断 instanceId={} symbol={} reason={} flatSnapshot={} tradeCount={} closeQty={} increaseQty={} remainingQty={} expectedCycleQty={} positionOpenedAt={} pendingOrderId={} clientOrderId={} executionId={} timeSource={} pendingOrderTime={} executionCreatedAt={} from={} to={} cutoff={} windowAgeMillis={}",
@@ -3794,7 +3880,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
                 }
                 long applyStartedAt = System.nanoTime();
                 try {
-                    return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven, closedCloseProven);
+                    return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven, closedCloseProven, closeNotExecutedProven);
                 } finally {
                     timing.stateApplyMs += pendingExecutionElapsedMillis(applyStartedAt);
                 }
@@ -3805,12 +3891,12 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
         } finally {
             long totalMs = pendingExecutionElapsedMillis(timing.startedAt);
             if (totalMs >= 1_000L) {
-                log.warn("待确认执行核实耗时拆分 instanceId={} credentialId={} symbol={} runMode={} action={} totalMs={} executionRecordMs={} credentialResolveMs={} exactOrderMs={} openOrdersMs={} historicalOrderMs={} positionSnapshotMs={} positionSnapshotQueries={} positionModeMs={} tradeHistoryMs={} decisionLogMs={} finalLeaseCheckMs={} stateApplyMs={} executionFound={} orderFound={} orderStatus={} queryFailure={} failure={}",
+                log.warn("待确认执行核实耗时拆分 instanceId={} credentialId={} symbol={} runMode={} action={} totalMs={} executionRecordMs={} credentialResolveMs={} exactOrderMs={} openOrdersMs={} historicalOrderMs={} positionSnapshotMs={} positionSnapshotQueries={} positionModeMs={} tradeHistoryMs={} decisionLogMs={} finalLeaseCheckMs={} stateApplyMs={} executionFound={} orderFound={} orderStatus={} queryFailure={} closeNotExecutedProven={} closeNotExecutedReason={} failure={}",
                     runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(), runtime.credential.getRunMode(), expectedPending.get(0),
                     totalMs, timing.executionRecordMs, timing.credentialResolveMs, timing.exactOrderMs, timing.openOrdersMs, timing.historicalOrderMs,
                     timing.positionSnapshotMs, timing.positionSnapshotQueries, timing.positionModeMs, timing.tradeHistoryMs, timing.decisionLogMs,
                     timing.finalLeaseCheckMs, timing.stateApplyMs, timing.executionFound,
-                    timing.orderFound, timing.orderStatus, timing.queryFailure, timing.failure);
+                    timing.orderFound, timing.orderStatus, timing.queryFailure, closeNotExecutedProven, closeNotExecutedReason, timing.failure);
             }
         }
     }
@@ -3942,6 +4028,98 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             return pendingInstant;
         }
         return executionCreatedAt == null ? null : executionCreatedAt.toInstant(java.time.ZoneOffset.UTC);
+    }
+
+    static Instant resolvePendingCloseAttemptStartTime(Long pendingOrderTime, LocalDateTime executionCreatedAt) {
+        Instant pendingInstant = pendingOrderTime == null || pendingOrderTime <= 0 ? null
+            : Instant.ofEpochMilli(pendingOrderTime);
+        Instant executionInstant = executionCreatedAt == null ? null
+            : executionCreatedAt.toInstant(java.time.ZoneOffset.UTC);
+        if (pendingInstant == null) {
+            return executionInstant;
+        }
+        if (executionInstant == null) {
+            return pendingInstant;
+        }
+        return pendingInstant.isBefore(executionInstant) ? pendingInstant : executionInstant;
+    }
+
+    /**
+     * 证明 TESTNET 的未知 CLOSE 请求没有产生任何成交。
+     * 必须同时满足：普通活动委托完整为空、当前交易所持仓与发起前数量一致、
+     * 从请求发起时间到核验时间没有该持仓方向的成交，且成交历史查询完整。
+     */
+    static CloseNotExecutedProofResult evaluatePendingCloseNotExecutedProof(
+        String symbol, String direction, BigDecimal expectedRemainingQuantity,
+        ExchangeGateway.PositionMode positionMode,
+        List<ExchangeGateway.OrderSnapshot> openOrders,
+        List<ExchangeGateway.TradeSnapshot> trades,
+        List<ExchangeGateway.PositionSnapshot> snapshots,
+        Instant attemptStartedAt, Instant from, Instant to) {
+        if (symbol == null || symbol.isBlank()
+            || !Set.of("LONG", "SHORT").contains(direction == null ? "" : direction.toUpperCase(java.util.Locale.ROOT))
+            || expectedRemainingQuantity == null || expectedRemainingQuantity.signum() <= 0
+            || positionMode == null || openOrders == null
+            || attemptStartedAt == null || from == null || to == null
+            || from.isAfter(attemptStartedAt) || attemptStartedAt.isAfter(to) || from.isAfter(to)) {
+            return new CloseNotExecutedProofResult(false, "INVALID_INPUT", trades == null ? 0 : trades.size());
+        }
+        if (!openOrders.isEmpty()) {
+            return new CloseNotExecutedProofResult(false, "OPEN_ORDERS_PRESENT", trades == null ? 0 : trades.size());
+        }
+        if (trades == null) {
+            return new CloseNotExecutedProofResult(false, "TRADE_HISTORY_UNKNOWN", 0);
+        }
+        if (snapshots == null || snapshots.isEmpty()
+            || snapshots.stream().anyMatch(snapshot -> snapshot == null || !symbol.equalsIgnoreCase(snapshot.symbol())
+                || snapshot.quantity() == null || snapshot.side() == null || snapshot.side().isBlank())) {
+            return new CloseNotExecutedProofResult(false, "POSITION_SNAPSHOT_INVALID", trades.size());
+        }
+        List<ExchangeGateway.PositionSnapshot> nonZeroPositions = snapshots.stream()
+            .filter(snapshot -> snapshot.quantity().signum() != 0).toList();
+        if (nonZeroPositions.size() != 1) {
+            return new CloseNotExecutedProofResult(false, "POSITION_DIRECTION_AMBIGUOUS", trades.size());
+        }
+        ExchangeGateway.PositionSnapshot position = nonZeroPositions.get(0);
+        boolean directionMatches = "LONG".equalsIgnoreCase(direction)
+            ? position.quantity().signum() > 0 : position.quantity().signum() < 0;
+        boolean sideMatches = positionMode.hedgeMode()
+            ? direction.equalsIgnoreCase(position.side())
+            : "BOTH".equalsIgnoreCase(position.side());
+        if (!directionMatches || !sideMatches
+            || position.quantity().abs().compareTo(expectedRemainingQuantity) != 0) {
+            return new CloseNotExecutedProofResult(false, "POSITION_QUANTITY_OR_DIRECTION_CHANGED", trades.size());
+        }
+
+        Set<Long> seenTradeIds = new HashSet<>();
+        for (ExchangeGateway.TradeSnapshot trade : trades) {
+            if (trade == null || trade.tradeId() == null || !seenTradeIds.add(trade.tradeId())
+                || trade.orderId() == null || trade.time() == null
+                || trade.time().isBefore(from) || trade.time().isAfter(to)
+                || !symbol.equalsIgnoreCase(trade.symbol())
+                || trade.quantity() == null || trade.quantity().signum() <= 0
+                || !("BUY".equalsIgnoreCase(trade.side()) || "SELL".equalsIgnoreCase(trade.side()))) {
+                return new CloseNotExecutedProofResult(false, "TRADE_HISTORY_INVALID_OR_DUPLICATE", trades.size());
+            }
+            if (positionMode.hedgeMode()) {
+                if (trade.positionSide() == null || trade.positionSide().isBlank()) {
+                    return new CloseNotExecutedProofResult(false, "HEDGE_TRADE_POSITION_SIDE_MISSING", trades.size());
+                }
+                if (!direction.equalsIgnoreCase(trade.positionSide())) {
+                    continue;
+                }
+            } else if (trade.positionSide() != null && !trade.positionSide().isBlank()
+                && !"BOTH".equalsIgnoreCase(trade.positionSide())) {
+                return new CloseNotExecutedProofResult(false, "ONE_WAY_TRADE_POSITION_SIDE_MISMATCH", trades.size());
+            }
+            if (!trade.time().isBefore(attemptStartedAt)) {
+                return new CloseNotExecutedProofResult(false, "TRADE_AFTER_CLOSE_ATTEMPT", trades.size());
+            }
+        }
+        return new CloseNotExecutedProofResult(true, "NO_TRADE_AFTER_CLOSE_ATTEMPT", trades.size());
+    }
+
+    record CloseNotExecutedProofResult(boolean proven, String reason, int tradeCount) {
     }
 
     static boolean closedPendingCloseProven(String symbol, String direction, BigDecimal expectedCycleQuantity,
@@ -4084,6 +4262,12 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
     private boolean applyPendingExecution(ActiveRuntime runtime, QuantExecutionRecord execution, ExchangeGateway.OrderSnapshot order,
                                           List<ExchangeGateway.PositionSnapshot> snapshots, boolean closedOpenProven,
                                           boolean closedCloseProven) {
+        return applyPendingExecution(runtime, execution, order, snapshots, closedOpenProven, closedCloseProven, false);
+    }
+
+    private boolean applyPendingExecution(ActiveRuntime runtime, QuantExecutionRecord execution, ExchangeGateway.OrderSnapshot order,
+                                          List<ExchangeGateway.PositionSnapshot> snapshots, boolean closedOpenProven,
+                                          boolean closedCloseProven, boolean closeNotExecutedProven) {
         if (!runtime.hasPendingAction() || runtime.state == null) {
             return false;
         }
@@ -4134,7 +4318,60 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             return true;
         }
         if (order == null) {
+            if (closeNotExecutedProven && execution != null
+                && executionRecordService.hasVerifiedCloseAbsence(execution)
+                && "TESTNET".equalsIgnoreCase(runtime.credential.getRunMode())
+                && runtime.state.getPositionId() != null
+                && runtime.state.getPositionCycleKey() != null && !runtime.state.getPositionCycleKey().isBlank()) {
+                QuantPosition verifiedPosition = loadPosition(runtime.credential, runtime.symbol.getSymbol(), credential, snapshots);
+                boolean positionMatches = verifiedPosition != null
+                    && runtime.state.getPositionId().equals(verifiedPosition.getId())
+                    && runtime.symbol.getSymbol().equalsIgnoreCase(verifiedPosition.getSymbol())
+                    && runtime.state.getDirection() != null
+                    && runtime.state.getDirection().equalsIgnoreCase(verifiedPosition.getPositionSide())
+                    && runtime.state.getPositionQty() != null
+                    && verifiedPosition.getQuantity() != null
+                    && verifiedPosition.getQuantity().compareTo(runtime.state.getPositionQty()) == 0;
+                if (!positionMatches) {
+                    runtime.state.setRecoveryRequired(true);
+                    runtime.state.setUnsafeRecovery(true);
+                    stateService.save(runtime.state);
+                    log.warn("CLOSE 未执行证明已成立，但本地持仓身份或数量与策略周期不一致，继续保留恢复阻断 instanceId={} symbol={} positionId={} stateQuantity={} localPositionId={} localQuantity={}",
+                        runtime.instance.getId(), runtime.symbol.getSymbol(), runtime.state.getPositionId(), runtime.state.getPositionQty(),
+                        verifiedPosition == null ? null : verifiedPosition.getId(),
+                        verifiedPosition == null ? null : verifiedPosition.getQuantity());
+                    return true;
+                }
+
+                QuantStrategyPositionState recoveredState = new QuantStrategyPositionState();
+                BeanUtils.copyProperties(runtime.state, recoveredState);
+                clearPending(recoveredState);
+                recoveredState.setStatus("OPEN");
+                recoveredState.setPositionQty(verifiedPosition.getQuantity());
+                // 先解除未知执行身份，但保持恢复标志，直到硬止损和动态保护整轮重新确认。
+                recoveredState.setRecoveryRequired(true);
+                recoveredState.setUnsafeRecovery(false);
+                stateService.save(recoveredState);
+
+                runtime.state = recoveredState;
+                runtime.position = verifiedPosition;
+                runtime.position.setProtectionCycleKey(recoveredState.getPositionCycleKey());
+                runtime.protectionDegraded = true;
+                ensureHardStop(runtime);
+                BigDecimal current = runtime.currentPrice() != null ? runtime.currentPrice() : runtime.position.getMarkPrice();
+                if (current != null && current.signum() > 0) {
+                    syncPluginProtections(runtime, buildContext(runtime, current,
+                        new ExchangeGateway.MarketEvent("RECOVERY", runtime.symbol.getSymbol(),
+                            runtime.strategySymbol.getIntervalCode(), current, null, Instant.now())));
+                }
+                log.warn("未知 CLOSE 请求已通过双重完整核验确认未执行，恢复原持仓并重新同步保护 instanceId={} symbol={} positionId={} positionCycleKey={} quantity={} pendingAction={} executionId={}",
+                    runtime.instance.getId(), runtime.symbol.getSymbol(), recoveredState.getPositionId(),
+                    recoveredState.getPositionCycleKey(), recoveredState.getPositionQty(), runtime.state.getPendingAction(),
+                    execution.getId());
+                return false;
+            }
             if (closedCloseProven && snapshots != null && snapshots.stream().allMatch(p -> runtime.symbol.getSymbol().equalsIgnoreCase(p.symbol())
+
                 && p.quantity() != null && p.quantity().signum() == 0)) {
                 // 仅在账户空仓、完整成交数量与原持仓完全吻合且普通活动订单为空后，才允许结束未知退出。
                 BigDecimal recoveredPositionQty = runtime.state.getPositionQty();

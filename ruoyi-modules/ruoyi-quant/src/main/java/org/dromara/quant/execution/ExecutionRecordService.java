@@ -17,6 +17,7 @@ import java.time.ZoneOffset;
 @Service
 public class ExecutionRecordService {
     private static final String VERIFIED_ABSENCE_PREFIX = "VERIFIED_ABSENCE_PENDING:";
+    private static final String VERIFIED_CLOSE_ABSENCE_PREFIX = "VERIFIED_CLOSE_ABSENCE:";
 
     /**
      * 当前领域 Mapper。
@@ -152,6 +153,66 @@ public class ExecutionRecordService {
             entity.setErrorMessage(reason);
             entity.setUpdatedAt(now);
         }
+    }
+
+    /**
+     * 判断 CLOSE 执行记录是否已经通过双重完整核验确认未执行。
+     */
+    public boolean hasVerifiedCloseAbsence(QuantExecutionRecord entity) {
+        return entity != null
+            && "CLOSE".equalsIgnoreCase(entity.getOperationType())
+            && "FAILED".equalsIgnoreCase(entity.getExecutionStatus())
+            && entity.getErrorMessage() != null
+            && entity.getErrorMessage().startsWith(VERIFIED_CLOSE_ABSENCE_PREFIX);
+    }
+
+    /**
+     * CLOSE 只有在精确订单、活动订单、历史订单、成交历史和持仓事实均完整核验后，
+     * 才允许 UNKNOWN 经两次相隔至少一分钟的核验转为 FAILED。
+     */
+    public boolean recordVerifiedCloseAbsence(QuantExecutionRecord entity, String message, LocalDateTime now) {
+        if (entity == null || !"CLOSE".equalsIgnoreCase(entity.getOperationType())
+            || entity.getId() == null || entity.getCredentialId() == null
+            || entity.getStrategyInstanceId() == null || entity.getSymbol() == null
+            || entity.getIdempotencyKey() == null || entity.getClientOrderId() == null
+            || entity.getExchangeOrderId() != null || entity.getExchangeOrderStatus() != null) {
+            return false;
+        }
+        if (hasVerifiedCloseAbsence(entity)) {
+            return true;
+        }
+        if (!"UNKNOWN".equalsIgnoreCase(entity.getExecutionStatus())) {
+            return false;
+        }
+        String detail = message == null ? "完整交易所核验确认 CLOSE 请求未产生任何成交" : message;
+        String verifiedMessage = VERIFIED_CLOSE_ABSENCE_PREFIX + detail;
+        if (hasVerifiedAbsenceMatured(entity, now)) {
+            if (mapper.markCloseNotExecutedAfterVerifiedAbsence(entity.getId(), entity.getCredentialId(),
+                entity.getStrategyInstanceId(), entity.getSymbol(), entity.getIdempotencyKey(),
+                entity.getClientOrderId(), verifiedMessage, now) == 1) {
+                entity.setExecutionStatus("FAILED");
+                entity.setErrorMessage(verifiedMessage);
+                entity.setUpdatedAt(now);
+                return true;
+            }
+            QuantExecutionRecord latest = mapper.selectById(entity.getId());
+            if (latest != null) {
+                entity.setExecutionStatus(latest.getExecutionStatus());
+                entity.setErrorMessage(latest.getErrorMessage());
+                entity.setUpdatedAt(latest.getUpdatedAt());
+                return hasVerifiedCloseAbsence(entity);
+            }
+            return false;
+        }
+        if (!hasVerifiedAbsencePending(entity)
+            && mapper.recordVerifiedCloseAbsence(entity.getId(), entity.getCredentialId(),
+                entity.getStrategyInstanceId(), entity.getSymbol(), entity.getIdempotencyKey(),
+                entity.getClientOrderId(), VERIFIED_ABSENCE_PREFIX + detail, now) == 1) {
+            entity.setExecutionStatus("UNKNOWN");
+            entity.setErrorMessage(VERIFIED_ABSENCE_PREFIX + detail);
+            entity.setUpdatedAt(now);
+        }
+        return false;
     }
 
     /**

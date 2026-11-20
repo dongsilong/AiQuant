@@ -25,6 +25,80 @@ import static org.mockito.Mockito.*;
 @org.junit.jupiter.api.Tag("dev")
 class StrategyRuntimeSafetyTest {
     @Test
+    void provesCloseWasNotExecutedOnlyWithCompleteNoTradeAndUnchangedPositionFacts() {
+        Instant attempt = Instant.parse("2026-11-20T09:23:23Z");
+        Instant from = attempt.minusSeconds(1);
+        Instant to = attempt.plusSeconds(30);
+        BigDecimal quantity = new BigDecimal("1264695");
+        var position = new ExchangeGateway.PositionSnapshot("JCTUSDT", "BOTH", quantity.negate(),
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            10, null, null);
+        var preAttemptTrade = new ExchangeGateway.TradeSnapshot("JCTUSDT", 1L, 11L, "SELL",
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, BigDecimal.ZERO, attempt.minusMillis(500));
+
+        var proof = StrategyRuntimeService.evaluatePendingCloseNotExecutedProof(
+            "JCTUSDT", "SHORT", quantity, new ExchangeGateway.PositionMode(false),
+            List.of(), List.of(preAttemptTrade), List.of(position), attempt, from, to);
+
+        assertTrue(proof.proven());
+        assertEquals("NO_TRADE_AFTER_CLOSE_ATTEMPT", proof.reason());
+    }
+
+    @Test
+    void rejectsCloseNonExecutionProofWhenAnyPostAttemptTradeExists() {
+        Instant attempt = Instant.parse("2026-11-20T09:23:23Z");
+        Instant from = attempt.minusSeconds(1);
+        Instant to = attempt.plusSeconds(30);
+        BigDecimal quantity = new BigDecimal("100");
+        var position = new ExchangeGateway.PositionSnapshot("JCTUSDT", "BOTH", quantity.negate(),
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            10, null, null);
+        var postAttemptTrade = new ExchangeGateway.TradeSnapshot("JCTUSDT", 2L, 12L, "BUY",
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, BigDecimal.ZERO, attempt.plusMillis(1));
+
+        var proof = StrategyRuntimeService.evaluatePendingCloseNotExecutedProof(
+            "JCTUSDT", "SHORT", quantity, new ExchangeGateway.PositionMode(false),
+            List.of(), List.of(postAttemptTrade), List.of(position), attempt, from, to);
+
+        assertFalse(proof.proven());
+        assertEquals("TRADE_AFTER_CLOSE_ATTEMPT", proof.reason());
+    }
+
+    @Test
+    void rejectsCloseNonExecutionProofWhenPositionOrOrdersAreNotUnambiguous() {
+        Instant attempt = Instant.parse("2026-11-20T09:23:23Z");
+        Instant from = attempt.minusSeconds(1);
+        Instant to = attempt.plusSeconds(30);
+        BigDecimal quantity = new BigDecimal("100");
+        var changedPosition = new ExchangeGateway.PositionSnapshot("JCTUSDT", "BOTH", new BigDecimal("-99"),
+            BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+            10, null, null);
+
+        var changed = StrategyRuntimeService.evaluatePendingCloseNotExecutedProof(
+            "JCTUSDT", "SHORT", quantity, new ExchangeGateway.PositionMode(false),
+            List.of(), List.of(), List.of(changedPosition), attempt, from, to);
+        var activeOrder = StrategyRuntimeService.evaluatePendingCloseNotExecutedProof(
+            "JCTUSDT", "SHORT", quantity, new ExchangeGateway.PositionMode(false),
+            java.util.Collections.singletonList(null), List.of(),
+            List.of(new ExchangeGateway.PositionSnapshot("JCTUSDT", "BOTH", quantity.negate(),
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                10, null, null)), attempt, from, to);
+        var unknownTrades = StrategyRuntimeService.evaluatePendingCloseNotExecutedProof(
+            "JCTUSDT", "SHORT", quantity, new ExchangeGateway.PositionMode(false),
+            List.of(), null,
+            List.of(new ExchangeGateway.PositionSnapshot("JCTUSDT", "BOTH", quantity.negate(),
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                10, null, null)), attempt, from, to);
+
+        assertFalse(changed.proven());
+        assertEquals("POSITION_QUANTITY_OR_DIRECTION_CHANGED", changed.reason());
+        assertFalse(activeOrder.proven());
+        assertEquals("OPEN_ORDERS_PRESENT", activeOrder.reason());
+        assertFalse(unknownTrades.proven());
+        assertEquals("TRADE_HISTORY_UNKNOWN", unknownTrades.reason());
+    }
+
+    @Test
     void reportsTheFirstFailedEntryProtectionProofCondition() {
         assertEquals("RUNTIME_CLOSED", StrategyRuntimeService.entryProtectionProofStateFailureReason(
             true, true, true, false, 1L, 2L, "cycle-a", "cycle-b"));
