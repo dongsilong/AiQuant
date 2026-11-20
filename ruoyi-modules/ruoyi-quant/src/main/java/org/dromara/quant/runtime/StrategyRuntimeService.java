@@ -2715,6 +2715,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (localQuantity != null) {
                 detail.append("，本地数量=").append(localQuantity);
             }
+            String openTime = "OPEN_PENDING".equalsIgnoreCase(status) ? null : formatExposureOpenTime(exposure.get("openedAt"));
+            if (openTime != null) {
+                detail.append("，开仓时间=").append(openTime);
+            }
             if (exposure.get("positionId") != null) {
                 detail.append("，持仓ID=").append(exposure.get("positionId"));
             }
@@ -2731,6 +2735,16 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
 
     private static String formatExposureValue(Object value) {
         return value instanceof BigDecimal decimal ? decimal.stripTrailingZeros().toPlainString() : Objects.toString(value, null);
+    }
+
+    private static String formatExposureOpenTime(Object value) {
+        if (value instanceof LocalDateTime time) {
+            return time.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            return timestamp.toLocalDateTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        }
+        return value == null ? null : Objects.toString(value).replace('T', ' ');
     }
 
     private void logExposureDiagnostic(ActiveRuntime runtime, Long openCount, Integer maxOpenCount, List<Map<String, Object>> exposures) {
