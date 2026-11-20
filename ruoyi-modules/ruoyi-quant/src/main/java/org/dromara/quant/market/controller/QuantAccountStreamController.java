@@ -8,6 +8,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.config.BeijingTime;
+import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
@@ -44,6 +45,7 @@ public class QuantAccountStreamController {
     private final UserDataStreamHub userDataStreamHub;
     private final StrategyPositionPerformanceHub performanceHub;
     private final QuantCredentialMapper credentialMapper;
+    private final QuantProperties quantProperties;
     private final ExchangeGateway gateway;
     private final TradeExecutionApplicationService executionService;
     private final ScheduledExecutorService heartbeatScheduler = Executors.newScheduledThreadPool(1, runnable -> {
@@ -152,7 +154,7 @@ public class QuantAccountStreamController {
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", event.eventType());
         payload.put("credentialId", credential.getId().toString());
-        payload.put("eventTime", BeijingTime.format(event.eventTime() == null ? Instant.now() : event.eventTime()));
+        payload.put("eventTime", BeijingTime.format(event.eventTime() == null ? Instant.now() : event.eventTime(), java.time.ZoneId.of(quantProperties.getTimeZone())));
         if ("SNAPSHOT".equals(event.eventType())) {
             // 账户资金、当前持仓和委托均由终端按需通过 REST 加载，避免 SSE 初始快照重复消耗交易所请求权重。
             payload.put("positionsSnapshotSkipped", true);
