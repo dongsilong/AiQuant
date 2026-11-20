@@ -684,6 +684,7 @@ class ProtectionOrderServiceTest {
             "0.5"), org.dromara.quant.strategy.ProtectionSignal.QuantityBase.INITIAL, new BigDecimal("99"), "test")), true);
         verify(gateway).placeProtectionOrder(argThat(r -> r.quantity().compareTo(new BigDecimal("5616")) == 0));
         verify(execution, never()).requireSymbol(any());
+        verify(gateway, times(1)).queryTradingRuleForProtection(any(), eq("BTCUSDT"));
     }
 
     @Test
