@@ -128,7 +128,7 @@ class ProtectionOrderJournalServiceTest {
         existing.setClientOrderId("child-client");
         existing.setStrategyInstanceId(999L);
         when(orders.selectOne(any())).thenReturn(existing);
-        assertThrows(IllegalStateException.class, () -> journal.bindChild(credential, local(), actual("BOTH"), child(91L)));
+        assertThrows(IllegalStateException.class, () -> journal.bindChild(credential, local(), actual("BOTH"), child(91L), BigDecimal.ZERO));
         verify(orders, never()).updateById(any(QuantOrder.class));
     }
 
