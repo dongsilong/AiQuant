@@ -2190,6 +2190,16 @@ class StrategyRuntimeSafetyTest {
             strategy.setStrategyName("当前策略快照");
             var ledger = (org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLedgerMapper) ReflectionTestUtils.getField(f.service, "runtimeLedgerMapper");
             when(ledger.countStrategyExposures(anyLong(), anyLong())).thenReturn(1L, 0L);
+            Map<String, Object> exposure = new HashMap<>();
+            exposure.put("symbol", "ETHUSDT");
+            exposure.put("positionSide", "SHORT");
+            exposure.put("positionStatus", "OPEN");
+            exposure.put("strategyQty", new BigDecimal("0.25"));
+            exposure.put("localPositionQty", new BigDecimal("0.25"));
+            exposure.put("openedAt", java.time.LocalDateTime.of(2026, 11, 20, 14, 30, 15));
+            exposure.put("positionId", 101L);
+            exposure.put("instanceId", 201L);
+            when(ledger.findStrategyExposures(anyLong(), anyLong())).thenReturn(List.of(exposure));
             var context = new StrategyContext("BTCUSDT", null, null, new BigDecimal("102"), null, new BigDecimal("100"), Instant.now(), false, Instant.now(), null, null, null,
                 10, null, null, false);
             var balance = (org.dromara.quant.market.AccountBalanceCache) ReflectionTestUtils.getField(f.service, "balanceCache");
@@ -2198,7 +2208,11 @@ class StrategyRuntimeSafetyTest {
             var captured = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.decision.DecisionLogEvent.class);
             verify(logs).record(captured.capture());
             assertEquals("MAX_POSITIONS", captured.getValue().reasonCode());
+            assertTrue(captured.getValue().reason().contains("ETHUSDT 空头"));
+            assertTrue(captured.getValue().reason().contains("开仓时间=2026-11-20 14:30:15"));
+            assertTrue(captured.getValue().reason().contains("持仓ID=101"));
             assertEquals("当前策略快照", captured.getValue().strategyName());
+            verify(ledger).findStrategyExposures(anyLong(), anyLong());
             verify((org.dromara.quant.runtime.coordination.StrategyEntryGuardService) ReflectionTestUtils.getField(f.service, "entryGuardService"), never()).tryClaim(any(),
                 any(), any(), any());
             ReflectionTestUtils.invokeMethod(f.service, "evaluateEntry", f.runtime, context);
