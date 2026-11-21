@@ -29,6 +29,7 @@ import org.dromara.quant.strategy.domain.QuantStrategySymbol;
 import org.dromara.quant.strategy.mapper.QuantStrategyInstanceMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
+import org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLeaseMapper;
 import org.dromara.quant.strategy.service.QuantStrategyService;
 import org.dromara.quant.strategy.KlineSlopeRateStrategy;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -50,6 +51,7 @@ public class QuantAdminController {
     private final QuantStrategyMapper strategyMapper;
     private final QuantStrategySymbolMapper strategySymbolMapper;
     private final QuantStrategyInstanceMapper instanceMapper;
+    private final StrategyRuntimeLeaseMapper runtimeLeaseMapper;
     private final QuantStrategyPositionStateMapper positionStateMapper;
     private final QuantPositionMapper positionMapper;
     private final QuantOrderMapper orderMapper;
@@ -137,6 +139,9 @@ public class QuantAdminController {
         }
         Page<QuantStrategyInstance> page = instanceMapper.selectPage(query.build(), new LambdaQueryWrapper<QuantStrategyInstance>().in(QuantStrategyInstance::getCredentialId,
             ids).in(strategyIds != null, QuantStrategyInstance::getStrategyId, strategyIds).in(QuantStrategyInstance::getStrategySymbolId, activeStrategySymbolIds).eq(status != null && !status.isBlank(), QuantStrategyInstance::getStatus, status).orderByDesc(QuantStrategyInstance::getStrategyId, QuantStrategyInstance::getCredentialId, QuantStrategyInstance::getStatus, QuantStrategyInstance::getStrategySymbolId, QuantStrategyInstance::getLastSignalAt));
+        List<Long> pageInstanceIds = page.getRecords().stream().map(QuantStrategyInstance::getId).toList();
+        Set<Long> activeRuntimeIds = pageInstanceIds.isEmpty() ? Collections.emptySet()
+            : new HashSet<>(runtimeLeaseMapper.selectActiveInstanceIds(pageInstanceIds));
         Map<Long, QuantCredential> credentials = credentials(ids);
         Map<Long, QuantStrategy> strategies = strategies(page.getRecords().stream().map(QuantStrategyInstance::getStrategyId).toList());
         Map<Long, QuantStrategySymbol> strategySymbols = strategySymbols(page.getRecords().stream().map(QuantStrategyInstance::getStrategySymbolId).toList());
@@ -153,6 +158,7 @@ public class QuantAdminController {
             row.put("symbol", binding == null || symbols.get(binding.getSymbolId()) == null ? null : symbols.get(binding.getSymbolId()).getSymbol());
             row.put("runtimeEnabled", binding == null || !Boolean.FALSE.equals(binding.getRuntimeEnabled()));
             row.put("status", item.getStatus());
+            row.put("runtimeActive", activeRuntimeIds.contains(item.getId()));
             row.put("lastSignalAt", item.getLastSignalAt());
             row.put("lastError", item.getLastError());
             return row;
