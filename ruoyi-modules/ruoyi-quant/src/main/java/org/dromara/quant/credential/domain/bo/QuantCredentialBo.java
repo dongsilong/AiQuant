@@ -63,6 +63,8 @@ public class QuantCredentialBo implements Serializable {
      * 运行模式：PAPER、TESTNET 或 LIVE。
      */
     private String runMode;
+    /** 记录查询有效时间；接口按北京时间传入。 */
+    private java.time.LocalDateTime effectiveTime;
     /**
      * 当前状态。
      */

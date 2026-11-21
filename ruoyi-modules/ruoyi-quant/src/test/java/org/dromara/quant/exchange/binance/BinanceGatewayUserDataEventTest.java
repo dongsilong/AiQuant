@@ -16,6 +16,8 @@ class BinanceGatewayUserDataEventTest {
         String json = "{\"e\":\"ORDER_TRADE_UPDATE\",\"E\":1000,\"o\":{\"s\":\"PUMPUSDT\",\"X\":\"FILLED\"}}";
         ExchangeGateway.UserDataEvent event = ReflectionTestUtils.invokeMethod(adapter, "parseUserDataEvent", json);
         assertEquals("ORDER_TRADE_UPDATE", event.eventType());
+        assertEquals(java.time.Instant.ofEpochMilli(1000), event.eventTime());
+        assertNotNull(event.receivedAt());
         assertEquals(json, event.rawJson());
     }
 

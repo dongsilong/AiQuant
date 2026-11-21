@@ -55,6 +55,32 @@ class TradingPreparationServiceTest {
     }
 
     @Test
+    void positionModeLookupIsSharedAcrossSymbolsForSameAccount() throws Exception {
+        ready();
+        var first = service.request(1L, testnet, "BTCUSDT", 10, "ISOLATED", null);
+        var second = service.request(1L, testnet, "ETHUSDT", 10, "ISOLATED", null);
+
+        first.get(2, TimeUnit.SECONDS);
+        second.get(2, TimeUnit.SECONDS);
+
+        verify(gateway, times(1)).queryPositionMode(testnet);
+        verify(gateway, times(1)).queryTradingRule(testnet, "BTCUSDT");
+        verify(gateway, times(1)).queryTradingRule(testnet, "ETHUSDT");
+    }
+
+    @Test
+    void preparationRetryHonorsExchangeDeferredWindow() {
+        var deferred = new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException(
+            "BLOCKED_UNTIL", "ACCOUNT", 0, new int[4], 0L, 18_000L);
+        var rateLimited = new org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException(
+            "QUERY_POSITION_MODE", 429, -1003, "Too many requests", 22_000L);
+
+        assertEquals(18_000L, TradingPreparationService.retryDelayMillis(deferred));
+        assertEquals(22_000L, TradingPreparationService.retryDelayMillis(rateLimited));
+        assertEquals(5_000L, TradingPreparationService.retryDelayMillis(new IllegalStateException("temporary")));
+    }
+
+    @Test
     void disabledLiveGateNeverChangesAccountSettings() throws Exception {
         ready();
         var live = new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE");

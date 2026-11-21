@@ -84,28 +84,35 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
-    void configRecoveryRequiresDurableConfigAppliedStatusAndExactExchangeSettings() throws Exception {
+    void configRecoveryRequiresExactDurableTargetAndExchangeSettings() throws Exception {
         var f = fixture();
         var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-recovery", "ISOLATED", 10);
+        assertTrue(f.first().matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 10));
+        assertFalse(f.first().matchesConfigurationIntent(1L, "BTCUSDT", "CROSSED", 10));
         f.first().unknown(setup);
 
-        assertFalse(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-recovery",
-            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
-        assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "config-recovery"));
-        assertEquals("config-recovery", f.jdbc().queryForObject(
-            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
-
-        // Simulate a process crash after both Binance calls returned and CONFIG_APPLIED
-        // was committed, but before the separate guard-release transaction committed.
-        f.jdbc().update("""
-            UPDATE quant_order_dispatch_ticket SET dispatch_status='CONFIG_APPLIED'
-            WHERE credential_id=1 AND idempotency_key='config-recovery'
-            """);
+        // UNKNOWN is recoverable only against the exact immutable target persisted with the ticket.
         assertFalse(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-recovery",
             "SETTINGS:CROSSED:10", "CROSSED", 10));
         assertTrue(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-recovery",
             "SETTINGS:ISOLATED:10", "ISOLATED", 10));
         assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "config-recovery"));
+        assertNull(f.jdbc().queryForObject(
+            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+
+        var dispatching = f.first().beginConfiguration(1L, "BTCUSDT", "config-dispatching", "ISOLATED", 10);
+        assertTrue(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-dispatching",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
+        assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "config-dispatching"));
+
+        f.first().beginConfiguration(1L, "BTCUSDT", "config-applied", "ISOLATED", 10);
+        f.jdbc().update("""
+            UPDATE quant_order_dispatch_ticket SET dispatch_status='CONFIG_APPLIED'
+            WHERE credential_id=1 AND idempotency_key='config-applied'
+            """);
+        assertTrue(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-applied",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
+        assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "config-applied"));
         assertNull(f.jdbc().queryForObject(
             "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
     }
@@ -181,6 +188,20 @@ class LiveOrderDispatcherTest {
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "uncertain"));
         assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "new-signal", "OPEN", "cid-new", null, null));
         assertEquals("uncertain", f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+    }
+
+    @Test
+    void supersedeOnlyExactUnknownProtectionCreateAndReleaseItsGuardAtomically() throws Exception {
+        var f = fixture();
+        var ticket = f.first().begin(1L, "BTCUSDT", "obsolete-protection", "PROTECT_CREATE", "QFTP_test", null, null);
+        f.first().unknown(ticket);
+
+        assertFalse(f.other().supersedeProtectionCreate(1L, "BTCUSDT", "obsolete-protection", "wrong-client"));
+        assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "obsolete-protection"));
+        assertTrue(f.other().supersedeProtectionCreate(1L, "BTCUSDT", "obsolete-protection", "QFTP_test"));
+        assertEquals("SUPERSEDED", f.mapper().ticketStatus(1L, "obsolete-protection"));
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+        assertFalse(f.other().supersedeProtectionCreate(1L, "BTCUSDT", "obsolete-protection", "QFTP_test"));
     }
 
     @Test

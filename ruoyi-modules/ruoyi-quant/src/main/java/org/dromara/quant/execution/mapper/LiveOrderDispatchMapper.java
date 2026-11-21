@@ -61,11 +61,21 @@ public interface LiveOrderDispatchMapper {
     int recoverConfiguration(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key,
                              @Param("clientOrderId") String clientOrderId, @Param("marginMode") String marginMode, @Param("leverage") int leverage);
 
+    /** Close a stale protection-create ticket only after its cycle is verified flat and idle. */
+    int supersedeProtectionCreate(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key,
+                                  @Param("clientOrderId") String clientOrderId);
+
     int notSent(@Param("credentialId") Long credentialId, @Param("key") String key);
 
     int unknown(@Param("credentialId") Long credentialId, @Param("key") String key);
 
     int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
+
+    int markNotExecuted(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
+                        @Param("key") String key, @Param("clientOrderId") String clientOrderId, @Param("instanceId") Long instanceId);
+
+    String notExecutedTicketStatus(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
+                                   @Param("key") String key, @Param("clientOrderId") String clientOrderId, @Param("instanceId") Long instanceId);
 
     int recoverVerified(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key, @Param("clientOrderId") String clientOrderId, @Param(
         "orderId") Long orderId);
@@ -79,6 +89,12 @@ public interface LiveOrderDispatchMapper {
                                   @Param("operation") String operation);
 
     java.util.Map<String, Object> activeDispatch(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
+    int inactiveGuardCount(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
+    java.util.Map<String, Object> lockGuardState(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
+    int ticketCount(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
     java.util.List<java.util.Map<String, Object>> activeProtectionCancels(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 

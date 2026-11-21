@@ -166,17 +166,31 @@ public class TradeExecutionApplicationService {
     }
 
     /**
+     * 由策略 Runtime 撤销已经确认身份的待处理订单。
+     */
+    public ExecutionResult cancelByRuntime(Long credentialId, String symbol, Long orderId, String clientOrderId, String idempotencyKey) {
+        QuantCredential credential = requireCredential(credentialId);
+        return executionPort.cancel(new CancelOrderCommand(credential.getId(), toCredential(credential), symbol, orderId, clientOrderId,
+            idempotencyKey, credential.getRunMode()));
+    }
+
+    /**
      * 由策略 Runtime 发起统一平仓执行。
      */
     public ExecutionResult closeByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
                                           String idempotencyKey) {
+        return closeByRuntime(credentialId, strategyId, strategyInstanceId, symbol, side, positionSide, quantity, idempotencyKey, null);
+    }
+
+    public ExecutionResult closeByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
+                                          String idempotencyKey, Long credentialRuntimeVersion) {
         QuantCredential credential = requireCredential(credentialId);
         QuantSymbol symbolEntity = requireSymbol(symbol);
         ExchangeGateway.Credential exchangeCredential = toCredential(credential);
         String resolvedPositionSide = normalizePositionSide(exchangeCredential, side, positionSide);
         QuantRiskConfig risk = riskMapper.selectOne(new LambdaQueryWrapper<QuantRiskConfig>().eq(QuantRiskConfig::getCredentialId, credentialId));
         return executionPort.close(new ClosePositionCommand(credentialId, strategyId, strategyInstanceId, exchangeCredential, symbol, side, "MARKET", quantity, null,
-            resolvedPositionSide, idempotencyKey, credential.getRunMode(), symbolRule(symbolEntity), safety(credential, risk, true)));
+            resolvedPositionSide, idempotencyKey, credential.getRunMode(), symbolRule(symbolEntity), safety(credential, risk, true), credentialRuntimeVersion));
     }
 
     /**
@@ -192,6 +206,13 @@ public class TradeExecutionApplicationService {
      */
     public ExecutionResult openByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
                                          BigDecimal price, int leverage, String marginMode, String idempotencyKey, java.time.Instant eventTime) {
+        return openByRuntime(credentialId, strategyId, strategyInstanceId, symbol, side, positionSide, quantity, price, leverage, marginMode, idempotencyKey,
+            eventTime, null);
+    }
+
+    public ExecutionResult openByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
+                                         BigDecimal price, int leverage, String marginMode, String idempotencyKey, java.time.Instant eventTime,
+                                         Long credentialRuntimeVersion) {
         QuantCredential credential = requireCredential(credentialId);
         QuantSymbol symbolEntity = requireSymbol(symbol);
         ExchangeGateway.Credential exchangeCredential = toCredential(credential);
@@ -205,7 +226,7 @@ public class TradeExecutionApplicationService {
         String resolvedPositionSide = "PAPER".equalsIgnoreCase(credential.getRunMode()) ? normalizePositionSide(exchangeCredential, side, positionSide) : positionSide;
         return executionPort.open(new OpenPositionCommand(credentialId, strategyId, strategyInstanceId, exchangeCredential, symbol, side, "MARKET", quantity, null,
             resolvedPositionSide, idempotencyKey, credential.getRunMode(), symbolRule(symbolEntity), leverage, marginMode, safety(credential, risk, true), notional,
-            eventTime == null ? null : eventTime.plusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())), eventTime));
+            eventTime == null ? null : eventTime.plusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())), eventTime, credentialRuntimeVersion));
     }
 
     /**

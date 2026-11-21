@@ -14,4 +14,8 @@ public interface QuantStrategyPositionStateMapper extends BaseMapperPlus<QuantSt
                                 @Param("rate") BigDecimal rate);
 
     int resetClosedMaximumReturnRate(@Param("instanceId") Long instanceId);
+
+    int closeUnexecutedOpenPending(@Param("id") Long id, @Param("instanceId") Long instanceId, @Param("version") Integer version,
+                                   @Param("key") String key, @Param("clientOrderId") String clientOrderId,
+                                   @Param("cycleKey") String cycleKey, @Param("now") java.time.LocalDateTime now);
 }

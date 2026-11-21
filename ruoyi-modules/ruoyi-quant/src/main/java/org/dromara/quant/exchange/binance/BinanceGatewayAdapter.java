@@ -74,11 +74,17 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     private final ThreadLocal<ClockSyncTiming> clockSyncTiming = new ThreadLocal<>();
     /**
+     * 当前线程正在执行的精确条件单查询诊断上下文，仅统计该查询触发的 REST 请求。
+     */
+    private static final ThreadLocal<QueryProtectionTiming> protectionQueryTiming = new ThreadLocal<>();
+    /**
      * 同一环境只允许一个服务器时间刷新，其他线程复用结果。
      */
     private final Map<String, Object> clockOffsetRefreshLocks = new ConcurrentHashMap<>();
     private final Map<String, Long> clockOffsetWarningTimes = new ConcurrentHashMap<>();
     private final Map<String, java.util.concurrent.atomic.AtomicBoolean> clockOffsetRefreshInFlight = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<ProtectionQueryKey, java.util.concurrent.CompletableFuture<ProtectionOrderSnapshot>> protectionQueries =
+        new ConcurrentHashMap<>();
     private final Map<String, Long> clockOffsetRefreshAttempts = new ConcurrentHashMap<>();
     private final java.util.concurrent.ExecutorService clockOffsetRefreshExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
     private final Map<String, TradingRules> tradingRules = new ConcurrentHashMap<>();
@@ -87,7 +93,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     private final java.util.concurrent.ConcurrentHashMap<Credential, java.util.concurrent.CompletableFuture<AccountSnapshot>> accountQueries =
         new java.util.concurrent.ConcurrentHashMap<>();
-    private final RestRequestScheduler restScheduler = new RestRequestScheduler(250);
+    private final RestRequestScheduler restScheduler = new RestRequestScheduler(50);
     /**
      * Binance 事件解析使用的 JSON 工具。
      */
@@ -167,6 +173,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         return value == null ? Instant.EPOCH : Instant.ofEpochMilli(value);
     }
 
+    static Instant instantNullable(Long value) {
+        return value == null ? null : Instant.ofEpochMilli(value);
+    }
+
+    static Instant instantPositiveNullable(Long value) {
+        return value == null || value <= 0 ? null : Instant.ofEpochMilli(value);
+    }
+
     /**
      * 读取必需数据，不满足条件时抛出异常。
      */
@@ -234,6 +248,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     /**
      * 将 SDK 异常映射为带阶段信息的安全错误，不输出认证数据。
      */
+    private static String rootCauseType(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current.getClass().getName();
+    }
+
     private RuntimeException requestFailure(String stage, RuntimeException ex) {
         if (ex instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred) {
             return deferred;
@@ -262,7 +284,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             restScheduler.deferFor(retryAfterMillis);
             return new ExchangeMarketPort.RateLimitException(stage, error.getCode(), errorCode(error), message, retryAfterMillis);
         }
-        return new ExchangeRequestException(stage, error == null ? null : error.getCode(), error == null ? null : errorCode(error), message);
+        return new ExchangeRequestException(stage, error == null ? null : error.getCode(), error == null ? null : errorCode(error), message,
+            ex.getClass().getName(), rootCauseType(ex));
     }
 
     private static long retryAfterMillis(com.binance.connector.client.common.ApiException error) {
@@ -445,10 +468,19 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     @Override
     public synchronized SymbolRule queryTradingRule(Credential credential, String symbol) {
+        return queryTradingRule(credential, symbol, RestRequestScheduler.Kind.BACKGROUND);
+    }
+
+    @Override
+    public synchronized SymbolRule queryTradingRuleForProtection(Credential credential, String symbol) {
+        return queryTradingRule(credential, symbol, RestRequestScheduler.Kind.PROTECTION_VERIFY);
+    }
+
+    private SymbolRule queryTradingRule(Credential credential, String symbol, RestRequestScheduler.Kind requestKind) {
         String environment = credential != null && "TESTNET".equalsIgnoreCase(credential.runMode()) ? "TESTNET" : "LIVE";
         TradingRules cached = tradingRules.get(environment);
         if (cached == null || cached.expiresAt() <= System.currentTimeMillis()) {
-            cached = new TradingRules(System.currentTimeMillis() + 60_000L, queryExchangeInfo(credential));
+            cached = new TradingRules(System.currentTimeMillis() + 60_000L, queryExchangeInfo(credential, requestKind));
             tradingRules.put(environment, cached);
         }
         return cached.info().symbols().stream().filter(rule -> rule.symbol().equalsIgnoreCase(symbol)).findFirst().orElseThrow(() -> new IllegalArgumentException(
@@ -456,8 +488,12 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     private ExchangeInfo queryExchangeInfo(Credential credential) {
+        return queryExchangeInfo(credential, RestRequestScheduler.Kind.BACKGROUND);
+    }
+
+    private ExchangeInfo queryExchangeInfo(Credential credential, RestRequestScheduler.Kind requestKind) {
         try {
-            ApiResponse<ExchangeInformationResponse> response = api(credential).exchangeInformation();
+            ApiResponse<ExchangeInformationResponse> response = api(credential, requestKind).exchangeInformation();
             List<SymbolRule> rules = new ArrayList<>();
             for (ExchangeInformationResponseSymbolsInner symbol : response.getData().getSymbols()) {
                 if (!"TRADING".equals(symbol.getStatus())) {
@@ -946,10 +982,19 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      * Every returned LONG/SHORT/BOTH row must agree. Missing getters, empty
      * data or conflicting facts fail closed rather than acknowledging settings.
      */
+    static boolean isValidTradingSymbol(String symbol) {
+        if (symbol == null || symbol.isBlank()) {
+            return false;
+        }
+        String normalized = symbol.trim();
+        int length = normalized.codePointCount(0, normalized.length());
+        return length >= 2 && length <= 32;
+    }
+
     @Override
     public org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings querySymbolTradingSettings(Credential credential, String symbol) {
         requireCredential(credential);
-        if (symbol == null || !symbol.matches("[a-zA-Z0-9]{2,32}")) {
+        if (!isValidTradingSymbol(symbol)) {
             throw new IllegalArgumentException("Binance 交易设置回查缺少有效交易对");
         }
         var rows = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
@@ -974,18 +1019,45 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         // intentionally filters zero-quantity rows, so an empty list means the requested symbol
         // (or the whole account when symbol == null) was successfully verified flat. Transport,
         // rate-limit, decoding, and API errors must throw instead of being converted to empty.
+        long v3StartedAt = System.nanoTime();
         var response = client.positionInformationV3(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData();
+        long v3ElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - v3StartedAt);
         var positions =
             response.stream().filter(item -> symbol == null || symbol.equalsIgnoreCase(item.getSymbol())).filter(item -> decimal(item.getPositionAmt()).signum() != 0).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
         if (positions.isEmpty()) {
+            log.info("Binance 持仓快照查询完成 symbol={} v3ElapsedMs={} v3RowCount={} openPositionCount=0 v2ElapsedMs=0 v2RowCount=0",
+                symbol, v3ElapsedMs, response.size());
             return List.of();
         }
+        long v2StartedAt = System.nanoTime();
+        var leverageRows = client.positionInformationV2(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData();
+        long v2ElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - v2StartedAt);
+        log.info("Binance 持仓快照查询完成 symbol={} v3ElapsedMs={} v3RowCount={} openPositionCount={} v2ElapsedMs={} v2RowCount={}",
+            symbol, v3ElapsedMs, response.size(), positions.size(), v2ElapsedMs, leverageRows.size());
         var leverageByPosition =
-            client.positionInformationV2(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS).getData().stream().collect(java.util.stream.Collectors.toMap(item -> item.getSymbol() + ":" + item.getPositionSide(), item -> Integer.valueOf(item.getLeverage()), (first, second) -> first));
+            leverageRows.stream().collect(java.util.stream.Collectors.toMap(item -> item.getSymbol() + ":" + item.getPositionSide(), item -> Integer.valueOf(item.getLeverage()), (first, second) -> first));
         return positions.stream().map(item -> new PositionSnapshot(item.getSymbol(), item.getPositionSide(), decimal(item.getPositionAmt()), decimal(item.getEntryPrice()),
             decimal(item.getMarkPrice()), decimal(item.getUnRealizedProfit()), decimal(item.getLiquidationPrice()), decimal(item.getPositionInitialMargin()),
             leverageByPosition.get(item.getSymbol() + ":" + item.getPositionSide()), null, null,
             item.getUpdateTime() == null ? null : Instant.ofEpochMilli(item.getUpdateTime()))).toList();
+    }
+
+    /**
+     * USDⓈ-M Futures 常用 REST 端点的 IP 权重。未明确列出的端点按 1 计，后续应以 Binance 文档及响应头持续校准。
+     */
+    static int restRequestWeight(okhttp3.Request request) {
+        String path = request.url().encodedPath();
+        boolean hasSymbol = request.url().queryParameter("symbol") != null;
+        return switch (path) {
+            case "/fapi/v1/openOrders", "/fapi/v1/openAlgoOrders" -> hasSymbol ? 1 : 40;
+            case "/fapi/v1/allOrders", "/fapi/v1/allAlgoOrders",
+                 "/fapi/v2/positionRisk", "/fapi/v3/positionRisk",
+                 "/fapi/v2/account", "/fapi/v3/account", "/fapi/v3/balance",
+                 "/fapi/v1/userTrades" -> 5;
+            case "/fapi/v1/income" -> 30;
+            case "/fapi/v1/aggTrades" -> 20;
+            default -> 1;
+        };
     }
 
     /**
@@ -1007,6 +1079,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                     throw ex;
                 }
                 clockRetried = true;
+                QueryProtectionTiming timing = protectionQueryTiming.get();
+                if (timing != null) {
+                    timing.clockRetryCount++;
+                }
                 refreshClockOffset(baseUrl, usedOffsetUpdatedAt);
                 log.warn("Binance 只读请求因时间戳被拒绝，已刷新服务器时间并重试一次: kind={}, runMode={}, binanceCode=-1021", kind, runMode);
             }
@@ -1021,6 +1097,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             } catch (RuntimeException ex) {
                 if (attempt >= MAX_NETWORK_RETRIES || !isTransientNetworkFailure(ex)) {
                     throw ex;
+                }
+                QueryProtectionTiming timing = protectionQueryTiming.get();
+                if (timing != null) {
+                    timing.networkRetryCount++;
                 }
                 long delay = NETWORK_RETRY_BASE_DELAY_MILLIS * (1L << attempt)
                     + java.util.concurrent.ThreadLocalRandom.current().nextLong(NETWORK_RETRY_JITTER_MILLIS + 1L);
@@ -1037,6 +1117,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     static boolean isTransientNetworkFailure(Throwable failure) {
+        if (Thread.currentThread().isInterrupted()) {
+            return false;
+        }
         boolean transportFailure = false;
         for (Throwable current = failure; current != null; current = current.getCause()) {
             if (current instanceof ExchangeMarketPort.RequestDeferredException
@@ -1049,7 +1132,8 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             if (current instanceof java.io.EOFException
                 || current instanceof java.net.SocketException
                 || current instanceof java.net.SocketTimeoutException
-                || current instanceof java.net.ConnectException) {
+                || current instanceof java.net.ConnectException
+                || current instanceof java.io.InterruptedIOException && !Thread.currentThread().isInterrupted()) {
                 transportFailure = true;
             }
         }
@@ -1067,9 +1151,15 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             if (response == null || response.getData() == null) {
                 throw new IllegalStateException("Binance 活动订单响应缺少数据载荷，无法确认查询完整性");
             }
+            long missingCreateTimeCount = response.getData().stream().filter(item -> item.getTime() == null).count();
+            if (missingCreateTimeCount > 0) {
+                log.warn("Binance 活动订单响应缺少创建时间 symbol={} orderCount={} missingCreateTimeCount={}",
+                    symbol, response.getData().size(), missingCreateTimeCount);
+            }
             return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
                 item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
-                "getAvgPrice")), string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"))).toList();
+                "getAvgPrice")), string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(item.getTime()),
+                nullableBoolean(item, "getClosePosition"))).toList();
         });
     }
 
@@ -1118,9 +1208,13 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (type == null || type.isBlank()) {
             type = "UNKNOWN";
         }
+        Long createTime = number(data, "getTime");
+        if (createTime == null) {
+            log.warn("Binance 精确订单响应缺少创建时间 symbol={} orderId={}", actualSymbol, actualOrderId);
+        }
         return new OrderSnapshot(actualSymbol, actualOrderId, actualClientOrderId, string(data, "getSide"), type, status, decimal(string(data, "getPrice")), decimal(string(data,
             "getOrigQty")), decimal(string(data, "getExecutedQty")), instant(number(data, "getUpdateTime")), decimal(string(data, "getAvgPrice")), string(data, "getPositionSide"),
-            nullableBoolean(data, "getReduceOnly"), instant(number(data, "getTime")), nullableBoolean(data, "getClosePosition"));
+            nullableBoolean(data, "getReduceOnly"), instantNullable(createTime), nullableBoolean(data, "getClosePosition"));
     }
 
     /**
@@ -1136,7 +1230,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         long from = range.from().toEpochMilli();
         long to = range.to().toEpochMilli();
         TradeHistoryResult result = collectCompleteTradeHistory(from, to, (startTime, endTime) ->
-            signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
+            signedRead(credential, RestRequestScheduler.Kind.BACKGROUND, client -> {
                 try {
                     ApiResponse<AccountTradeListResponse> response = client.accountTradeList(
                         symbol.trim(), null, startTime, endTime, null, (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS);
@@ -1220,7 +1314,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             || range == null || range.from() == null || range.to() == null || range.from().isAfter(range.to())) {
             throw new IllegalArgumentException("按订单查询成交必须指定交易对、订单 ID 和有效时间范围");
         }
-        return signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
+        return signedRead(credential, RestRequestScheduler.Kind.BACKGROUND, client -> {
             ApiResponse<AccountTradeListResponse> response = client.accountTradeList(
                 symbol.trim(), orderId, range.from().toEpochMilli(), range.to().toEpochMilli(), null,
                 limit == null ? 1000L : limit, RECV_WINDOW_MILLIS);
@@ -1238,7 +1332,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 查询历史订单。
+     * 查询历史订单，保留普通查询原有的单次分页行为。
      */
     @Override
     public List<OrderSnapshot> queryOrderHistory(Credential credential, String symbol, TimeRange range, Long limit) {
@@ -1251,10 +1345,103 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         if (data == null) {
             throw new IllegalStateException("Binance 历史订单响应缺少数据载荷，无法确认查询完整性");
         }
+        long missingCreateTimeCount = data.stream().filter(item -> item.getTime() == null).count();
+        if (missingCreateTimeCount > 0) {
+            log.warn("Binance 历史订单响应缺少创建时间 symbol={} orderCount={} missingCreateTimeCount={} startTime={} endTime={}",
+                querySymbol, data.size(), missingCreateTimeCount, start, end);
+        }
         return data.stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(), item.getStatus(),
             decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item, "getAvgPrice")),
-            string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instant(number(item, "getTime")),
+            string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(item.getTime()),
             nullableBoolean(item, "getClosePosition"))).toList();
+    }
+
+    /**
+     * 查询历史订单；分页触顶时递归缩小时间窗口，无法证明完整则失败关闭。
+     */
+    @Override
+    public List<OrderSnapshot> queryOrderHistoryComplete(Credential credential, String symbol, TimeRange range, Long limit) {
+        requireCredential(credential);
+        String querySymbol = symbol == null || symbol.isBlank() ? null : symbol.trim();
+        if (range == null || range.from() == null || range.to() == null || range.from().isAfter(range.to())) {
+            throw new IllegalArgumentException("查询历史订单必须指定有效时间范围");
+        }
+        int pageSize = limit == null ? ALGO_HISTORY_PAGE_SIZE : Math.toIntExact(limit);
+        if (pageSize <= 0 || pageSize > ALGO_HISTORY_PAGE_SIZE) {
+            throw new IllegalArgumentException("历史订单分页大小必须在 1 到 1000 之间");
+        }
+        long start = range.from().toEpochMilli();
+        long end = range.to().toEpochMilli();
+        OrderHistoryResult result = collectCompleteOrderHistory(start, end, pageSize, (from, to) ->
+            signedRead(credential, RestRequestScheduler.Kind.BACKGROUND, client -> {
+                var response = client.allOrders(querySymbol, null, from, to, (long) pageSize, RECV_WINDOW_MILLIS);
+                if (response == null || response.getData() == null) {
+                    return null;
+                }
+                return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(),
+                    item.getSide(), item.getType(), item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()),
+                    decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item, "getAvgPrice")),
+                    string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(item.getTime()),
+                    nullableBoolean(item, "getClosePosition"))).toList();
+            }));
+        if (!result.complete()) {
+            throw new IllegalStateException("Binance 历史订单查询无法证明完整：时间窗口分页达到查询上限或单毫秒窗口仍被截断");
+        }
+        return result.orders();
+    }
+
+    static OrderHistoryResult collectCompleteOrderHistory(long startTime, long endTime, int pageSize,
+                                                            java.util.function.BiFunction<Long, Long, List<OrderSnapshot>> query) {
+        if (startTime < 0 || endTime < startTime || pageSize <= 0 || pageSize > ALGO_HISTORY_PAGE_SIZE || query == null) {
+            return new OrderHistoryResult(List.of(), false, 0);
+        }
+        List<OrderSnapshot> orders = new ArrayList<>();
+        int[] queryCount = {0};
+        boolean complete = collectOrderHistoryRange(startTime, endTime, pageSize, query, orders, queryCount);
+        if (!complete) {
+            return new OrderHistoryResult(List.of(), false, queryCount[0]);
+        }
+        Map<Long, OrderSnapshot> unique = new LinkedHashMap<>();
+        for (OrderSnapshot order : orders) {
+            if (order == null || order.orderId() == null || order.orderId() <= 0 || order.createTime() == null
+                || order.createTime().toEpochMilli() < startTime || order.createTime().toEpochMilli() > endTime
+                || unique.putIfAbsent(order.orderId(), order) != null) {
+                return new OrderHistoryResult(List.of(), false, queryCount[0]);
+            }
+        }
+        return new OrderHistoryResult(List.copyOf(unique.values()), true, queryCount[0]);
+    }
+
+    private static boolean collectOrderHistoryRange(long startTime, long endTime, int pageSize,
+                                                      java.util.function.BiFunction<Long, Long, List<OrderSnapshot>> query,
+                                                      List<OrderSnapshot> orders, int[] queryCount) {
+        if (++queryCount[0] > ALGO_HISTORY_MAX_QUERIES) {
+            return false;
+        }
+        // Binance allOrders requires a time interval shorter than seven days.
+        long maxInterval = java.time.Duration.ofDays(7).toMillis() - 1L;
+        if (endTime - startTime > maxInterval) {
+            long middle = startTime + maxInterval;
+            return collectOrderHistoryRange(startTime, middle, pageSize, query, orders, queryCount)
+                && collectOrderHistoryRange(middle + 1L, endTime, pageSize, query, orders, queryCount);
+        }
+        List<OrderSnapshot> page = query.apply(startTime, endTime);
+        if (page == null) {
+            return false;
+        }
+        if (page.size() < pageSize) {
+            orders.addAll(page);
+            return true;
+        }
+        if (startTime == endTime) {
+            return false;
+        }
+        long middle = startTime + (endTime - startTime) / 2L;
+        return collectOrderHistoryRange(startTime, middle, pageSize, query, orders, queryCount)
+            && collectOrderHistoryRange(middle + 1L, endTime, pageSize, query, orders, queryCount);
+    }
+
+    record OrderHistoryResult(List<OrderSnapshot> orders, boolean complete, int queryCount) {
     }
 
     /**
@@ -1263,14 +1450,15 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     @Override
     public List<ProtectionOrderSnapshot> queryProtectionOrders(Credential credential, String symbol) {
         requireCredential(credential);
-        var data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+        var data = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
             client -> client.currentAllAlgoOpenOrders("CONDITIONAL", symbol, null, RECV_WINDOW_MILLIS).getData());
         if (data == null) {
             throw new IllegalStateException("Binance 条件单活动列表响应缺少数据载荷，无法确认保护单清理状态");
         }
         return data.stream().map(item -> new ProtectionOrderSnapshot(string(item, "getSymbol"), number(item, "getAlgoId"), string(item, "getClientAlgoId"), normalizeAlgoStatus(string(item,
             "getAlgoStatus")), string(item, "getSide"), string(item, "getPositionSide"), string(item, "getOrderType"), decimal(string(item, "getQuantity")), decimal(string(item,
-            "getTriggerPrice")), instant(number(item, "getUpdateTime")), null, Boolean.valueOf(string(item, "getReduceOnly")), Boolean.valueOf(string(item, "getClosePosition")))).filter(item -> symbol == null || symbol.equalsIgnoreCase(item.symbol())).toList();
+            "getTriggerPrice")), instant(number(item, "getUpdateTime")), null, Boolean.valueOf(string(item, "getReduceOnly")), Boolean.valueOf(string(item, "getClosePosition")),
+            null, null, instantNullable(number(item, "getCreateTime")))).filter(item -> symbol == null || symbol.equalsIgnoreCase(item.symbol())).toList();
     }
 
     /**
@@ -1299,27 +1487,119 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     @Override
     public ProtectionOrderSnapshot queryProtectionOrder(Credential credential, Long orderId, String clientOrderId, String symbol, Long intentCreatedAtEpochMillis) {
         requireCredential(credential);
-        com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAlgoOrderResponse data;
+        if ((orderId == null || orderId <= 0) && (clientOrderId == null || clientOrderId.isBlank())) {
+            return queryProtectionOrderUnshared(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+        }
+        ProtectionQueryKey key = new ProtectionQueryKey(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+        var created = new java.util.concurrent.CompletableFuture<ProtectionOrderSnapshot>();
+        var existing = protectionQueries.putIfAbsent(key, created);
+        if (existing != null) {
+            return awaitProtectionQuery(existing);
+        }
         try {
-            data = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
-                client -> client.queryAlgoOrder(orderId, clientOrderId, RECV_WINDOW_MILLIS).getData());
-        } catch (com.binance.connector.client.common.ApiException ex) {
-            if (!isProtectionOrderAbsent(ex)) {
-                throw ex;
+            ProtectionOrderSnapshot snapshot = queryProtectionOrderUnshared(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+            created.complete(snapshot);
+            return snapshot;
+        } catch (RuntimeException | Error failure) {
+            created.completeExceptionally(failure);
+            throw failure;
+        } finally {
+            protectionQueries.remove(key, created);
+        }
+    }
+
+    private ProtectionOrderSnapshot queryProtectionOrderUnshared(Credential credential, Long orderId, String clientOrderId, String symbol,
+                                                                   Long intentCreatedAtEpochMillis) {
+        QueryProtectionTiming timing = new QueryProtectionTiming();
+        QueryProtectionTiming previousTiming = protectionQueryTiming.get();
+        protectionQueryTiming.set(timing);
+        long totalStartedAt = System.nanoTime();
+        try {
+            com.binance.connector.client.derivatives_trading_usds_futures.rest.model.QueryAlgoOrderResponse data;
+            long exactStartedAt = System.nanoTime();
+            try {
+                data = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
+                    client -> client.queryAlgoOrder(orderId, clientOrderId, RECV_WINDOW_MILLIS).getData());
+            } catch (com.binance.connector.client.common.ApiException ex) {
+                timing.exactQueryNanos += System.nanoTime() - exactStartedAt;
+                if (!isProtectionOrderAbsent(ex)) {
+                    throw ex;
+                }
+                String responseMessage = null;
+                try {
+                    JsonObject error = com.google.gson.JsonParser.parseString(ex.getResponseBody()).getAsJsonObject();
+                    responseMessage = error.has("msg") && !error.get("msg").isJsonNull() ? error.get("msg").getAsString() : null;
+                } catch (RuntimeException ignored) {
+                    // 错误码已确认是 -2013；消息解析失败不改变订单事实判断。
+                }
+                if (responseMessage != null) {
+                    responseMessage = responseMessage.replace('\r', ' ').replace('\n', ' ');
+                    responseMessage = responseMessage.substring(0, Math.min(responseMessage.length(), 300));
+                }
+                log.warn("Binance 条件单精确查询返回订单不存在，转查历史记录 runMode={} symbol={} clientAlgoId={} orderId={} httpStatus={} binanceCode={} message={}",
+                    credential.runMode(), symbol, clientOrderId, orderId, ex.getCode(), errorCode(ex), responseMessage);
+                // Binance 的精确查询可能已不再返回已结束的 Algo 单；历史记录必须按订单身份精确匹配。
+                // 未命中只有在本地创建时间处于 3 天完整保留窗口且分页完整时才确认不存在，否则保持未知。
+                return queryProtectionOrderHistoryTimed(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis, timing);
             }
-            // Binance 的精确查询可能已不返回已结束的 Algo 单；历史记录必须按订单身份精确匹配。
-            // 未命中只有在本地创建时间处于 3 天完整保留窗口且分页完整时才确认不存在，否则保持未知。
-            return queryProtectionOrderHistory(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+            timing.exactQueryNanos += System.nanoTime() - exactStartedAt;
+            if (data == null) {
+                // 成功响应也可能没有 data；先查有限时间范围的算法单历史，再由上层决定是否仍未知。
+                return queryProtectionOrderHistoryTimed(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis, timing);
+            }
+            String status = normalizeAlgoStatus(string(data, "getAlgoStatus"));
+            return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), status, string(data, "getSide"), string(data,
+                "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")), decimal(string(data, "getTriggerPrice")),
+                instant(number(data, "getUpdateTime")), protectionExecutedQuantity(status, decimal(string(data, "getActualQty"))), nullableBoolean(data, "getReduceOnly"), nullableBoolean(data, "getClosePosition"), number(data, "getActualOrderId"),
+                decimal(string(data, "getActualPrice")), instantNullable(number(data, "getCreateTime")), instantPositiveNullable(number(data, "getTriggerTime")));
+        } finally {
+            long totalNanos = System.nanoTime() - totalStartedAt;
+            long totalMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(totalNanos);
+            if (totalMs >= 500L) {
+                long schedulerQueueMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.schedulerQueueNanos);
+                long interceptorProceedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.interceptorProceedNanos);
+                long nonInterceptorMs = Math.max(0L, totalMs - schedulerQueueMs - interceptorProceedMs);
+                log.warn("Binance 条件单精确查询耗时偏高 runMode={} symbol={} clientAlgoId={} orderId={} totalMs={} exactQueryMs={} historyQueryMs={} schedulerQueueMs={} interceptorProceedMs={} nonInterceptorMs={} requestCount={} networkRetryCount={} clockRetryCount={} transportFailureCount={} httpStatusCounts={} pathCounts={}",
+                    credential.runMode(), symbol, clientOrderId, orderId, totalMs,
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.exactQueryNanos),
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(timing.historyQueryNanos),
+                    schedulerQueueMs, interceptorProceedMs, nonInterceptorMs, timing.requestCount,
+                    timing.networkRetryCount, timing.clockRetryCount, timing.transportFailureCount, timing.httpStatusCounts, timing.pathCounts);
+            }
+            if (previousTiming == null) {
+                protectionQueryTiming.remove();
+            } else {
+                protectionQueryTiming.set(previousTiming);
+            }
         }
-        if (data == null) {
-            // 成功响应也可能没有 data；先查有限时间范围的算法单历史，再由上层决定是否仍未知。
-            return queryProtectionOrderHistory(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+    }
+
+    private ProtectionOrderSnapshot awaitProtectionQuery(java.util.concurrent.CompletableFuture<ProtectionOrderSnapshot> future) {
+        try {
+            return future.join();
+        } catch (java.util.concurrent.CompletionException failure) {
+            if (failure.getCause() instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (failure.getCause() instanceof Error error) {
+                throw error;
+            }
+            throw failure;
         }
-        String status = normalizeAlgoStatus(string(data, "getAlgoStatus"));
-        return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), status, string(data, "getSide"), string(data,
-            "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")), decimal(string(data, "getTriggerPrice")),
-            instant(number(data, "getUpdateTime")), protectionExecutedQuantity(status, decimal(string(data, "getActualQty"))), nullableBoolean(data, "getReduceOnly"), nullableBoolean(data, "getClosePosition"), number(data, "getActualOrderId"),
-            decimal(string(data, "getActualPrice")));
+    }
+
+    private record ProtectionQueryKey(Credential credential, Long orderId, String clientOrderId, String symbol,
+                                      Long intentCreatedAtEpochMillis) {
+    }
+
+    private ProtectionOrderSnapshot queryProtectionOrderHistoryTimed(Credential credential, Long orderId, String clientOrderId, String symbol,
+                                                                        Long intentCreatedAtEpochMillis, QueryProtectionTiming timing) {
+        long startedAt = System.nanoTime();
+        try {
+            return queryProtectionOrderHistory(credential, orderId, clientOrderId, symbol, intentCreatedAtEpochMillis);
+        } finally {
+            timing.historyQueryNanos += System.nanoTime() - startedAt;
+        }
     }
 
     private ProtectionOrderSnapshot queryProtectionOrderHistory(Credential credential, Long orderId, String clientOrderId, String symbol, Long intentCreatedAtEpochMillis) {
@@ -1330,7 +1610,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         long endTime = System.currentTimeMillis() + exchangeOffsetMillis;
         long recentStartTime = endTime - java.time.Duration.ofDays(7).toMillis() + 1;
         if (orderId != null && orderId > 0) {
-            var response = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+            var response = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
                 client -> client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), orderId, recentStartTime, endTime,
                     (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS));
             var data = response == null ? null : response.getData();
@@ -1343,9 +1623,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         // 超出该窗口的已撤销/过期无成交 Algo 单可能已被 Binance 清理，必须保持 UNKNOWN。
         long intentStartTime = intentCreatedAtEpochMillis == null ? -1L : intentCreatedAtEpochMillis + exchangeOffsetMillis;
         boolean absenceCanBeProven = isProtectionHistoryAbsenceProvable(intentStartTime, endTime);
-        long startTime = absenceCanBeProven ? intentStartTime : recentStartTime;
+        long startTime = intentStartTime > recentStartTime && intentStartTime <= endTime ? intentStartTime : recentStartTime;
         AlgoHistoryResult result = collectCompleteAlgoHistory(startTime, endTime, (from, to) -> {
-            var response = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT,
+            var response = signedRead(credential, RestRequestScheduler.Kind.PROTECTION_VERIFY,
                 client -> client.queryAllAlgoOrders(symbol.trim().toUpperCase(Locale.ROOT), null, from, to,
                     (long) ALGO_HISTORY_PAGE_SIZE, RECV_WINDOW_MILLIS));
             return response == null ? null : response.getData();
@@ -1353,9 +1633,17 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         // A full page at one millisecond resolution may still be truncated.
         // In that case absence and uniqueness are unknowable, so stay fail closed.
         if (!result.complete()) {
+            log.warn("Binance 条件单历史查询未能完整覆盖，保持核验未知 runMode={} symbol={} clientAlgoId={} orderId={} historyComplete=false absenceProvable={}",
+                credential.runMode(), symbol, clientOrderId, orderId, absenceCanBeProven);
             return null;
         }
+        long clientAlgoIdMatches = result.orders().stream()
+            .filter(item -> item != null && symbol.equalsIgnoreCase(item.getSymbol())
+                && clientOrderId != null && clientOrderId.equals(item.getClientAlgoId()))
+            .count();
         ProtectionOrderSnapshot exact = findExactAlgoHistory(result.orders(), symbol, orderId, clientOrderId);
+        log.warn("Binance 条件单历史查询核验结果 runMode={} symbol={} clientAlgoId={} orderId={} historyComplete=true historyRecordCount={} clientAlgoIdMatches={} exactIdentityMatched={} absenceProvable={}",
+            credential.runMode(), symbol, clientOrderId, orderId, result.orders().size(), clientAlgoIdMatches, exact != null, absenceCanBeProven);
         if (exact != null) {
             return exact;
         }
@@ -1426,7 +1714,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         Long updateTime = item.getUpdateTime() == null ? item.getCreateTime() : item.getUpdateTime();
         return new ProtectionOrderSnapshot(item.getSymbol(), item.getAlgoId(), item.getClientAlgoId(), status, item.getSide(), item.getPositionSide(), item.getOrderType(),
             decimal(item.getQuantity()), decimal(item.getTriggerPrice()), instant(updateTime), executedQuantity, item.getReduceOnly(), item.getClosePosition(),
-            number(item, "getActualOrderId"), decimal(item.getActualPrice()));
+            number(item, "getActualOrderId"), decimal(item.getActualPrice()), instantNullable(item.getCreateTime()), instantPositiveNullable(number(item, "getTriggerTime")));
     }
 
     private static boolean isProtectionOrderAbsent(com.binance.connector.client.common.ApiException exception) {
@@ -1526,8 +1814,13 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             return new ProtectionOrderResult(null, request.clientOrderId(), "PAPER_ACCEPTED");
         }
         requireCredential(request.credential());
+        WorkingType workingType = switch (request.workingType() == null ? "CONTRACT_PRICE" : request.workingType().toUpperCase()) {
+            case "MARK_PRICE" -> WorkingType.MARK_PRICE;
+            case "CONTRACT_PRICE" -> WorkingType.CONTRACT_PRICE;
+            default -> throw new IllegalArgumentException("不支持的保护单触发价格类型: " + request.workingType());
+        };
         NewAlgoOrderRequest algo =
-            new NewAlgoOrderRequest().algoType(AlgoType.CONDITIONAL).symbol(request.symbol()).side(Side.fromValue(request.side().toUpperCase())).type(OrderType.fromValue((request.orderType() == null ? "STOP_MARKET" : request.orderType()).toUpperCase())).quantity(request.quantity().doubleValue()).triggerPrice(request.stopPrice().doubleValue()).workingType(WorkingType.CONTRACT_PRICE).clientAlgoId(request.clientOrderId());
+            new NewAlgoOrderRequest().algoType(AlgoType.CONDITIONAL).symbol(request.symbol()).side(Side.fromValue(request.side().toUpperCase())).type(OrderType.fromValue((request.orderType() == null ? "STOP_MARKET" : request.orderType()).toUpperCase())).quantity(request.quantity().doubleValue()).triggerPrice(request.stopPrice().doubleValue()).workingType(workingType).clientAlgoId(request.clientOrderId());
         if (request.positionSide() != null && !request.positionSide().isBlank()) {
             algo.positionSide(request.positionSide().toUpperCase());
         }
@@ -1538,6 +1831,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         try {
             response = api(request.credential(), true).newAlgoOrder(algo);
         } catch (RuntimeException ex) {
+            // 与普通订单保持一致：调度器在 HTTP 请求发送前延期时，明确标记为未发送，不能占用 UNKNOWN 派发锁。
+            RuntimeException dispatchFailure = classifyOrderDispatchFailure(ex);
+            if (dispatchFailure instanceof OrderNotSentException) {
+                throw dispatchFailure;
+            }
             var error = apiError(ex);
             Integer code = error == null ? null : errorCode(error);
             if (error != null && error.getCode() == 400 && code != null && Set.of(-4023, -4004, -4005, -1111, -4164, -4014, -2021).contains(code)) {
@@ -1630,7 +1928,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         JsonObject json = gson.fromJson(text, JsonObject.class);
         String type = json.has("e") ? json.get("e").getAsString() : "UNKNOWN";
         Instant time = json.has("E") ? Instant.ofEpochMilli(json.get("E").getAsLong()) : Instant.now();
-        return new UserDataEvent(type, time, text);
+        return new UserDataEvent(type, time, text, Instant.now());
     }
 
     /**
@@ -1673,24 +1971,64 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             // Acquire a slot for every actual HTTP request, not merely when an SDK client is constructed.
             // Some SDK API objects issue multiple requests, so client-construction throttling is insufficient.
             .addInterceptor(chain -> {
+                okhttp3.Request request = chain.request();
+                int requestWeight = restRequestWeight(request);
                 long queueStarted = System.nanoTime();
                 try {
-                    restScheduler.acquire(kind);
+                    restScheduler.acquire(request.url().host(), kind, requestWeight);
                 } catch (ExchangeMarketPort.RequestDeferredException deferred) {
-                    log.warn("Binance REST 请求延期 kind={} reason={} queueSize={} queueSizes={} waitedMs={} retryAfterMs={}",
-                        deferred.kind(), deferred.reason(), deferred.queueSize(), java.util.Arrays.toString(deferred.queueSizes()),
-                        deferred.waitedMillis(), deferred.retryAfterMillis());
+                    QueryProtectionTiming protectionTiming = protectionQueryTiming.get();
+                    if (protectionTiming != null) {
+                        protectionTiming.schedulerQueueNanos += java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(deferred.waitedMillis());
+                    }
+                    log.warn("Binance REST 请求延期 host={} method={} path={} kind={} requestWeight={} reason={} queueSize={} queueSizes={} waitedMs={} retryAfterMs={}",
+                        request.url().host(), request.method(), request.url().encodedPath(), deferred.kind(), requestWeight, deferred.reason(), deferred.queueSize(), java.util.Arrays.toString(deferred.queueSizes()), deferred.waitedMillis(), deferred.retryAfterMillis());
                     throw deferred;
                 }
-                long queueMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queueStarted);
+                long queueNanos = System.nanoTime() - queueStarted;
+                long queueMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(queueNanos);
                 ClockSyncTiming syncTiming = clockSyncTiming.get();
-                log.debug("Binance REST 获准执行 kind={} queueMillis={} clockSync={}", kind, queueMillis, syncTiming != null);
+                QueryProtectionTiming protectionTiming = protectionQueryTiming.get();
+                if (protectionTiming != null) {
+                    protectionTiming.schedulerQueueNanos += queueNanos;
+                }
+                log.debug("Binance REST 获准执行 method={} path={} kind={} requestWeight={} queueMillis={} clockSync={}", request.method(), request.url().encodedPath(), kind, requestWeight, queueMillis, syncTiming != null);
                 // Keep diagnostics out of the measured HTTP round trip.
                 long requestStartedAt = System.currentTimeMillis();
                 if (syncTiming != null) {
                     syncTiming.markRequestStarted(requestStartedAt, queueMillis);
                 }
-                okhttp3.Response response = chain.proceed(chain.request());
+                long proceedStartedAt = System.nanoTime();
+                okhttp3.Response response;
+                try {
+                    response = chain.proceed(chain.request());
+                } catch (java.io.IOException | RuntimeException ex) {
+                    if (protectionTiming != null) {
+                        protectionTiming.recordTransportFailure(chain.request().url().encodedPath(), System.nanoTime() - proceedStartedAt);
+                    }
+                    throw ex;
+                }
+                long proceedNanos = System.nanoTime() - proceedStartedAt;
+                long requestElapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(proceedNanos);
+                boolean terminalSnapshotRequest = "/fapi/v3/account".equals(request.url().encodedPath())
+                    || "/fapi/v3/positionRisk".equals(request.url().encodedPath())
+                    || "/fapi/v2/positionRisk".equals(request.url().encodedPath());
+                if (queueMillis >= 250L) {
+                    log.warn("Binance REST 请求排队等待偏高 host={} method={} path={} kind={} requestWeight={} queueMillis={} requestElapsedMillis={} status={} usedWeight1m={} schedulerState={}",
+                        request.url().host(), request.method(), request.url().encodedPath(), kind, requestWeight, queueMillis,
+                        requestElapsedMillis, response.code(), response.header("X-MBX-USED-WEIGHT-1M"), restScheduler.diagnostics());
+                } else if (terminalSnapshotRequest) {
+                    log.info("交易终端账户快照 REST 耗时 path={} kind={} requestWeight={} queueMillis={} requestElapsedMillis={} status={} usedWeight1m={}",
+                        request.url().encodedPath(), kind, requestWeight, queueMillis, requestElapsedMillis,
+                        response.code(), response.header("X-MBX-USED-WEIGHT-1M"));
+                } else {
+                    log.debug("Binance REST 响应 host={} method={} path={} kind={} requestWeight={} queueMillis={} requestElapsedMillis={} status={} usedWeight1m={}",
+                        request.url().host(), request.method(), request.url().encodedPath(), kind, requestWeight, queueMillis,
+                        requestElapsedMillis, response.code(), response.header("X-MBX-USED-WEIGHT-1M"));
+                }
+                if (protectionTiming != null) {
+                    protectionTiming.recordResponse(chain.request().url().encodedPath(), response.code(), proceedNanos);
+                }
                 if (syncTiming != null) {
                     syncTiming.markResponseReceived(System.currentTimeMillis());
                 }
@@ -1714,6 +2052,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                             log.error("Binance REST HTTP 418 has no trustworthy expiry; REST is latched closed until operator restart.");
                         } else {
                             restScheduler.deferFor(retryAfterMillis);
+                            log.warn("Binance REST 触发限流，已延后后续请求 status={} method={} path={} kind={} usedWeight1m={} retryAfterMs={}",
+                                response.code(), response.request().method(), response.request().url().encodedPath(), kind,
+                                response.header("X-MBX-USED-WEIGHT-1M"), retryAfterMillis);
                         }
                     }
                 }
@@ -1860,7 +2201,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             config.setSignatureConfiguration(signature);
             long offset = clockOffset(config.getUrl());
             ApiClient client = new ApiClient(config, new OffsetAuthenticationFactory(offset));
-            return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT || kind == RestRequestScheduler.Kind.POSITION_VERIFY
+            return new DerivativesTradingUsdsFuturesRestApi(kind == RestRequestScheduler.Kind.ACCOUNT || kind == RestRequestScheduler.Kind.POSITION_VERIFY || kind == RestRequestScheduler.Kind.PROTECTION_VERIFY
                 ? accountRestClient(client, kind) : restClient(client, kind));
         }
         ApiClient client = new ApiClient(config);
@@ -2031,6 +2372,34 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     /** 单次服务器时间同步的 HTTP 时序采样。 */
     private record ClockSyncResult(long offsetMillis, long requestStartedAtMillis, long responseReceivedAtMillis,
                                    long schedulerQueueMillis) {
+    }
+
+    /** 当前精确条件单查询的 REST 时序统计；仅在对应调用线程内累积。 */
+    private static final class QueryProtectionTiming {
+        private long exactQueryNanos;
+        private long historyQueryNanos;
+        private long schedulerQueueNanos;
+        private long interceptorProceedNanos;
+        private int requestCount;
+        private int networkRetryCount;
+        private int clockRetryCount;
+        private int transportFailureCount;
+        private final Map<Integer, Integer> httpStatusCounts = new LinkedHashMap<>();
+        private final Map<String, Integer> pathCounts = new LinkedHashMap<>();
+
+        private void recordResponse(String path, int status, long elapsedNanos) {
+            requestCount++;
+            interceptorProceedNanos += elapsedNanos;
+            pathCounts.merge(path, 1, Integer::sum);
+            httpStatusCounts.merge(status, 1, Integer::sum);
+        }
+
+        private void recordTransportFailure(String path, long elapsedNanos) {
+            requestCount++;
+            transportFailureCount++;
+            interceptorProceedNanos += elapsedNanos;
+            pathCounts.merge(path, 1, Integer::sum);
+        }
     }
 
     /** 由 REST 拦截器在调度放行及响应到达时填充。 */

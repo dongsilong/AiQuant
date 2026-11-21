@@ -8,10 +8,11 @@ import org.springframework.web.context.request.async.AsyncRequestNotUsableExcept
 
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.BlockingQueue;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 class SseEventDispatcherTest {
@@ -60,6 +61,46 @@ class SseEventDispatcherTest {
     }
 
     @Test
+    void queueOverflowTriggersFailureWithoutBlockingEventProducer() throws Exception {
+        CountDownLatch writeStarted = new CountDownLatch(1);
+        CountDownLatch releaseWrite = new CountDownLatch(1);
+        CountDownLatch failureCalled = new CountDownLatch(1);
+        SseEmitter emitter = new SseEmitter(0L) {
+            @Override
+            public void send(SseEventBuilder builder) throws IOException {
+                writeStarted.countDown();
+                try {
+                    releaseWrite.await(3, TimeUnit.SECONDS);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(ex);
+                }
+            }
+        };
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAsyncStarted(true);
+        SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
+        SseEventDispatcher dispatcher = new SseEventDispatcher(emitter, responseReady, failureCalled::countDown);
+        dispatcher.start();
+        try {
+            assertTrue(dispatcher.offer("quant.market", "in-flight"));
+            assertTrue(writeStarted.await(1, TimeUnit.SECONDS));
+            for (int index = 0; index < 256; index++) {
+                assertTrue(dispatcher.offer("quant.market", "queued-" + index));
+            }
+            long startedAt = System.nanoTime();
+            assertFalse(dispatcher.offer("quant.market", "overflow"));
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+            assertTrue(elapsedMs < 100, "queue overflow must not block the event producer");
+            assertTrue(failureCalled.await(1, TimeUnit.SECONDS), "queue overflow must trigger connection cleanup");
+        } finally {
+            releaseWrite.countDown();
+            dispatcher.close();
+            responseReady.close();
+        }
+    }
+
+    @Test
     void coalescesUnsentUpdatesForTheSameKey() throws Exception {
         CountDownLatch firstWriteStarted = new CountDownLatch(1);
         CountDownLatch releaseFirstWrite = new CountDownLatch(1);
@@ -90,14 +131,58 @@ class SseEventDispatcherTest {
             assertTrue(firstWriteStarted.await(1, TimeUnit.SECONDS));
             assertTrue(dispatcher.offerLatest("peak", "quant.account", "old"));
             assertTrue(dispatcher.offerLatest("peak", "quant.account", "latest"));
-            BlockingQueue<?> queue = (BlockingQueue<?>) ReflectionTestUtils.getField(dispatcher, "queue");
-            assertTrue(queue != null && queue.size() == 1);
-            Object pending = queue.peek();
-            assertTrue(pending != null && "latest".equals(ReflectionTestUtils.getField(pending, "data")));
+            Map<?, ?> latestStateQueue = (Map<?, ?>) ReflectionTestUtils.getField(dispatcher, "latestStateQueue");
+            assertTrue(latestStateQueue != null && latestStateQueue.size() == 1);
+            Object pending = latestStateQueue.values().iterator().next();
+            assertTrue("latest".equals(ReflectionTestUtils.getField(pending, "data")));
+            java.util.concurrent.atomic.AtomicLong coalescedCount =
+                (java.util.concurrent.atomic.AtomicLong) ReflectionTestUtils.getField(dispatcher, "coalescedCount");
+            assertTrue(coalescedCount != null && coalescedCount.get() == 1);
         } finally {
             releaseFirstWrite.countDown();
             dispatcher.close();
             responseReady.close();
         }
     }
+    @Test
+    void reliableEventsDoNotStarveLatestStateEvents() {
+        SseResponseReadyGate responseReady = new SseResponseReadyGate(new MockHttpServletRequest());
+        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L), responseReady, () -> { });
+        try {
+            for (int index = 0; index < 9; index++) {
+                assertTrue(dispatcher.offer("quant.account", "reliable-" + index));
+            }
+            assertTrue(dispatcher.offerLatest("position", "quant.account", "latest-state"));
+
+            for (int index = 0; index < 8; index++) {
+                Object pending = ReflectionTestUtils.invokeMethod(dispatcher, "takeNext");
+                assertTrue(("reliable-" + index).equals(ReflectionTestUtils.getField(pending, "data")));
+            }
+            Object state = ReflectionTestUtils.invokeMethod(dispatcher, "takeNext");
+            assertTrue("latest-state".equals(ReflectionTestUtils.getField(state, "data")));
+            Object remaining = ReflectionTestUtils.invokeMethod(dispatcher, "takeNext");
+            assertTrue("reliable-8".equals(ReflectionTestUtils.getField(remaining, "data")));
+        } finally {
+            dispatcher.close();
+            responseReady.close();
+        }
+    }
+
+    @Test
+    void latestStateQueueIsBoundedAndOverflowDisconnectsClient() throws Exception {
+        CountDownLatch failureCalled = new CountDownLatch(1);
+        SseResponseReadyGate responseReady = new SseResponseReadyGate(new MockHttpServletRequest());
+        SseEventDispatcher dispatcher = new SseEventDispatcher(new SseEmitter(0L), responseReady, failureCalled::countDown);
+        try {
+            for (int index = 0; index < 256; index++) {
+                assertTrue(dispatcher.offerLatest("state-" + index, "quant.market", index));
+            }
+            assertFalse(dispatcher.offerLatest("overflow", "quant.market", "overflow"));
+            assertTrue(failureCalled.await(1, TimeUnit.SECONDS));
+        } finally {
+            dispatcher.close();
+            responseReady.close();
+        }
+    }
+
 }

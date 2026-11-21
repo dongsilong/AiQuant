@@ -95,6 +95,8 @@ public class QuantOrder {
      * 执行幂等键，用于阻止重复交易请求。
      */
     private String idempotencyKey;
+    /** 交易所订单创建时间（UTC）；历史同步订单优先使用该时间过滤。 */
+    private LocalDateTime exchangeCreatedAt;
     /**
      * 创建时间。
      */

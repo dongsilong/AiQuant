@@ -64,6 +64,20 @@ public class StrategyPositionStateService {
     }
 
     /**
+     * 返回已关闭但保护单清理尚未完成的周期，供独立恢复任务处理。
+     */
+    public java.util.List<QuantStrategyPositionState> findClosedProtectionCleanupPending() {
+        return mapper.selectList(new LambdaQueryWrapper<QuantStrategyPositionState>()
+            .eq(QuantStrategyPositionState::getStatus, "CLOSED")
+            .eq(QuantStrategyPositionState::getPositionQty, BigDecimal.ZERO)
+            .isNotNull(QuantStrategyPositionState::getPositionId)
+            .isNotNull(QuantStrategyPositionState::getPositionCycleKey)
+            .isNull(QuantStrategyPositionState::getPendingAction)
+            .and(query -> query.eq(QuantStrategyPositionState::getRecoveryRequired, true)
+                .or().eq(QuantStrategyPositionState::getUnsafeRecovery, true)));
+    }
+
+    /**
      * 返回仍需监管的持仓或待确认执行，支持应用重启恢复。
      */
     public java.util.List<QuantStrategyPositionState> findUnclosed() {

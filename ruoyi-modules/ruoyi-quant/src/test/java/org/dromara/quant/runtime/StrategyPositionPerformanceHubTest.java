@@ -16,7 +16,26 @@ class StrategyPositionPerformanceHubTest {
         AutoCloseable subscription = hub.subscribe(11L, first::add);
         hub.subscribe(12L, second::add);
 
-        StrategyPositionPerformanceEvent event = new StrategyPositionPerformanceEvent(11L, 21L, 31L, "cycle", "BTCUSDT", "LONG", null, null, null, null, null, null, null);
+        StrategyPositionPerformanceEvent event = new StrategyPositionPerformanceEvent(
+            11L,          // 1  credentialId
+            21L,          // 2  instanceId
+            31L,          // 3  positionId
+            "cycle",      // 4  positionCycleKey
+            "BTCUSDT",    // 5  symbol
+            "KlineSlope", // 6  pluginCode      ← 原来的 "LONG" 挪走
+            "LONG",       // 7  direction       ← 原来的 null 改成 "LONG"
+            null,         // 8  entryPrice
+            null,         // 9  initialPositionQty
+            null,         // 10 initialMargin
+            null,         // 11 highestPriceSinceEntry
+            null,         // 12 lowestPriceSinceEntry
+            null,         // 13 maximumReturnRate
+            null,         // 14 highestStep
+            null,         // 15 confirmedProtectionStep
+            null,         // 16 frozenLeverage
+            null,         // 17 ladderMaximumReturnRate
+            null          // 18 updatedAt
+        );
         hub.publish(event);
         subscription.close();
         hub.publish(event);

@@ -10,6 +10,11 @@ import java.math.BigDecimal;
 @Data
 public class QuantProperties {
     /**
+     * 量化接口时间展示时区，默认北京时间。
+     */
+    private String timeZone = "Asia/Shanghai";
+
+    /**
      * Binance 连接配置。
      */
     private Binance binance = new Binance();
@@ -195,6 +200,10 @@ public class QuantProperties {
          * 每个订阅的最大排队事件数，溢出时显式断线并补偿。
          */
         private int queueCapacity = 2048;
+        /**
+         * 全局行情恢复REST只读请求并发数；所有交易对和周期共享，避免启动恢复完全串行。
+         */
+        private int recoveryReadConcurrency = 5;
         /**
          * Binance事件产生至策略决策允许的最大年龄（毫秒）。
          */

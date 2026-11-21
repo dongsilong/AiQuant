@@ -12,6 +12,13 @@ public interface ExchangeTradingPort {
 
     List<ExchangeGateway.OrderSnapshot> queryOrderHistory(ExchangeGateway.Credential credential, String symbol, ExchangeGateway.TimeRange range, Long limit);
 
+    /**
+     * 完整历史订单核验；无法证明分页覆盖完整时必须抛出异常。
+     */
+    default List<ExchangeGateway.OrderSnapshot> queryOrderHistoryComplete(ExchangeGateway.Credential credential, String symbol, ExchangeGateway.TimeRange range, Long limit) {
+        throw new UnsupportedOperationException("交易所网关未实现完整历史订单核验");
+    }
+
     List<ExchangeGateway.TradeSnapshot> queryTrades(ExchangeGateway.Credential credential, String symbol, ExchangeGateway.TimeRange range);
 
     List<ExchangeGateway.TradeSnapshot> queryTradesByOrder(ExchangeGateway.Credential credential, String symbol, Long orderId, ExchangeGateway.TimeRange range, Long limit);
@@ -51,11 +58,22 @@ public interface ExchangeTradingPort {
     class ExchangeRequestException extends IllegalStateException {
         private final Integer httpStatus;
         private final Integer code;
+        private final String exceptionType;
+        private final String rootCauseType;
 
         public ExchangeRequestException(String stage, Integer httpStatus, Integer code, String message) {
-            super("stage=" + stage + " httpStatus=" + httpStatus + " binanceCode=" + code + " msg=" + sanitize(message));
+            this(stage, httpStatus, code, message, null, null);
+        }
+
+        public ExchangeRequestException(String stage, Integer httpStatus, Integer code, String message, String exceptionType, String rootCauseType) {
+            super("stage=" + stage + " httpStatus=" + httpStatus + " binanceCode=" + code
+                + (exceptionType == null ? "" : " sdkException=" + safeType(exceptionType))
+                + (rootCauseType == null ? "" : " rootCause=" + safeType(rootCauseType))
+                + " msg=" + sanitize(message));
             this.httpStatus = httpStatus;
             this.code = code;
+            this.exceptionType = exceptionType;
+            this.rootCauseType = rootCauseType;
         }
 
         public Integer httpStatus() {
@@ -64,6 +82,19 @@ public interface ExchangeTradingPort {
 
         public Integer code() {
             return code;
+        }
+
+        public String exceptionType() {
+            return exceptionType;
+        }
+
+        public String rootCauseType() {
+            return rootCauseType;
+        }
+
+        private static String safeType(String value) {
+            String safe = value.replaceAll("[^A-Za-z0-9_.$]", "");
+            return safe.substring(0, Math.min(safe.length(), 128));
         }
 
         private static String sanitize(String message) {

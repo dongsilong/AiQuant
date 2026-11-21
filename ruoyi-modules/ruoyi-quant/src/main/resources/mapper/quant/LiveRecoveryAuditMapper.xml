@@ -6,7 +6,8 @@
 VALUES (#{auditId}, #{caseId}, #{actorId}, #{action}, #{evidenceHash},
         #{detailHash}, UTC_TIMESTAMP(6))]]></insert>
     <select id="listByCase" resultType="map" timeout="3"><![CDATA[SELECT audit_id, case_id, actor_id, action,
-       evidence_sha256, detail_hash, created_at
+       evidence_sha256, detail_hash,
+       DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at
 FROM quant_live_recovery_audit
 WHERE case_id=#{caseId}
 ORDER BY created_at ASC, audit_id ASC

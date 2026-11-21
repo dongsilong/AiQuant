@@ -1,10 +1,11 @@
 package org.dromara.quant.market;
 
 import lombok.extern.slf4j.Slf4j;
-import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.AccountPositionSnapshotQuery;
 import org.dromara.quant.risk.OpenCapacityService;
 import org.dromara.quant.util.QuantJsonMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -19,14 +20,22 @@ import java.util.function.BooleanSupplier;
  * 开仓容量检查使用的账户持仓事实，不用于估值或替代订单恢复账本。
  * 完整快照初始化后由私有流增量维护；未知状态禁止新开仓。
  */
-@RequiredArgsConstructor
 @Component
 @Slf4j
 public class AccountPositionCache {
     private static final long AUDIT_INTERVAL = TimeUnit.SECONDS.toNanos(30);
     private static final long MAX_SNAPSHOT_AGE = TimeUnit.SECONDS.toNanos(90);
-    private final ExchangeGateway gateway;
+    private final AccountPositionSnapshotQuery positionSnapshotQuery;
     private final Map<Long, Account> accounts = new ConcurrentHashMap<>();
+
+    @Autowired
+    public AccountPositionCache(AccountPositionSnapshotQuery positionSnapshotQuery) {
+        this.positionSnapshotQuery = positionSnapshotQuery;
+    }
+
+    AccountPositionCache(ExchangeGateway gateway) {
+        this(new AccountPositionSnapshotQuery(gateway));
+    }
 
     private static void seedTimes(Account account, Collection<ExchangeGateway.PositionSnapshot> positions) {
         for (var position : positions) {
@@ -140,8 +149,16 @@ public class AccountPositionCache {
             }
             try {
                 Map<String, Object> json = QuantJsonMapper.readMap(event.rawJson());
-                if (!(json.get("T") instanceof Number time) || time.longValue() <= 0 || !(json.get("a") instanceof Map<?, ?> update) || !(update.get("P") instanceof List<?> positions)) {
-                    throw new IllegalArgumentException("缺少持仓增量字段");
+                if (!(json.get("T") instanceof Number time) || time.longValue() <= 0 || !(json.get("a") instanceof Map<?, ?> update)) {
+                    throw new IllegalArgumentException("缺少账户增量字段");
+                }
+                Object rawPositions = update.get("P");
+                // 资金费率等合法 ACCOUNT_UPDATE 可能只有 B，没有 P；它不改变持仓缓存。
+                if (rawPositions == null) {
+                    return;
+                }
+                if (!(rawPositions instanceof List<?> positions)) {
+                    throw new IllegalArgumentException("持仓增量格式错误");
                 }
                 // 先完整解析，避免半个事件成功、半个事件失败。
                 List<ExchangeGateway.PositionSnapshot> changes = new ArrayList<>();
@@ -220,7 +237,7 @@ public class AccountPositionCache {
             account.loading = loading;
             Thread.ofVirtual().name("quant-position-snapshot").start(() -> {
                 try {
-                    var snapshots = gateway.queryPositions(account.credential, null);
+                    var snapshots = positionSnapshotQuery.query(credentialId, account.credential);
                     if (snapshots == null) {
                         throw new IllegalStateException("持仓快照为空响应");
                     }

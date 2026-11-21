@@ -29,8 +29,10 @@ public class TradingPreparationService {
     private final LiveTradingGate liveGate;
     private final AccountPositionCache positions;
     private final AccountBalanceCache balances;
+    private static final long POSITION_MODE_CACHE_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
     private final Map<String, State> states = new ConcurrentHashMap<>();
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
+    private final Map<Long, PositionModeCache> positionModes = new ConcurrentHashMap<>();
     private volatile LiveOrderDispatcher liveOrderDispatcher;
 
     private static String normalizeMode(String mode) {
@@ -45,6 +47,68 @@ public class TradingPreparationService {
 
     private static String key(Long id, String symbol) {
         return id + ":" + symbol.toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private ExchangeGateway.PositionMode queryPositionMode(Long id, ExchangeGateway.Credential credential) {
+        PositionModeCache cache = positionModes.compute(id, (ignored, current) ->
+            current == null || !current.credential.equals(credential) ? new PositionModeCache(credential) : current);
+        CompletableFuture<ExchangeGateway.PositionMode> future;
+        boolean owner = false;
+        synchronized (cache) {
+            if (cache.mode != null && System.nanoTime() - cache.checkedAt < POSITION_MODE_CACHE_TTL_NANOS) {
+                return cache.mode;
+            }
+            future = cache.loading;
+            if (future == null) {
+                future = new CompletableFuture<>();
+                cache.loading = future;
+                owner = true;
+            }
+        }
+        if (owner) {
+            try {
+                ExchangeGateway.PositionMode mode = Objects.requireNonNull(gateway.queryPositionMode(credential), "Binance position mode is missing");
+                synchronized (cache) {
+                    cache.mode = mode;
+                    cache.checkedAt = System.nanoTime();
+                }
+                future.complete(mode);
+                return mode;
+            } catch (RuntimeException | Error failure) {
+                future.completeExceptionally(failure);
+                throw failure;
+            } finally {
+                synchronized (cache) {
+                    if (cache.loading == future) {
+                        cache.loading = null;
+                    }
+                }
+            }
+        }
+        try {
+            return future.join();
+        } catch (java.util.concurrent.CompletionException failure) {
+            if (failure.getCause() instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (failure.getCause() instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
+    static long retryDelayMillis(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred
+                && deferred.retryAfterMillis() > 0L) {
+                return Math.max(5_000L, deferred.retryAfterMillis());
+            }
+            if (current instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException rateLimited) {
+                return Math.max(5_000L, rateLimited.retryAfterMillis());
+            }
+        }
+        return 5_000L;
     }
 
     /**
@@ -114,7 +178,7 @@ public class TradingPreparationService {
                         }
                         balances.requireSnapshot(state.id);
                         var active = positions.requirePositions(state.id);
-                        var mode = gateway.queryPositionMode(state.credential);
+                        var mode = queryPositionMode(state.id, state.credential);
                         var rule = gateway.queryTradingRule(state.credential, state.symbol);
                         if (mode == null || rule == null || rule.minNotional() == null || rule.minNotional().signum() <= 0 || state.leverage <= 0) {
                             throw new IllegalStateException("交易准备缺少有效模式、规则或杠杆");
@@ -227,7 +291,7 @@ public class TradingPreparationService {
                         if (states.get(key) == state && revision == state.revision) {
                             state.liveFailures = ex instanceof LiveTradingGate.LiveTradingBlockedException blocked ? blocked.getFailures() : null;
                         }
-                        state.retryAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                        state.retryAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retryDelayMillis(ex));
                     }
                     log.debug("交易后台准备未就绪 credentialId={} symbol={} elapsedMillis={} reason={}", state.id, state.symbol,
                         TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), ex.getClass().getSimpleName());
@@ -248,6 +312,7 @@ public class TradingPreparationService {
      * 使账户准备状态失效，要求后续决策重新核验。
      */
     public void invalidate(Long id) {
+        positionModes.remove(id);
         states.values().stream().filter(state -> state.id.equals(id)).forEach(state -> {
             synchronized (state) {
                 state.prepared = null;
@@ -301,6 +366,7 @@ public class TradingPreparationService {
         try {
             var json = QuantJsonMapper.readMap(event.rawJson());
             if ("ACCOUNT_CONFIG_UPDATE".equals(event.eventType())) {
+                positionModes.remove(id);
                 if (json.get("ac") instanceof Map<?, ?> config && config.get("l") instanceof Number leverage) {
                     String symbol = Objects.toString(config.get("s"), "");
                     if (symbol.isBlank()) {
@@ -355,6 +421,17 @@ public class TradingPreparationService {
      * 已校验的交易模式和交易对规则，以及本地有效期限。
      */
     public record Prepared(ExchangeGateway.PositionMode positionMode, ExchangeGateway.SymbolRule rule, long expiresAtNanos) {
+    }
+
+    private static final class PositionModeCache {
+        private final ExchangeGateway.Credential credential;
+        private ExchangeGateway.PositionMode mode;
+        private long checkedAt;
+        private CompletableFuture<ExchangeGateway.PositionMode> loading;
+
+        private PositionModeCache(ExchangeGateway.Credential credential) {
+            this.credential = credential;
+        }
     }
 
     private static final class State {

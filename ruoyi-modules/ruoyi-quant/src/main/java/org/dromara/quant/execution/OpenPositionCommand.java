@@ -29,7 +29,18 @@ import java.math.BigDecimal;
 public record OpenPositionCommand(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol, String side, String type,
                                   BigDecimal quantity, BigDecimal price, String positionSide, String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule,
                                   Integer leverage, String marginMode, ExecutionSafetyContext safety, BigDecimal notional, java.time.Instant validUntil,
-                                  java.time.Instant signalEventTime) {
+                                  java.time.Instant signalEventTime, Long credentialRuntimeVersion) {
+    /**
+     * 兼容原有完整命令构造方式。
+     */
+    public OpenPositionCommand(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol, String side, String type,
+                               BigDecimal quantity, BigDecimal price, String positionSide, String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule,
+                               Integer leverage, String marginMode, ExecutionSafetyContext safety, BigDecimal notional, java.time.Instant validUntil,
+                               java.time.Instant signalEventTime) {
+        this(credentialId, strategyId, strategyInstanceId, credential, symbol, side, type, quantity, price, positionSide, idempotencyKey, runMode, symbolRule, leverage,
+            marginMode, safety, notional, validUntil, signalEventTime, null);
+    }
+
     /**
      * 保留已有命令构造方式；事件时间仅用于诊断，不重新生成行情时间。
      */
@@ -37,7 +48,7 @@ public record OpenPositionCommand(Long credentialId, Long strategyId, Long strat
                                BigDecimal quantity, BigDecimal price, String positionSide, String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule,
                                Integer leverage, String marginMode, ExecutionSafetyContext safety, BigDecimal notional, java.time.Instant validUntil) {
         this(credentialId, strategyId, strategyInstanceId, credential, symbol, side, type, quantity, price, positionSide, idempotencyKey, runMode, symbolRule, leverage,
-            marginMode, safety, notional, validUntil, null);
+            marginMode, safety, notional, validUntil, null, null);
     }
 
     /**

@@ -3,7 +3,9 @@
 <mapper namespace="org.dromara.quant.execution.mapper.QuantExecutionRecordMapper">
     <update id="markAccepted" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET execution_status='CONFIRMED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
-    exchange_order_status=#{exchangeStatus}, updated_at=#{now}
+    exchange_order_status=#{exchangeStatus},
+    error_message=CASE WHEN LEFT(error_message, 25) = 'VERIFIED_ABSENCE_PENDING:' THEN NULL ELSE error_message END,
+    updated_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN')
   AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
   AND #{orderId} IS NOT NULL AND #{orderId}>0]]></update>
@@ -13,9 +15,40 @@ WHERE id=#{id} AND execution_status='PENDING']]></update>
     <update id="markUnknownIfUnresolved" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET execution_status='UNKNOWN', error_message=#{message}, updated_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN')]]></update>
+    <update id="recordVerifiedAbsence" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='UNKNOWN', error_message=#{message}, updated_at=#{now}
+WHERE id=#{id} AND credential_id=#{credentialId} AND symbol=#{symbol}
+  AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND execution_status IN ('PENDING','UNKNOWN') AND operation_type='OPEN'
+  AND exchange_order_id IS NULL]]></update>
+    <update id="markNotExecutedAfterVerifiedAbsence" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='FAILED', error_message=#{message}, updated_at=#{now}
+WHERE id=#{id} AND credential_id=#{credentialId} AND symbol=#{symbol}
+  AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND execution_status='UNKNOWN' AND operation_type='OPEN'
+  AND exchange_order_id IS NULL
+  AND LEFT(error_message, 25) = 'VERIFIED_ABSENCE_PENDING:'
+  AND updated_at <= DATE_SUB(#{now}, INTERVAL 1 MINUTE)]]></update>
+    <update id="recordVerifiedCloseAbsence" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='UNKNOWN', error_message=#{message}, updated_at=#{now}
+WHERE id=#{id} AND credential_id=#{credentialId} AND strategy_instance_id=#{strategyInstanceId}
+  AND symbol=#{symbol} AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND execution_status='UNKNOWN' AND operation_type='CLOSE'
+  AND exchange_order_id IS NULL AND (exchange_order_status IS NULL OR exchange_order_status='')
+  AND (error_message IS NULL OR LEFT(error_message, 25) <> 'VERIFIED_ABSENCE_PENDING:')]]></update>
+    <update id="markCloseNotExecutedAfterVerifiedAbsence" timeout="3"><![CDATA[UPDATE quant_execution_record
+SET execution_status='FAILED', error_message=#{message}, updated_at=#{now}
+WHERE id=#{id} AND credential_id=#{credentialId} AND strategy_instance_id=#{strategyInstanceId}
+  AND symbol=#{symbol} AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND execution_status='UNKNOWN' AND operation_type='CLOSE'
+  AND exchange_order_id IS NULL AND (exchange_order_status IS NULL OR exchange_order_status='')
+  AND LEFT(error_message, 25) = 'VERIFIED_ABSENCE_PENDING:'
+  AND updated_at <= DATE_SUB(#{now}, INTERVAL 1 MINUTE)]]></update>
     <update id="markRecoveredAfterFact" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET execution_status='RECOVERED', exchange_order_id=COALESCE(#{orderId},exchange_order_id),
-    exchange_order_status=COALESCE(#{exchangeStatus},exchange_order_status), updated_at=#{now}
+    exchange_order_status=COALESCE(#{exchangeStatus},exchange_order_status),
+    error_message=CASE WHEN LEFT(error_message, 25) = 'VERIFIED_ABSENCE_PENDING:' THEN NULL ELSE error_message END,
+    updated_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN','CONFIRMED','RECOVERED')
   AND (exchange_order_id IS NULL OR exchange_order_id=#{orderId})
   AND (
@@ -32,7 +65,7 @@ WHERE id=#{id} AND operation_type='CANCEL'
   AND exchange_order_id=#{orderId}]]></update>
     <update id="recordRecoveryAttempt" timeout="3"><![CDATA[UPDATE quant_execution_record
 SET recovery_attempts=COALESCE(recovery_attempts,0)+1,
-    last_recovery_at=#{now}, updated_at=#{now}
+    last_recovery_at=#{now}
 WHERE id=#{id} AND execution_status IN ('PENDING','UNKNOWN','CONFIRMED')]]></update>
     <select id="strandedRecoveredDispatches" resultType="org.dromara.quant.execution.domain.QuantExecutionRecord" timeout="3"><![CDATA[SELECT e.id, e.credential_id AS credentialId,
        e.symbol, e.idempotency_key AS idempotencyKey,

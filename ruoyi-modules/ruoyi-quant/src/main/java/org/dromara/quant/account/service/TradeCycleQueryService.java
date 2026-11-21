@@ -7,9 +7,11 @@ import org.dromara.common.mybatis.core.page.PageQuery;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.account.domain.vo.TradeCyclePageVo;
 import org.dromara.quant.account.mapper.TradeCycleMapper;
+import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -24,12 +26,14 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class TradeCycleQueryService {
-    private static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Shanghai");
+    @Autowired
+    private QuantProperties quantProperties;
 
     private final QuantCredentialMapper credentialMapper;
     private final TradeCycleMapper cycleMapper;
 
-    public TradeCyclePageVo page(PageQuery query, Long credentialId, String symbol, String from, String to) {
+    public TradeCyclePageVo page(PageQuery query, Long credentialId, String symbol, String from, String to,
+                                 String sortField, String sortOrder) {
         Long userId = LoginHelper.getUserId();
         if (userId == null) {
             throw new ServiceException("请先登录后查询交易记录");
@@ -55,6 +59,15 @@ public class TradeCycleQueryService {
         if (normalizedSymbol != null && !normalizedSymbol.matches("[A-Z0-9]{2,32}")) {
             throw new ServiceException("交易对格式无效");
         }
+        String normalizedSortField = sortField == null || sortField.isBlank() ? "openedAt" : sortField;
+        if (!"openedAt".equals(normalizedSortField) && !"closedAt".equals(normalizedSortField)) {
+            throw new ServiceException("不支持的交易记录排序字段");
+        }
+        String normalizedSortOrder = sortOrder == null || sortOrder.isBlank() ? "DESC" : sortOrder.toUpperCase(Locale.ROOT);
+        if (!"ASC".equals(normalizedSortOrder) && !"DESC".equals(normalizedSortOrder)) {
+            throw new ServiceException("交易记录排序方向无效");
+        }
+
         LocalDateTime start = boundary(from, false);
         LocalDateTime end = boundary(to, true);
         if (start != null && end != null && !start.isBefore(end)) {
@@ -68,18 +81,18 @@ public class TradeCycleQueryService {
         int inferredCount = cycleMapper.countInferredCycles(credentialIds, normalizedSymbol, start, end);
         long offset = (long) (pageNum - 1) * pageSize;
         List<Map<String, Object>> rows = total == 0 ? List.of()
-            : cycleMapper.selectCycles(credentialIds, normalizedSymbol, start, end, offset, pageSize);
+            : cycleMapper.selectCycles(credentialIds, normalizedSymbol, start, end, normalizedSortField, normalizedSortOrder, offset, pageSize);
         return new TradeCyclePageVo(rows == null ? List.of() : rows, total, incompleteCount, inferredCount);
     }
 
-    private static LocalDateTime boundary(String date, boolean nextDay) {
+    private LocalDateTime boundary(String date, boolean nextDay) {
         if (date == null || date.isBlank()) {
             return null;
         }
         try {
             LocalDate parsed = LocalDate.parse(date);
             return LocalDateTime.ofInstant(
-                (nextDay ? parsed.plusDays(1) : parsed).atStartOfDay(DISPLAY_ZONE).toInstant(), ZoneOffset.UTC);
+                (nextDay ? parsed.plusDays(1) : parsed).atStartOfDay(ZoneId.of(quantProperties.getTimeZone())).toInstant(), ZoneOffset.UTC);
         } catch (java.time.DateTimeException ex) {
             throw new ServiceException("日期格式应为 yyyy-MM-dd");
         }

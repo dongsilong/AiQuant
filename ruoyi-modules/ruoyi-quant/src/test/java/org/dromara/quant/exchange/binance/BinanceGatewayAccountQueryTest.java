@@ -220,4 +220,42 @@ class BinanceGatewayAccountQueryTest {
         }
     }
 
+
+    @Test
+    void queriesTradingSettingsForUnicodeSymbolAndEncodesItInSignedRequest() throws IOException {
+        AtomicReference<String> rawQuery = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            String body;
+            if (path.endsWith("/time")) {
+                body = "{\"serverTime\":" + System.currentTimeMillis() + "}";
+            } else {
+                rawQuery.set(exchange.getRequestURI().getRawQuery());
+                body = "[{\"symbol\":\"牛来USDT\",\"leverage\":\"5\",\"isolated\":true}]";
+            }
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var properties = new QuantProperties();
+            properties.getBinance().setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
+            var gateway = new BinanceGatewayAdapter(properties);
+            var credential = new ExchangeGateway.Credential("test-key", "test-secret", "HMAC", "LIVE");
+
+            var settings = gateway.querySymbolTradingSettings(credential, "牛来USDT");
+
+            assertEquals("牛来USDT", settings.symbol());
+            assertEquals("ISOLATED", settings.marginMode());
+            assertEquals(5, settings.leverage());
+            assertTrue(rawQuery.get().contains("%E7%89%9B%E6%9D%A5USDT"), rawQuery.get());
+            assertTrue(java.net.URLDecoder.decode(rawQuery.get(), StandardCharsets.UTF_8).contains("symbol=牛来USDT"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
 }

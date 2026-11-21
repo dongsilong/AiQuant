@@ -149,10 +149,11 @@ class UserDataStreamHubTest {
             });
             var fill = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.now(), "{\"e\":\"ORDER_TRADE_UPDATE\",\"o\":{\"X\":\"FILLED\"}}");
             receiver.get().accept(fill);
-            verify(positionCache).onEvent(72L, fill);
-            verify(balanceCache).onEvent(72L, fill);
-            verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, fill);
-            verify(preparation).onEvent(72L, fill);
+            var eventOrder = inOrder(tradeNotifications, positionCache, balanceCache, preparation);
+            eventOrder.verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, fill);
+            eventOrder.verify(positionCache).onEvent(72L, fill);
+            eventOrder.verify(balanceCache).onEvent(72L, fill);
+            eventOrder.verify(preparation).onEvent(72L, fill);
             var accountUpdate = new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.now(),
                 "{\"e\":\"ACCOUNT_UPDATE\",\"a\":{\"m\":\"ORDER\"}}");
             receiver.get().accept(accountUpdate);
@@ -199,6 +200,34 @@ class UserDataStreamHubTest {
             verify(cache, never()).remove(1L);
             second.close();
             verify(cache).remove(1L);
+        } finally {
+            hub.destroy();
+        }
+    }
+
+    @Test
+    void testnetHealthCheckRecoversRecentCloseSnapshots() {
+        var gateway = mock(ExchangeGateway.class);
+        var execution = mock(TradeExecutionApplicationService.class);
+        var credential = new QuantCredential();
+        credential.setId(74L);
+        credential.setRunMode("TESTNET");
+        var exchange = new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET");
+        var session = mock(ExchangeGateway.UserDataStreamSession.class);
+        when(execution.toCredential(credential)).thenReturn(exchange);
+        when(gateway.subscribeUserData(eq(exchange), any())).thenReturn(session);
+        when(session.isConnected()).thenReturn(true);
+        var tradeNotifications = mock(org.dromara.quant.notification.QuantTradeNotificationService.class);
+        var hub = new UserDataStreamHub(gateway, execution, mock(AccountPositionCache.class),
+            mock(AccountBalanceCache.class), mock(org.dromara.quant.execution.TradingPreparationService.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(hub, "tradeNotifications", tradeNotifications);
+        try {
+            hub.subscribe(credential, ignored -> {
+            });
+
+            hub.healthCheck();
+
+            verify(tradeNotifications).recoverRecentCloseSnapshots(74L, exchange);
         } finally {
             hub.destroy();
         }

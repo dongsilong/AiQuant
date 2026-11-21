@@ -13,6 +13,37 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BinanceGatewayAdapterTest {
     @Test
+    void mapsKnownUsdMarginedFuturesEndpointWeights() {
+        assertEquals(1, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/openAlgoOrders?symbol=BTCUSDT").build()));
+        assertEquals(40, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/openAlgoOrders").build()));
+        assertEquals(5, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/allAlgoOrders?symbol=BTCUSDT").build()));
+        assertEquals(5, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v3/positionRisk").build()));
+        assertEquals(1, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/order").build()));
+        assertEquals(20, BinanceGatewayAdapter.restRequestWeight(new okhttp3.Request.Builder()
+            .url("https://fapi.binance.com/fapi/v1/aggTrades?symbol=BTCUSDT").build()));
+    }
+
+    @Test
+    void treatsZeroAlgoTriggerTimeAsUnavailable() {
+        assertNull(BinanceGatewayAdapter.instantPositiveNullable(null));
+        assertNull(BinanceGatewayAdapter.instantPositiveNullable(0L));
+        assertEquals(Instant.ofEpochMilli(1_760_760_000_500L),
+            BinanceGatewayAdapter.instantPositiveNullable(1_760_760_000_500L));
+    }
+
+    @Test
+    void preservesMissingExchangeOrderCreateTimeAsNull() {
+        assertNull(BinanceGatewayAdapter.instantNullable(null));
+        Instant createTime = Instant.parse("2026-10-07T15:51:00Z");
+        assertEquals(createTime, BinanceGatewayAdapter.instantNullable(createTime.toEpochMilli()));
+    }
+
+    @Test
     void usesCachedClockOffsetDuringTheThirtySecondToFiveMinuteRefreshWindow() {
         long now = 1_800_000_000_000L;
 
@@ -40,6 +71,49 @@ class BinanceGatewayAdapterTest {
         assertFalse(BinanceGatewayAdapter.isProtectionHistoryAbsenceProvable(now - threeDays - 1, now));
         assertFalse(BinanceGatewayAdapter.isProtectionHistoryAbsenceProvable(now + 1, now));
         assertFalse(BinanceGatewayAdapter.isProtectionHistoryAbsenceProvable(0, now));
+    }
+
+    @Test
+    void splitsFullOrderHistoryPagesUntilTheWindowIsComplete() {
+        var first = new ExchangeGateway.OrderSnapshot("BTCUSDT", 1L, "a", "BUY", "LIMIT", "FILLED",
+            java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, Instant.EPOCH,
+            java.math.BigDecimal.ONE, "LONG", false, Instant.ofEpochMilli(1), false);
+        var second = new ExchangeGateway.OrderSnapshot("BTCUSDT", 2L, "b", "BUY", "LIMIT", "FILLED",
+            java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, Instant.EPOCH,
+            java.math.BigDecimal.ONE, "LONG", false, Instant.ofEpochMilli(2), false);
+        var result = BinanceGatewayAdapter.collectCompleteOrderHistory(0L, 2L, 1000, (from, to) -> {
+            if (from == 0L && to == 2L) return java.util.Collections.nCopies(1000, first);
+            if (from == 0L && to == 1L) return List.of(first);
+            if (from == 2L && to == 2L) return List.of(second);
+            return List.of();
+        });
+        assertTrue(result.complete());
+        assertEquals(List.of(1L, 2L), result.orders().stream().map(ExchangeGateway.OrderSnapshot::orderId).toList());
+    }
+
+    @Test
+    void rejectsOrderHistoryWhenAOneMillisecondWindowStillHitsThePageLimit() {
+        var order = new ExchangeGateway.OrderSnapshot("BTCUSDT", 1L, "a", "BUY", "LIMIT", "FILLED",
+            java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, Instant.EPOCH,
+            java.math.BigDecimal.ONE, "LONG", false, Instant.EPOCH, false);
+        var result = BinanceGatewayAdapter.collectCompleteOrderHistory(1L, 1L, 1000, (from, to) -> java.util.Collections.nCopies(1000, order));
+        assertFalse(result.complete());
+        assertTrue(result.orders().isEmpty());
+    }
+
+    @Test
+    void rejectsOrderHistoryRowsWithoutCreateTimeOrWithDuplicateOrderIds() {
+        var missingTime = new ExchangeGateway.OrderSnapshot("BTCUSDT", 1L, "a", "BUY", "LIMIT", "NEW",
+            java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ZERO, Instant.EPOCH);
+        assertFalse(BinanceGatewayAdapter.collectCompleteOrderHistory(0L, 10L, 1000, (from, to) -> List.of(missingTime)).complete());
+
+        var first = new ExchangeGateway.OrderSnapshot("BTCUSDT", 1L, "a", "BUY", "LIMIT", "NEW",
+            java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ZERO, Instant.EPOCH,
+            java.math.BigDecimal.ONE, "LONG", false, Instant.ofEpochMilli(1), false);
+        var duplicate = new ExchangeGateway.OrderSnapshot("BTCUSDT", 1L, "b", "BUY", "LIMIT", "NEW",
+            java.math.BigDecimal.ONE, java.math.BigDecimal.ONE, java.math.BigDecimal.ZERO, Instant.EPOCH,
+            java.math.BigDecimal.ONE, "LONG", false, Instant.ofEpochMilli(2), false);
+        assertFalse(BinanceGatewayAdapter.collectCompleteOrderHistory(0L, 10L, 1000, (from, to) -> List.of(first, duplicate)).complete());
     }
 
     @Test
@@ -97,6 +171,21 @@ class BinanceGatewayAdapterTest {
     }
 
     @Test
+    void preservesSafeTransportExceptionTypesWithoutLeakingExceptionMessages() {
+        var failure = new IllegalStateException("authorization=do-not-log", new java.io.IOException("secret=do-not-log"));
+        var adapter = new BinanceGatewayAdapter(new org.dromara.quant.config.QuantProperties());
+
+        RuntimeException mapped = org.springframework.test.util.ReflectionTestUtils.invokeMethod(adapter, "requestFailure", "PLACE_ORDER", failure);
+
+        var diagnostic = assertInstanceOf(org.dromara.quant.exchange.ExchangeTradingPort.ExchangeRequestException.class, mapped);
+        assertEquals(IllegalStateException.class.getName(), diagnostic.exceptionType());
+        assertEquals(java.io.IOException.class.getName(), diagnostic.rootCauseType());
+        assertTrue(diagnostic.getMessage().contains("sdkException=java.lang.IllegalStateException"));
+        assertTrue(diagnostic.getMessage().contains("rootCause=java.io.IOException"));
+        assertFalse(diagnostic.getMessage().contains("do-not-log"));
+    }
+
+    @Test
     void classifiesBinanceInvalidSymbolResponseFromWrappedSdkException() {
         ApiException invalidSymbol = new ApiException(400, "Bad Request", java.util.Map.of(), "{\"code\":-1121,\"msg\":\"Invalid symbol.\"}");
         ApiException otherError = new ApiException(400, "Bad Request", java.util.Map.of(), "{\"code\":-1003,\"msg\":\"Too many requests.\"}");
@@ -143,7 +232,8 @@ class BinanceGatewayAdapterTest {
             .algoStatus("CANCELED").updateTime(1_760_760_000_000L);
         QueryAllAlgoOrdersResponseInner match = new QueryAllAlgoOrdersResponseInner().symbol("BTCUSDT").algoId(12L).clientAlgoId("QFTP_exact")
             .orderType("TAKE_PROFIT_MARKET").side("SELL").positionSide("BOTH").quantity("5").triggerPrice("100")
-            .algoStatus("CANCELED").updateTime(1_760_760_001_000L).reduceOnly(true).closePosition(false);
+            .algoStatus("CANCELED").createTime(1_760_759_990_000L).updateTime(1_760_760_001_000L).triggerTime(1_760_760_000_500L)
+            .reduceOnly(true).closePosition(false);
 
         var snapshot = BinanceGatewayAdapter.findExactAlgoHistory(List.of(other, match), "BTCUSDT", null, "QFTP_exact");
 
@@ -152,6 +242,8 @@ class BinanceGatewayAdapterTest {
         assertEquals("QFTP_exact", snapshot.clientAlgoId());
         assertEquals("CANCELED", snapshot.status());
         assertEquals(0, snapshot.executedQuantity().compareTo(java.math.BigDecimal.ZERO));
+        assertEquals(Instant.ofEpochMilli(1_760_759_990_000L), snapshot.createTime());
+        assertEquals(Instant.ofEpochMilli(1_760_760_000_500L), snapshot.triggerTime());
         assertNull(BinanceGatewayAdapter.findExactAlgoHistory(List.of(match), "BTCUSDT", null, "QFTP_other"));
     }
 
@@ -265,6 +357,32 @@ class BinanceGatewayAdapterTest {
 
         assertEquals("ok", result);
         assertEquals(3, attempts.get());
+    }
+
+    @Test
+    void retriesOkHttpInterruptedIoTimeout() {
+        var attempts = new java.util.concurrent.atomic.AtomicInteger();
+        String result = BinanceGatewayAdapter.executeWithNetworkRetries(() -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new IllegalStateException("SDK transport timeout",
+                    new java.io.InterruptedIOException("timeout"));
+            }
+            return "ok";
+        }, RestRequestScheduler.Kind.ACCOUNT, "LIVE");
+
+        assertEquals("ok", result);
+        assertEquals(2, attempts.get());
+    }
+
+    @Test
+    void doesNotRetryWhenCallingThreadIsInterrupted() {
+        Thread.currentThread().interrupt();
+        try {
+            assertFalse(BinanceGatewayAdapter.isTransientNetworkFailure(
+                new java.io.InterruptedIOException("timeout")));
+        } finally {
+            Thread.interrupted();
+        }
     }
 
     @Test

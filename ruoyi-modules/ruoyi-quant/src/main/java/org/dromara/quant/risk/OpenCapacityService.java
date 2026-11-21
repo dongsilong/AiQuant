@@ -50,6 +50,11 @@ public class OpenCapacityService {
         return id != null && value instanceof Number n && n.longValue() == id;
     }
 
+    private static boolean isTrue(Object value) {
+        return Boolean.TRUE.equals(value) || value instanceof Number number && number.intValue() != 0
+            || "true".equalsIgnoreCase(Objects.toString(value, ""));
+    }
+
     private static String key(Object symbol, Object side) {
         return Objects.toString(symbol, "").toUpperCase(Locale.ROOT) + ":" + Objects.toString(side, "").toUpperCase(Locale.ROOT);
     }
@@ -183,7 +188,9 @@ public class OpenCapacityService {
                 boolean terminal = Set.of("CONFIRMED", "RECOVERED").contains(executionStatus) && Set.of("FILLED", "CANCELED", "EXPIRED", "REJECTED").contains(orderStatus);
                 java.time.LocalDateTime updated = localTime(slot.get("state_updated"));
                 java.time.LocalDateTime created = localTime(slot.get("created_at"));
-                boolean closed = "CLOSED".equals(slot.get("state_status")) && updated != null && created != null && !updated.isBefore(created);
+                boolean closed = "CLOSED".equals(slot.get("state_status")) && slot.get("state_pending_action") == null
+                    && !isTrue(slot.get("state_recovery_required")) && !isTrue(slot.get("state_unsafe_recovery"))
+                    && updated != null && created != null && !updated.isBefore(created);
                 // 必须同时确认执行终态、持仓归零和此次开仓之后的关闭事实；不能因初始空仓释放名额。
                 if (failed || terminal && closed && !accountKeys.contains(positionKey)) {
                     releasable.add(Objects.toString(slot.get("idempotency_key")));

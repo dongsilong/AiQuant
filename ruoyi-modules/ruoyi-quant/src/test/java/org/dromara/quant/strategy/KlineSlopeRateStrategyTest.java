@@ -48,6 +48,18 @@ class KlineSlopeRateStrategyTest {
         assertEquals(EntrySignal.Direction.SHORT, signal.direction());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "LONG,101.2,101.2",
+        "SHORT,99.0,99.0",
+        "SHORT,99.2,99.0"
+    })
+    void oneMinuteMaDirectionFilterRejectsEqualOrOppositeAlignment(String direction, String ma5, String ma7) {
+        StrategyContext c = context(null, null, new BigDecimal("100"),
+            "LONG".equals(direction) ? new BigDecimal("102") : new BigDecimal("98"), false, null, null);
+        assertTrue(strategy.evaluateEntry(c, Map.of(), new BigDecimal(ma5), new BigDecimal(ma7)).isEmpty());
+    }
+
     @Test
     void oneMinuteMaDirectionFilterWaitsForSevenClosedCandlesUnlessDisabled() {
         StrategyContext c = context(null, null, new BigDecimal("100"), new BigDecimal("102"), false, null, null);
@@ -204,6 +216,44 @@ class KlineSlopeRateStrategyTest {
         assertEquals(KlineSlopeRateStrategy.EXIT_LOCAL_STOP, strategy.evaluateExit(c, Map.of()).getFirst().type());
         var mirror = strategy.evaluateProtection(c, Map.of()).stream().filter(p -> p.type().equals("LOCAL_STOP")).findFirst().orElseThrow();
         assertEquals(0, stop.compareTo(mirror.triggerPrice()));
+    }
+
+    @Test
+    void markPriceRoiConversionUsesMarkNotionalFormulaForBothDirections() {
+        assertEquals(0, new BigDecimal("102.0408163265306122").compareTo(
+            KlineSlopeRateStrategy.priceForMarkReturn(new BigDecimal("100"), "LONG", new BigDecimal("0.20"), 10)));
+        assertEquals(0, new BigDecimal("98.0392156862745098").compareTo(
+            KlineSlopeRateStrategy.priceForMarkReturn(new BigDecimal("100"), "SHORT", new BigDecimal("0.20"), 10)));
+        assertEquals(0, new BigDecimal("99.5024875621890547").compareTo(
+            KlineSlopeRateStrategy.priceForMarkReturn(new BigDecimal("100"), "LONG", new BigDecimal("-0.05"), 10)));
+    }
+
+    @Test
+    void v3ProtectionSignalsUseMarkPriceRoiWithoutChangingContractPriceLadder() {
+        StrategyContext context = context("LONG", new BigDecimal("100"), null, new BigDecimal("101"), false, new BigDecimal("101"), null);
+        Map<String, Object> params = Map.of(
+            KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY, 3,
+            "firstProfitTakingRate", "0.10",
+            "stepRatio", "0.10"
+        );
+        var signals = strategy.evaluateProtection(context, params);
+        var first = signals.stream().filter(signal -> signal.type().equals("FIRST_TP")).findFirst().orElseThrow();
+        var step = signals.stream().filter(signal -> signal.type().equals("STEP_TP")).findFirst().orElseThrow();
+        assertEquals(0, new BigDecimal("101.0101010101010101").compareTo(first.triggerPrice()));
+        assertEquals(0, new BigDecimal("100").compareTo(step.triggerPrice()));
+        assertEquals(1, step.stepIndex());
+    }
+
+    @Test
+    void markPricePeakDoesNotAdvanceContractPriceLadder() {
+        StrategyContext context = new StrategyContext("BTCUSDT", "LONG", new BigDecimal("100"), new BigDecimal("100"),
+            new BigDecimal("100"), new BigDecimal("100"), Instant.now(), false, Instant.now(), BigDecimal.ONE, BigDecimal.ONE,
+            BigDecimal.TEN, 10, new BigDecimal("100"), new BigDecimal("100"), false, 0, new BigDecimal("120"));
+        assertEquals(0, KlineSlopeRateStrategy.reachedStep(context, Map.of("stepRatio", "0.10")));
+        assertTrue(strategy.evaluateProtection(context, Map.of(
+            KlineSlopeRateStrategy.PROTECTION_POLICY_VERSION_KEY, 3,
+            "stepRatio", "0.10"
+        )).stream().noneMatch(signal -> signal.type().equals("STEP_TP")));
     }
 
     private StrategyContext context(String direction, BigDecimal entry, BigDecimal previousOpen, BigDecimal current, boolean firstTp, BigDecimal high, BigDecimal low) {

@@ -176,9 +176,24 @@ public class LiveOrderDispatcher {
     }
 
     /**
-     * Recover a CONFIG_SETTINGS ticket only after an independent exchange query
-     * proves that both persisted desired settings are already active. The exact
-     * durable intent, synthetic ticket identity and active guard must all match.
+     * Check the immutable account-symbol configuration intent before issuing any
+     * recovery write to Binance. A ticket alone is not authorization to change settings.
+     */
+    public boolean matchesConfigurationIntent(Long credentialId, String symbol, String marginMode, int leverage) {
+        String normalizedSymbol = symbol == null ? null : symbol.toUpperCase(Locale.ROOT);
+        String normalizedMode = marginMode == null ? null : marginMode.toUpperCase(Locale.ROOT);
+        if (credentialId == null || credentialId <= 0 || normalizedSymbol == null || normalizedSymbol.isBlank()
+            || normalizedMode == null || !java.util.Set.of("ISOLATED", "CROSSED").contains(normalizedMode)
+            || leverage < 1 || leverage > 125) {
+            return false;
+        }
+        return mapper.matchingSettingsIntent(credentialId, normalizedSymbol, normalizedMode, leverage) == 1L;
+    }
+
+    /**
+     * Complete a CONFIG_SETTINGS ticket only after the caller has reconciled and
+     * independently verified both persisted desired settings. The exact durable
+     * intent, synthetic ticket identity and active guard must all match.
      */
     public boolean recoveredConfigurationFromExchange(Long credentialId, String symbol, String key, String clientOrderId, String marginMode, int leverage) {
         String normalizedSymbol = symbol == null ? null : symbol.toUpperCase(Locale.ROOT);
@@ -201,6 +216,28 @@ public class LiveOrderDispatcher {
     }
 
     /**
+     * Release an obsolete protection-create ticket only after the protection service
+     * has independently verified the local cycle and exchange account are flat and idle.
+     * This records business obsolescence, not a claim that Binance rejected or canceled it.
+     */
+    public boolean supersedeProtectionCreate(Long credentialId, String symbol, String key, String clientOrderId) {
+        if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank()
+            || key == null || key.isBlank() || clientOrderId == null || clientOrderId.isBlank()) {
+            throw new IllegalArgumentException("Cannot supersede a protection ticket without exact identity");
+        }
+        String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (mapper.supersedeProtectionCreate(credentialId, normalizedSymbol, key, clientOrderId) != 1) {
+                return false;
+            }
+            if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                throw new IllegalStateException("Superseded protection ticket but durable dispatch guard mismatch");
+            }
+            return true;
+        }));
+    }
+
+    /**
      * Reserved for a provably NOT-SENT result. All timeouts are UNKNOWN instead.
      */
     public void notSent(Ticket ticket) {
@@ -209,6 +246,50 @@ public class LiveOrderDispatcher {
                 throw new IllegalStateException("LIVE 未发送票据无法安全解除调度占用");
             }
         });
+    }
+
+    /**
+     * 仅在两次完整交易所核验均确认 OPEN 不存在后，终结对应 LIVE 票据。
+     * 没有对应票据且账户交易对锁也未被该幂等键占用时，视为无需释放；
+     * 孤立锁、身份不匹配或其他状态均保持阻断。
+     */
+    public boolean verifiedNotExecuted(Long credentialId, String symbol, String key, String clientOrderId, Long instanceId,
+                                        java.util.function.BooleanSupplier finalizeExecution) {
+        if (credentialId == null || symbol == null || symbol.isBlank() || key == null || key.isBlank()
+            || clientOrderId == null || clientOrderId.isBlank() || instanceId == null || finalizeExecution == null) {
+            throw new IllegalArgumentException("Cannot verify a LIVE dispatch ticket without exact strategy identity");
+        }
+        String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            int updated = mapper.markNotExecuted(credentialId, normalizedSymbol, key, clientOrderId, instanceId);
+            if (updated == 1) {
+                if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                    throw new IllegalStateException("已核实 OPEN 未执行，但 LIVE 账户交易对锁未能安全释放");
+                }
+            } else {
+                String ticketStatus = mapper.notExecutedTicketStatus(credentialId, normalizedSymbol, key, clientOrderId, instanceId);
+                if ("VERIFIED_NOT_EXECUTED".equalsIgnoreCase(ticketStatus)) {
+                    java.util.Map<String, Object> active = mapper.activeDispatch(credentialId, normalizedSymbol);
+                    if (active != null && key.equals(stringValue(active, "dispatchKey"))
+                        && mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                        throw new IllegalStateException("已终结 OPEN 未执行票据，但残留账户交易对锁无法释放");
+                    }
+                } else {
+                    if (ticketStatus != null) {
+                        return false;
+                    }
+                    java.util.Map<String, Object> active = mapper.activeDispatch(credentialId, normalizedSymbol);
+                    if (active != null && key.equals(stringValue(active, "dispatchKey"))) {
+                        return false;
+                    }
+                }
+            }
+            if (!finalizeExecution.getAsBoolean()) {
+                status.setRollbackOnly();
+                return false;
+            }
+            return true;
+        }));
     }
 
     /**

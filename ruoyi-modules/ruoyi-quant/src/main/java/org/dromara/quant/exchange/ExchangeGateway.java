@@ -102,9 +102,19 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param kline     行情事件携带的 K 线快照
      * @param eventTime 当前行情事件时间
      */
-    record MarketEvent(String type, String symbol, String interval, BigDecimal price, Kline kline, Instant eventTime, Long sequenceId, Instant receivedAt, boolean replay) {
+    record MarketEvent(String type, String symbol, String interval, BigDecimal price, Kline kline, Instant eventTime, Long sequenceId, Instant receivedAt, boolean replay,
+                       BigDecimal ma5, BigDecimal ma7, String maTrend, boolean maReady) {
+        public MarketEvent(String type, String symbol, String interval, BigDecimal price, Kline kline, Instant eventTime, Long sequenceId, Instant receivedAt,
+                           boolean replay) {
+            this(type, symbol, interval, price, kline, eventTime, sequenceId, receivedAt, replay, null, null, null, false);
+        }
+
         public MarketEvent(String type, String symbol, String interval, BigDecimal price, Kline kline, Instant eventTime) {
-            this(type, symbol, interval, price, kline, eventTime, null, Instant.now(), false);
+            this(type, symbol, interval, price, kline, eventTime, null, Instant.now(), false, null, null, null, false);
+        }
+
+        public MarketEvent withOneMinuteMa(BigDecimal ma5, BigDecimal ma7, String maTrend, boolean maReady) {
+            return new MarketEvent(type, symbol, interval, price, kline, eventTime, sequenceId, receivedAt, replay, ma5, ma7, maTrend, maReady);
         }
     }
 
@@ -319,9 +329,14 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param stopPrice     条件单触发价格
      * @param clientOrderId 客户端订单号
      * @param live          是否真正向交易所发送有交易副作用的请求
+     * @param workingType   条件单触发价格类型：MARK_PRICE 或 CONTRACT_PRICE
      */
     record ProtectionOrderRequest(Credential credential, String symbol, String side, String positionSide, String orderType, BigDecimal quantity, BigDecimal stopPrice,
-                                  String clientOrderId, boolean live) {
+                                  String clientOrderId, boolean live, String workingType) {
+        public ProtectionOrderRequest(Credential credential, String symbol, String side, String positionSide, String orderType, BigDecimal quantity, BigDecimal stopPrice,
+                                       String clientOrderId, boolean live) {
+            this(credential, symbol, side, positionSide, orderType, quantity, stopPrice, clientOrderId, live, "CONTRACT_PRICE");
+        }
     }
 
     /**
@@ -368,26 +383,41 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param reduceOnly    是否仅减仓，用于区分单向持仓保护与开仓条件单
      * @param closePosition 是否触发后平掉全部持仓
      * @param updateTime    交易所事实更新时间
+     * @param triggerTime   Binance 条件单实际触发时间；缺失时保持为空
      */
     record ProtectionOrderSnapshot(String symbol,
                                    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long algoId,
                                    String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity, BigDecimal triggerPrice,
                                    Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
                                    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long actualOrderId,
-                                   BigDecimal actualPrice) {
+                                   BigDecimal actualPrice, Instant createTime, Instant triggerTime) {
+        public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
+                                       BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
+                                       Long actualOrderId, BigDecimal actualPrice, Instant createTime) {
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition,
+                actualOrderId, actualPrice, createTime, null);
+        }
+
+        public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
+                                       BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
+                                       Long actualOrderId, BigDecimal actualPrice) {
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition,
+                actualOrderId, actualPrice, null, null);
+        }
+
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition) {
-            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition, null, null);
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition, null, null, null, null);
         }
 
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity) {
-            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, null, null);
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, null, null, null, null, null, null);
         }
 
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime) {
-            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, null);
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, null, null, null, null, null, null, null);
         }
     }
 
@@ -398,7 +428,10 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param eventTime 当前行情事件时间
      * @param rawJson   交易所私有事件原始 JSON
      */
-    record UserDataEvent(String eventType, Instant eventTime, String rawJson) {
+    record UserDataEvent(String eventType, Instant eventTime, String rawJson, Instant receivedAt) {
+        public UserDataEvent(String eventType, Instant eventTime, String rawJson) {
+            this(eventType, eventTime, rawJson, Instant.now());
+        }
     }
 
     /**

@@ -1,6 +1,7 @@
 package org.dromara.quant.strategy;
 
 import lombok.extern.slf4j.Slf4j;
+import org.dromara.quant.market.OneMinuteMovingAverage;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -29,6 +30,7 @@ import java.util.Optional;
 public final class KlineSlopeRateStrategy implements StrategyPlugin {
     private static final long SLOPE_LOG_INTERVAL_MILLIS = 5_000L;
     private static final java.util.concurrent.ConcurrentHashMap<String, Long> NEXT_SLOPE_LOG_AT = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> NEXT_MA_DIRECTION_LOG_AT = new java.util.concurrent.ConcurrentHashMap<>();
     /**
      * 斜率参考 K 线根数：1 表示往前第 1 根，2 表示往前第 2 根，3 表示往前第 3 根，最大是3。
      */
@@ -42,7 +44,13 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
 
     /** 判断冻结快照是否启用统一保护规则；运行时不会直接信任客户端提供的版本标识。 */
     public static boolean unifiedProtection(Map<String, Object> params) {
-        return params != null && "2".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY)));
+        return params != null && ("2".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY)))
+            || "3".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY))));
+    }
+
+    /** V3 将交易所保护单触发价统一换算为 MARK_PRICE ROI 口径；V2 历史周期继续使用 CONTRACT_PRICE。 */
+    public static boolean markPriceProtection(Map<String, Object> params) {
+        return params != null && "3".equals(String.valueOf(params.get(PROTECTION_POLICY_VERSION_KEY)));
     }
 
     /** 新周期硬止损比例与策略参数共用校验、默认值及历史别名。 */
@@ -131,11 +139,32 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
     }
 
     /**
-     * 将目标杠杆回报率换算为价格触发点，用于构造 Binance 条件单。
+     * 将目标 CONTRACT_PRICE 杠杆回报率换算为价格触发点。
      */
     public static BigDecimal priceForReturn(BigDecimal entryPrice, String direction, BigDecimal returnRate, int leverage) {
         BigDecimal priceRate = returnRate.divide(BigDecimal.valueOf(Math.max(1, leverage)), 12, RoundingMode.HALF_UP);
         return "SHORT".equalsIgnoreCase(direction) ? entryPrice.multiply(BigDecimal.ONE.subtract(priceRate)) : entryPrice.multiply(BigDecimal.ONE.add(priceRate));
+    }
+
+    /**
+     * 按 StrategyPositionReturnRate 的 MARK_PRICE ROI 口径反算条件单触发价。
+     * ROI = L * (P-E) / P（空头方向相反），returnRate 使用小数比例。
+     */
+    public static BigDecimal priceForMarkReturn(BigDecimal entryPrice, String direction, BigDecimal returnRate, int leverage) {
+        if (entryPrice == null || entryPrice.signum() <= 0 || returnRate == null) {
+            throw new IllegalArgumentException("MARK_PRICE 回报率换算缺少有效开仓价或目标回报率");
+        }
+        BigDecimal priceRate = returnRate.divide(BigDecimal.valueOf(Math.max(1, leverage)), 16, RoundingMode.HALF_UP);
+        BigDecimal denominator = "SHORT".equalsIgnoreCase(direction) ? BigDecimal.ONE.add(priceRate) : BigDecimal.ONE.subtract(priceRate);
+        if (denominator.signum() <= 0) {
+            throw new IllegalArgumentException("MARK_PRICE 回报率目标超出可换算价格范围");
+        }
+        return entryPrice.divide(denominator, 16, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal protectionPrice(BigDecimal entryPrice, String direction, BigDecimal returnRate, int leverage, Map<String, Object> params) {
+        return markPriceProtection(params) ? priceForMarkReturn(entryPrice, direction, returnRate, leverage)
+            : priceForReturn(entryPrice, direction, returnRate, leverage);
     }
 
     /**
@@ -287,7 +316,22 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
      */
     @Override
     public Optional<EntrySignal> evaluateEntry(StrategyContext context, Map<String, Object> params) {
-        SlopeEvaluation evaluation = calculateSlope(context, params);
+        return evaluateEntry(context, params, null, null);
+    }
+
+    /**
+     * 根据斜率和最近已收盘的 1 分钟 K 线 5MA/7MA 计算开仓信号。
+     * 均线不包含当前未收盘 K 线；缺少完整窗口或均线方向不一致时不允许开仓。
+     */
+    public Optional<EntrySignal> evaluateEntry(StrategyContext context, Map<String, Object> params, BigDecimal ma5, BigDecimal ma7) {
+        return evaluateEntry(context, params, ma5, ma7, calculateSlope(context, params));
+    }
+
+    /**
+     * 使用已计算的斜率结果继续完成均线方向过滤，避免 Runtime 为调整门禁顺序重复计算斜率。
+     */
+    public Optional<EntrySignal> evaluateEntry(StrategyContext context, Map<String, Object> params, BigDecimal ma5, BigDecimal ma7,
+                                               SlopeEvaluation evaluation) {
         if (evaluation == null) {
             return Optional.empty();
         }
@@ -297,22 +341,17 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
 //        log.info("计算交易对：" + context.symbol());
         double degrees = evaluation.rawDegrees();
         if (Math.abs(degrees) > 58 && shouldLogSlope(context.symbol(), System.currentTimeMillis())) {
-            log.warn("  ***  策略实时斜率 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}°", context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(),
-                evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(), BigDecimal.valueOf(degrees).setScale(2, RoundingMode.HALF_UP));
+            log.warn("  ***  策略实时斜率 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}° 1分钟MA5：{} MA7：{}",
+                context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(),
+                evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(),
+                BigDecimal.valueOf(degrees).setScale(2, RoundingMode.HALF_UP), ma5, ma7);
         }
         if (!evaluation.entryApproved()) {
             return Optional.empty();
         }
         EntrySignal.Direction direction = degrees > 0 ? EntrySignal.Direction.LONG : EntrySignal.Direction.SHORT;
-        return Optional.of(new EntrySignal(direction, "K线斜率角度=" + evaluation.degrees() + "°, 阈值=" + evaluation.entryThreshold() + "°"));
-    }
-
-    /**
-     * 在斜率信号通过后，使用最近已收盘的 1 分钟 K 线 5MA/7MA 做方向过滤。
-     * 均线不包含当前未收盘 K 线；缺少完整窗口或均线方向不一致时不允许开仓。
-     */
-    public Optional<EntrySignal> evaluateEntry(StrategyContext context, Map<String, Object> params, BigDecimal ma5, BigDecimal ma7) {
-        Optional<EntrySignal> signal = evaluateEntry(context, params);
+        Optional<EntrySignal> signal = Optional.of(new EntrySignal(direction,
+            "K线斜率角度=" + evaluation.degrees() + "°, 阈值=" + evaluation.entryThreshold() + "°"));
         if (signal.isEmpty() || !entryMaDirectionFilterEnabled(params)) {
             return signal;
         }
@@ -321,9 +360,14 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         }
         EntrySignal entry = signal.get();
         int comparison = ma5.compareTo(ma7);
-        boolean directionApproved = entry.direction() == EntrySignal.Direction.LONG ? comparison > 0
-            : entry.direction() == EntrySignal.Direction.SHORT && comparison < 0;
+        boolean directionApproved = OneMinuteMovingAverage.directionApproved(entry.direction() == EntrySignal.Direction.LONG, ma5, ma7);
         if (!directionApproved) {
+            if (shouldLogMaDirection(context.symbol(), System.currentTimeMillis())) {
+                String directionText = entry.direction() == EntrySignal.Direction.LONG ? "LONG" : "SHORT";
+                log.warn("策略开仓条件未通过 时间：{} 交易对：{} 方向：{} 斜率角度：{}° 阈值：{}° MA5：{} MA7：{} 原因：MA5_MA7_DIRECTION_MISMATCH",
+                    context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(), directionText,
+                    evaluation.degrees(), evaluation.entryThreshold(), ma5, ma7);
+            }
             return Optional.empty();
         }
         String maReason = comparison > 0 ? "1分钟5MA高于7MA" : "1分钟5MA低于7MA";
@@ -338,6 +382,18 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
     static boolean shouldLogSlope(String symbol, long nowMillis) {
         java.util.concurrent.atomic.AtomicBoolean allowed = new java.util.concurrent.atomic.AtomicBoolean();
         NEXT_SLOPE_LOG_AT.compute(symbol, (ignored, nextAt) -> {
+            if (nextAt == null || nowMillis >= nextAt) {
+                allowed.set(true);
+                return nowMillis + SLOPE_LOG_INTERVAL_MILLIS;
+            }
+            return nextAt;
+        });
+        return allowed.get();
+    }
+
+    private static boolean shouldLogMaDirection(String symbol, long nowMillis) {
+        java.util.concurrent.atomic.AtomicBoolean allowed = new java.util.concurrent.atomic.AtomicBoolean();
+        NEXT_MA_DIRECTION_LOG_AT.compute(symbol, (ignored, nextAt) -> {
             if (nextAt == null || nowMillis >= nextAt) {
                 allowed.set(true);
                 return nowMillis + SLOPE_LOG_INTERVAL_MILLIS;
@@ -405,20 +461,20 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
         int leverage = leverage(context);
         List<ProtectionSignal> result = new ArrayList<>();
         if (!unifiedProtection(params)) {
-            result.add(new ProtectionSignal(PROTECTION_LOCAL_STOP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
-                context.direction(), localStop.negate(), leverage), "Binance 本地止损镜像"));
+            result.add(new ProtectionSignal(PROTECTION_LOCAL_STOP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, protectionPrice(context.entryPrice(),
+                context.direction(), localStop.negate(), leverage, params), "Binance 本地止损镜像"));
         }
 
         if (!context.firstTakeProfitTriggered()) {
-            result.add(new ProtectionSignal(PROTECTION_FIRST_TP, "TAKE_PROFIT_MARKET", firstClose, ProtectionSignal.QuantityBase.INITIAL, priceForReturn(context.entryPrice(),
-                context.direction(), firstProfit, leverage), "Binance 首次分批止盈"));
+            result.add(new ProtectionSignal(PROTECTION_FIRST_TP, "TAKE_PROFIT_MARKET", firstClose, ProtectionSignal.QuantityBase.INITIAL, protectionPrice(context.entryPrice(),
+                context.direction(), firstProfit, leverage, params), "Binance 首次分批止盈"));
         }
         int stepIndex = reachedStep(context, params);
         if (stepIndex > 0) {
             BigDecimal maxReturn = maxFavorableReturn(context);
             BigDecimal locked = step.multiply(BigDecimal.valueOf(Math.max(0, stepIndex - 1L)));
-            result.add(new ProtectionSignal(PROTECTION_STEP_TP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, priceForReturn(context.entryPrice(),
-                context.direction(), locked, leverage), "Binance 阶梯追踪止盈，第" + stepIndex + "阶，最高回报率=" + percent(maxReturn) + "，锁定回报率=" + percent(locked), stepIndex));
+            result.add(new ProtectionSignal(PROTECTION_STEP_TP, "STOP_MARKET", BigDecimal.ONE, ProtectionSignal.QuantityBase.CURRENT, protectionPrice(context.entryPrice(),
+                context.direction(), locked, leverage, params), "Binance 阶梯追踪止盈，第" + stepIndex + "阶，最高回报率=" + percent(maxReturn) + "，锁定回报率=" + percent(locked), stepIndex));
         }
         result.sort(java.util.Comparator.comparingInt(signal -> switch (signal.type()) {
             case PROTECTION_LOCAL_STOP -> 0;
