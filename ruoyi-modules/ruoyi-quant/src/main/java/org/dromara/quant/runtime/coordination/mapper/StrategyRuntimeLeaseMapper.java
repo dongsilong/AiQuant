@@ -2,6 +2,8 @@ package org.dromara.quant.runtime.coordination.mapper;
 
 import org.apache.ibatis.annotations.*;
 
+import java.util.List;
+
 
 /**
  * MySQL 原子策略租约。唯一键 (credential_id, symbol) 是跨实例排他保证。
@@ -30,4 +32,9 @@ public interface StrategyRuntimeLeaseMapper {
     Long currentEpoch(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken, @Param("credentialRuntimeVersion") Long credentialRuntimeVersion);
 
     int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken);
+
+    /**
+     * 查询指定实例当前仍在有效租约期内的运行节点。
+     */
+    List<Long> selectActiveInstanceIds(@Param("instanceIds") List<Long> instanceIds);
 }
