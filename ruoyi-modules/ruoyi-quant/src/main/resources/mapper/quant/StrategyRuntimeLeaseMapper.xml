@@ -32,10 +32,5 @@ WHERE instance_id=#{instanceId} AND credential_id=#{credentialId}
   AND EXISTS (SELECT 1 FROM quant_credential c WHERE c.id=#{credentialId} AND c.del_flag=0 AND c.credential_runtime_version = #{credentialRuntimeVersion})]]></select>
     <select id="selectActiveInstanceIds" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT DISTINCT instance_id
 FROM quant_strategy_runtime_lease
-WHERE instance_id IN]]>
-        <foreach collection="instanceIds" item="instanceId" open="(" separator="," close=")">
-            #{instanceId}
-        </foreach>
-        <![CDATA[AND lease_until > DATE_ADD(NOW(), INTERVAL 2 SECOND)]]>
-    </select>
+WHERE instance_id IN (]]><foreach collection="instanceIds" item="instanceId" separator=",">#{instanceId}</foreach><![CDATA[) AND lease_until > DATE_ADD(NOW(), INTERVAL 2 SECOND)]]></select>
 </mapper>
