@@ -75,7 +75,7 @@ class StrategySlopeTelemetryHubTest {
             eventTime, receivedAt, sequence, true,
             new BigDecimal("101.5"), new BigDecimal("101.2"), trend, ready,
             null, Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MINUTES).minusSeconds(60),
-            eventTime, receivedAt, 3_000L, 3_000L, Instant.now()
+            eventTime, receivedAt, 3_000L, 3_000L, receivedAt
         );
     }
 }
