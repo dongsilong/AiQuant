@@ -154,11 +154,30 @@ public class QuantAdminController {
             row.put("credentialId", item.getCredentialId());
             row.put("accountName", credentials.get(item.getCredentialId()) == null ? null : credentials.get(item.getCredentialId()).getAccountName());
             row.put("strategySymbolId", item.getStrategySymbolId());
+            QuantStrategy strategy = strategies.get(item.getStrategyId());
+            QuantCredential credential = credentials.get(item.getCredentialId());
             QuantStrategySymbol binding = strategySymbols.get(item.getStrategySymbolId());
+            QuantSymbol symbol = binding == null ? null : symbols.get(binding.getSymbolId());
+            boolean runtimeActive = activeRuntimeIds.contains(item.getId());
+            String runtimeStatusReason = null;
+            if (!runtimeActive) {
+                if (strategy == null || !"1".equals(strategy.getStatus())) {
+                    runtimeStatusReason = "策略定义未启动";
+                } else if (binding == null || !"0".equals(binding.getStatus())) {
+                    runtimeStatusReason = "策略交易对绑定未启用";
+                } else if (Boolean.FALSE.equals(binding.getRuntimeEnabled())) {
+                    runtimeStatusReason = "该交易对已暂停开仓";
+                } else if (credential == null || !"0".equals(credential.getStatus())) {
+                    runtimeStatusReason = "交易账户未启用";
+                } else if (symbol == null || !"0".equals(symbol.getStatus())) {
+                    runtimeStatusReason = "交易对不可交易";
+                }
+            }
             row.put("symbol", binding == null || symbols.get(binding.getSymbolId()) == null ? null : symbols.get(binding.getSymbolId()).getSymbol());
             row.put("runtimeEnabled", binding == null || !Boolean.FALSE.equals(binding.getRuntimeEnabled()));
             row.put("status", item.getStatus());
-            row.put("runtimeActive", activeRuntimeIds.contains(item.getId()));
+            row.put("runtimeActive", runtimeActive);
+            row.put("runtimeStatusReason", runtimeStatusReason);
             row.put("lastSignalAt", item.getLastSignalAt());
             row.put("lastError", item.getLastError());
             return row;
