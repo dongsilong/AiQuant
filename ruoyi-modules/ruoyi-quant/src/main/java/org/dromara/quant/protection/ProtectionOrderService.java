@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.ExchangeTradingRuleCache;
 import org.dromara.quant.exchange.QuantityNormalizer;
+import org.dromara.quant.market.MarketStreamHub;
 import org.dromara.quant.execution.LiveOrderDispatcher;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.position.domain.QuantPosition;
@@ -18,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -60,6 +62,8 @@ public class ProtectionOrderService {
     private volatile QuantPositionMapper positionMapper;
     @Autowired
     private ProtectionOrderJournalService protectionJournal;
+    @Autowired(required = false)
+    private MarketStreamHub marketStreamHub;
     /**
      * 兼容仅提供保护目标协调器以外依赖的测试与调用方。
      */
@@ -1324,6 +1328,46 @@ public class ProtectionOrderService {
         if (decisionLogs != null) {
             decisionLogs.protection(credentialId, local, actual);
         }
+
+        Instant triggerTime = actual.triggerTime();
+        Instant childCreatedAt = child.createTime();
+        BigDecimal fillPrice = child.averagePrice() != null ? child.averagePrice() : actual.actualPrice();
+        MarketStreamHub.ProtectionPriceSnapshot triggerPrices = null;
+        if (triggerTime != null) {
+            local.setTriggerTimeEpochMillis(triggerTime.toEpochMilli());
+            if (marketStreamHub != null) {
+                triggerPrices = marketStreamHub.protectionPriceAt(credential.runMode(), local.getSymbol(), triggerTime);
+            }
+            if (triggerPrices != null) {
+                if (triggerPrices.markPrice() != null) {
+                    local.setTriggerMarkPrice(triggerPrices.markPrice());
+                    local.setTriggerMarkPriceAtEpochMillis(triggerPrices.markPriceTime().toEpochMilli());
+                }
+                if (triggerPrices.contractTradePrice() != null) {
+                    local.setTriggerContractTradePrice(triggerPrices.contractTradePrice());
+                    local.setTriggerContractTradeAtEpochMillis(triggerPrices.contractTradeTime().toEpochMilli());
+                }
+            }
+        }
+        if (childCreatedAt != null) {
+            local.setChildCreatedAtEpochMillis(childCreatedAt.toEpochMilli());
+        }
+        Long triggerToChildDelayMillis = triggerTime == null || childCreatedAt == null
+            ? null : java.time.Duration.between(triggerTime, childCreatedAt).toMillis();
+        if (triggerToChildDelayMillis != null) {
+            local.setTriggerToChildDelayMillis(triggerToChildDelayMillis);
+        }
+        BigDecimal adverseSlippagePct = null;
+        if (fillPrice != null && fillPrice.signum() > 0) {
+            local.setActualFillPrice(fillPrice);
+            if (local.getStopPrice() != null && local.getStopPrice().signum() > 0) {
+                BigDecimal adverseDifference = "SHORT".equalsIgnoreCase(local.getPositionSide())
+                    ? fillPrice.subtract(local.getStopPrice()) : local.getStopPrice().subtract(fillPrice);
+                adverseSlippagePct = adverseDifference.multiply(BigDecimal.valueOf(100))
+                    .divide(local.getStopPrice(), 8, java.math.RoundingMode.HALF_UP);
+                local.setAdverseSlippagePct(adverseSlippagePct);
+            }
+        }
         local.setExchangeOrderId(actual.algoId());
         local.setStatus("FINISHED");
         local.setExecutedQuantity(child.executedQuantity().max(local.getExecutedQuantity() == null ? BigDecimal.ZERO : local.getExecutedQuantity()));
@@ -1331,8 +1375,15 @@ public class ProtectionOrderService {
             throw new IllegalStateException("Algo 触发成交终态未可靠写入本地账本");
         }
         markTerminalTargetReference(credentialId, local);
-        log.info("保护单 Algo 已触发且实际子订单完整成交，持久化终态并准备释放派发门禁 accountId={} symbol={} clientAlgoId={} algoId={} actualOrderId={} executedQuantity={}",
-            credentialId, local.getSymbol(), local.getClientOrderId(), actual.algoId(), actual.actualOrderId(), child.executedQuantity());
+        Long markSampleAgeMs = triggerPrices == null || triggerPrices.markPriceTime() == null || triggerTime == null
+            ? null : java.time.Duration.between(triggerPrices.markPriceTime(), triggerTime).toMillis();
+        Long contractSampleAgeMs = triggerPrices == null || triggerPrices.contractTradeTime() == null || triggerTime == null
+            ? null : java.time.Duration.between(triggerPrices.contractTradeTime(), triggerTime).toMillis();
+        log.info("保护单触发诊断 accountId={} runMode={} symbol={} clientAlgoId={} algoId={} workingType={} stopPrice={} triggerTime={} triggerMarkPrice={} triggerMarkPriceAt={} triggerMarkSampleAgeMs={} triggerLastContractTradePrice={} triggerLastContractTradeAt={} triggerContractSampleAgeMs={} childCreatedAt={} triggerToChildDelayMs={} actualFillPrice={} adverseSlippagePct={} executedQuantity={}",
+            credentialId, credential.runMode(), local.getSymbol(), local.getClientOrderId(), actual.algoId(), local.getWorkingType(), local.getStopPrice(),
+            triggerTime, local.getTriggerMarkPrice(), local.getTriggerMarkPriceAtEpochMillis(), markSampleAgeMs,
+            local.getTriggerContractTradePrice(), local.getTriggerContractTradeAtEpochMillis(), contractSampleAgeMs,
+            childCreatedAt, triggerToChildDelayMillis, local.getActualFillPrice(), adverseSlippagePct, child.executedQuantity());
         return actual.algoId();
     }
 
@@ -1895,7 +1946,7 @@ public class ProtectionOrderService {
         }
         return new ExchangeGateway.ProtectionOrderSnapshot(actual.symbol(), actual.algoId(), actual.clientAlgoId(), "FINISHED", actual.side(), actual.positionSide(),
             actual.type(), actual.quantity(), actual.triggerPrice(), actual.updateTime(), child.executedQuantity(), actual.reduceOnly(), actual.closePosition(),
-            actual.actualOrderId(), child.averagePrice(), actual.createTime());
+            actual.actualOrderId(), child.averagePrice(), actual.createTime(), actual.triggerTime());
     }
 
     /**

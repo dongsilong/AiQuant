@@ -8,10 +8,14 @@ import org.dromara.quant.exchange.ExchangeMarketPort;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
@@ -28,9 +32,92 @@ public class MarketStreamHub {
     private final ScheduledExecutorService scheduler;
     private final QuantProperties properties;
     private final java.util.concurrent.Semaphore recoveryReads;
+    private static final Duration PROTECTION_PRICE_SAMPLE_MAX_AGE = Duration.ofSeconds(5);
+    private static final int MARK_SAMPLE_LIMIT = 600;
+    private static final int TRADE_SAMPLE_LIMIT = 4096;
     private final Map<Key, SharedStream> streams = new ConcurrentHashMap<>();
     private final Map<AggregateTradeKey, CompletableFuture<List<ExchangeGateway.MarketEvent>>> aggregateTradeReads = new ConcurrentHashMap<>();
+    private final Map<ProtectionPriceKey, ProtectionPriceHistory> protectionPriceHistories = new ConcurrentHashMap<>();
     private final java.util.concurrent.ExecutorService recoveryExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
+    public record ProtectionPriceSnapshot(BigDecimal markPrice, Instant markPriceTime,
+                                          BigDecimal contractTradePrice, Instant contractTradeTime) {
+    }
+
+    private record ProtectionPriceKey(String runMode, String symbol) {
+    }
+
+    static final class ProtectionPriceHistory {
+        private final NavigableMap<Instant, BigDecimal> markPrices = new TreeMap<>();
+        private final NavigableMap<Instant, BigDecimal> contractTradePrices = new TreeMap<>();
+
+        synchronized void record(String type, Instant eventTime, BigDecimal price) {
+            if (eventTime == null || price == null || price.signum() <= 0) {
+                return;
+            }
+            NavigableMap<Instant, BigDecimal> samples = switch (type) {
+                case "MARK" -> markPrices;
+                case "TRADE" -> contractTradePrices;
+                default -> null;
+            };
+            if (samples == null) {
+                return;
+            }
+            samples.put(eventTime, price);
+            int limit = "MARK".equals(type) ? MARK_SAMPLE_LIMIT : TRADE_SAMPLE_LIMIT;
+            while (samples.size() > limit) {
+                samples.pollFirstEntry();
+            }
+        }
+
+        synchronized ProtectionPriceSnapshot at(Instant triggerTime) {
+            PricePoint mark = latestAtOrBefore(markPrices, triggerTime);
+            PricePoint trade = latestAtOrBefore(contractTradePrices, triggerTime);
+            if (mark == null && trade == null) {
+                return null;
+            }
+            return new ProtectionPriceSnapshot(mark == null ? null : mark.price(), mark == null ? null : mark.time(),
+                trade == null ? null : trade.price(), trade == null ? null : trade.time());
+        }
+
+        private static PricePoint latestAtOrBefore(NavigableMap<Instant, BigDecimal> samples, Instant target) {
+            if (target == null || samples.isEmpty()) {
+                return null;
+            }
+            Map.Entry<Instant, BigDecimal> entry = samples.floorEntry(target);
+            if (entry == null || Duration.between(entry.getKey(), target).compareTo(PROTECTION_PRICE_SAMPLE_MAX_AGE) > 0) {
+                return null;
+            }
+            return new PricePoint(entry.getKey(), entry.getValue());
+        }
+
+        private record PricePoint(Instant time, BigDecimal price) {
+        }
+    }
+
+    /**
+     * 返回指定 Binance Algo 触发时刻之前 5 秒内最近的实时价格样本；不使用触发后的价格或 REST 回放数据。
+     */
+    public ProtectionPriceSnapshot protectionPriceAt(String runMode, String symbol, Instant triggerTime) {
+        if (symbol == null || symbol.isBlank() || triggerTime == null) {
+            return null;
+        }
+        String mode = "TESTNET".equalsIgnoreCase(runMode) ? "TESTNET" : "LIVE";
+        ProtectionPriceHistory history = protectionPriceHistories.get(new ProtectionPriceKey(mode, symbol.trim().toUpperCase(java.util.Locale.ROOT)));
+        return history == null ? null : history.at(triggerTime);
+    }
+
+    private void recordProtectionPriceSample(String runMode, String symbol, ExchangeGateway.MarketEvent event) {
+        if (event == null || event.replay() || event.eventTime() == null || event.price() == null) {
+            return;
+        }
+        if (!"MARK".equals(event.type()) && !"TRADE".equals(event.type())) {
+            return;
+        }
+        ProtectionPriceKey key = new ProtectionPriceKey(runMode, symbol);
+        protectionPriceHistories.computeIfAbsent(key, ignored -> new ProtectionPriceHistory())
+            .record(event.type(), event.eventTime(), event.price());
+    }
 
     static long reconnectDelayMillis(int reconnectDelaySeconds, long jitterMillis) {
         long baseDelayMillis = TimeUnit.SECONDS.toMillis(Math.max(1, reconnectDelaySeconds));
@@ -101,6 +188,7 @@ public class MarketStreamHub {
     public void close() {
         streams.values().forEach(SharedStream::close);
         streams.clear();
+        protectionPriceHistories.clear();
         recoveryExecutor.shutdownNow();
     }
 
@@ -846,6 +934,7 @@ public class MarketStreamHub {
                     }
                     lastTradeId = event.sequenceId();
                 }
+                recordProtectionPriceSample(key.runMode(), key.symbol(), event);
                 if (!connected && currentKlineValid(exchangeNow) && lastEventTime.get("MARK") != null && !lastEventTime.get("MARK").isBefore(exchangeNow.minusMillis(Math.max(1,
                     properties.getMarket().getMaxEventAgeMillis())))) {
                     connected = true;

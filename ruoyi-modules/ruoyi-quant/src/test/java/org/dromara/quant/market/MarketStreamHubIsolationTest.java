@@ -22,6 +22,24 @@ import static org.mockito.Mockito.*;
 @org.junit.jupiter.api.Tag("dev")
 class MarketStreamHubIsolationTest {
     @Test
+    void protectionPriceSnapshotUsesOnlyRecentSamplesAtOrBeforeTriggerTime() {
+        var history = new MarketStreamHub.ProtectionPriceHistory();
+        Instant triggerTime = Instant.parse("2026-11-21T03:38:13.071Z");
+        history.record("MARK", triggerTime.minusMillis(900), new BigDecimal("1583.19"));
+        history.record("TRADE", triggerTime.minusMillis(80), new BigDecimal("1609.08"));
+        history.record("MARK", triggerTime.plusMillis(10), new BigDecimal("1583.50"));
+        history.record("TRADE", triggerTime.plusMillis(20), new BigDecimal("1610.00"));
+
+        var snapshot = history.at(triggerTime);
+
+        assertEquals(new BigDecimal("1583.19"), snapshot.markPrice());
+        assertEquals(triggerTime.minusMillis(900), snapshot.markPriceTime());
+        assertEquals(new BigDecimal("1609.08"), snapshot.contractTradePrice());
+        assertEquals(triggerTime.minusMillis(80), snapshot.contractTradeTime());
+        assertNull(history.at(triggerTime.plusSeconds(6)));
+    }
+
+    @Test
     void sameSymbolInLiveAndTestnetHasIndependentUpstreamAndReferenceReplay() throws Exception {
         ExchangeGateway gateway = mock(ExchangeGateway.class);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();

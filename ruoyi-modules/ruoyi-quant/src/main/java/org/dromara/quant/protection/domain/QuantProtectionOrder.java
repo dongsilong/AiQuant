@@ -90,4 +90,29 @@ public class QuantProtectionOrder {
      * 当前状态。
      */
     private String status;
+    /** Binance Algo 实际触发时间，Unix epoch 毫秒。 */
+    @TableField("trigger_time_epoch_ms")
+    private Long triggerTimeEpochMillis;
+    /** 触发时间之前最近一次有效标记价格样本。 */
+    @TableField("trigger_mark_price")
+    private BigDecimal triggerMarkPrice;
+    @TableField("trigger_mark_price_at_epoch_ms")
+    private Long triggerMarkPriceAtEpochMillis;
+    /** 触发时间之前最近一次有效合约 aggTrade 成交价样本，不代表盘口买卖价。 */
+    @TableField("trigger_contract_trade_price")
+    private BigDecimal triggerContractTradePrice;
+    @TableField("trigger_contract_trade_at_epoch_ms")
+    private Long triggerContractTradeAtEpochMillis;
+    /** Binance 实际子市价单创建时间，Unix epoch 毫秒。 */
+    @TableField("child_created_at_epoch_ms")
+    private Long childCreatedAtEpochMillis;
+    /** Algo 触发至子市价单创建的耗时，单位毫秒。 */
+    @TableField("trigger_to_child_delay_ms")
+    private Long triggerToChildDelayMillis;
+    /** 实际子市价单成交均价。 */
+    @TableField("actual_fill_price")
+    private BigDecimal actualFillPrice;
+    /** 相对保护触发价的方向性不利滑点百分比；正数为不利，负数为有利。 */
+    @TableField("adverse_slippage_pct")
+    private BigDecimal adverseSlippagePct;
 }

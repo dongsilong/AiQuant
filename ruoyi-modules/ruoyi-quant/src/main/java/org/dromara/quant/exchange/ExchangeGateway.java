@@ -383,33 +383,41 @@ public interface ExchangeGateway extends ExchangeMarketPort, ExchangeAccountPort
      * @param reduceOnly    是否仅减仓，用于区分单向持仓保护与开仓条件单
      * @param closePosition 是否触发后平掉全部持仓
      * @param updateTime    交易所事实更新时间
+     * @param triggerTime   Binance 条件单实际触发时间；缺失时保持为空
      */
     record ProtectionOrderSnapshot(String symbol,
                                    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long algoId,
                                    String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity, BigDecimal triggerPrice,
                                    Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
                                    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class) Long actualOrderId,
-                                   BigDecimal actualPrice, Instant createTime) {
+                                   BigDecimal actualPrice, Instant createTime, Instant triggerTime) {
+        public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
+                                       BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
+                                       Long actualOrderId, BigDecimal actualPrice, Instant createTime) {
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition,
+                actualOrderId, actualPrice, createTime, null);
+        }
+
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition,
                                        Long actualOrderId, BigDecimal actualPrice) {
             this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition,
-                actualOrderId, actualPrice, null);
+                actualOrderId, actualPrice, null, null);
         }
 
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity, Boolean reduceOnly, Boolean closePosition) {
-            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition, null, null, null);
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, reduceOnly, closePosition, null, null, null, null);
         }
 
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime, BigDecimal executedQuantity) {
-            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, null, null, null, null, null);
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, executedQuantity, null, null, null, null, null, null);
         }
 
         public ProtectionOrderSnapshot(String symbol, Long algoId, String clientAlgoId, String status, String side, String positionSide, String type, BigDecimal quantity,
                                        BigDecimal triggerPrice, Instant updateTime) {
-            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, null, null, null, null, null, null);
+            this(symbol, algoId, clientAlgoId, status, side, positionSide, type, quantity, triggerPrice, updateTime, null, null, null, null, null, null, null);
         }
     }
 

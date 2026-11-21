@@ -1547,7 +1547,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             return new ProtectionOrderSnapshot(string(data, "getSymbol"), number(data, "getAlgoId"), string(data, "getClientAlgoId"), status, string(data, "getSide"), string(data,
                 "getPositionSide"), string(data, "getOrderType"), decimal(string(data, "getQuantity")), decimal(string(data, "getTriggerPrice")),
                 instant(number(data, "getUpdateTime")), protectionExecutedQuantity(status, decimal(string(data, "getActualQty"))), nullableBoolean(data, "getReduceOnly"), nullableBoolean(data, "getClosePosition"), number(data, "getActualOrderId"),
-                decimal(string(data, "getActualPrice")), instantNullable(number(data, "getCreateTime")));
+                decimal(string(data, "getActualPrice")), instantNullable(number(data, "getCreateTime")), instantNullable(number(data, "getTriggerTime")));
         } finally {
             long totalNanos = System.nanoTime() - totalStartedAt;
             long totalMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(totalNanos);
@@ -1710,7 +1710,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         Long updateTime = item.getUpdateTime() == null ? item.getCreateTime() : item.getUpdateTime();
         return new ProtectionOrderSnapshot(item.getSymbol(), item.getAlgoId(), item.getClientAlgoId(), status, item.getSide(), item.getPositionSide(), item.getOrderType(),
             decimal(item.getQuantity()), decimal(item.getTriggerPrice()), instant(updateTime), executedQuantity, item.getReduceOnly(), item.getClosePosition(),
-            number(item, "getActualOrderId"), decimal(item.getActualPrice()), instantNullable(item.getCreateTime()));
+            number(item, "getActualOrderId"), decimal(item.getActualPrice()), instantNullable(item.getCreateTime()), instantNullable(number(item, "getTriggerTime")));
     }
 
     private static boolean isProtectionOrderAbsent(com.binance.connector.client.common.ApiException exception) {
