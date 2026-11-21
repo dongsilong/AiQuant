@@ -1604,11 +1604,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /**
-     * 根据策略参数独立订阅并维护 1 分钟均线行情。
+     * 为斜率面板持续采集 1 分钟均线行情；开仓是否使用均线过滤仍由 entryMaDirectionFilterEnabled 单独控制。
      */
     private void configureEntryMaMarket(ActiveRuntime runtime) {
         synchronized (runtime) {
-            boolean required = entryMaDirectionFilterEnabled(runtime.plugin, runtime.params);
+            boolean required = runtime.plugin instanceof KlineSlopeRateStrategy;
             runtime.entryMaEnabled = required;
             if (!required) {
                 if (runtime.entryMaSubscription != null) {
