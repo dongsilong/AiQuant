@@ -1331,7 +1331,8 @@ public class ProtectionOrderService {
 
         Instant triggerTime = actual.triggerTime();
         Instant childCreatedAt = child.createTime();
-        BigDecimal fillPrice = child.averagePrice() != null ? child.averagePrice() : actual.actualPrice();
+        BigDecimal fillPrice = child.averagePrice() != null && child.averagePrice().signum() > 0
+            ? child.averagePrice() : actual.actualPrice();
         MarketStreamHub.ProtectionPriceSnapshot triggerPrices = null;
         if (triggerTime != null) {
             local.setTriggerTimeEpochMillis(triggerTime.toEpochMilli());
