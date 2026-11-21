@@ -29,6 +29,14 @@ class BinanceGatewayAdapterTest {
     }
 
     @Test
+    void treatsZeroAlgoTriggerTimeAsUnavailable() {
+        assertNull(BinanceGatewayAdapter.instantPositiveNullable(null));
+        assertNull(BinanceGatewayAdapter.instantPositiveNullable(0L));
+        assertEquals(Instant.ofEpochMilli(1_760_760_000_500L),
+            BinanceGatewayAdapter.instantPositiveNullable(1_760_760_000_500L));
+    }
+
+    @Test
     void preservesMissingExchangeOrderCreateTimeAsNull() {
         assertNull(BinanceGatewayAdapter.instantNullable(null));
         Instant createTime = Instant.parse("2026-10-07T15:51:00Z");
