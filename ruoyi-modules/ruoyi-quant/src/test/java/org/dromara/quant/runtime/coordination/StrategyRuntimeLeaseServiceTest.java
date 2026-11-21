@@ -27,12 +27,16 @@ class StrategyRuntimeLeaseServiceTest {
             assertTrue(mapperXml.contains("lease_until=DATE_SUB"));
             assertTrue(mapperXml.contains("c.credential_runtime_version = #{credentialRuntimeVersion}"));
             assertTrue(mapperXml.contains("timeout=\"3\""));
+            assertTrue(mapperXml.contains("SELECT DISTINCT instance_id"));
+            assertTrue(mapperXml.contains("lease_until > DATE_ADD(NOW(), INTERVAL 2 SECOND)"));
+            assertTrue(mapperXml.contains("collection=\"instanceIds\""));
         }
         var type = StrategyRuntimeLeaseMapper.class;
         assertEquals(Long.class, type.getMethod("acquireOrRenew", Long.class, Long.class, String.class, String.class, int.class, Long.class)
             .getParameterTypes()[5]);
         assertEquals(Long.class, type.getMethod("currentEpoch", Long.class, Long.class, String.class, String.class, Long.class)
             .getParameterTypes()[4]);
+        assertEquals(java.util.List.class, type.getMethod("selectActiveInstanceIds", java.util.List.class).getReturnType());
     }
 
     @Test
