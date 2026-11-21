@@ -1648,7 +1648,7 @@ public class ProtectionOrderService {
         if (local.getClientOrderId() == null || !local.getClientOrderId().equals(actual.clientAlgoId()) || actual.algoId() == null || actual.algoId() <= 0 || local.getExchangeOrderId() != null && !local.getExchangeOrderId().equals(actual.algoId())) {
             throw new IllegalStateException("Binance 保护单恢复返回了冲突的算法订单身份");
         }
-        if (decisionLogs != null) {
+        if (decisionLogs != null && !"FINISHED".equalsIgnoreCase(actual.status())) {
             decisionLogs.protection(credentialId, local, actual);
         }
         local.setExchangeOrderId(actual.algoId());
