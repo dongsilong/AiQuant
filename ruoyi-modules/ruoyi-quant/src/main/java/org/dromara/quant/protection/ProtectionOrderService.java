@@ -1657,13 +1657,9 @@ public class ProtectionOrderService {
             // Persist that exchange fact before forcing position reconciliation; otherwise the
             // parent protection remains WORKING forever and its previous-target lease never clears.
             if ("FINISHED".equals(actual.status()) && actual.actualOrderId() != null && actual.actualOrderId() > 0) {
-                local.setStatus("FINISHED");
-                BigDecimal executed = actual.executedQuantity() == null ? BigDecimal.ZERO : actual.executedQuantity();
-                local.setExecutedQuantity(executed.max(local.getExecutedQuantity() == null ? BigDecimal.ZERO : local.getExecutedQuantity()));
-                if (mapper.updateById(local) != 1) {
-                    throw new IllegalStateException("保护单实际子订单已终态，但本地保护账本更新失败");
-                }
-                markTerminalTargetReference(credentialId, local);
+                // 正常运行路径同样必须核实实际子单完整成交，并持久化触发时刻与滑点诊断。
+                // 该方法会再次精确查询 Algo/子单；证据不足时继续失败关闭，不提前标记终态。
+                persistVerifiedTriggeredProtection(credentialId, local, credential);
             }
             throw new ProtectionExecutionPendingException();
         }
