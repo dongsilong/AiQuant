@@ -1639,11 +1639,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
             EntryMaSnapshot previous = runtime.entryMa.snapshot();
             runtime.entryMa.markUnready();
+            EntryMaSnapshot current = runtime.entryMa.snapshot();
             if (previous.ready()) {
                 log.warn("策略1分钟MA K线恢复状态关闭行情门禁 instanceId={} mode={} symbol={} eventType={} eventReplay={} closedKlines={}/7",
                     runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(),
                     previous.closedKlines());
             }
+            publishSlopeTelemetryForMaUpdate(runtime, current);
             // 保留已收盘K线缓存，恢复期间继续从当前游标补偿。
             return;
         }
@@ -1653,15 +1655,25 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             log.info("策略1分钟MA K线历史恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7 liveMarketEventSeen={}",
                 runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), current.closedKlines(),
                 current.eventTime() != null && current.receivedAt() != null);
+            publishSlopeTelemetryForMaUpdate(runtime, current);
             return;
         }
         if (event.kline() != null || "MARK".equalsIgnoreCase(event.type()) || "CONNECTED".equals(event.type())) {
             EntryMaSnapshot snapshot = runtime.entryMa.update(event);
-            if (!event.replay() && "KLINE".equalsIgnoreCase(event.type()) && event.kline() != null) {
-                log.info("策略1分钟MA收到实时K线 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
-                    runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
-                    event.receivedAt(), event.kline().closed(), snapshot.closedKlines(), snapshot.ready());
+            if (!event.replay()) {
+                if ("KLINE".equalsIgnoreCase(event.type()) && event.kline() != null) {
+                    log.info("策略1分钟MA收到实时K线 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
+                        runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
+                        event.receivedAt(), event.kline().closed(), snapshot.closedKlines(), snapshot.ready());
+                }
+                publishSlopeTelemetryForMaUpdate(runtime, snapshot);
             }
+        }
+    }
+
+    private void publishSlopeTelemetryForMaUpdate(ActiveRuntime runtime, EntryMaSnapshot snapshot) {
+        if (runtime.plugin instanceof KlineSlopeRateStrategy) {
+            publishSlopeTelemetry(runtime, runtime.latestSlopeContext, snapshot);
         }
     }
 
@@ -1841,7 +1853,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 org.dromara.quant.market.MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), localNow, exchangeNow, maxEventAgeMillis)) {
                 BigDecimal displayPrice = event.price() != null ? event.price() : runtime.currentPrice();
                 if (displayPrice != null && displayPrice.signum() > 0) {
-                    publishSlopeTelemetry(runtime, buildContext(runtime, displayPrice, event));
+                    publishSlopeTelemetry(runtime, buildContext(runtime, displayPrice, event), event.receivedAt());
                 }
             }
             if (!event.replay()) {
@@ -1905,7 +1917,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             log.debug("evaluate 到达遥测 instanceId={} symbol={} eventType={} price={} prevKlineOpen={} klineOpen={} klineClosed={}", runtime.instance.getId(),
             runtime.symbol.getSymbol(), event.type(), price, context.previousKlineOpenPrice(), context.klineOpenTime(), context.klineClosed());
         }
-        publishSlopeTelemetry(runtime, context);
+        publishSlopeTelemetry(runtime, context, event.receivedAt());
         fenceSnapshotClosedCandle(runtime, context);
         clearProtectionDegradedAfterConfirmedFlat(runtime);
         // 待确认交易或退出协调会暂停本轮开仓、退出和保护同步；实时斜率仍随有效行情更新。
@@ -2941,34 +2953,104 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     /**
      * 推送策略插件实际使用的斜率结果；交易决策仍由插件原逻辑执行。
      */
-    private void publishSlopeTelemetry(ActiveRuntime runtime, StrategyContext context) {
+    private void publishSlopeTelemetry(ActiveRuntime runtime, StrategyContext context, Instant receivedAt) {
         if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
             return;
         }
-        KlineSlopeRateStrategy.SlopeEvaluation evaluation = KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
+        SlopeContextSnapshot current = new SlopeContextSnapshot(context, receivedAt);
+        runtime.latestSlopeContext = current;
+        publishSlopeTelemetry(runtime, current, runtime.entryMa.snapshot());
+    }
+
+    private void publishSlopeTelemetry(ActiveRuntime runtime, SlopeContextSnapshot slopeContext, EntryMaSnapshot maSnapshot) {
+        StrategyContext context = slopeContext == null ? null : slopeContext.context();
+        Instant receivedAt = slopeContext == null ? null : slopeContext.receivedAt();
+        KlineSlopeRateStrategy.SlopeEvaluation evaluation = context == null ? null
+            : KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
         if (runtime.hasPendingAction() && System.nanoTime() >= runtime.nextPendingSlopeLogNanos) {
             runtime.nextPendingSlopeLogNanos = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
             if (evaluation == null) {
-                log.warn("策略实时斜率无法计算 instanceId={} symbol={} currentPrice={} previousKlineOpenPrice={} pendingAction={}", runtime.instance.getId(), context.symbol(),
-context.currentPrice(), context.previousKlineOpenPrice(), runtime.state.getPendingAction());
+                log.warn("策略实时斜率无法计算 instanceId={} symbol={} currentPrice={} previousKlineOpenPrice={} pendingAction={}",
+                    runtime.instance.getId(), runtime.symbol.getSymbol(), context == null ? null : context.currentPrice(),
+                    context == null ? null : context.previousKlineOpenPrice(), runtime.state.getPendingAction());
             } else {
-                log.info("策略实时斜率 +++ 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}° 开仓暂停 pendingAction={} instanceId={}", context.eventTime(), context.symbol(),
-evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(), evaluation.degrees(), runtime.state.getPendingAction(),
-                  runtime.instance.getId());
+                log.info("策略实时斜率 +++ 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}° 开仓暂停 pendingAction={} instanceId={}",
+                    context.eventTime(), context.symbol(), evaluation.referenceOpenPrice(), evaluation.currentPrice(),
+                    evaluation.slopePercent(), evaluation.degrees(), runtime.state.getPendingAction(), runtime.instance.getId());
             }
         }
-        if (evaluation == null) {
-            long now = System.currentTimeMillis();
-            if (now - runtime.nextSlopeDiagLogAt >= 30_000L) {
-                runtime.nextSlopeDiagLogAt = now;
-                log.warn("斜率计算返回 null instanceId={} symbol={} currentPrice={} previousKlineOpen={} klineOpen={} klineClosed={}", runtime.instance.getId(), context.symbol(),
-                 context.currentPrice(), context.previousKlineOpenPrice(), context.klineOpenTime(), context.klineClosed());
+        if (context != null && evaluation == null) {
+            long logNow = System.currentTimeMillis();
+            if (logNow - runtime.nextSlopeDiagLogAt >= 30_000L) {
+                runtime.nextSlopeDiagLogAt = logNow;
+                log.warn("斜率计算返回 null instanceId={} symbol={} currentPrice={} previousKlineOpen={} klineOpen={} klineClosed={}",
+                    runtime.instance.getId(), context.symbol(), context.currentPrice(), context.previousKlineOpenPrice(),
+                    context.klineOpenTime(), context.klineClosed());
             }
-            return;
         }
-        slopeTelemetryHub.publish(new StrategySlopeTelemetry(runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
-    runtime.strategySymbol.getIntervalCode(), evaluation.currentPrice(), evaluation.referenceOpenPrice(), evaluation.slopePercent(), evaluation.degrees(),
-          evaluation.entryThreshold(), evaluation.entryApproved(), context.eventTime()));
+
+        Instant now = Instant.now();
+        Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
+        long maxEventAgeMillis = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
+        long slopeFreshForMillis = remainingEventFreshnessMillis(
+            context == null ? null : context.eventTime(), receivedAt, now, exchangeNow, maxEventAgeMillis);
+        boolean slopeReady = evaluation != null && slopeFreshForMillis > 0;
+
+        String maBlockReason = runtime.entryMaEnabled
+            ? entryMaMarketBlockReason(runtime, maSnapshot)
+            : "FILTER_DISABLED";
+        boolean maReady = maBlockReason == null;
+        long maFreshForMillis = maReady
+            ? remainingEventFreshnessMillis(maSnapshot.eventTime(), maSnapshot.receivedAt(), now, exchangeNow, maxEventAgeMillis)
+            : 0L;
+        if (maReady) {
+            Instant nextExchangeMinute = exchangeNow.truncatedTo(java.time.temporal.ChronoUnit.MINUTES).plusSeconds(60L);
+            maFreshForMillis = Math.min(maFreshForMillis, Math.max(0L,
+                java.time.Duration.between(exchangeNow, nextExchangeMinute).toMillis()));
+            maReady = maFreshForMillis > 0;
+            if (!maReady) {
+                maBlockReason = "STALE_EVENT";
+            }
+        }
+
+        BigDecimal ma5 = maReady ? maSnapshot.ma5() : null;
+        BigDecimal ma7 = maReady ? maSnapshot.ma7() : null;
+        String maTrend = maReady ? org.dromara.quant.market.OneMinuteMovingAverage.trend(ma5, ma7) : null;
+        slopeTelemetryHub.publish(new StrategySlopeTelemetry(
+            runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
+            runtime.strategySymbol.getIntervalCode(),
+            slopeReady ? evaluation.currentPrice() : null,
+            slopeReady ? evaluation.referenceOpenPrice() : null,
+            slopeReady ? evaluation.slopePercent() : null,
+            slopeReady ? evaluation.degrees() : null,
+            evaluation == null ? null : evaluation.entryThreshold(),
+            slopeReady && evaluation.entryApproved(),
+            context == null ? null : context.eventTime(),
+            receivedAt,
+            runtime.slopeTelemetrySequence.incrementAndGet(),
+            slopeReady,
+            ma5,
+            ma7,
+            maTrend,
+            maReady,
+            maBlockReason,
+            maSnapshot.lastClosedKlineOpenTime(),
+            maSnapshot.eventTime(),
+            maSnapshot.receivedAt(),
+            slopeFreshForMillis,
+            maFreshForMillis,
+            now
+        ));
+    }
+
+    private static long remainingEventFreshnessMillis(Instant eventTime, Instant receivedAt, Instant localNow,
+                                                       Instant exchangeNow, long maxEventAgeMillis) {
+        if (!MarketEventFreshness.isFresh(eventTime, receivedAt, localNow, exchangeNow, maxEventAgeMillis)) {
+            return 0L;
+        }
+        long eventAgeMillis = java.time.Duration.between(eventTime, exchangeNow).toMillis();
+        long receivedAgeMillis = java.time.Duration.between(receivedAt, localNow).toMillis();
+        return Math.max(0L, Math.min(maxEventAgeMillis - eventAgeMillis, maxEventAgeMillis - receivedAgeMillis));
     }
 
     /**
@@ -6128,7 +6210,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private record QuantExecutionRecordStatus(String value) {
     }
 
-    private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines, Instant lastClosedKlineOpenTime) {
+    private record SlopeContextSnapshot(StrategyContext context, Instant receivedAt) {\n    }\n\n    private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines, Instant lastClosedKlineOpenTime) {
     }
 
     /**
@@ -6150,6 +6232,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private synchronized void markUnready() {
             historyReady = false;
             streamReady = false;
+            ma5 = null;
+            ma7 = null;
             eventTime = null;
             receivedAt = null;
         }
