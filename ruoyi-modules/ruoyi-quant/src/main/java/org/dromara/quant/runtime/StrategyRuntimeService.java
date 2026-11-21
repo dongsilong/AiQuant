@@ -1645,7 +1645,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(),
                     previous.closedKlines());
             }
-            publishSlopeTelemetryForMaUpdate(runtime, current);
+            publishSlopeTelemetryForMaUpdate(runtime);
             // 保留已收盘K线缓存，恢复期间继续从当前游标补偿。
             return;
         }
@@ -1655,7 +1655,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             log.info("策略1分钟MA K线历史恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7 liveMarketEventSeen={}",
                 runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), current.closedKlines(),
                 current.eventTime() != null && current.receivedAt() != null);
-            publishSlopeTelemetryForMaUpdate(runtime, current);
+            publishSlopeTelemetryForMaUpdate(runtime);
             return;
         }
         if (event.kline() != null || "MARK".equalsIgnoreCase(event.type()) || "CONNECTED".equals(event.type())) {
@@ -1666,14 +1666,16 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
                         event.receivedAt(), event.kline().closed(), snapshot.closedKlines(), snapshot.ready());
                 }
-                publishSlopeTelemetryForMaUpdate(runtime, snapshot);
+                publishSlopeTelemetryForMaUpdate(runtime);
             }
         }
     }
 
-    private void publishSlopeTelemetryForMaUpdate(ActiveRuntime runtime, EntryMaSnapshot snapshot) {
+    private void publishSlopeTelemetryForMaUpdate(ActiveRuntime runtime) {
         if (runtime.plugin instanceof KlineSlopeRateStrategy) {
-            publishSlopeTelemetry(runtime, runtime.latestSlopeContext, snapshot);
+            synchronized (runtime.slopeTelemetryLock) {
+                publishSlopeTelemetry(runtime, runtime.latestSlopeContext, runtime.entryMa.snapshot());
+            }
         }
     }
 
@@ -2957,9 +2959,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
             return;
         }
-        SlopeContextSnapshot current = new SlopeContextSnapshot(context, receivedAt);
-        runtime.latestSlopeContext = current;
-        publishSlopeTelemetry(runtime, current, runtime.entryMa.snapshot());
+        synchronized (runtime.slopeTelemetryLock) {
+            SlopeContextSnapshot current = new SlopeContextSnapshot(context, receivedAt);
+            runtime.latestSlopeContext = current;
+            publishSlopeTelemetry(runtime, current, runtime.entryMa.snapshot());
+        }
     }
 
     private void publishSlopeTelemetry(ActiveRuntime runtime, SlopeContextSnapshot slopeContext, EntryMaSnapshot maSnapshot) {
@@ -6508,6 +6512,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private BigDecimal latestTradePrice;
         private Instant latestTradeEventAt;
         private BigDecimal latestMarkPrice;
+        private final Object slopeTelemetryLock = new Object();
         private volatile SlopeContextSnapshot latestSlopeContext;
         private final java.util.concurrent.atomic.AtomicLong slopeTelemetrySequence = new java.util.concurrent.atomic.AtomicLong();
         // 健康回调直接关闭决策，不能等待普通行情队列的断线通知。
