@@ -6210,7 +6210,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private record QuantExecutionRecordStatus(String value) {
     }
 
-    private record SlopeContextSnapshot(StrategyContext context, Instant receivedAt) {\n    }\n\n    private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines, Instant lastClosedKlineOpenTime) {
+    private record SlopeContextSnapshot(StrategyContext context, Instant receivedAt) {
+    }
+
+    private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines, Instant lastClosedKlineOpenTime) {
     }
 
     /**
@@ -6505,6 +6508,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private BigDecimal latestTradePrice;
         private Instant latestTradeEventAt;
         private BigDecimal latestMarkPrice;
+        private volatile SlopeContextSnapshot latestSlopeContext;
+        private final java.util.concurrent.atomic.AtomicLong slopeTelemetrySequence = new java.util.concurrent.atomic.AtomicLong();
         // 健康回调直接关闭决策，不能等待普通行情队列的断线通知。
         private volatile boolean marketStreamReady;
         private volatile long nextReconcileAt;

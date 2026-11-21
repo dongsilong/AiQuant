@@ -33,7 +33,9 @@ class StrategySlopeTelemetryHubTest {
         var replayed = new ArrayList<StrategySlopeTelemetry>();
         try (var subscription = hub.subscribe(2L, 3L, replayed::add)) {
             assertEquals(1, replayed.size());
-            assertEquals(second, replayed.getFirst());
+            assertEquals(second.sequence(), replayed.getFirst().sequence());
+            assertEquals(second.currentPrice(), replayed.getFirst().currentPrice());
+            assertTrue(replayed.getFirst().maReady());
         }
     }
 
