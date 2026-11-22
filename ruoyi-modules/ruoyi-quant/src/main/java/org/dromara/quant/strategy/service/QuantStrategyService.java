@@ -169,6 +169,29 @@ public class QuantStrategyService {
     }
 
     /**
+     * 启动单个实例；策略整体必须先处于启用状态。
+     */
+    public boolean startInstance(Long strategyId, Long instanceId) {
+        QuantStrategy strategy = require(strategyId);
+        checkAccess(strategy);
+        if (!"1".equals(strategy.getStatus())) {
+            throw new ServiceException("策略尚未开启，不能启动策略实例");
+        }
+        instanceService.startInstance(strategyId, instanceId);
+        return true;
+    }
+
+    /**
+     * 停止单个实例，不改变策略整体启用状态。
+     */
+    public boolean stopInstance(Long strategyId, Long instanceId) {
+        QuantStrategy strategy = require(strategyId);
+        checkAccess(strategy);
+        instanceService.stopInstance(strategyId, instanceId);
+        return true;
+    }
+
+    /**
      * 执行与启动接口相同的服务端配置预检。
      */
     public StrategyPreflightResult preflight(Long id) {
