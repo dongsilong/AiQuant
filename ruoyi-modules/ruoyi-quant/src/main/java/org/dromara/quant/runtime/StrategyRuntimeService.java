@@ -637,6 +637,18 @@ public class StrategyRuntimeService {
         if (instanceId == null) {
             return;
         }
+        QuantStrategyInstance instance = instanceMapper.selectById(instanceId);
+        if (instance == null || instance.getStrategySymbolId() == null) {
+            invalidateInstanceRuntime(instanceId);
+            return;
+        }
+        Object symbolLock = strategySymbolLocks.computeIfAbsent(instance.getStrategySymbolId(), ignored -> new Object());
+        synchronized (symbolLock) {
+            invalidateInstanceRuntime(instanceId);
+        }
+    }
+
+    private void invalidateInstanceRuntime(Long instanceId) {
         ActiveRuntime runtime = activeRuntimes.get(instanceId);
         if (runtime == null) {
             return;
@@ -654,7 +666,6 @@ public class StrategyRuntimeService {
             closeRuntime(runtime);
         }
     }
-
     /**
      * 已关闭周期的保护单清理不能依赖 ActiveRuntime；STOPPED 实例也必须能够从持久化状态恢复。
      */
@@ -1382,7 +1393,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                             existingState != null && !"CLOSED".equals(existingState.getStatus()) && ((existingState.getPositionQty() != null && existingState.getPositionQty().signum() > 0) || existingState.getPendingAction() != null || "PROTECTION_CLEANUP".equals(existingState.getStatus()));
 
         boolean tradingAllowed =
-         "1".equals(strategy.getStatus()) && "0".equals(strategySymbol.getStatus()) && !Boolean.FALSE.equals(strategySymbol.getRuntimeEnabled()) && "0".equals(credential.getStatus()) && "0".equals(symbol.getStatus()) && (!"PAPER".equalsIgnoreCase(credential.getRunMode()) || properties.getPaper().isEnabled());
+         "RUNNING".equals(instance.getStatus()) && "1".equals(strategy.getStatus()) && "0".equals(strategySymbol.getStatus()) && !Boolean.FALSE.equals(strategySymbol.getRuntimeEnabled()) && "0".equals(credential.getStatus()) && "0".equals(symbol.getStatus()) && (!"PAPER".equalsIgnoreCase(credential.getRunMode()) || properties.getPaper().isEnabled());
 
         if (!hasOpenPosition && !tradingAllowed) {
             stopInactiveRuntime(instance.getId());
