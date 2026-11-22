@@ -1504,7 +1504,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     ensureHardStop(runtime);
                 }
                 runtime.subscription = marketStreamHub.subscribe(credential.getRunMode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), event -> onMarketEvent(runtime,
-            event), ready -> runtime.marketStreamReady = ready);
+            event), ready -> {
+                runtime.marketStreamReady = ready;
+                if (!ready && "CONNECTED".equals(runtime.marketStreamStatus)) {
+                    runtime.marketStreamStatus = "CONNECTING";
+                }
+            });
                 configureEntryMaMarket(runtime);
                 if (!"PAPER".equalsIgnoreCase(credential.getRunMode())) {
                     runtime.userSubscription = userDataStreamHub.subscribe(credential, event -> {
@@ -1758,6 +1763,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (runtime.closed) {
                 return;
             }
+            if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
+                || "ERROR".equals(event.type()) || "CONNECTED".equals(event.type())) {
+                runtime.marketStreamStatus = event.type();
+            }
             if (!ensureEventLease(runtime)) {
                 // Losing the strategy lease fences decisions, but does not mean the public
                 // market feed is unhealthy. MarketStreamHub reports feed readiness separately.
@@ -1842,6 +1851,27 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /**
+     * 根据共享行情流状态区分主行情决策门禁的阻断原因；只用于诊断，不改变门禁条件。
+     */
+    private static String marketDecisionBlockReason(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
+        if (event.replay()) {
+            return "REPLAY_EVENT";
+        }
+        if (!runtime.marketStreamReady) {
+            return switch (runtime.marketStreamStatus == null ? "" : runtime.marketStreamStatus) {
+                case "DISCONNECTED" -> "STREAM_DISCONNECTED";
+                case "ERROR" -> "STREAM_TERMINAL_ERROR";
+                case "CONNECTING" -> "STREAM_CONNECTING_OR_RECOVERING";
+                default -> "STREAM_READINESS_NOT_CONFIRMED";
+            };
+        }
+        if (!runtime.marketHealthy) {
+            return "RUNTIME_HEALTH_NOT_RESTORED";
+        }
+        return "MARKET_UNREADY";
+    }
+
+    /**
      * 基于最新行情、持仓和策略状态执行一次决策。
      */
     private void evaluate(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, long callbackStartedNanos, long runtimeLockRequestedNanos, long runtimeLockAcquiredNanos) {
@@ -1858,6 +1888,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
         }
         if (!runtime.marketHealthy || !runtime.marketStreamReady || event.replay()) {
+            String marketBlockReason = marketDecisionBlockReason(runtime, event);
             // 行情未就绪时，新鲜的实时 TRADE/KLINE 仍可更新斜率遥测；回放或未就绪行情不能触发开仓、平仓判断。
             if (!event.replay() && runtime.plugin instanceof KlineSlopeRateStrategy && ("TRADE".equalsIgnoreCase(event.type()) || "KLINE".equalsIgnoreCase(event.type())) &&
                 org.dromara.quant.market.MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), localNow, exchangeNow, maxEventAgeMillis)) {
@@ -1867,16 +1898,24 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 }
             }
             if (!event.replay()) {
-                logUnavailableEntry(runtime, event, "MARKET_UNREADY", "行情尚未就绪，暂停策略决策");
+                logUnavailableEntry(runtime, event, marketBlockReason,
+                    "行情尚未就绪，暂停策略决策；阻断原因=" + marketBlockReason
+                        + "；streamStatus=" + runtime.marketStreamStatus
+                        + "；marketHealthy=" + runtime.marketHealthy
+                        + "；marketStreamReady=" + runtime.marketStreamReady);
             }
             // 所有交易环境共用该门控；斜率遥测可更新不代表行情已满足交易决策条件。
             long unreadyGraceMillis = Math.max(1, properties.getMarket().getIdleTimeoutSeconds()) * 1_000L;
             if (!event.replay() && ("TRADE".equals(event.type()) || "KLINE".equals(event.type())) && runtime.marketUnreadySinceAt > 0 &&
                 nowMillis - runtime.marketUnreadySinceAt >= unreadyGraceMillis && nowMillis >= runtime.nextMarketUnreadyLogAt) {
                 runtime.nextMarketUnreadyLogAt = nowMillis + 60_000L;
-                log.warn("策略行情门控持续未就绪 instanceId={} mode={} symbol={} eventType={} marketHealthy={} marketStreamReady={} unreadyDurationMillis={} eventTime={}",
-                    runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), runtime.marketHealthy, runtime.marketStreamReady,
-                    nowMillis - runtime.marketUnreadySinceAt, event.eventTime());
+                Instant lastTradeAt = runtime.latestTradeEventAt;
+                long lastTradeAgeMillis = lastTradeAt == null ? -1L
+                    : java.time.Duration.between(lastTradeAt, exchangeNow).toMillis();
+                log.warn("策略行情门控持续未就绪 instanceId={} mode={} symbol={} eventType={} blockReason={} streamStatus={} marketHealthy={} marketStreamReady={} unreadyDurationMillis={} lastTradeEventAt={} lastTradeAgeMillis={} maxEventAgeMillis={} eventTime={}",
+                    runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), marketBlockReason,
+                    runtime.marketStreamStatus, runtime.marketHealthy, runtime.marketStreamReady,
+                    nowMillis - runtime.marketUnreadySinceAt, lastTradeAt, lastTradeAgeMillis, maxEventAgeMillis, event.eventTime());
             }
             // 限频输出行情未就绪的调试信息，避免高频行情事件刷屏。
             if (log.isDebugEnabled() && System.currentTimeMillis() >= runtime.nextLatencyLogAt) {
@@ -6612,6 +6651,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final java.util.concurrent.atomic.AtomicLong slopeTelemetrySequence = new java.util.concurrent.atomic.AtomicLong();
         // 健康回调直接关闭决策，不能等待普通行情队列的断线通知。
         private volatile boolean marketStreamReady;
+        /** 最近收到的共享行情流状态事件，仅用于解释决策门禁，不参与健康判定。 */
+        private volatile String marketStreamStatus = "UNKNOWN";
         private volatile long nextReconcileAt;
         /**
          * 最近一次参与开仓判断的 K 线开始时间。
