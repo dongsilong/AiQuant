@@ -136,7 +136,6 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 subscriptions.put(id, reference);
                 nextLeaseConflictLogAt.remove(id);
                 log.info("LIVE私有流租约已获取并注册共享订阅 credentialId={}，等待WebSocket连接及完整持仓核验后开放开仓准入", id);
-                coordinator.queueRefresh(id);
             } catch (RuntimeException ex) {
                 closeSubscription(id);
                 freshness.privateStreamDisconnected(id, "STREAM_ENROLLMENT_FAILED");
