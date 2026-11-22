@@ -410,14 +410,14 @@ public class QuantAccountQueryController {
                         reconciliationService.syncTradingData(credential, symbol, selectedRange);
                     try {
                         notificationService.notifyOrderTradeSyncResult(credential, symbol,
-                            result.symbolCount(), result.orderCount(), result.tradeCount());
+                            result.symbolCount(), result.orderCount(), result.tradeCount(), selectedRange);
                     } catch (RuntimeException notificationFailure) {
                         log.error("订单与成交同步成功，但成功通知投递失败 credentialId={}", credentialId, notificationFailure);
                     }
                 } catch (RuntimeException failure) {
                     log.error("后台订单与成交历史同步失败 credentialId={}", credentialId, failure);
                     try {
-                        notificationService.notifyOrderTradeSyncFailure(credential, symbol, failure);
+                        notificationService.notifyOrderTradeSyncFailure(credential, symbol, selectedRange, failure);
                     } catch (RuntimeException notificationFailure) {
                         log.error("订单与成交同步失败通知投递异常 credentialId={}", credentialId, notificationFailure);
                     }
