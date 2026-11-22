@@ -16,6 +16,7 @@ import org.dromara.quant.notification.mapper.QuantNotificationMapper;
 import org.dromara.quant.notification.mapper.QuantTradeNotificationQueryMapper;
 import org.dromara.quant.risk.domain.QuantRiskConfig;
 import org.dromara.quant.risk.mapper.QuantRiskConfigMapper;
+import org.dromara.quant.reconcile.TradingReconciliationService.ManualTradingHistoryRange;
 import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.util.QuantJsonMapper;
 import org.dromara.system.api.MessageService;
@@ -93,7 +94,8 @@ public class QuantTradeNotificationService {
     /**
      * 订单与成交历史同步完成后，仅发送系统消息，不触发邮件通知。
      */
-    public void notifyOrderTradeSyncResult(QuantCredential credential, String symbol, int symbolCount, int orderCount, int tradeCount) {
+    public void notifyOrderTradeSyncResult(QuantCredential credential, String symbol, int symbolCount, int orderCount,
+                                           int tradeCount, ManualTradingHistoryRange historyRange) {
         String subject = "订单与成交同步成功";
         String symbolText = symbol == null || symbol.isBlank() ? "全部交易对" : symbol.trim().toUpperCase(java.util.Locale.ROOT);
         String resultText = symbolCount == 0
@@ -102,7 +104,7 @@ public class QuantTradeNotificationService {
                 + "处理订单数：" + orderCount + " 笔\n"
                 + "完整且已核实的成交数：" + tradeCount + " 笔";
         String content = "同步状态：成功\n"
-            + "同步范围：最近 90 天\n"
+            + "同步范围：" + historyRange.displayText() + "\n"
             + "同步交易对：" + symbolText + "\n"
             + resultText + "\n"
             + "账户模式：" + (credential == null || credential.getRunMode() == null ? "未知" : credential.getRunMode()) + "\n"
@@ -113,7 +115,8 @@ public class QuantTradeNotificationService {
     /**
      * 同步中断时发送系统消息；按交易对提交的历史数据可能已有部分成功落库。
      */
-    public void notifyOrderTradeSyncFailure(QuantCredential credential, String symbol, RuntimeException failure) {
+    public void notifyOrderTradeSyncFailure(QuantCredential credential, String symbol,
+                                             ManualTradingHistoryRange historyRange, RuntimeException failure) {
         String subject = "订单与成交同步未完成";
         String symbolText = symbol == null || symbol.isBlank() ? "全部交易对" : symbol.trim().toUpperCase(java.util.Locale.ROOT);
         String reason = failure == null ? "未知异常" : failure.getMessage();
@@ -124,7 +127,7 @@ public class QuantTradeNotificationService {
             reason = reason.substring(0, 1000) + "...";
         }
         String content = "同步状态：未完成\n"
-            + "同步范围：最近 90 天\n"
+            + "同步范围：" + historyRange.displayText() + "\n"
             + "同步交易对：" + symbolText + "\n"
             + "失败原因：" + reason + "\n"
             + "说明：同步按交易对分别提交，失败前已完成的交易对数据可能已经保存；请结合日志核对后重试。\n"
