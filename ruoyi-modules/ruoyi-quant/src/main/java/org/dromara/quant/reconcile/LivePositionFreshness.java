@@ -29,14 +29,19 @@ public class LivePositionFreshness {
     }
 
     /**
-     * Only release LIVE entry gate if no stream event arrived during this REST snapshot.
+     * 接受代次未变化的完整 REST 快照；只有私有流已连接时才记录为开仓可用快照。
      */
     public boolean verifiedIfUnchanged(Long credentialId, long expectedGeneration) {
         synchronized (generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong())) {
-            if (generation(credentialId) != expectedGeneration || !privateStreamReady(credentialId)) {
+            if (generation(credentialId) != expectedGeneration) {
                 return false;
             }
-            verified.put(credentialId, Instant.now());
+            if (privateStreamReady(credentialId)) {
+                verified.put(credentialId, Instant.now());
+            } else {
+                // REST 事实仍可用于更新本地持仓，但不能在私有流未连接时释放 LIVE 开仓门禁。
+                verified.remove(credentialId);
+            }
             return true;
         }
     }
@@ -60,7 +65,7 @@ public class LivePositionFreshness {
     }
 
     /**
-     * 只有真实 WebSocket CONNECTED 事件才能打开连接侧门禁；随后仍需新的完整 REST 持仓核验。
+     * 真实 WebSocket 连接状态发生变化时推进代次，拒绝连接建立前启动的 REST 快照。
      */
     public void privateStreamConnected(Long credentialId) {
         if (credentialId == null) {
@@ -68,10 +73,11 @@ public class LivePositionFreshness {
         }
         var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
         synchronized (counter) {
-            if (privateStreamRequired.add(credentialId)) {
-                invalidateLocked(credentialId, counter, "PRIVATE_STREAM_REQUIRED");
+            boolean newlyRequired = privateStreamRequired.add(credentialId);
+            boolean newlyConnected = privateStreamConnected.add(credentialId);
+            if (newlyRequired || newlyConnected) {
+                invalidateLocked(credentialId, counter, newlyRequired ? "PRIVATE_STREAM_REQUIRED" : "PRIVATE_STREAM_CONNECTED");
             }
-            privateStreamConnected.add(credentialId);
         }
     }
 
@@ -123,8 +129,8 @@ public class LivePositionFreshness {
     }
 
     /**
-     * 将快照代次检查与数据库提交串行化，避免私有流事件在检查后、事务提交前推进代次。
-     * action 执行期间，新事件的 invalidate() 会等待；提交完成后事件再推进代次并触发新一轮核实。
+     * 将快照代次检查与数据库提交串行化。私有流连接状态单独控制开仓门禁，
+     * 不应阻止无竞争的 REST 事实落库；连接变化会推进代次并使旧快照失效。
      */
     public boolean runIfGenerationUnchanged(Long credentialId, long expectedGeneration, Runnable action) {
         if (credentialId == null || action == null) {
@@ -132,7 +138,7 @@ public class LivePositionFreshness {
         }
         var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
         synchronized (counter) {
-            if (counter.get() != expectedGeneration || !privateStreamReady(credentialId)) {
+            if (counter.get() != expectedGeneration) {
                 return false;
             }
             action.run();
@@ -141,7 +147,7 @@ public class LivePositionFreshness {
     }
 
     /**
-     * 标记本代持仓事实已经由交易所完整核验。
+     * 标记本代持仓事实已经由交易所完整核验；私有流未连接时不开放开仓准入。
      */
     public void verified(Long credentialId) {
         if (credentialId != null) {
