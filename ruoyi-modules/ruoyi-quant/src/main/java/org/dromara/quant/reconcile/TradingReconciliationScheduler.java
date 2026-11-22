@@ -8,6 +8,7 @@ import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeMarketPort;
+import org.dromara.quant.exchange.ExchangeTradingPort;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -122,6 +123,10 @@ public class TradingReconciliationScheduler {
             return false;
         }
         for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof ExchangeTradingPort.ExchangeRequestException requestFailure
+                && isTransientNetworkFailureType(requestFailure.rootCauseType())) {
+                return true;
+            }
             if (current instanceof java.io.EOFException
                 || current instanceof java.net.SocketException
                 || current instanceof java.net.SocketTimeoutException
@@ -131,6 +136,14 @@ public class TradingReconciliationScheduler {
             }
         }
         return false;
+    }
+
+    private static boolean isTransientNetworkFailureType(String exceptionType) {
+        return java.io.EOFException.class.getName().equals(exceptionType)
+            || java.net.SocketException.class.getName().equals(exceptionType)
+            || java.net.SocketTimeoutException.class.getName().equals(exceptionType)
+            || java.net.ConnectException.class.getName().equals(exceptionType)
+            || java.io.InterruptedIOException.class.getName().equals(exceptionType);
     }
 
     static long retryDelayMillis(long retryAfterMillis, int attempt) {
