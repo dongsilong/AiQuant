@@ -320,6 +320,9 @@ public class UserDataStreamHub {
                 positionCache.disconnect(credential.getId());
                 balanceCache.disconnect(credential.getId());
                 preparationService.invalidate(credential.getId());
+                if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && positionEvents != null) {
+                    positionEvents.onUserDataEvent(credential.getId(), new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
+                }
                 long retryAfterMillis = throttleRetryAfterMillis(ex);
                 long retryDelayMillis = retryAfterMillis > 0
                     ? retryAfterMillis + ThreadLocalRandom.current().nextLong(0L, 1_001L)
