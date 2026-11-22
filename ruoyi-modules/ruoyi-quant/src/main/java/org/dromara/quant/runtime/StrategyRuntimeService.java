@@ -2157,7 +2157,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return true;
         }
         try {
-            return containsPrivateEventSymbol(QuantJsonMapper.readMap(event.rawJson()), runtime.symbol.getSymbol());
+            boolean symbolMatched = containsPrivateEventSymbol(QuantJsonMapper.readMap(event.rawJson()), runtime.symbol.getSymbol());
+            return symbolMatched || !"ACCOUNT_UPDATE".equals(eventType);
         } catch (Exception ex) {
             // 相关事件无法解析时按相关事件处理，不能因格式异常沿用旧清理证明。
             return true;
