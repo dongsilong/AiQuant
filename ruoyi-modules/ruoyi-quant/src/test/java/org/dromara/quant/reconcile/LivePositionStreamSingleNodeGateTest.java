@@ -91,7 +91,7 @@ class LivePositionStreamSingleNodeGateTest {
         verify(hub).unregisterLeaseOwner(110L, 4L);
         verify(hub).registerLeaseOwner(110L, 5L);
         verify(hub, times(2)).subscribe(eq(account), any());
-        verify(coordinator, times(2)).request(110L);
+        verifyNoInteractions(coordinator);
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(110L));
         stream.close();
         verify(newSubscription).close();
