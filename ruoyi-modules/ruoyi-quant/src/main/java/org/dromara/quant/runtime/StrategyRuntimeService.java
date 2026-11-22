@@ -1661,12 +1661,16 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (event.kline() != null || "MARK".equalsIgnoreCase(event.type()) || "CONNECTED".equals(event.type())) {
             EntryMaSnapshot snapshot = runtime.entryMa.update(event);
             if (!event.replay()) {
-                if ("KLINE".equalsIgnoreCase(event.type()) && event.kline() != null) {
+                /*if ("KLINE".equalsIgnoreCase(event.type()) && event.kline() != null) {
                     log.info("策略1分钟MA收到实时K线 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
                         runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
                         event.receivedAt(), event.kline().closed(), snapshot.closedKlines(), snapshot.ready());
-                }
+                }*/
                 publishSlopeTelemetryForMaUpdate(runtime);
+            }else{
+                log.warn("策略1分钟MA收到实时K线警告，实时性存在问题 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
+                    runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
+                    event.receivedAt(), event.kline().closed(), snapshot.closedKlines(), snapshot.ready());
             }
         }
     }
