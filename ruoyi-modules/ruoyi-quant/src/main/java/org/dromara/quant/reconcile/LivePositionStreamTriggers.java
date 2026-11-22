@@ -82,6 +82,9 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
         for (QuantCredential credential : enabledCredentials) {
             Long id = credential.getId();
             if (!"LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                if (!subscriptions.containsKey(id)) {
+                    freshness.clearPrivateStreamRequirement(id, "RUN_MODE_NOT_LIVE");
+                }
                 continue;
             }
             liveIds.add(id);
