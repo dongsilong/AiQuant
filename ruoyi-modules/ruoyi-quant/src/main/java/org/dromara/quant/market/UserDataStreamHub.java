@@ -7,6 +7,7 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.decision.TradeDecisionLogService;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.exchange.ExchangeMarketPort;
+import org.dromara.quant.exchange.ExchangeTradingPort;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.TradingPreparationService;
 import org.dromara.quant.notification.QuantTradeNotificationService;
@@ -28,6 +29,8 @@ import java.util.function.Consumer;
 @Slf4j
 public class UserDataStreamHub {
     private static final long LISTEN_KEY_SAFE_RENEWAL_MILLIS = TimeUnit.MINUTES.toMillis(55);
+    private static final long START_RETRY_BASE_MILLIS = 1_000L;
+    private static final long START_RETRY_MAX_MILLIS = 60_000L;
     /**
      * 交易所统一网关。
      */
@@ -213,6 +216,9 @@ public class UserDataStreamHub {
         private volatile ScheduledFuture<?> startRetryTask;
         private volatile long startRetryNotBeforeNanos;
         private volatile Instant lastKeepaliveSuccessAt;
+        private int startFailureCount;
+        private long connectedGeneration = -1L;
+        private long disconnectedGeneration = -1L;
         /**
          * 组件/Runtime 是否已经关闭。
          */
@@ -263,7 +269,6 @@ public class UserDataStreamHub {
             }
             try {
                 long attempt = ++generation;
-                Instant listenKeyCreatedAt = Instant.now();
                 ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
                 positionCache.begin(credential.getId(), exchangeCredential, () -> {
                     ExchangeGateway.UserDataStreamSession currentSession = session;
@@ -278,8 +283,8 @@ public class UserDataStreamHub {
                     }
                 });
                 // Opening a Binance connection can block longer than the DB
-                // lease. Never publish CONNECTED or retain a session if another
-                // node took ownership while the network request was in flight.
+                // lease. Never retain a session if another node took ownership
+                // while the network request was in flight.
                 if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && !ownsLiveStream(credential.getId())) {
                     ExchangeGateway.UserDataStreamSession obsolete = session;
                     session = null;
@@ -288,13 +293,11 @@ public class UserDataStreamHub {
                     }
                     throw new IllegalStateException("LIVE private stream lease lost during connection establishment");
                 }
-                lastEventAt = Instant.now();
-                lastKeepaliveSuccessAt = listenKeyCreatedAt;
-                onEvent(new ExchangeGateway.UserDataEvent("CONNECTED", lastEventAt, null));
-                if (keepaliveTask != null) {
-                    keepaliveTask.cancel(false);
+                // SDK transport connects synchronously. RAW_OKHTTP connects asynchronously
+                // and reports CONNECTED from the actual WebSocket onOpen callback.
+                if (session.isConnected()) {
+                    onEvent(new ExchangeGateway.UserDataEvent("CONNECTED", Instant.now(), null));
                 }
-                keepaliveTask = scheduler.scheduleAtFixedRate(this::keepAlive, 30, 30, TimeUnit.MINUTES);
             } catch (RuntimeException ex) {
                 log.error("用户数据流启动失败 credentialId={}: {}", credential.getId(), ex.getMessage(), ex);
                 // The socket may already have been created when initial event
@@ -318,19 +321,52 @@ public class UserDataStreamHub {
                 balanceCache.disconnect(credential.getId());
                 preparationService.invalidate(credential.getId());
                 long retryAfterMillis = throttleRetryAfterMillis(ex);
-                if (retryAfterMillis > 0 && !closed && !listeners.isEmpty()) {
-                    scheduleStartRetry(retryAfterMillis);
-                    log.warn("用户数据流启动被 REST 调度或交易所限流延后，按退避时间重试 credentialId={} errorType={} retryAfterMs={}",
-                        credential.getId(), ex.getClass().getSimpleName(), retryAfterMillis);
+                long retryDelayMillis = retryAfterMillis > 0
+                    ? retryAfterMillis + ThreadLocalRandom.current().nextLong(0L, 1_001L)
+                    : isTransientStartFailure(ex) ? nextStartRetryDelayMillis() : 0L;
+                if (retryDelayMillis > 0 && !closed && !listeners.isEmpty()) {
+                    scheduleStartRetry(retryDelayMillis);
+                    log.warn("用户数据流启动失败，按退避时间重试 credentialId={} errorType={} retryInMs={} consecutiveFailures={}",
+                        credential.getId(), ex.getClass().getSimpleName(), retryDelayMillis, startFailureCount);
                 }
             }
         }
 
         private void onEvent(ExchangeGateway.UserDataEvent event) {
+            if (event == null || event.eventType() == null) {
+                return;
+            }
+            String eventType = event.eventType();
+            if ("CONNECTED".equalsIgnoreCase(eventType)) {
+                ExchangeGateway.UserDataStreamSession current = session;
+                if (current == null || !current.isConnected() || connectedGeneration == generation) {
+                    return;
+                }
+                connectedGeneration = generation;
+                disconnectedGeneration = -1L;
+                startFailureCount = 0;
+                startRetryNotBeforeNanos = 0L;
+                if (startRetryTask != null) {
+                    startRetryTask.cancel(false);
+                    startRetryTask = null;
+                }
+                lastKeepaliveSuccessAt = current.startedAt();
+                if (keepaliveTask != null) {
+                    keepaliveTask.cancel(false);
+                }
+                keepaliveTask = scheduler.scheduleAtFixedRate(this::keepAlive, 30, 30, TimeUnit.MINUTES);
+            } else if ("DISCONNECTED".equalsIgnoreCase(eventType) || "listenKeyExpired".equalsIgnoreCase(eventType)) {
+                if (disconnectedGeneration == generation) {
+                    return;
+                }
+                disconnectedGeneration = generation;
+                lastKeepaliveSuccessAt = null;
+            }
+
             // 快照触发必须先于持仓协调、决策日志和缓存处理，避免这些同步步骤推迟平仓资金采样。
-            if (event != null && tradeNotifications != null
-                && ("ORDER_TRADE_UPDATE".equals(event.eventType()) || "ACCOUNT_UPDATE".equals(event.eventType())
-                    || "DISCONNECTED".equals(event.eventType()) || "listenKeyExpired".equalsIgnoreCase(event.eventType()))) {
+            if (tradeNotifications != null
+                && ("ORDER_TRADE_UPDATE".equals(eventType) || "ACCOUNT_UPDATE".equals(eventType)
+                    || "DISCONNECTED".equals(eventType) || "listenKeyExpired".equalsIgnoreCase(eventType))) {
                 tradeNotifications.captureCloseSnapshotFromUserDataEvent(
                     credential.getId(), executionService.toCredential(credential), event);
             }
@@ -351,7 +387,7 @@ public class UserDataStreamHub {
                     log.warn("用户数据流消费者异常 credentialId={}: {}", credential.getId(), ex.getMessage());
                 }
             });
-            if (event != null && ("listenKeyExpired".equals(event.eventType()) || "DISCONNECTED".equals(event.eventType()))) {
+            if ("listenKeyExpired".equalsIgnoreCase(eventType) || "DISCONNECTED".equalsIgnoreCase(eventType)) {
                 scheduler.execute(this::restart);
             }
         }
@@ -437,6 +473,23 @@ public class UserDataStreamHub {
             return 0L;
         }
 
+        private boolean isTransientStartFailure(RuntimeException error) {
+            if (error instanceof ExchangeTradingPort.ExchangeRequestException request) {
+                Integer status = request.httpStatus();
+                String rootCause = request.rootCauseType();
+                return status == null || status == 0 || status >= 500
+                    || rootCause != null && (rootCause.contains("IOException") || rootCause.contains("EOFException")
+                        || rootCause.contains("SocketException") || rootCause.contains("SSL"));
+            }
+            return false;
+        }
+
+        private long nextStartRetryDelayMillis() {
+            int attempt = Math.min(++startFailureCount, 7);
+            long baseDelay = Math.min(START_RETRY_MAX_MILLIS, START_RETRY_BASE_MILLIS << (attempt - 1));
+            return baseDelay + ThreadLocalRandom.current().nextLong(0L, Math.max(1L, baseDelay / 4L) + 1L);
+        }
+
         private synchronized void checkHealth() {
             ExchangeGateway.UserDataStreamSession current = session;
             Instant lastSuccess = lastKeepaliveSuccessAt;
@@ -464,6 +517,11 @@ public class UserDataStreamHub {
             }
             startRetryNotBeforeNanos = 0L;
             lastKeepaliveSuccessAt = null;
+            connectedGeneration = -1L;
+            disconnectedGeneration = -1L;
+            if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && positionEvents != null) {
+                positionEvents.onUserDataEvent(credential.getId(), new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
+            }
             ExchangeGateway.UserDataStreamSession current = session;
             session = null;
             if (current != null) {
@@ -473,7 +531,10 @@ public class UserDataStreamHub {
                 }
             }
             if (!closed && !listeners.isEmpty()) {
-                scheduler.schedule(this::start, 3, TimeUnit.SECONDS);
+                long retryDelayMillis = nextStartRetryDelayMillis();
+                scheduleStartRetry(retryDelayMillis);
+                log.warn("用户数据流断开，按退避时间重建连接 credentialId={} retryInMs={} consecutiveFailures={}",
+                    credential.getId(), retryDelayMillis, startFailureCount);
             }
         }
 
@@ -493,6 +554,8 @@ public class UserDataStreamHub {
             }
             startRetryNotBeforeNanos = 0L;
             lastKeepaliveSuccessAt = null;
+            connectedGeneration = -1L;
+            disconnectedGeneration = -1L;
             listeners.forEach(StreamEventConsumer::close);
             listeners.clear();
             if (keepaliveTask != null) {

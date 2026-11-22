@@ -18,6 +18,8 @@ public class LivePositionFreshness {
     private static final Duration MAX_AGE = Duration.ofSeconds(120);
     private final ConcurrentHashMap<Long, Instant> verified = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicLong> generations = new ConcurrentHashMap<>();
+    private final java.util.Set<Long> privateStreamRequired = ConcurrentHashMap.newKeySet();
+    private final java.util.Set<Long> privateStreamConnected = ConcurrentHashMap.newKeySet();
 
     /**
      * 返回账户当前持仓事实代次，用于拒绝过期刷新结果。
@@ -31,12 +33,93 @@ public class LivePositionFreshness {
      */
     public boolean verifiedIfUnchanged(Long credentialId, long expectedGeneration) {
         synchronized (generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong())) {
-            if (generation(credentialId) != expectedGeneration) {
+            if (generation(credentialId) != expectedGeneration || !privateStreamReady(credentialId)) {
                 return false;
             }
             verified.put(credentialId, Instant.now());
             return true;
         }
+    }
+
+    /**
+     * 将账户纳入 LIVE 私有流连接门禁；新订阅未完成握手前不得释放开仓准入。
+     */
+    public void requirePrivateStream(Long credentialId, String reason) {
+        if (credentialId == null) {
+            return;
+        }
+        var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+        synchronized (counter) {
+            boolean newlyRequired = privateStreamRequired.add(credentialId);
+            boolean wasConnected = privateStreamConnected.remove(credentialId);
+            boolean hadVerifiedSnapshot = verified.remove(credentialId) != null;
+            if (newlyRequired || wasConnected || hadVerifiedSnapshot) {
+                invalidateLocked(credentialId, counter, reason);
+            }
+        }
+    }
+
+    /**
+     * 只有真实 WebSocket CONNECTED 事件才能打开连接侧门禁；随后仍需新的完整 REST 持仓核验。
+     */
+    public void privateStreamConnected(Long credentialId) {
+        if (credentialId == null) {
+            return;
+        }
+        var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+        synchronized (counter) {
+            if (privateStreamRequired.add(credentialId)) {
+                invalidateLocked(credentialId, counter, "PRIVATE_STREAM_REQUIRED");
+            }
+            privateStreamConnected.add(credentialId);
+        }
+    }
+
+    /**
+     * 私有流断开时同时关闭连接侧门禁并撤销当前持仓核验。
+     */
+    public void privateStreamDisconnected(Long credentialId, String reason) {
+        if (credentialId == null) {
+            return;
+        }
+        var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+        synchronized (counter) {
+            boolean newlyRequired = privateStreamRequired.add(credentialId);
+            boolean wasConnected = privateStreamConnected.remove(credentialId);
+            boolean hadVerifiedSnapshot = verified.remove(credentialId) != null;
+            if (newlyRequired || wasConnected || hadVerifiedSnapshot) {
+                invalidateLocked(credentialId, counter, reason);
+            }
+        }
+    }
+
+    /**
+     * LIVE 凭证停用或切换到非 LIVE 模式后移除专属私有流门禁。
+     */
+    public void clearPrivateStreamRequirement(Long credentialId, String reason) {
+        if (credentialId == null) {
+            return;
+        }
+        var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+        synchronized (counter) {
+            boolean wasRequired = privateStreamRequired.remove(credentialId);
+            privateStreamConnected.remove(credentialId);
+            boolean hadVerifiedSnapshot = verified.remove(credentialId) != null;
+            if (wasRequired || hadVerifiedSnapshot) {
+                invalidateLocked(credentialId, counter, reason);
+            }
+        }
+    }
+
+    private boolean privateStreamReady(Long credentialId) {
+        return !privateStreamRequired.contains(credentialId) || privateStreamConnected.contains(credentialId);
+    }
+
+    private void invalidateLocked(Long credentialId, java.util.concurrent.atomic.AtomicLong counter, String reason) {
+        long previous = counter.getAndIncrement();
+        verified.remove(credentialId);
+        log.debug("LIVE position snapshot invalidated credentialId={} reason={} generation={}->{}",
+            credentialId, reason == null ? "UNSPECIFIED" : reason, previous, previous + 1);
     }
 
     /**
@@ -49,7 +132,7 @@ public class LivePositionFreshness {
         }
         var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
         synchronized (counter) {
-            if (counter.get() != expectedGeneration) {
+            if (counter.get() != expectedGeneration || !privateStreamReady(credentialId)) {
                 return false;
             }
             action.run();
@@ -62,7 +145,12 @@ public class LivePositionFreshness {
      */
     public void verified(Long credentialId) {
         if (credentialId != null) {
-            verified.put(credentialId, Instant.now());
+            var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+            synchronized (counter) {
+                if (privateStreamReady(credentialId)) {
+                    verified.put(credentialId, Instant.now());
+                }
+            }
         }
     }
 
@@ -80,10 +168,7 @@ public class LivePositionFreshness {
         if (credentialId != null) {
             var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
             synchronized (counter) {
-                long previous = counter.getAndIncrement();
-                verified.remove(credentialId);
-                log.debug("LIVE position snapshot invalidated credentialId={} reason={} generation={}->{}",
-                    credentialId, reason == null ? "UNSPECIFIED" : reason, previous, previous + 1);
+                invalidateLocked(credentialId, counter, reason);
             }
         }
     }
@@ -92,8 +177,13 @@ public class LivePositionFreshness {
      * 判断账户持仓事实是否仍处于已核验状态。
      */
     public boolean fresh(Long credentialId) {
-        Instant at = verified.get(credentialId);
-        return at != null && !at.isAfter(Instant.now()) && Duration.between(at, Instant.now()).compareTo(MAX_AGE) <= 0;
+        if (credentialId == null) {
+            return false;
+        }
+        var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
+        synchronized (counter) {
+            return privateStreamReady(credentialId) && isFresh(verified.get(credentialId));
+        }
     }
 
     /**
@@ -105,8 +195,8 @@ public class LivePositionFreshness {
         }
         var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
         synchronized (counter) {
-            if (!isFresh(verified.get(credentialId))) {
-                throw new IllegalStateException("LIVE 账户级持仓快照缺失或过期");
+            if (!privateStreamReady(credentialId) || !isFresh(verified.get(credentialId))) {
+                throw new IllegalStateException("LIVE 私有流未连接或账户级持仓快照缺失、过期");
             }
             return counter.get();
         }
@@ -121,8 +211,8 @@ public class LivePositionFreshness {
         }
         var counter = generations.computeIfAbsent(credentialId, ignored -> new java.util.concurrent.atomic.AtomicLong());
         synchronized (counter) {
-            if (counter.get() != expectedGeneration || !isFresh(verified.get(credentialId))) {
-                throw new IllegalStateException("LIVE 账户级持仓快照在开仓准备期间失效或发生变化");
+            if (counter.get() != expectedGeneration || !privateStreamReady(credentialId) || !isFresh(verified.get(credentialId))) {
+                throw new IllegalStateException("LIVE 私有流或账户级持仓快照在开仓准备期间失效或发生变化");
             }
         }
     }

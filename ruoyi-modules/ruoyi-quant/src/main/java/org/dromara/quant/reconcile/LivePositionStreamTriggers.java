@@ -69,7 +69,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
             // previously authorized account and a renewable stale lease.
             for (Long id : Set.copyOf(subscriptions.keySet())) {
                 closeSubscription(id);
-                freshness.invalidate(id, "CREDENTIAL_DISCOVERY_FAILED");
+                freshness.privateStreamDisconnected(id, "CREDENTIAL_DISCOVERY_FAILED");
                 try {
                     lease.release(id);
                 } catch (RuntimeException releaseError) {
@@ -80,10 +80,14 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
             return;
         }
         for (QuantCredential credential : enabledCredentials) {
+            Long id = credential.getId();
             if (!"LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                if (subscriptions.containsKey(id)) {
+                    closeSubscription(id);
+                }
+                freshness.clearPrivateStreamRequirement(id, "RUN_MODE_NOT_LIVE");
                 continue;
             }
-            Long id = credential.getId();
             liveIds.add(id);
             try {
                 Long leaseEpoch = lease.acquire(id, LEASE_SECONDS);
@@ -100,7 +104,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                         log.warn("LIVE私有流租约竞争 credentialId={} dbLease=[{}]；本节点禁止创建交易策略运行时", id, leaseState);
                     }
                     closeSubscription(id);
-                    freshness.invalidate(id, "LEASE_NOT_OWNED");
+                    freshness.privateStreamDisconnected(id, "LEASE_NOT_OWNED");
                     continue;
                 }
                 Long previousEpoch = subscriptionEpochs.get(id);
@@ -108,7 +112,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                     // A process can reacquire an expired lease with the same token.
                     // Epoch changes still fence the old socket and its account facts.
                     closeSubscription(id);
-                    freshness.invalidate(id, "LEASE_EPOCH_CHANGED");
+                    freshness.privateStreamDisconnected(id, "LEASE_EPOCH_CHANGED");
                 }
                 // Hub may have forcibly removed the old WebSocket after a
                 // lease loss while this supervisor still holds its old handle.
@@ -125,18 +129,18 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 // A new stream ownership generation cannot inherit a position
                 // snapshot verified under the previous WebSocket/lease. Block
                 // LIVE entries until a fresh authenticated REST snapshot wins.
-                freshness.invalidate(id, "STREAM_SUBSCRIPTION_CREATED");
+                freshness.requirePrivateStream(id, "STREAM_SUBSCRIPTION_CREATED");
                 AutoCloseable reference = hub.subscribe(credential, event -> {
                     // Hub centrally forwards events into the coordinator; this
                     // listener exists only to hold an active subscription.
                 });
                 subscriptions.put(id, reference);
                 nextLeaseConflictLogAt.remove(id);
-                log.info("LIVE私有流租约已获取并注册共享订阅 credentialId={}，允许本节点策略运行时继续初始化", id);
+                log.info("LIVE私有流租约已获取并注册共享订阅 credentialId={}，等待WebSocket连接及完整持仓核验后开放开仓准入", id);
                 coordinator.queueRefresh(id);
             } catch (RuntimeException ex) {
                 closeSubscription(id);
-                freshness.invalidate(id, "STREAM_ENROLLMENT_FAILED");
+                freshness.privateStreamDisconnected(id, "STREAM_ENROLLMENT_FAILED");
                 // A failed Hub enrollment must not strand a DB lease for 75 seconds.
                 // A conditional release cannot affect another node's ownership.
                 try {
@@ -150,7 +154,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
         for (Long id : Set.copyOf(subscriptions.keySet())) {
             if (!liveIds.contains(id)) {
                 closeSubscription(id);
-                freshness.invalidate(id, "CREDENTIAL_DISABLED");
+                freshness.clearPrivateStreamRequirement(id, "CREDENTIAL_DISABLED");
                 try {
                     lease.release(id);
                 } catch (RuntimeException ex) {
@@ -163,6 +167,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
     }
 
     private void closeSubscription(Long id) {
+        freshness.privateStreamDisconnected(id, "STREAM_SUBSCRIPTION_CLOSED");
         Long epoch = subscriptionEpochs.remove(id);
         if (epoch != null) {
             hub.unregisterLeaseOwner(id, epoch);
@@ -184,7 +189,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
     public synchronized void close() {
         for (Long id : Set.copyOf(subscriptions.keySet())) {
             closeSubscription(id);
-            freshness.invalidate(id, "APPLICATION_SHUTDOWN");
+            freshness.privateStreamDisconnected(id, "APPLICATION_SHUTDOWN");
             try {
                 lease.release(id);
             } catch (RuntimeException ex) {

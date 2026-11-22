@@ -119,6 +119,77 @@ class UserDataStreamHubTest {
     }
 
     @Test
+    void rawSessionDoesNotPublishConnectedUntilTransportConfirmsHandshake() throws Exception {
+        var gateway = mock(ExchangeGateway.class);
+        var execution = mock(TradeExecutionApplicationService.class);
+        var credential = new QuantCredential();
+        credential.setId(75L);
+        credential.setRunMode("TESTNET");
+        var exchange = new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET");
+        when(execution.toCredential(credential)).thenReturn(exchange);
+        var receiver = new AtomicReference<Consumer<ExchangeGateway.UserDataEvent>>();
+        var connected = new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(gateway.subscribeUserData(eq(exchange), any())).thenAnswer(invocation -> {
+            receiver.set(invocation.getArgument(1));
+            return new ExchangeGateway.UserDataStreamSession("test", Instant.now(), () -> {
+            }, () -> {
+            }, connected::get);
+        });
+        var connectedEvent = new java.util.concurrent.CountDownLatch(1);
+        var hub = new UserDataStreamHub(gateway, execution, mock(AccountPositionCache.class),
+            mock(AccountBalanceCache.class), mock(org.dromara.quant.execution.TradingPreparationService.class));
+        try {
+            hub.subscribe(credential, event -> {
+                if ("CONNECTED".equals(event.eventType())) {
+                    connectedEvent.countDown();
+                }
+            });
+
+            assertFalse(connectedEvent.await(100, java.util.concurrent.TimeUnit.MILLISECONDS),
+                "listenKey/session allocation must not be treated as a completed WebSocket handshake");
+            connected.set(true);
+            receiver.get().accept(new ExchangeGateway.UserDataEvent("CONNECTED", Instant.now(), null));
+
+            assertTrue(connectedEvent.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        } finally {
+            hub.destroy();
+        }
+    }
+
+    @Test
+    void transientListenKeyNetworkFailureSchedulesExponentialRetry() {
+        var gateway = mock(ExchangeGateway.class);
+        var execution = mock(TradeExecutionApplicationService.class);
+        var credential = new QuantCredential();
+        credential.setId(76L);
+        credential.setRunMode("LIVE");
+        var exchange = new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE");
+        when(execution.toCredential(credential)).thenReturn(exchange);
+        when(gateway.subscribeUserData(eq(exchange), any())).thenThrow(
+            new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeRequestException(
+                "START_USER_DATA_STREAM", 0, null, "network failure", "com.binance.connector.client.common.ApiException", "java.io.EOFException"));
+        var hub = new UserDataStreamHub(gateway, execution, mock(AccountPositionCache.class),
+            mock(AccountBalanceCache.class), mock(org.dromara.quant.execution.TradingPreparationService.class));
+        var lease = mock(org.dromara.quant.reconcile.LiveUserStreamLeaseService.class);
+        when(lease.owns(76L, 1L)).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(hub, "streamLease", lease);
+        try {
+            hub.registerLeaseOwner(76L, 1L);
+            hub.subscribe(credential, ignored -> {
+            });
+
+            var streams = (java.util.Map<Long, ?>) org.springframework.test.util.ReflectionTestUtils.getField(hub, "streams");
+            Object stream = streams.get(76L);
+            assertNotNull(org.springframework.test.util.ReflectionTestUtils.getField(stream, "startRetryTask"));
+            assertEquals(1, org.springframework.test.util.ReflectionTestUtils.getField(stream, "startFailureCount"));
+            hub.healthCheck();
+            verify(gateway, times(1)).subscribeUserData(eq(exchange), any());
+        } finally {
+            hub.destroy();
+        }
+    }
+
+    @Test
     void testnetOrderFillEventReachesStrategyListenerAndAccountCaches() throws Exception {
         var gateway = mock(ExchangeGateway.class);
         var execution = mock(TradeExecutionApplicationService.class);

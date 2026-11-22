@@ -53,11 +53,14 @@ public class LivePositionEventCoordinator {
         String type = event.eventType();
         if ("DISCONNECTED".equalsIgnoreCase(type) || "listenKeyExpired".equalsIgnoreCase(type)) {
             if (freshness != null) {
-                freshness.invalidate(credentialId, "STREAM_DISCONNECTED");
+                freshness.privateStreamDisconnected(credentialId, "STREAM_DISCONNECTED");
             }
             return;
         }
         if ("CONNECTED".equalsIgnoreCase(type)) {
+            if (freshness != null) {
+                freshness.privateStreamConnected(credentialId);
+            }
             protectionRecoveryPending.add(new ProtectionRecoveryRequest(credentialId, null));
             queueRefresh(credentialId);
             return;

@@ -1881,6 +1881,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         boolean testnet = "TESTNET".equalsIgnoreCase(credential.runMode());
         String base = testnet ? properties.getBinance().getTestnetUserDataStreamUrl() : "wss://fstream.binance.com/private/ws/";
         Consumer<String> events = text -> listener.accept(parseUserDataEvent(text));
+        Runnable connected = () -> listener.accept(new UserDataEvent("CONNECTED", Instant.now(), null));
         Runnable disconnected = () -> listener.accept(new UserDataEvent("DISCONNECTED", Instant.now(), null));
         if (sdkStreamsEnabled()) {
             try {
@@ -1905,7 +1906,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                     ex.getClass().getSimpleName());
             }
         }
-        SocketConnection socket = new SocketConnection(base + listenKey, events, disconnected);
+        SocketConnection socket = new SocketConnection(base + listenKey, events, connected, disconnected);
         StreamHandle managed = trackWebsocket(() -> {
             socket.close();
             try {
@@ -2542,11 +2543,17 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         private final AtomicBoolean closed = new AtomicBoolean();
         private final AtomicBoolean connected = new AtomicBoolean();
         private final Consumer<String> messages;
+        private final Runnable connectedNotification;
         private final Runnable disconnected;
         private final okhttp3.WebSocket socket;
 
         private SocketConnection(String url, Consumer<String> messages, Runnable disconnected) {
+            this(url, messages, () -> { }, disconnected);
+        }
+
+        private SocketConnection(String url, Consumer<String> messages, Runnable connectedNotification, Runnable disconnected) {
             this.messages = messages;
+            this.connectedNotification = connectedNotification;
             this.disconnected = disconnected;
             var builder =
                 new okhttp3.OkHttpClient.Builder().connectionPool(restPool).dispatcher(restDispatcher).connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS).readTimeout(0,
@@ -2560,7 +2567,17 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
 
         @Override
         public void onOpen(okhttp3.WebSocket socket, okhttp3.Response response) {
-            connected.set(!closed.get());
+            if (closed.get()) {
+                socket.close(1000, null);
+                return;
+            }
+            connected.set(true);
+            try {
+                connectedNotification.run();
+            } catch (RuntimeException ex) {
+                fail();
+                socket.cancel();
+            }
         }
 
         @Override
