@@ -2,6 +2,7 @@ package org.dromara.quant.reconcile;
 
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.reconcile.mapper.TradeHistoryCollectionLeaseMapper;
 import org.springframework.stereotype.Service;
 
@@ -15,6 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * Coordinates historical fill collection for one credential and symbol across nodes.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class TradeHistoryCollectionLeaseService {
@@ -67,8 +69,16 @@ public class TradeHistoryCollectionLeaseService {
             if (lost.get()) {
                 return;
             }
-            if (mapper.renew(credentialId, symbol, owner, epoch, LEASE_SECONDS) != 1) {
-                lost.set(true);
+            try {
+                if (mapper.renew(credentialId, symbol, owner, epoch, LEASE_SECONDS) != 1) {
+                    lost.set(true);
+                    log.warn("成交历史采集租约续期未能确认持有权，停止使用该租约 credentialId={} symbol={} epoch={}",
+                        credentialId, symbol, epoch);
+                }
+            } catch (RuntimeException failure) {
+                // A transient database error must not cancel scheduleAtFixedRate's future renewals.
+                log.warn("成交历史采集租约续期请求失败，将在下个续期间隔继续尝试 credentialId={} symbol={} epoch={}",
+                    credentialId, symbol, epoch, failure);
             }
         }
 
