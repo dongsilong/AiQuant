@@ -23,6 +23,7 @@ import org.dromara.quant.notification.mapper.QuantNotificationMapper;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
+import org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLeaseMapper;
 import org.dromara.quant.runtime.mapper.QuantStrategyPositionStateMapper;
 import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.strategy.domain.QuantStrategyInstance;
@@ -62,6 +63,7 @@ public class QuantAdminController {
     private final QuantExecutionRecordMapper executionMapper;
     private final QuantNotificationMapper notificationMapper;
     private final QuantStrategyService strategyService;
+    private final StrategyRuntimeLeaseMapper runtimeLeaseMapper;
 
     private static Map<String, Object> map() {
         return new LinkedHashMap<>();
@@ -157,6 +159,9 @@ public class QuantAdminController {
             QuantStrategySymbol binding = strategySymbols.get(item.getStrategySymbolId());
             row.put("symbol", binding == null || symbols.get(binding.getSymbolId()) == null ? null : symbols.get(binding.getSymbolId()).getSymbol());
             row.put("runtimeEnabled", binding == null || !Boolean.FALSE.equals(binding.getRuntimeEnabled()));
+            boolean strategyEnabled = strategies.get(item.getStrategyId()) != null && "1".equals(strategies.get(item.getStrategyId()).getStatus());
+            row.put("strategyEnabled", strategyEnabled);
+            row.put("runtimeActive", strategyEnabled && "RUNNING".equals(item.getStatus()) && runtimeLeaseMapper.countActiveInstance(item.getId()) > 0);
             row.put("status", item.getStatus());
             row.put("lastSignalAt", item.getLastSignalAt());
             row.put("lastError", item.getLastError());
