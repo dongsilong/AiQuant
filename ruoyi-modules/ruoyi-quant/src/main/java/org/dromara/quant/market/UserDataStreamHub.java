@@ -356,6 +356,8 @@ public class UserDataStreamHub {
                     startRetryTask = null;
                 }
                 lastKeepaliveSuccessAt = current.startedAt();
+                log.info("账户私有WebSocket握手成功 credentialId={} runMode={} generation={}",
+                    credential.getId(), credential.getRunMode(), generation);
                 if (keepaliveTask != null) {
                     keepaliveTask.cancel(false);
                 }
@@ -366,6 +368,8 @@ public class UserDataStreamHub {
                 }
                 disconnectedGeneration = generation;
                 lastKeepaliveSuccessAt = null;
+                log.warn("账户私有WebSocket连接断开 credentialId={} runMode={} eventType={} generation={}",
+                    credential.getId(), credential.getRunMode(), eventType, generation);
             }
 
             // 快照触发必须先于持仓协调、决策日志和缓存处理，避免这些同步步骤推迟平仓资金采样。
