@@ -1667,7 +1667,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                         event.receivedAt(), event.kline().closed(), snapshot.closedKlines(), snapshot.ready());
                 }*/
                 publishSlopeTelemetryForMaUpdate(runtime);
-            }else{
+            } else if ("KLINE".equalsIgnoreCase(event.type()) && event.kline() != null) {
                 log.warn("策略1分钟MA收到实时K线警告，实时性存在问题 instanceId={} mode={} symbol={} eventTime={} receivedAt={} closed={} closedKlines={}/7 streamReady={}",
                     runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.eventTime(),
                     event.receivedAt(), event.kline().closed(), snapshot.closedKlines(), snapshot.ready());
