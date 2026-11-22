@@ -96,6 +96,41 @@ public class StrategyInstanceService {
     }
 
     /**
+     * 启动单个策略实例。策略整体启用状态由上层服务校验。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void startInstance(Long strategyId, Long instanceId) {
+        QuantStrategyInstance instance = instanceMapper.selectById(instanceId);
+        if (instance == null || !strategyId.equals(instance.getStrategyId())) {
+            throw new org.dromara.common.core.exception.ServiceException("策略实例不存在或不属于当前策略");
+        }
+        if (!"RUNNING".equals(instance.getStatus())) {
+            instance.setStatus("RUNNING");
+            if (instanceMapper.updateById(instance) != 1) {
+                throw new org.dromara.common.core.exception.ServiceException("启动策略实例失败");
+            }
+        }
+    }
+
+    /**
+     * 停止单个策略实例，不影响同一策略下的其他实例。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void stopInstance(Long strategyId, Long instanceId) {
+        QuantStrategyInstance instance = instanceMapper.selectById(instanceId);
+        if (instance == null || !strategyId.equals(instance.getStrategyId())) {
+            throw new org.dromara.common.core.exception.ServiceException("策略实例不存在或不属于当前策略");
+        }
+        if (!"STOPPED".equals(instance.getStatus())) {
+            instance.setStatus("STOPPED");
+            if (instanceMapper.updateById(instance) != 1) {
+                throw new org.dromara.common.core.exception.ServiceException("停止策略实例失败");
+            }
+        }
+        afterCommit(() -> runtimeService.invalidateInstance(instanceId));
+    }
+
+    /**
      * 停止组件或订阅并释放资源。
      */
     @Transactional(rollbackFor = Exception.class)
