@@ -67,6 +67,28 @@ class TradeHistoryCollectionLeaseServiceTest {
     }
 
     @Test
+    void retriesLeaseRenewalAfterATemporaryDatabaseFailure() {
+        var mapper = mock(TradeHistoryCollectionLeaseMapper.class);
+        when(mapper.acquire(eq(9L), eq("XRPUSDT"), anyString(), eq(90))).thenReturn(1);
+        when(mapper.currentEpoch(eq(9L), eq("XRPUSDT"), anyString())).thenReturn(31L);
+        when(mapper.renew(eq(9L), eq("XRPUSDT"), anyString(), eq(31L), eq(90)))
+            .thenThrow(new IllegalStateException("temporary database error"))
+            .thenReturn(1);
+        when(mapper.lockOwned(eq(9L), eq("XRPUSDT"), anyString(), eq(31L))).thenReturn(31L);
+        var service = new TradeHistoryCollectionLeaseService(mapper);
+
+        var lease = service.acquire(9L, "XRPUSDT");
+        assertNotNull(lease);
+        assertDoesNotThrow(() -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(lease, "renew"));
+        assertDoesNotThrow(() -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(lease, "renew"));
+        assertDoesNotThrow(lease::assertOwnedForCommit);
+
+        verify(mapper, times(2)).renew(eq(9L), eq("XRPUSDT"), anyString(), eq(31L), eq(90));
+        lease.close();
+        service.shutdown();
+    }
+
+    @Test
     void returnsNoLeaseWhenAnotherNodeOwnsTheSymbol() {
         var mapper = mock(TradeHistoryCollectionLeaseMapper.class);
         when(mapper.acquire(eq(9L), eq("SOLUSDT"), anyString(), eq(90))).thenReturn(0);
