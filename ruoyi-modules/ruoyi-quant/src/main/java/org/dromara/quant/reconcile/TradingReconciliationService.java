@@ -119,8 +119,6 @@ public class TradingReconciliationService {
     /** Current wallet snapshots cannot reconstruct balances for historical fills. */
     private static final Duration POST_FILL_BALANCE_CAPTURE_WINDOW = Duration.ofMinutes(2);
     @Autowired
-    private TradeDecisionLogService decisionLogs;
-    @Autowired
     private TradeHistoryMapper tradeHistoryMapper;
     @Autowired(required = false)
     private org.dromara.quant.execution.TradeCycleProjectionService tradeCycleProjectionService;
@@ -1338,10 +1336,6 @@ public class TradingReconciliationService {
             if (persisted == 1 && sourceFactsChanged) {
                 projectionDirtySymbols.add(s.symbol().toUpperCase(Locale.ROOT));
             }
-            // 历史/当前订单快照同样可补齐受理后的成交事实；价格、数量、时间均沿用交易所返回值。
-            if (decisionLogs != null) {
-                decisionLogs.order(credential.getId(), s);
-            }
         }
         if (tradeCycleProjectionService != null) {
             projectionDirtySymbols.forEach(symbol -> tradeCycleProjectionService.markDirty(credential.getId(), symbol));
@@ -1408,10 +1402,6 @@ public class TradingReconciliationService {
                     continue;
                 }
             }
-            if (decisionLogs != null) {
-                decisionLogs.trade(credential.getId(), s);
-            }
-
             QuantTrade entity = tradeMapper.selectOne(new LambdaQueryWrapper<QuantTrade>()
                 .eq(QuantTrade::getCredentialId, credential.getId())
                 .eq(QuantTrade::getSymbol, s.symbol())

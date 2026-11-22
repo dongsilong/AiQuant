@@ -138,8 +138,10 @@ class UserDataStreamHubTest {
             }, () -> true);
         });
         var tradeNotifications = mock(org.dromara.quant.notification.QuantTradeNotificationService.class);
+        var decisionLogs = mock(org.dromara.quant.decision.TradeDecisionLogService.class);
         var hub = new UserDataStreamHub(gateway, execution, positionCache, balanceCache, preparation);
         org.springframework.test.util.ReflectionTestUtils.setField(hub, "tradeNotifications", tradeNotifications);
+        org.springframework.test.util.ReflectionTestUtils.setField(hub, "decisionLogs", decisionLogs);
         var forwarded = new java.util.concurrent.CountDownLatch(1);
         try {
             var subscription = hub.subscribe(credential, event -> {
@@ -149,6 +151,7 @@ class UserDataStreamHubTest {
             });
             var fill = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.now(), "{\"e\":\"ORDER_TRADE_UPDATE\",\"o\":{\"X\":\"FILLED\"}}");
             receiver.get().accept(fill);
+            verify(decisionLogs).privateEvent(72L, fill);
             var eventOrder = inOrder(tradeNotifications, positionCache, balanceCache, preparation);
             eventOrder.verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, fill);
             eventOrder.verify(positionCache).onEvent(72L, fill);
