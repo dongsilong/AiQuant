@@ -324,6 +324,9 @@ public class UserDataStreamHub {
                     positionEvents.onUserDataEvent(credential.getId(), new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
                 }
                 long retryAfterMillis = throttleRetryAfterMillis(ex);
+                if (retryAfterMillis > 0) {
+                    startFailureCount = Math.min(startFailureCount + 1, 7);
+                }
                 long retryDelayMillis = retryAfterMillis > 0
                     ? retryAfterMillis + ThreadLocalRandom.current().nextLong(0L, 1_001L)
                     : isTransientStartFailure(ex) ? nextStartRetryDelayMillis() : 0L;
@@ -347,7 +350,6 @@ public class UserDataStreamHub {
                 }
                 connectedGeneration = generation;
                 disconnectedGeneration = -1L;
-                startFailureCount = 0;
                 startRetryNotBeforeNanos = 0L;
                 if (startRetryTask != null) {
                     startRetryTask.cancel(false);
@@ -413,6 +415,7 @@ public class UserDataStreamHub {
             try {
                 current.keepAlive();
                 lastKeepaliveSuccessAt = Instant.now();
+                startFailureCount = 0;
                 cancelKeepaliveRetry();
             } catch (RuntimeException ex) {
                 long retryAfterMillis = throttleRetryAfterMillis(ex);
@@ -488,8 +491,8 @@ public class UserDataStreamHub {
         }
 
         private long nextStartRetryDelayMillis() {
-            int attempt = Math.min(++startFailureCount, 7);
-            long baseDelay = Math.min(START_RETRY_MAX_MILLIS, START_RETRY_BASE_MILLIS << (attempt - 1));
+            startFailureCount = Math.min(startFailureCount + 1, 7);
+            long baseDelay = Math.min(START_RETRY_MAX_MILLIS, START_RETRY_BASE_MILLIS << (startFailureCount - 1));
             return baseDelay + ThreadLocalRandom.current().nextLong(0L, Math.max(1L, baseDelay / 4L) + 1L);
         }
 
