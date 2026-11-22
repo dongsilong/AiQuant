@@ -39,6 +39,31 @@ class TradingReconciliationSchedulerTest {
     }
 
     @Test
+    void retriesNetworkFailuresPreservedAsSafeExchangeDiagnostics() {
+        assertEquals(true, TradingReconciliationScheduler.isTransientNetworkFailure(
+            new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeRequestException(
+                "QUERY_ACCOUNT", 0, null, "ApiException",
+                "com.binance.connector.client.common.ApiException", "java.net.SocketException")));
+        assertEquals(true, TradingReconciliationScheduler.isTransientNetworkFailure(
+            new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeRequestException(
+                "QUERY_ACCOUNT", 0, null, "ApiException",
+                "com.binance.connector.client.common.ApiException", "java.net.SocketTimeoutException")));
+        assertEquals(false, TradingReconciliationScheduler.isTransientNetworkFailure(
+            new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeRequestException(
+                "QUERY_ACCOUNT", 400, null, "invalid request",
+                "com.binance.connector.client.common.ApiException", "java.lang.IllegalArgumentException")));
+        Thread.currentThread().interrupt();
+        try {
+            assertEquals(false, TradingReconciliationScheduler.isTransientNetworkFailure(
+                new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeRequestException(
+                    "QUERY_ACCOUNT", 0, null, "interrupted",
+                    "com.binance.connector.client.common.ApiException", "java.net.SocketException")));
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
     void deferredRetriesUseTheServerDelayAndBoundedExponentialBackoff() {
         assertEquals(2_000L, TradingReconciliationScheduler.retryDelayMillis(2_000L, 1));
         assertEquals(4_000L, TradingReconciliationScheduler.retryDelayMillis(0L, 3));
