@@ -91,6 +91,24 @@ public class QuantStrategyController {
     }
 
     /**
+     * 启动单个策略实例。
+     */
+    @SaCheckPermission("quant:strategy:edit")
+    @PostMapping("/{strategyId}/instances/{instanceId}/start")
+    public R<Boolean> startInstance(@PathVariable Long strategyId, @PathVariable Long instanceId) {
+        return R.ok(service.startInstance(strategyId, instanceId));
+    }
+
+    /**
+     * 停止单个策略实例。
+     */
+    @SaCheckPermission("quant:strategy:edit")
+    @PostMapping("/{strategyId}/instances/{instanceId}/stop")
+    public R<Boolean> stopInstance(@PathVariable Long strategyId, @PathVariable Long instanceId) {
+        return R.ok(service.stopInstance(strategyId, instanceId));
+    }
+
+    /**
      * 启动前检查账户、交易对和最终运行参数。
      */
     @SaCheckPermission("quant:strategy:query")
