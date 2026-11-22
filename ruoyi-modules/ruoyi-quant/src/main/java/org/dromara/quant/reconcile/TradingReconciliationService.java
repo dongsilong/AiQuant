@@ -180,6 +180,44 @@ public class TradingReconciliationService {
     public record TradingDataSyncResult(int symbolCount, int orderCount, int tradeCount) {
     }
 
+    /** 手动订单与成交同步可选的历史范围；月份按 UTC 日历月计算。 */
+    public enum ManualTradingHistoryRange {
+        THREE_DAYS("3d", 3, false),
+        SEVEN_DAYS("7d", 7, false),
+        ONE_MONTH("1m", 1, true),
+        THREE_MONTHS("3m", 3, true);
+
+        private final String code;
+        private final int amount;
+        private final boolean calendarMonths;
+
+        ManualTradingHistoryRange(String code, int amount, boolean calendarMonths) {
+            this.code = code;
+            this.amount = amount;
+            this.calendarMonths = calendarMonths;
+        }
+
+        public static ManualTradingHistoryRange fromCode(String code) {
+            if (code == null || code.isBlank()) {
+                return THREE_DAYS;
+            }
+            return Arrays.stream(values())
+                .filter(range -> range.code.equals(code))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("不支持的订单与成交同步范围"));
+        }
+
+        private Instant startAt(Instant end) {
+            return calendarMonths
+                ? end.atZone(ZoneOffset.UTC).minusMonths(amount).toInstant()
+                : end.minus(Duration.ofDays(amount));
+        }
+
+        private String code() {
+            return code;
+        }
+    }
+
     /**
      * Restore an emptied local fill ledger from Binance historical orders.
      * The account-level marker prevents every scheduler tick from rescanning the same 90-day history.
@@ -224,6 +262,12 @@ public class TradingReconciliationService {
      * Exchange reads are completed before the short per-symbol write transaction.
      */
     public TradingDataSyncResult syncTradingData(QuantCredential credential, String requestedSymbol) {
+        return syncTradingData(credential, requestedSymbol, null);
+    }
+
+    /** 手动同步按用户选择的范围拉取；内部自动账本恢复继续使用原有 90 天范围。 */
+    public TradingDataSyncResult syncTradingData(QuantCredential credential, String requestedSymbol,
+                                                  ManualTradingHistoryRange manualRange) {
         if (credential == null || credential.getId() == null) {
             throw new IllegalArgumentException("交易账户不能为空");
         }
@@ -233,9 +277,12 @@ public class TradingReconciliationService {
         String symbolFilter = requestedSymbol == null || requestedSymbol.isBlank()
             ? "" : normalizeTradingSymbol(requestedSymbol);
         Instant historyEnd = Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(credential.getRunMode()));
-        Instant historyStart = ExchangeHistoryCollector.recent90DaysStart(historyEnd);
+        String historyRange = manualRange == null ? "90d" : manualRange.code();
+        Instant historyStart = manualRange == null
+            ? ExchangeHistoryCollector.recent90DaysStart(historyEnd)
+            : manualRange.startAt(historyEnd);
         Map<String, List<ExchangeGateway.OrderSnapshot>> ordersBySymbol = collectManualOrderHistory(
-            exchangeCredential, credential.getId(), symbolFilter, historyStart, historyEnd);
+            exchangeCredential, credential.getId(), symbolFilter, historyStart, historyEnd, historyRange);
         if (ordersBySymbol.isEmpty()) {
             return new TradingDataSyncResult(0, 0, 0);
         }
@@ -334,17 +381,18 @@ public class TradingReconciliationService {
             }
         }
 
-        log.info("手动历史同步完成 credentialId={} symbolCount={} orderCount={} tradeCount={} historyStart={} historyEnd={} mode=ACCOUNT_ORDER_FIRST_90D",
-            credential.getId(), ordersBySymbol.size(), orderCount, tradeCount, historyStart, historyEnd);
+        log.info("手动历史同步完成 credentialId={} symbolCount={} orderCount={} tradeCount={} historyRange={} historyStart={} historyEnd={} mode=ACCOUNT_ORDER_FIRST",
+            credential.getId(), ordersBySymbol.size(), orderCount, tradeCount, historyRange, historyStart, historyEnd);
         return new TradingDataSyncResult(ordersBySymbol.size(), orderCount, tradeCount);
     }
 
     private Map<String, List<ExchangeGateway.OrderSnapshot>> collectManualOrderHistory(ExchangeGateway.Credential credential, Long credentialId,
-                                                                                              String symbol, Instant historyStart, Instant historyEnd) {
+                                                                                              String symbol, Instant historyStart, Instant historyEnd,
+                                                                                              String historyRange) {
         List<ExchangeGateway.OrderSnapshot> history;
         if (symbol == null || symbol.isBlank()) {
-            log.info("手动账户级历史订单查询 credentialId={} from={} to={} scope=ACCOUNT_90D",
-                credentialId, historyStart, historyEnd);
+            log.info("手动账户级历史订单查询 credentialId={} from={} to={} historyRange={}",
+                credentialId, historyStart, historyEnd, historyRange);
             history = ExchangeHistoryCollector.collect(historyStart, historyEnd, range ->
                 gateway.queryOrderHistory(credential, null, range, 1000L));
         } else {
@@ -368,8 +416,8 @@ public class TradingReconciliationService {
         }
         Map<String, List<ExchangeGateway.OrderSnapshot>> result = new TreeMap<>();
         grouped.forEach((orderSymbol, ordersById) -> result.put(orderSymbol, List.copyOf(ordersById.values())));
-        log.info("手动历史订单同步范围完成 credentialId={} symbolFilter={} symbolCount={} returnedCount={} scope=90D",
-            credentialId, symbol, result.size(), history.size());
+        log.info("手动历史订单同步范围完成 credentialId={} symbolFilter={} symbolCount={} returnedCount={} historyRange={} from={} to={}",
+            credentialId, symbol, result.size(), history.size(), historyRange, historyStart, historyEnd);
         return result;
     }
 
