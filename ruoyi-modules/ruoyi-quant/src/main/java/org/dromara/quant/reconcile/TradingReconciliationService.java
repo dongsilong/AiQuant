@@ -213,6 +213,15 @@ public class TradingReconciliationService {
                 : end.minus(Duration.ofDays(amount));
         }
 
+        public String displayText() {
+            return switch (this) {
+                case THREE_DAYS -> "最近 3 天";
+                case SEVEN_DAYS -> "最近 7 天";
+                case ONE_MONTH -> "最近 1 个月";
+                case THREE_MONTHS -> "最近 3 个月";
+            };
+        }
+
         private String code() {
             return code;
         }
