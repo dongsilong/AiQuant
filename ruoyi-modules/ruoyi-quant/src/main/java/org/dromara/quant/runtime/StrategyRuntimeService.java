@@ -2146,7 +2146,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     /** 仅影响当前交易对仓位或保护单的私有事件才使空仓清理证明失效。 */
     private boolean affectsEntryProtectionCleanup(ActiveRuntime runtime, ExchangeGateway.UserDataEvent event) {
         String eventType = event.eventType();
-        if ("DISCONNECTED".equalsIgnoreCase(eventType) || "listenKeyExpired".equalsIgnoreCase(eventType)) {
+        if (eventType == null || "DISCONNECTED".equalsIgnoreCase(eventType) || "listenKeyExpired".equalsIgnoreCase(eventType)) {
             return true;
         }
         if (!Set.of("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE", "ALGO_ORDER_TRADE_UPDATE",
