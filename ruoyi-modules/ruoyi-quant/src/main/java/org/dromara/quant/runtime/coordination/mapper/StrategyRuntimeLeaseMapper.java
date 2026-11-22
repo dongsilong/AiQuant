@@ -29,5 +29,7 @@ public interface StrategyRuntimeLeaseMapper {
      */
     Long currentEpoch(@Param("instanceId") Long instanceId, @Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken, @Param("credentialRuntimeVersion") Long credentialRuntimeVersion);
 
+    Long countActiveInstance(@Param("instanceId") Long instanceId);
+
     int release(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("ownerToken") String ownerToken);
 }
