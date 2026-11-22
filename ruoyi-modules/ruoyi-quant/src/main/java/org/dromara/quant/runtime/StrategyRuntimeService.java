@@ -1337,6 +1337,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             if (reconciliationCompleted) {
                 schedulePositionFactsRefresh(runtime, runtime.positionFactsVerifiedAt);
+                warmEntryProtectionCleanupIfReady(runtime);
             }
             if (!reconciliationCompleted || "RECOVERY_OR_PROTECTION_STILL_REQUIRED".equals(runtime.positionReconciliationBlockReason)) {
                 scheduleReconciliationRetry(runtime);
@@ -1509,7 +1510,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     runtime.userSubscription = userDataStreamHub.subscribe(credential, event -> {
                         if (event != null) {
                             invalidatePositionFacts(runtime);
-                            invalidateEntryProtectionCleanup(runtime);
+                            if (affectsEntryProtectionCleanup(runtime, event)) {
+                                invalidateEntryProtectionCleanup(runtime);
+                            }
                             reconciliationService.invalidateRuntimePositionSnapshot(credential.getId());
                             requestReconciliation(runtime, "ORDER_TRADE_UPDATE".equalsIgnoreCase(event.eventType()));
                         }
@@ -1529,6 +1532,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             throw ex;
         }
         resumeRecoveryIfNeeded(runtime);
+        warmEntryProtectionCleanupIfReady(runtime);
         log.info("策略运行时已启动 instanceId={} strategy={} plugin={} symbol={} interval={} mode={} protectionOnly={}", instance.getId(), strategy.getStrategyName(),
                 strategy.getPluginCode(), symbol.getSymbol(), strategySymbol.getIntervalCode(), credential.getRunMode(), protectionOnly);
         return true;
@@ -2137,6 +2141,64 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             offsetMillis, observedExchangeTime, event.eventTime() == null ? null : java.time.Duration.between(event.eventTime(), observedExchangeTime).toMillis(),
             event.receivedAt() == null ? null : java.time.Duration.between(event.receivedAt(), observedAt).toMillis(), callbackElapsedMillis, runtimeLockWaitMillis,
             preEvaluateMillis, Math.max(1, properties.getMarket().getMaxEventAgeMillis()));
+    }
+
+    /** 仅影响当前交易对仓位或保护单的私有事件才使空仓清理证明失效。 */
+    private boolean affectsEntryProtectionCleanup(ActiveRuntime runtime, ExchangeGateway.UserDataEvent event) {
+        String eventType = event.eventType();
+        if ("DISCONNECTED".equalsIgnoreCase(eventType) || "listenKeyExpired".equalsIgnoreCase(eventType)) {
+            return true;
+        }
+        if (!Set.of("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE", "ALGO_ORDER_TRADE_UPDATE",
+            "CONDITIONAL_ORDER_TRADE_UPDATE").contains(eventType)) {
+            return false;
+        }
+        if (event.rawJson() == null || event.rawJson().isBlank()) {
+            return true;
+        }
+        try {
+            return containsPrivateEventSymbol(QuantJsonMapper.readMap(event.rawJson()), runtime.symbol.getSymbol());
+        } catch (Exception ex) {
+            // 相关事件无法解析时按相关事件处理，不能因格式异常沿用旧清理证明。
+            return true;
+        }
+    }
+
+    private static boolean containsPrivateEventSymbol(Object value, String symbol) {
+        if (value instanceof Map<?, ?> map) {
+            Object eventSymbol = map.get("s");
+            if (eventSymbol != null && symbol.equalsIgnoreCase(String.valueOf(eventSymbol))) {
+                return true;
+            }
+            for (Object nested : map.values()) {
+                if (containsPrivateEventSymbol(nested, symbol)) {
+                    return true;
+                }
+            }
+        } else if (value instanceof Collection<?> values) {
+            for (Object nested : values) {
+                if (containsPrivateEventSymbol(nested, symbol)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Runtime 启动或确认平仓后提前准备清理证明，避免等到开仓信号出现才启动交易所核验。 */
+    private void warmEntryProtectionCleanupIfReady(ActiveRuntime runtime) {
+        if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
+            return;
+        }
+        synchronized (runtime) {
+            if (runtime.closed || runtime.protectionOnly || runtime.position != null || runtime.hasPendingAction()
+                || !runtime.positionFactsReady || runtime.protectionCleanupPending || runtime.protectionDegraded
+                || runtime.state != null && (!"CLOSED".equals(runtime.state.getStatus())
+                    || Boolean.TRUE.equals(runtime.state.getRecoveryRequired()) || Boolean.TRUE.equals(runtime.state.getUnsafeRecovery()))) {
+                return;
+            }
+        }
+        entryProtectionReady(runtime);
     }
 
     /** 私有事件或新周期准备使旧清理证明失效；在途清理只能完成核实，不能放行开仓。 */
@@ -3426,6 +3488,9 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                 runtime.symbol.getSymbol(), exit.type(), context.currentPrice(), quantity,
                 maximumReturnRateBeforeClose == null ? "N/A" : maximumReturnRateBeforeClose.multiply(BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString() + "%",
                 exit.reason());
+            if (runtime.position == null) {
+                warmEntryProtectionCleanupIfReady(runtime);
+            }
         } catch (RuntimeException ex) {
             QuantExecutionRecordStatus status = findExecutionStatus(runtime.credential.getId(), idempotencyKey);
             recordTradeDecision(runtime, context, "CLOSE", direction, quantity, null, idempotencyKey, "FAILED".equals(status.value()) ? "FAILED" : "UNKNOWN", "EXECUTION_FAILURE"
@@ -3511,6 +3576,7 @@ KlineSlopeRateStrategy.priceForReturn(context.entryPrice(), context.direction(),
                 stateService.markClosed(runtime.state);
                 runtime.state = stateService.findByInstance(runtime.instance.getId());
             }
+            warmEntryProtectionCleanupIfReady(runtime);
             return true;
         }
         BigDecimal totalFirst = firstExecuted.add(runtime.state.getFirstTakeProfitLocalExecutedQty() == null ? BigDecimal.ZERO :
