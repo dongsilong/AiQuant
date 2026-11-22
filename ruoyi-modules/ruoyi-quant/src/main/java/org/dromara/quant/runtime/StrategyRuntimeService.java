@@ -1508,11 +1508,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 configureEntryMaMarket(runtime);
                 if (!"PAPER".equalsIgnoreCase(credential.getRunMode())) {
                     runtime.userSubscription = userDataStreamHub.subscribe(credential, event -> {
-                        if (event != null) {
+                        if (event != null && affectsRuntimePositionFacts(runtime, event)) {
                             invalidatePositionFacts(runtime);
-                            if (affectsEntryProtectionCleanup(runtime, event)) {
-                                invalidateEntryProtectionCleanup(runtime);
-                            }
+                            invalidateEntryProtectionCleanup(runtime);
                             reconciliationService.invalidateRuntimePositionSnapshot(credential.getId());
                             requestReconciliation(runtime, "ORDER_TRADE_UPDATE".equalsIgnoreCase(event.eventType()));
                         }
@@ -2144,7 +2142,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /** 仅影响当前交易对仓位或保护单的私有事件才使空仓清理证明失效。 */
-    private boolean affectsEntryProtectionCleanup(ActiveRuntime runtime, ExchangeGateway.UserDataEvent event) {
+    private boolean affectsRuntimePositionFacts(ActiveRuntime runtime, ExchangeGateway.UserDataEvent event) {
         String eventType = event.eventType();
         if (eventType == null || "DISCONNECTED".equalsIgnoreCase(eventType) || "listenKeyExpired".equalsIgnoreCase(eventType)) {
             return true;
