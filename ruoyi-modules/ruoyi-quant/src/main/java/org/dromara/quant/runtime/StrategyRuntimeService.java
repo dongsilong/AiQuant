@@ -2157,8 +2157,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return true;
         }
         try {
-            boolean symbolMatched = containsPrivateEventSymbol(QuantJsonMapper.readMap(event.rawJson()), runtime.symbol.getSymbol());
-            return symbolMatched || !"ACCOUNT_UPDATE".equals(eventType);
+            Object payload = QuantJsonMapper.readMap(event.rawJson());
+            if (containsPrivateEventSymbol(payload, runtime.symbol.getSymbol())) {
+                return true;
+            }
+            // ACCOUNT_UPDATE 可能只是余额变化；没有目标交易对持仓项时不影响该交易对的保护清理证明。
+            return !"ACCOUNT_UPDATE".equals(eventType) && !containsAnyPrivateEventSymbol(payload);
         } catch (Exception ex) {
             // 相关事件无法解析时按相关事件处理，不能因格式异常沿用旧清理证明。
             return true;
@@ -2179,6 +2183,26 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         } else if (value instanceof Collection<?> values) {
             for (Object nested : values) {
                 if (containsPrivateEventSymbol(nested, symbol)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsAnyPrivateEventSymbol(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            if (map.containsKey("s") && map.get("s") != null) {
+                return true;
+            }
+            for (Object nested : map.values()) {
+                if (containsAnyPrivateEventSymbol(nested)) {
+                    return true;
+                }
+            }
+        } else if (value instanceof Collection<?> values) {
+            for (Object nested : values) {
+                if (containsAnyPrivateEventSymbol(nested)) {
                     return true;
                 }
             }
