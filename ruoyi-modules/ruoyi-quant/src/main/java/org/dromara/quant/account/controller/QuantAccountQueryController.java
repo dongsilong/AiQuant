@@ -280,8 +280,10 @@ public class QuantAccountQueryController {
     @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
     @PostMapping("/order/{credentialId}/sync")
     public R<String> syncOrders(
-        @PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
-        submitManualTradingSync(credentialId, symbol);
+        @PathVariable Long credentialId,
+        @RequestParam(required = false) String symbol,
+        @RequestParam(defaultValue = "3d") String historyRange) {
+        submitManualTradingSync(credentialId, symbol, historyRange);
         return R.ok("同步任务已提交");
     }
 
@@ -383,12 +385,20 @@ public class QuantAccountQueryController {
     @SaCheckPermission(value = {"quant:order:sync", "quant:trade:sync"}, mode = SaMode.AND)
     @PostMapping("/trade/{credentialId}/sync")
     public R<String> syncTrades(
-        @PathVariable Long credentialId, @RequestParam(required = false) String symbol) {
-        submitManualTradingSync(credentialId, symbol);
+        @PathVariable Long credentialId,
+        @RequestParam(required = false) String symbol,
+        @RequestParam(defaultValue = "3d") String historyRange) {
+        submitManualTradingSync(credentialId, symbol, historyRange);
         return R.ok("同步任务已提交");
     }
 
-    private void submitManualTradingSync(Long credentialId, String symbol) {
+    private void submitManualTradingSync(Long credentialId, String symbol, String historyRange) {
+        TradingReconciliationService.ManualTradingHistoryRange selectedRange;
+        try {
+            selectedRange = TradingReconciliationService.ManualTradingHistoryRange.fromCode(historyRange);
+        } catch (IllegalArgumentException ex) {
+            throw new ServiceException("同步时间范围仅支持 3 天、7 天、1 个月或 3 个月");
+        }
         QuantCredential credential = credentialEntity(credentialId);
         if (!activeManualSyncCredentials.add(credentialId)) {
             throw new ServiceException("该交易账户已有订单与成交同步正在执行，请勿重复提交");
@@ -397,7 +407,7 @@ public class QuantAccountQueryController {
             tradingSyncExecutor.execute(() -> {
                 try {
                     TradingReconciliationService.TradingDataSyncResult result =
-                        reconciliationService.syncTradingData(credential, symbol);
+                        reconciliationService.syncTradingData(credential, symbol, selectedRange);
                     try {
                         notificationService.notifyOrderTradeSyncResult(credential, symbol,
                             result.symbolCount(), result.orderCount(), result.tradeCount());
