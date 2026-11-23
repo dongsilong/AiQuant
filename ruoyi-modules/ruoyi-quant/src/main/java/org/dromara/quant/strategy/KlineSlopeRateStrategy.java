@@ -341,10 +341,17 @@ public final class KlineSlopeRateStrategy implements StrategyPlugin {
 //        log.info("计算交易对：" + context.symbol());
         double degrees = evaluation.rawDegrees();
         if (Math.abs(degrees) > 58 && shouldLogSlope(context.symbol(), System.currentTimeMillis())) {
-            log.warn("  ***  策略实时斜率 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}° 1分钟MA5：{} MA7：{}",
-                context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(),
-                evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(),
-                BigDecimal.valueOf(degrees).setScale(2, RoundingMode.HALF_UP), ma5, ma7);
+            if (evaluation.entryApproved()) {
+                log.warn("  ***  策略实时斜率 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}° 1分钟MA5：{} MA7：{}",
+                    context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(),
+                    evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(),
+                    BigDecimal.valueOf(degrees).setScale(2, RoundingMode.HALF_UP), ma5, ma7);
+            } else {
+                log.warn("  ***  策略实时斜率 时间：{} 交易对：{} 上根K线开盘价：{} 当前价：{} 坡度百分：{} 度数：{}° MA5/MA7：未评估（斜率未达到开仓阈值）",
+                    context.eventTime().atZone(ZoneId.of("Asia/Shanghai")).toLocalDateTime(), context.symbol(),
+                    evaluation.referenceOpenPrice(), evaluation.currentPrice(), evaluation.slopePercent(),
+                    BigDecimal.valueOf(degrees).setScale(2, RoundingMode.HALF_UP));
+            }
         }
         if (!evaluation.entryApproved()) {
             return Optional.empty();
