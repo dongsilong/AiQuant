@@ -94,6 +94,27 @@ class StrategySlopeTelemetryHubTest {
     }
 
     @Test
+    void markDisplaySlopeRemainsSeparateFromDecisionSlopeAndRuntimeSnapshotKeepsPriority() throws Exception {
+        var hub = new StrategySlopeTelemetryHub();
+        var events = new ArrayList<StrategySlopeTelemetry>();
+        Instant now = Instant.now();
+        var runtime = copyWithDisplay(telemetry(10L, new BigDecimal("100"), now, now, true, "UP"),
+            new BigDecimal("103"), new BigDecimal("2.5"), now, 3_000L, "MARK");
+        var monitor = copyWithSource(runtime, null, 1L, now);
+        try (var subscription = hub.subscribe(2L, 3L, events::add)) {
+            hub.publish(runtime);
+            hub.publish(monitor);
+            assertEquals(1, events.size());
+            assertEquals(runtime.instanceId(), events.getFirst().instanceId());
+            assertEquals(new BigDecimal("100"), events.getFirst().currentPrice());
+            assertEquals(new BigDecimal("103"), events.getFirst().displayCurrentPrice());
+            assertEquals(new BigDecimal("2.5"), events.getFirst().displayDegrees());
+            assertEquals("MARK", events.getFirst().displaySource());
+            assertTrue(events.getFirst().slopeReady());
+        }
+    }
+
+    @Test
     void keepsSnapshotsForTheSameSymbolAndDifferentIntervals() throws Exception {
         var hub = new StrategySlopeTelemetryHub();
         var first = telemetry(1L, new BigDecimal("100"), Instant.now(), Instant.now(), true, "UP");
@@ -106,6 +127,20 @@ class StrategySlopeTelemetryHubTest {
             assertTrue(replayed.stream().anyMatch(item -> "15m".equals(item.interval())));
             assertTrue(replayed.stream().anyMatch(item -> "1m".equals(item.interval())));
         }
+    }
+
+    private static StrategySlopeTelemetry copyWithDisplay(StrategySlopeTelemetry source, BigDecimal displayPrice,
+                                                                BigDecimal displayDegrees, Instant receivedAt,
+                                                                long freshForMillis, String displaySource) {
+        return new StrategySlopeTelemetry(
+            source.strategyId(), source.instanceId(), source.credentialId(), source.symbol(), source.interval(),
+            source.currentPrice(), source.referenceOpenPrice(), source.slopePercent(), source.degrees(),
+            source.entryThreshold(), source.entryApproved(), source.eventTime(), source.receivedAt(), source.sequence(),
+            source.slopeReady(), source.ma5(), source.ma7(), source.maTrend(), source.maReady(), source.maBlockReason(),
+            source.maLastClosedKlineOpenTime(), source.maEventTime(), source.maReceivedAt(), source.slopeFreshForMillis(),
+            source.maFreshForMillis(), source.publishedAt(), displayPrice, source.displayReferenceOpenPrice(),
+            source.displaySlopePercent(), displayDegrees, receivedAt, receivedAt, freshForMillis, displaySource
+        );
     }
 
     private static StrategySlopeTelemetry copyWithInterval(StrategySlopeTelemetry source, String interval) {
