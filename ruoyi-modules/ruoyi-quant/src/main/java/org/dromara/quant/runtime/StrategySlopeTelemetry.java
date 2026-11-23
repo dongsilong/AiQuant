@@ -32,6 +32,28 @@ public record StrategySlopeTelemetry(
     Instant maReceivedAt,
     long slopeFreshForMillis,
     long maFreshForMillis,
-    Instant publishedAt
+    Instant publishedAt,
+    BigDecimal displayCurrentPrice,
+    BigDecimal displayReferenceOpenPrice,
+    BigDecimal displaySlopePercent,
+    BigDecimal displayDegrees,
+    Instant displayEventTime,
+    Instant displayReceivedAt,
+    long displayFreshForMillis,
+    String displaySource
 ) {
+    public StrategySlopeTelemetry(
+        Long strategyId, Long instanceId, Long credentialId, String symbol, String interval,
+        BigDecimal currentPrice, BigDecimal referenceOpenPrice, BigDecimal slopePercent, BigDecimal degrees,
+        BigDecimal entryThreshold, boolean entryApproved, Instant eventTime, Instant receivedAt, long sequence,
+        boolean slopeReady, BigDecimal ma5, BigDecimal ma7, String maTrend, boolean maReady, String maBlockReason,
+        Instant maLastClosedKlineOpenTime, Instant maEventTime, Instant maReceivedAt,
+        long slopeFreshForMillis, long maFreshForMillis, Instant publishedAt
+    ) {
+        this(strategyId, instanceId, credentialId, symbol, interval, currentPrice, referenceOpenPrice, slopePercent, degrees,
+            entryThreshold, entryApproved, eventTime, receivedAt, sequence, slopeReady, ma5, ma7, maTrend, maReady,
+            maBlockReason, maLastClosedKlineOpenTime, maEventTime, maReceivedAt, slopeFreshForMillis, maFreshForMillis,
+            publishedAt, currentPrice, referenceOpenPrice, slopePercent, degrees, eventTime, receivedAt, slopeFreshForMillis,
+            "TRADE_KLINE");
+    }
 }
