@@ -1670,9 +1670,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if ("KLINE_READY".equals(event.type())) {
             runtime.entryMa.setHistoryReady(true);
             EntryMaSnapshot current = runtime.entryMa.snapshot();
-            log.info("策略1分钟MA K线历史恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7 liveMarketEventSeen={}",
+            log.info("策略1分钟MA K线历史恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7 ma5={} ma7={} liveMarketEventSeen={}",
                 runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), current.closedKlines(),
-                current.eventTime() != null && current.receivedAt() != null);
+                current.ma5(), current.ma7(), current.eventTime() != null && current.receivedAt() != null);
             publishSlopeTelemetryForMaUpdate(runtime);
             return;
         }
