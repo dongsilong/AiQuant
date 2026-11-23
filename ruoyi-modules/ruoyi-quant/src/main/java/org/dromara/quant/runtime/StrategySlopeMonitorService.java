@@ -161,7 +161,7 @@ public class StrategySlopeMonitorService {
                     monitor.close();
                     throw ex;
                 }
-            } catch (RuntimeException ex) {
+            } catch (Exception ex) {
                 log.warn("实时斜率监控订阅失败 strategyId={} credentialId={} symbol={} interval={}",
                     strategy.getId(), credential.getId(), symbol == null ? binding.getSymbolId() : symbol.getSymbol(), interval, ex);
             }
@@ -360,7 +360,8 @@ public class StrategySlopeMonitorService {
                 ma.ma5 = event.maReady() ? event.ma5() : null;
                 ma.ma7 = event.maReady() ? event.ma7() : null;
             }
-            if (!event.replay() && "CONNECTED".equals(event.type())) {
+            if (!event.replay() && "CONNECTED".equals(event.type())
+                && event.eventTime() != null && event.receivedAt() != null) {
                 ma.streamReady = true;
             }
             if (!event.replay() && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
