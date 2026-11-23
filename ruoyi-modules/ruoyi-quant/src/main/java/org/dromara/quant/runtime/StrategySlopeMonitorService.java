@@ -88,8 +88,7 @@ public class StrategySlopeMonitorService {
         List<QuantStrategySymbol> bindings;
         try {
             bindings = strategySymbolMapper.selectList(new LambdaQueryWrapper<QuantStrategySymbol>()
-                .eq(QuantStrategySymbol::getStrategyId, strategy.getId())
-                .eq(QuantStrategySymbol::getStatus, "0"));
+                .eq(QuantStrategySymbol::getStrategyId, strategy.getId()));
         } catch (RuntimeException ex) {
             log.warn("实时斜率监控读取策略交易对失败 strategyId={}", strategy.getId(), ex);
             return;
@@ -98,6 +97,9 @@ public class StrategySlopeMonitorService {
             return;
         }
         for (QuantStrategySymbol binding : bindings) {
+            if ("1".equals(binding.getStatus())) {
+                continue;
+            }
             QuantSymbol symbol = null;
             String interval = binding.getIntervalCode();
             try {
