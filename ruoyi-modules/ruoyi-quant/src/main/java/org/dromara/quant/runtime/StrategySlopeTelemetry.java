@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * 策略 Runtime 实际使用的斜率和 1 分钟均线快照。
+ * 策略 Runtime 的交易决策斜率、展示斜率和 1 分钟均线快照。
  */
 public record StrategySlopeTelemetry(
     Long strategyId,
