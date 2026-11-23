@@ -1810,6 +1810,21 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
                 runtime.latestMarkPrice = event.price();
+                if (runtime.plugin instanceof KlineSlopeRateStrategy && runtime.latestSlopeContext != null
+                    && MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), Instant.now(),
+                        Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode())),
+                        Math.max(1, properties.getMarket().getMaxEventAgeMillis()))) {
+                    StrategyContext base = runtime.latestSlopeContext.context();
+                    StrategyContext displayContext = new StrategyContext(base.symbol(), base.direction(), base.entryPrice(),
+                        event.price(), base.referencePrice(), base.previousKlineOpenPrice(), base.klineOpenTime(),
+                        base.klineClosed(), event.eventTime(), base.quantity(), base.initialPositionQuantity(),
+                        base.initialMargin(), base.leverage(), base.highestPriceSinceEntry(), base.lowestPriceSinceEntry(),
+                        base.firstTakeProfitTriggered(), base.highestStep(), event.price());
+                    synchronized (runtime.slopeTelemetryLock) {
+                        publishSlopeTelemetry(runtime, runtime.latestSlopeContext, runtime.entryMa.snapshot(),
+                            new SlopeContextSnapshot(displayContext, event.receivedAt()));
+                    }
+                }
                 if (runtime.position != null && !runtime.exitCoordinating.get()) {
                     updateRuntimeMaximumReturnRate(runtime, event.price());
                 }
@@ -3097,6 +3112,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     private void publishSlopeTelemetry(ActiveRuntime runtime, SlopeContextSnapshot slopeContext, EntryMaSnapshot maSnapshot) {
+        publishSlopeTelemetry(runtime, slopeContext, maSnapshot, slopeContext);
+    }
+
+    private void publishSlopeTelemetry(ActiveRuntime runtime, SlopeContextSnapshot slopeContext, EntryMaSnapshot maSnapshot,
+                                       SlopeContextSnapshot displayContext) {
         StrategyContext context = slopeContext == null ? null : slopeContext.context();
         Instant receivedAt = slopeContext == null ? null : slopeContext.receivedAt();
         KlineSlopeRateStrategy.SlopeEvaluation evaluation = context == null ? null
@@ -3137,6 +3157,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         long maFreshForMillis = maReady
             ? remainingEventFreshnessMillis(maSnapshot.eventTime(), maSnapshot.receivedAt(), now, exchangeNow, maxEventAgeMillis)
             : 0L;
+        StrategyContext display = displayContext == null ? null : displayContext.context();
+        Instant displayReceivedAt = displayContext == null ? null : displayContext.receivedAt();
+        KlineSlopeRateStrategy.SlopeEvaluation displayEvaluation = display == null ? null
+            : KlineSlopeRateStrategy.calculateSlope(display, runtime.params);
+        long displayFreshForMillis = remainingEventFreshnessMillis(
+            display == null ? null : display.eventTime(), displayReceivedAt, now, exchangeNow, maxEventAgeMillis);
+        boolean displayReady = displayEvaluation != null && displayFreshForMillis > 0;
         // MA 快照不应在每个整分钟边界被人为提前过期。
         // 是否仍可用于决策由实时事件新鲜度和最近已收盘 K 线时间共同判定。
 
@@ -3166,7 +3193,17 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             maSnapshot.receivedAt(),
             slopeFreshForMillis,
             maFreshForMillis,
-            now
+            now,
+            displayReady ? displayEvaluation.currentPrice() : null,
+            displayReady ? displayEvaluation.referenceOpenPrice() : null,
+            displayReady ? displayEvaluation.slopePercent() : null,
+            displayReady ? displayEvaluation.degrees() : null,
+            display == null ? null : display.eventTime(),
+            displayReceivedAt,
+            displayFreshForMillis,
+            displayContext == null || display == null ? null
+                : "MARK".equals(displayContext == null ? "" : (display.markPrice() == null ? "TRADE_KLINE" : "MARK"))
+                    ? "MARK" : "TRADE_KLINE"
         ));
     }
 
