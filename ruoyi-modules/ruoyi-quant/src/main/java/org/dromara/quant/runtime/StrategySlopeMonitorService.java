@@ -313,6 +313,7 @@ public class StrategySlopeMonitorService {
             if (event.kline() != null) {
                 market.updateKline(event.kline());
                 market.lastKlineEventAt = event.eventTime();
+                market.lastKlineReceivedAt = event.receivedAt();
             }
             if ("TRADE".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
                 latestTradePrice = event.price();
@@ -338,7 +339,9 @@ public class StrategySlopeMonitorService {
             Instant now = Instant.now();
             Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runMode));
             long maxAgeMillis = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
-            if (!MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), now, exchangeNow, maxAgeMillis)) {
+            if (!MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), now, exchangeNow, maxAgeMillis)
+                || (markEvent && !MarketEventFreshness.isFresh(market.lastKlineEventAt, market.lastKlineReceivedAt,
+                    now, exchangeNow, maxAgeMillis))) {
                 return;
             }
             BigDecimal price = markEvent ? event.price() : currentPrice(now, maxAgeMillis);
@@ -442,6 +445,7 @@ public class StrategySlopeMonitorService {
         private BigDecimal secondPreviousKlineOpen;
         private BigDecimal thirdPreviousKlineOpen;
         private Instant lastKlineEventAt;
+        private Instant lastKlineReceivedAt;
         private Instant lastClosedKlineOpenTime;
 
         private void updateKline(ExchangeGateway.Kline kline) {
