@@ -68,6 +68,17 @@ class MarketEventFreshnessTest {
     }
 
     @Test
+    void acceptsTradeOnlyInsideImmediatelyFollowingKlinePeriod() {
+        Instant nextOpen = Instant.parse("2026-11-08T00:45:00Z");
+        Instant nextPeriodOpen = Instant.parse("2026-11-08T01:00:00Z");
+
+        assertTrue(MarketStreamHub.isTradeInNextKlinePeriod(nextOpen, nextOpen, nextPeriodOpen));
+        assertTrue(MarketStreamHub.isTradeInNextKlinePeriod(nextPeriodOpen.minusMillis(1), nextOpen, nextPeriodOpen));
+        assertFalse(MarketStreamHub.isTradeInNextKlinePeriod(nextOpen.minusMillis(1), nextOpen, nextPeriodOpen));
+        assertFalse(MarketStreamHub.isTradeInNextKlinePeriod(nextPeriodOpen, nextOpen, nextPeriodOpen));
+    }
+
+    @Test
     void rejectsExchangeTimestampMoreThanOneSecondInTheFuture() {
         Instant localNow = Instant.parse("2026-10-17T07:21:33Z");
 
