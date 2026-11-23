@@ -368,8 +368,8 @@ public class MarketStreamHub {
             } else {
                 // 持有共享流锁，保证参考回放先于该订阅者的实时事件和就绪通知入队。
                 for (ExchangeGateway.Kline kline : referenceKlines.values()) {
-                    ExchangeGateway.MarketEvent event = new ExchangeGateway.MarketEvent("KLINE", key.symbol(), key.interval(), null, kline, Instant.now(), null,
-                        Instant.now(), true);
+                    ExchangeGateway.MarketEvent event = withOneMinuteMa(new ExchangeGateway.MarketEvent("KLINE", key.symbol(), key.interval(), null, kline, Instant.now(), null,
+                        Instant.now(), true));
                     if (filter.test(event)) {
                         consumer.accept(new Incoming(generation, event));
                     }
