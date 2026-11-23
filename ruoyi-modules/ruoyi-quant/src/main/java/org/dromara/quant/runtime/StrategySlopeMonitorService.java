@@ -371,12 +371,15 @@ public class StrategySlopeMonitorService {
                 ma.ma5 = event.maReady() ? event.ma5() : null;
                 ma.ma7 = event.maReady() ? event.ma7() : null;
             }
-            if (!event.replay() && "CONNECTED".equals(event.type())
-                && event.eventTime() != null && event.receivedAt() != null) {
+            boolean freshMaEvent = !event.replay()
+                && event.eventTime() != null && event.receivedAt() != null;
+            if (freshMaEvent && ("CONNECTED".equals(event.type())
+                || "KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type()))) {
+                // 订阅时的 CONNECTED 可能没有可用 MARK 时间戳；后续第一条新鲜行情也必须完成就绪状态迁移。
                 ma.streamReady = true;
             }
-            if (!event.replay() && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
-                || "CONNECTED".equals(event.type())) && event.eventTime() != null && event.receivedAt() != null) {
+            if (freshMaEvent && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
+                || "CONNECTED".equals(event.type()))) {
                 ma.eventTime = event.eventTime();
                 ma.receivedAt = event.receivedAt();
             }
