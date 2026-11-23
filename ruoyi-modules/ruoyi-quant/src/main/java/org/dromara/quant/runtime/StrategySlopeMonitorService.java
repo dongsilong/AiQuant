@@ -181,6 +181,12 @@ public class StrategySlopeMonitorService {
         long maxAgeMillis = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
         KlineSlopeRateStrategy.SlopeEvaluation evaluation = input == null ? null
             : KlineSlopeRateStrategy.calculateSlope(input.context(), monitor.params);
+        SlopeInput displayInput = monitor.latestDisplaySlopeInput;
+        KlineSlopeRateStrategy.SlopeEvaluation displayEvaluation = displayInput == null ? null
+            : KlineSlopeRateStrategy.calculateSlope(displayInput.context(), monitor.params);
+        long displayFreshForMillis = displayInput == null ? 0L : remainingFreshnessMillis(
+            displayInput.context().eventTime(), displayInput.receivedAt(), now, exchangeNow, maxAgeMillis);
+        boolean displayReady = displayEvaluation != null && displayFreshForMillis > 0;
         long slopeFreshForMillis = input == null ? 0L : remainingFreshnessMillis(
             input.context().eventTime(), input.receivedAt(), now, exchangeNow, maxAgeMillis);
         boolean slopeReady = evaluation != null && slopeFreshForMillis > 0;
@@ -216,7 +222,15 @@ public class StrategySlopeMonitorService {
             monitor.ma.receivedAt,
             slopeFreshForMillis,
             maFreshForMillis,
-            now
+            now,
+            displayReady ? displayEvaluation.currentPrice() : null,
+            displayReady ? displayEvaluation.referenceOpenPrice() : null,
+            displayReady ? displayEvaluation.slopePercent() : null,
+            displayReady ? displayEvaluation.degrees() : null,
+            displayInput == null ? null : displayInput.context().eventTime(),
+            displayInput == null ? null : displayInput.receivedAt(),
+            displayFreshForMillis,
+            displayInput == null ? null : displayInput.source()
         ));
     }
 
@@ -275,6 +289,7 @@ public class StrategySlopeMonitorService {
         private BigDecimal latestTradePrice;
         private Instant latestTradeEventAt;
         private SlopeInput latestSlopeInput;
+        private SlopeInput latestDisplaySlopeInput;
         private volatile long nextErrorLogAt;
 
         private Monitor(Long strategyId, Long credentialId, String runMode, String symbol,
@@ -307,6 +322,7 @@ public class StrategySlopeMonitorService {
                 latestTradePrice = null;
                 latestTradeEventAt = null;
                 latestSlopeInput = null;
+                latestDisplaySlopeInput = null;
                 publish(Monitor.this);
                 return;
             }
@@ -315,7 +331,8 @@ public class StrategySlopeMonitorService {
                 publish(Monitor.this);
                 return;
             }
-            if (event.replay() || (!"TRADE".equalsIgnoreCase(event.type()) && !"KLINE".equalsIgnoreCase(event.type()))) {
+            boolean markEvent = "MARK".equalsIgnoreCase(event.type());
+            if (event.replay() || (!markEvent && !"TRADE".equalsIgnoreCase(event.type()) && !"KLINE".equalsIgnoreCase(event.type()))) {
                 return;
             }
             Instant now = Instant.now();
@@ -324,7 +341,7 @@ public class StrategySlopeMonitorService {
             if (!MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), now, exchangeNow, maxAgeMillis)) {
                 return;
             }
-            BigDecimal price = currentPrice(now, maxAgeMillis);
+            BigDecimal price = markEvent ? event.price() : currentPrice(now, maxAgeMillis);
             if (price == null || price.signum() <= 0 || market.previousKlineOpenPrice() == null) {
                 return;
             }
@@ -333,7 +350,11 @@ public class StrategySlopeMonitorService {
                 market.currentKlineOpen(), market.currentKlineClosed(), event.eventTime(),
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, leverage, null, null, false, 0, null
             );
-            latestSlopeInput = new SlopeInput(context, event.receivedAt());
+            SlopeInput input = new SlopeInput(context, event.receivedAt(), markEvent ? "MARK" : "TRADE_KLINE");
+            latestDisplaySlopeInput = input;
+            if (!markEvent) {
+                latestSlopeInput = input;
+            }
             publish(Monitor.this);
         }
 
@@ -503,6 +524,6 @@ public class StrategySlopeMonitorService {
     private record MonitorKey(Long strategyId, Long credentialId, String symbol, String interval) {
     }
 
-    private record SlopeInput(StrategyContext context, Instant receivedAt) {
+    private record SlopeInput(StrategyContext context, Instant receivedAt, String source) {
     }
 }
