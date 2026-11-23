@@ -3137,15 +3137,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         long maFreshForMillis = maReady
             ? remainingEventFreshnessMillis(maSnapshot.eventTime(), maSnapshot.receivedAt(), now, exchangeNow, maxEventAgeMillis)
             : 0L;
-        if (maReady) {
-            Instant nextExchangeMinute = exchangeNow.truncatedTo(java.time.temporal.ChronoUnit.MINUTES).plusSeconds(60L);
-            maFreshForMillis = Math.min(maFreshForMillis, Math.max(0L,
-                java.time.Duration.between(exchangeNow, nextExchangeMinute).toMillis()));
-            maReady = maFreshForMillis > 0;
-            if (!maReady) {
-                maBlockReason = "STALE_EVENT";
-            }
-        }
+        // MA 快照不应在每个整分钟边界被人为提前过期。
+        // 是否仍可用于决策由实时事件新鲜度和最近已收盘 K 线时间共同判定。
 
         BigDecimal ma5 = maReady ? maSnapshot.ma5() : null;
         BigDecimal ma7 = maReady ? maSnapshot.ma7() : null;
@@ -6373,8 +6366,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private synchronized void markUnready() {
             historyReady = false;
             streamReady = false;
-            ma5 = null;
-            ma7 = null;
+            // 断线只撤销实时可用性，不销毁已计算的历史 MA；
+            // 恢复期间 streamReady=false 会阻断决策，恢复后仍需重新确认新鲜实时事件。
             eventTime = null;
             receivedAt = null;
         }
