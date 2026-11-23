@@ -189,16 +189,8 @@ public class StrategySlopeMonitorService {
         boolean maReady = maBlockReason == null;
         long maFreshForMillis = maReady ? remainingFreshnessMillis(
             monitor.ma.eventTime, monitor.ma.receivedAt, now, exchangeNow, maxAgeMillis) : 0L;
-        if (maReady) {
-            Instant nextExchangeMinute = exchangeNow.truncatedTo(ChronoUnit.MINUTES).plusSeconds(60L);
-            maFreshForMillis = Math.min(maFreshForMillis,
-                Math.max(0L, java.time.Duration.between(exchangeNow, nextExchangeMinute).toMillis()));
-            maReady = maFreshForMillis > 0;
-            if (!maReady) {
-                maBlockReason = "STALE_EVENT";
-            }
-        }
-
+        // MA 快照不应在每个整分钟边界被人为提前过期。
+        // 是否仍可用于决策由实时事件新鲜度和最近已收盘 K 线时间共同判定。
         BigDecimal ma5 = maReady ? monitor.ma.ma5 : null;
         BigDecimal ma7 = maReady ? monitor.ma.ma7 : null;
         MonitorKey monitorKey = new MonitorKey(monitor.strategyId, monitor.credentialId, monitor.symbol, monitor.interval);
@@ -229,7 +221,10 @@ public class StrategySlopeMonitorService {
     }
 
     private String maBlockReason(MaState ma, Instant now, Instant exchangeNow, long maxAgeMillis) {
-        if (!ma.historyReady || !ma.streamReady || ma.eventTime == null || ma.receivedAt == null) {
+        if (!ma.historyReady) {
+            return "HISTORY_NOT_READY";
+        }
+        if (!ma.streamReady || ma.eventTime == null || ma.receivedAt == null) {
             return "STREAM_NOT_READY";
         }
         if (ma.ma5 == null || ma.ma7 == null) {
@@ -484,10 +479,9 @@ public class StrategySlopeMonitorService {
         private Instant receivedAt;
 
         private void markUnready() {
-            historyReady = false;
+            // 断线只撤销实时可用性，不销毁已计算的历史 MA；
+            // 恢复期间 streamReady=false 会阻断决策，历史 K 线过期也会被周期校验拦截。
             streamReady = false;
-            ma5 = null;
-            ma7 = null;
             eventTime = null;
             receivedAt = null;
         }
