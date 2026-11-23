@@ -3201,9 +3201,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             display == null ? null : display.eventTime(),
             displayReceivedAt,
             displayFreshForMillis,
-            displayContext == null || display == null ? null
-                : "MARK".equals(displayContext == null ? "" : (display.markPrice() == null ? "TRADE_KLINE" : "MARK"))
-                    ? "MARK" : "TRADE_KLINE"
+            displayContext == null || display == null ? null : displayContext == slopeContext ? "TRADE_KLINE" : "MARK"
         ));
     }
 
