@@ -93,6 +93,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     private final java.util.concurrent.ConcurrentHashMap<Credential, java.util.concurrent.CompletableFuture<AccountSnapshot>> accountQueries =
         new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * 同一凭证、同一交易对的活动订单查询只允许一个 REST 请求在途；完成后立即移除，不缓存订单快照。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<OpenOrdersQueryKey, java.util.concurrent.CompletableFuture<List<OrderSnapshot>>> openOrdersQueries =
+        new java.util.concurrent.ConcurrentHashMap<>();
     private final RestRequestScheduler restScheduler = new RestRequestScheduler(50);
     /**
      * Binance 事件解析使用的 JSON 工具。
@@ -1141,26 +1146,60 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     /**
-     * 查询活动订单。
+     * 查询活动订单。同一凭证和交易对的并发查询复用同一个在途请求，不复用已完成快照。
      */
     @Override
     public List<OrderSnapshot> queryOrders(Credential credential, String symbol) {
-        return signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
-            ApiResponse<CurrentAllOpenOrdersResponse> response =
-                client.currentAllOpenOrders(symbol == null ? null : symbol.trim(), RECV_WINDOW_MILLIS);
-            if (response == null || response.getData() == null) {
-                throw new IllegalStateException("Binance 活动订单响应缺少数据载荷，无法确认查询完整性");
+        String normalizedSymbol = symbol == null ? null : symbol.trim().toUpperCase(Locale.ROOT);
+        OpenOrdersQueryKey key = new OpenOrdersQueryKey(credential, normalizedSymbol);
+        var result = new java.util.concurrent.CompletableFuture<List<OrderSnapshot>>();
+        var running = openOrdersQueries.putIfAbsent(key, result);
+        if (running != null) {
+            try {
+                return running.get(15, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException();
+            } catch (java.util.concurrent.TimeoutException ex) {
+                throw new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException();
+            } catch (java.util.concurrent.ExecutionException ex) {
+                if (ex.getCause() instanceof RuntimeException error) {
+                    throw error;
+                }
+                if (ex.getCause() instanceof Error error) {
+                    throw error;
+                }
+                throw new IllegalStateException("活动订单查询失败");
             }
-            long missingCreateTimeCount = response.getData().stream().filter(item -> item.getTime() == null).count();
-            if (missingCreateTimeCount > 0) {
-                log.warn("Binance 活动订单响应缺少创建时间 symbol={} orderCount={} missingCreateTimeCount={}",
-                    symbol, response.getData().size(), missingCreateTimeCount);
-            }
-            return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
-                item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
-                "getAvgPrice")), string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(item.getTime()),
-                nullableBoolean(item, "getClosePosition"))).toList();
-        });
+        }
+        try {
+            List<OrderSnapshot> orders = signedRead(credential, RestRequestScheduler.Kind.ACCOUNT, client -> {
+                ApiResponse<CurrentAllOpenOrdersResponse> response =
+                    client.currentAllOpenOrders(normalizedSymbol, RECV_WINDOW_MILLIS);
+                if (response == null || response.getData() == null) {
+                    throw new IllegalStateException("Binance 活动订单响应缺少数据载荷，无法确认查询完整性");
+                }
+                long missingCreateTimeCount = response.getData().stream().filter(item -> item.getTime() == null).count();
+                if (missingCreateTimeCount > 0) {
+                    log.warn("Binance 活动订单响应缺少创建时间 symbol={} orderCount={} missingCreateTimeCount={}",
+                        normalizedSymbol, response.getData().size(), missingCreateTimeCount);
+                }
+                return response.getData().stream().map(item -> new OrderSnapshot(item.getSymbol(), item.getOrderId(), item.getClientOrderId(), item.getSide(), item.getType(),
+                    item.getStatus(), decimal(item.getPrice()), decimal(item.getOrigQty()), decimal(item.getExecutedQty()), instant(item.getUpdateTime()), decimal(string(item,
+                    "getAvgPrice")), string(item, "getPositionSide"), nullableBoolean(item, "getReduceOnly"), instantNullable(item.getTime()),
+                    nullableBoolean(item, "getClosePosition"))).toList();
+            });
+            result.complete(orders);
+            return orders;
+        } catch (RuntimeException | Error ex) {
+            result.completeExceptionally(ex);
+            throw ex;
+        } finally {
+            openOrdersQueries.remove(key, result);
+        }
+    }
+
+    private record OpenOrdersQueryKey(Credential credential, String symbol) {
     }
 
     /**
