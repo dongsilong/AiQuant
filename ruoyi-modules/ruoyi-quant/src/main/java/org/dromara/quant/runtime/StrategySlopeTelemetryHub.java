@@ -78,7 +78,7 @@ public class StrategySlopeTelemetryHub {
     }
 
     private static boolean hasFreshDisplaySlope(StrategySlopeTelemetry snapshot, Instant now) {
-        if (snapshot.displayFreshForMillis() <= 0 || snapshot.displayReceivedAt() == null) {
+        if (snapshot.displayFreshForMillis() <= 0 || snapshot.displayReceivedAt() == null || snapshot.publishedAt() == null) {
             return false;
         }
         long elapsedMillis = Math.max(0L, Duration.between(snapshot.publishedAt(), now).toMillis());
@@ -116,10 +116,10 @@ public class StrategySlopeTelemetryHub {
             slopeFreshForMillis,
             maFreshForMillis,
             now,
-            displayFreshForMillis > elapsedMillis ? snapshot.displayCurrentPrice() : null,
-            displayFreshForMillis > elapsedMillis ? snapshot.displayReferenceOpenPrice() : null,
-            displayFreshForMillis > elapsedMillis ? snapshot.displaySlopePercent() : null,
-            displayFreshForMillis > elapsedMillis ? snapshot.displayDegrees() : null,
+            displayFreshForMillis > 0 ? snapshot.displayCurrentPrice() : null,
+            displayFreshForMillis > 0 ? snapshot.displayReferenceOpenPrice() : null,
+            displayFreshForMillis > 0 ? snapshot.displaySlopePercent() : null,
+            displayFreshForMillis > 0 ? snapshot.displayDegrees() : null,
             snapshot.displayEventTime(),
             snapshot.displayReceivedAt(),
             Math.max(0L, snapshot.displayFreshForMillis() - elapsedMillis),
