@@ -67,6 +67,44 @@ class StrategySlopeTelemetryHubTest {
         }
     }
 
+    @Test
+    void freshRuntimeTelemetryTakesPriorityOverReadOnlyMonitorTelemetry() {
+        var freshHub = new StrategySlopeTelemetryHub();
+        var freshEvents = new ArrayList<StrategySlopeTelemetry>();
+        Instant now = Instant.now();
+        var runtime = telemetry(10L, new BigDecimal("100"), now.minusMillis(100), now.minusMillis(100), true, "UP");
+        var monitor = copyWithSource(runtime, null, 1L, now);
+        try (var subscription = freshHub.subscribe(2L, 3L, freshEvents::add)) {
+            freshHub.publish(runtime);
+            freshHub.publish(monitor);
+            assertEquals(1, freshEvents.size());
+            assertEquals(runtime.instanceId(), freshEvents.getFirst().instanceId());
+            assertEquals(runtime.currentPrice(), freshEvents.getFirst().currentPrice());
+        }
+
+        var staleHub = new StrategySlopeTelemetryHub();
+        var staleEvents = new ArrayList<StrategySlopeTelemetry>();
+        try (var subscription = staleHub.subscribe(2L, 3L, staleEvents::add)) {
+            staleHub.publish(copyWithSource(runtime, runtime.instanceId(), runtime.sequence(), now.minusSeconds(10)));
+            staleHub.publish(monitor);
+            assertEquals(1, staleEvents.size());
+            assertNull(staleEvents.getFirst().instanceId());
+            assertEquals(monitor.currentPrice(), staleEvents.getFirst().currentPrice());
+        }
+    }
+
+    private static StrategySlopeTelemetry copyWithSource(StrategySlopeTelemetry source, Long instanceId,
+                                                           long sequence, Instant publishedAt) {
+        return new StrategySlopeTelemetry(
+            source.strategyId(), instanceId, source.credentialId(), source.symbol(), source.interval(),
+            source.currentPrice(), source.referenceOpenPrice(), source.slopePercent(), source.degrees(),
+            source.entryThreshold(), source.entryApproved(), source.eventTime(), source.receivedAt(),
+            sequence, source.slopeReady(), source.ma5(), source.ma7(), source.maTrend(), source.maReady(),
+            source.maBlockReason(), source.maLastClosedKlineOpenTime(), source.maEventTime(), source.maReceivedAt(),
+            source.slopeFreshForMillis(), source.maFreshForMillis(), publishedAt
+        );
+    }
+
     private static StrategySlopeTelemetry telemetry(long sequence, BigDecimal price, Instant eventTime, Instant receivedAt,
                                                       boolean ready, String trend) {
         return new StrategySlopeTelemetry(
