@@ -154,7 +154,7 @@ class StrategySlopeTelemetryHubTest {
             source.currentPrice(), source.referenceOpenPrice(), source.slopePercent(), source.degrees(),
             source.entryThreshold(), source.entryApproved(), source.eventTime(), source.receivedAt(), source.sequence(),
             source.slopeReady(), source.ma5(), source.ma7(), source.maTrend(), source.maReady(), source.maBlockReason(),
-            source.maLastClosedKlineOpenTime(), source.maEventTime(), source.maReceivedAt(), source.slopeFreshForMillis(),
+            source.maLastClosedKlineOpenTime(), source.maEventTime(), source.maReceivedAt(), 30_000L,
             source.maFreshForMillis(), source.publishedAt(), displayPrice, source.displayReferenceOpenPrice(),
             source.displaySlopePercent(), displayDegrees, receivedAt, receivedAt, freshForMillis, displaySource
         );
