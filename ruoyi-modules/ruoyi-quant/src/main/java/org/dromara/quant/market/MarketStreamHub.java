@@ -235,9 +235,9 @@ public class MarketStreamHub {
             && !eventTime.isBefore(openTime) && eventTime.isBefore(nextOpen);
     }
 
-    static boolean isTradeInNextKlinePeriod(Instant eventTime, Instant currentOpen, Instant nextOpen) {
-        return eventTime != null && currentOpen != null && nextOpen != null
-            && !eventTime.isBefore(nextOpen) && eventTime.isBefore(nextOpen.plusSeconds(java.time.Duration.between(currentOpen, nextOpen).getSeconds()));
+    static boolean isTradeInNextKlinePeriod(Instant eventTime, Instant nextOpen, Instant nextPeriodOpen) {
+        return eventTime != null && nextOpen != null && nextPeriodOpen != null
+            && !eventTime.isBefore(nextOpen) && eventTime.isBefore(nextPeriodOpen);
     }
 
     private record Key(String runMode, String symbol, String interval) {
@@ -397,8 +397,7 @@ public class MarketStreamHub {
         private List<ExchangeGateway.Kline> history(Instant from, int limit) {
             if ("TESTNET".equals(key.runMode())) {
                 return from == null ? gateway.queryKlines(key.runMode(), key.symbol(), key.interval(), limit) : gateway.queryKlinesFrom(key.runMode(), key.symbol(),
-                    key.interval(), from, limit);
-            }
+                    key.interval(), from, limit);            }
             return from == null ? gateway.queryKlines(key.symbol(), key.interval(), limit) : gateway.queryKlinesFrom(key.symbol(), key.interval(), from, limit);
         }
 
@@ -797,8 +796,7 @@ public class MarketStreamHub {
                 return;
             }
             if (recovering) {
-                long recoveryLockRequestedAtNanos = System.nanoTime();
-                synchronized (this) {
+                long recoveryLockRequestedAtNanos = System.nanoTime();                synchronized (this) {
                     monitorWaitNanos += Math.max(0L, System.nanoTime() - recoveryLockRequestedAtNanos);
                     if (closed || attempt != generation || event == null) {
                         return;                    }
@@ -932,8 +930,8 @@ public class MarketStreamHub {
                         if (lastTradeId == null) {
                             lastTradeId = event.sequenceId() - 1;
                         }
-                        if (isTradeInNextKlinePeriod(processingEventTime, lastKlineOpen,
-                            lastKlineOpen == null ? null : nextOpen(lastKlineOpen))) {
+                        if (lastKlineOpen != null && isTradeInNextKlinePeriod(processingEventTime,
+                            nextOpen(lastKlineOpen), nextOpen(nextOpen(lastKlineOpen)))) {
                             // TRADE 与 KLINE 属于独立WebSocket流；新周期成交可能先到。
                             // 只推进已连续确认的成交游标，不发布该成交，等待新周期KLINE确认后再处理新鲜事件。
                             lastTradeId = event.sequenceId();
@@ -1197,8 +1195,7 @@ public class MarketStreamHub {
             ingress.clear();
             recoveryBuffer.clear();
             listeners.values().forEach(StreamEventConsumer::clear);
-            publish(status("DISCONNECTED"));
-            ExchangeGateway.MarketStreamSession old = upstream;
+            publish(status("DISCONNECTED"));            ExchangeGateway.MarketStreamSession old = upstream;
             upstream = null;
             int baseReconnectDelay = Math.max(1, properties.getMarket().getReconnectDelaySeconds());
             long jitterMillis = ThreadLocalRandom.current().nextLong(0, TimeUnit.SECONDS.toMillis(baseReconnectDelay) + 1L);
