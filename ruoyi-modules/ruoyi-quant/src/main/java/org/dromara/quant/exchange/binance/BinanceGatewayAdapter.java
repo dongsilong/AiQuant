@@ -91,7 +91,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     /**
      * 进程内共享的 REST 请求节流时间点，避免同一出口 IP 触发 Binance 权重限制。
      */
-    private final java.util.concurrent.ConcurrentHashMap<Credential, java.util.concurrent.CompletableFuture<AccountSnapshot>> accountQueries =
+    private final java.util.concurrent.ConcurrentHashMap<AccountQueryKey, java.util.concurrent.CompletableFuture<AccountSnapshot>> accountQueries =
         new java.util.concurrent.ConcurrentHashMap<>();
     /**
      * 同一凭证、同一交易对的活动订单查询只允许一个 REST 请求在途；完成后立即移除，不缓存订单快照。
@@ -828,8 +828,26 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     @Override
     public AccountSnapshot queryAccount(Credential credential) {
+        return queryAccountShared(credential, RestRequestScheduler.Kind.ACCOUNT);
+    }
+
+    /**
+     * 直接从交易所刷新账户余额与持仓事实，不使用本地缓存。
+     */
+    @Override
+    public AccountSnapshot queryAccountFresh(Credential credential) {
+        return queryAccountShared(credential, RestRequestScheduler.Kind.ACCOUNT);
+    }
+
+    @Override
+    public AccountSnapshot queryAccountForPosition(Credential credential) {
+        return queryAccountShared(credential, RestRequestScheduler.Kind.POSITION_VERIFY);
+    }
+
+    private AccountSnapshot queryAccountShared(Credential credential, RestRequestScheduler.Kind kind) {
+        AccountQueryKey key = new AccountQueryKey(credential, kind);
         var result = new java.util.concurrent.CompletableFuture<AccountSnapshot>();
-        var running = accountQueries.putIfAbsent(credential, result);
+        var running = accountQueries.putIfAbsent(key, result);
         if (running != null) {
             try {
                 return running.get(15, java.util.concurrent.TimeUnit.SECONDS);
@@ -842,35 +860,25 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 if (ex.getCause() instanceof RuntimeException error) {
                     throw error;
                 }
+                if (ex.getCause() instanceof Error error) {
+                    throw error;
+                }
                 throw new IllegalStateException("账户查询失败");
             }
         }
         try {
-            AccountSnapshot snapshot = queryAccountFresh(credential);
+            AccountSnapshot snapshot = queryAccountFromExchange(credential, kind);
             result.complete(snapshot);
             return snapshot;
-        } catch (RuntimeException ex) {
+        } catch (RuntimeException | Error ex) {
             result.completeExceptionally(ex);
             throw ex;
         } finally {
-            accountQueries.remove(credential, result);
+            accountQueries.remove(key, result);
         }
     }
 
-    /**
-     * 直接从交易所刷新账户余额与持仓事实，不使用本地缓存。
-     */
-    @Override
-    public AccountSnapshot queryAccountFresh(Credential credential) {
-        return queryAccount(credential, RestRequestScheduler.Kind.ACCOUNT);
-    }
-
-    @Override
-    public AccountSnapshot queryAccountForPosition(Credential credential) {
-        return queryAccount(credential, RestRequestScheduler.Kind.POSITION_VERIFY);
-    }
-
-    private AccountSnapshot queryAccount(Credential credential, RestRequestScheduler.Kind kind) {
+    private AccountSnapshot queryAccountFromExchange(Credential credential, RestRequestScheduler.Kind kind) {
         try {
             AccountInformationV3Response data = signedRead(credential, kind,
                 client -> client.accountInformationV3(RECV_WINDOW_MILLIS).getData());
@@ -1197,6 +1205,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         } finally {
             openOrdersQueries.remove(key, result);
         }
+    }
+
+    private record AccountQueryKey(Credential credential, RestRequestScheduler.Kind kind) {
     }
 
     private record OpenOrdersQueryKey(Credential credential, String symbol) {
