@@ -258,4 +258,76 @@ class BinanceGatewayAccountQueryTest {
         }
     }
 
+
+    @Test
+    void coalescesSameKindAccountQueriesButKeepsPositionVerificationSeparate() throws Exception {
+        var accountCalls = new java.util.concurrent.atomic.AtomicInteger();
+        var firstAccountEntered = new java.util.concurrent.CountDownLatch(1);
+        var secondAccountEntered = new java.util.concurrent.CountDownLatch(1);
+        var releaseFirstAccount = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newCachedThreadPool();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.setExecutor(executor);
+        server.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            String body;
+            if (path.endsWith("/time")) {
+                body = "{\\"serverTime\\":" + System.currentTimeMillis() + "}";
+            } else if (path.endsWith("/account")) {
+                int count = accountCalls.incrementAndGet();
+                if (count == 1) {
+                    firstAccountEntered.countDown();
+                    try {
+                        releaseFirstAccount.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException(ex);
+                    }
+                } else if (count == 2) {
+                    secondAccountEntered.countDown();
+                }
+                body = "{\\"totalWalletBalance\\":\\"100\\",\\"availableBalance\\":\\"90\\","
+                    + "\\"totalMarginBalance\\":\\"100\\",\\"totalUnrealizedProfit\\":\\"0\\"}";
+            } else {
+                body = "{}";
+            }
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var properties = new QuantProperties();
+            properties.getBinance().setBaseUrl("http://127.0.0.1:" + server.getAddress().getPort());
+            var gateway = new BinanceGatewayAdapter(properties);
+            var credential = new ExchangeGateway.Credential("key", "secret", "HMAC", "LIVE");
+
+            var first = java.util.concurrent.CompletableFuture.supplyAsync(() -> gateway.queryAccount(credential));
+            assertTrue(firstAccountEntered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+
+            var sameKindResult = new java.util.concurrent.CompletableFuture<ExchangeGateway.AccountSnapshot>();
+            var sameKindWaiter = new Thread(() -> sameKindResult.complete(gateway.queryAccountFresh(credential)));
+            sameKindWaiter.start();
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (sameKindWaiter.getState() != Thread.State.TIMED_WAITING && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+            assertEquals(Thread.State.TIMED_WAITING, sameKindWaiter.getState());
+
+            var position = java.util.concurrent.CompletableFuture.supplyAsync(() -> gateway.queryAccountForPosition(credential));
+            assertTrue(secondAccountEntered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            releaseFirstAccount.countDown();
+
+            assertTrue(first.get(5, java.util.concurrent.TimeUnit.SECONDS) != null);
+            assertTrue(sameKindResult.get(5, java.util.concurrent.TimeUnit.SECONDS) != null);
+            assertTrue(position.get(5, java.util.concurrent.TimeUnit.SECONDS) != null);
+            sameKindWaiter.join(5_000);
+            assertEquals(2, accountCalls.get(), "ACCOUNT 合并一次，POSITION_VERIFY 独立请求一次");
+        } finally {
+            releaseFirstAccount.countDown();
+            server.stop(0);
+            executor.shutdownNow();
+        }
+    }
 }
