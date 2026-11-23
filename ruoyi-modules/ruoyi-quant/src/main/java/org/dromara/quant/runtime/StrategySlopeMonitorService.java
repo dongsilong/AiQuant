@@ -298,7 +298,7 @@ public class StrategySlopeMonitorService {
                 return;
             }
             if ("1m".equalsIgnoreCase(interval)) {
-                onMaMarketEvent(event);
+                onMaMarketEvent(event, false);
             }
             if (event.kline() != null) {
                 market.updateKline(event.kline());
@@ -312,6 +312,11 @@ public class StrategySlopeMonitorService {
                 latestTradePrice = null;
                 latestTradeEventAt = null;
                 latestSlopeInput = null;
+                publish(Monitor.this);
+                return;
+            }
+            if ("1m".equalsIgnoreCase(interval) && ("KLINE_READY".equals(event.type())
+                || "CONNECTED".equals(event.type()) || "MARK".equalsIgnoreCase(event.type()))) {
                 publish(Monitor.this);
                 return;
             }
@@ -338,6 +343,10 @@ public class StrategySlopeMonitorService {
         }
 
         private synchronized void onMaMarketEvent(ExchangeGateway.MarketEvent event) {
+            onMaMarketEvent(event, true);
+        }
+
+        private synchronized void onMaMarketEvent(ExchangeGateway.MarketEvent event, boolean publishTelemetry) {
             if (closed || event == null) {
                 return;
             }
@@ -346,14 +355,16 @@ public class StrategySlopeMonitorService {
             }
             if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
                 ma.markUnready();
-                if (!event.replay()) {
+                if (publishTelemetry && !event.replay()) {
                     publish(Monitor.this);
                 }
                 return;
             }
             if ("KLINE_READY".equals(event.type())) {
                 ma.historyReady = true;
-                publish(Monitor.this);
+                if (publishTelemetry) {
+                    publish(Monitor.this);
+                }
                 return;
             }
             if (event.kline() != null || "MARK".equalsIgnoreCase(event.type())) {
@@ -369,7 +380,8 @@ public class StrategySlopeMonitorService {
                 ma.eventTime = event.eventTime();
                 ma.receivedAt = event.receivedAt();
             }
-            if (!event.replay() && (event.kline() != null || "MARK".equalsIgnoreCase(event.type()) || "CONNECTED".equals(event.type()))) {
+            if (publishTelemetry && !event.replay()
+                && (event.kline() != null || "MARK".equalsIgnoreCase(event.type()) || "CONNECTED".equals(event.type()))) {
                 publish(Monitor.this);
             }
         }
