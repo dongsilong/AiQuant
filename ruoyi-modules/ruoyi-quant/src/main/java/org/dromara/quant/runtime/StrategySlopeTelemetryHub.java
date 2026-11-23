@@ -47,7 +47,7 @@ public class StrategySlopeTelemetryHub {
         String snapshotKey = telemetry.symbol() + "|" + telemetry.interval();
         bySymbol.compute(snapshotKey, (ignored, previous) -> {
             if (previous != null && previous.instanceId() != null && telemetry.instanceId() == null
-                && hasFreshSlope(previous, Instant.now())) {
+                && (hasFreshSlope(previous, Instant.now()) || hasFreshDisplaySlope(previous, Instant.now()))) {
                 return previous;
             }
             if (previous != null && java.util.Objects.equals(previous.instanceId(), telemetry.instanceId())
@@ -77,11 +77,20 @@ public class StrategySlopeTelemetryHub {
         return snapshot.slopeFreshForMillis() > elapsedMillis;
     }
 
+    private static boolean hasFreshDisplaySlope(StrategySlopeTelemetry snapshot, Instant now) {
+        if (snapshot.displayFreshForMillis() <= 0 || snapshot.displayReceivedAt() == null) {
+            return false;
+        }
+        long elapsedMillis = Math.max(0L, Duration.between(snapshot.publishedAt(), now).toMillis());
+        return snapshot.displayFreshForMillis() > elapsedMillis;
+    }
+
     private static StrategySlopeTelemetry forReplay(StrategySlopeTelemetry snapshot, Instant now) {
         long elapsedMillis = snapshot.publishedAt() == null
             ? Long.MAX_VALUE : Math.max(0L, Duration.between(snapshot.publishedAt(), now).toMillis());
         long slopeFreshForMillis = Math.max(0L, snapshot.slopeFreshForMillis() - elapsedMillis);
         long maFreshForMillis = Math.max(0L, snapshot.maFreshForMillis() - elapsedMillis);
+        long displayFreshForMillis = Math.max(0L, snapshot.displayFreshForMillis() - elapsedMillis);
         boolean slopeReady = snapshot.slopeReady() && slopeFreshForMillis > 0;
         boolean maReady = snapshot.maReady() && maFreshForMillis > 0;
         return new StrategySlopeTelemetry(
@@ -106,7 +115,15 @@ public class StrategySlopeTelemetryHub {
             snapshot.maReceivedAt(),
             slopeFreshForMillis,
             maFreshForMillis,
-            now
+            now,
+            displayFreshForMillis > elapsedMillis ? snapshot.displayCurrentPrice() : null,
+            displayFreshForMillis > elapsedMillis ? snapshot.displayReferenceOpenPrice() : null,
+            displayFreshForMillis > elapsedMillis ? snapshot.displaySlopePercent() : null,
+            displayFreshForMillis > elapsedMillis ? snapshot.displayDegrees() : null,
+            snapshot.displayEventTime(),
+            snapshot.displayReceivedAt(),
+            Math.max(0L, snapshot.displayFreshForMillis() - elapsedMillis),
+            snapshot.displaySource()
         );
     }
 
