@@ -23,7 +23,6 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -57,7 +56,7 @@ public class StrategySlopeMonitorService {
             return () -> {
             };
         }
-        Key key = new Key(strategy.getId(), credential.getId());
+        Key key = new Key(strategy.getId(), credential.getId(), fallbackInterval == null ? "" : fallbackInterval.trim());
         Session session = sessions.compute(key, (ignored, current) -> {
             if (current != null) {
                 current.references++;
@@ -95,23 +94,28 @@ public class StrategySlopeMonitorService {
             log.warn("实时斜率监控读取策略交易对失败 strategyId={}", strategy.getId(), ex);
             return;
         }
+        if (bindings == null || bindings.isEmpty()) {
+            return;
+        }
         for (QuantStrategySymbol binding : bindings) {
-            QuantSymbol symbol = symbolMapper.selectById(binding.getSymbolId());
-            if (symbol == null || !"0".equals(symbol.getStatus())) {
-                continue;
-            }
+            QuantSymbol symbol = null;
             String interval = binding.getIntervalCode();
-            if (interval == null || interval.isBlank()) {
-                interval = fallbackInterval;
-            }
-            if (interval == null || interval.isBlank()) {
-                interval = strategy.getDefaultInterval();
-            }
-            if (interval == null || interval.isBlank()) {
-                log.warn("实时斜率监控缺少K线周期 strategyId={} symbol={}", strategy.getId(), symbol.getSymbol());
-                continue;
-            }
             try {
+                symbol = binding.getSymbolId() == null ? null : symbolMapper.selectById(binding.getSymbolId());
+                if (symbol == null || !"0".equals(symbol.getStatus())) {
+                    continue;
+                }
+                if (interval == null || interval.isBlank()) {
+                    interval = fallbackInterval;
+                }
+                if (interval == null || interval.isBlank()) {
+                    interval = strategy.getDefaultInterval();
+                }
+                if (interval == null || interval.isBlank()) {
+                    log.warn("实时斜率监控缺少K线周期 strategyId={} symbol={}", strategy.getId(), symbol.getSymbol());
+                    continue;
+                }
+                interval = interval.trim();
                 Map<String, Object> params = new HashMap<>();
                 if (strategy.getParamsJson() != null && !strategy.getParamsJson().isBlank()) {
                     params.putAll(QuantJsonMapper.readMap(strategy.getParamsJson()));
@@ -124,23 +128,28 @@ public class StrategySlopeMonitorService {
                     : strategy.getDefaultLeverage() == null || strategy.getDefaultLeverage() <= 0 ? 1 : strategy.getDefaultLeverage();
                 Monitor monitor = new Monitor(strategy.getId(), credential.getId(), credential.getRunMode(),
                     symbol.getSymbol(), interval, leverage, params);
-                monitor.subscriptions.add(marketStreamHub.subscribe(
-                    credential.getRunMode(), symbol.getSymbol(), interval, monitor::onMarketEvent, ignored -> {
-                    }));
-                if (!"1m".equalsIgnoreCase(interval)) {
-                    Predicate<ExchangeGateway.MarketEvent> filter = event -> event != null
-                        && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
-                        || "KLINE_READY".equals(event.type()) || "CONNECTED".equals(event.type())
-                        || "CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
-                        || "ERROR".equals(event.type()));
+                try {
                     monitor.subscriptions.add(marketStreamHub.subscribe(
-                        credential.getRunMode(), symbol.getSymbol(), "1m", monitor::onMaMarketEvent, ignored -> {
-                        }, filter));
+                        credential.getRunMode(), symbol.getSymbol(), interval, monitor::onMarketEvent, ignored -> {
+                        }));
+                    if (!"1m".equalsIgnoreCase(interval)) {
+                        Predicate<ExchangeGateway.MarketEvent> filter = event -> event != null
+                            && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
+                            || "KLINE_READY".equals(event.type()) || "CONNECTED".equals(event.type())
+                            || "CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
+                            || "ERROR".equals(event.type()));
+                        monitor.subscriptions.add(marketStreamHub.subscribe(
+                            credential.getRunMode(), symbol.getSymbol(), "1m", monitor::onMaMarketEvent, ignored -> {
+                            }, filter));
+                    }
+                    session.monitors.add(monitor);
+                } catch (RuntimeException ex) {
+                    monitor.close();
+                    throw ex;
                 }
-                session.monitors.add(monitor);
             } catch (RuntimeException ex) {
                 log.warn("实时斜率监控订阅失败 strategyId={} credentialId={} symbol={} interval={}",
-                    strategy.getId(), credential.getId(), symbol.getSymbol(), interval, ex);
+                    strategy.getId(), credential.getId(), symbol == null ? binding.getSymbolId() : symbol.getSymbol(), interval, ex);
             }
         }
     }
@@ -272,6 +281,9 @@ public class StrategySlopeMonitorService {
         private synchronized void onMarketEvent(ExchangeGateway.MarketEvent event) {
             if (closed || event == null) {
                 return;
+            }
+            if ("1m".equalsIgnoreCase(interval)) {
+                onMaMarketEvent(event);
             }
             if (event.kline() != null) {
                 market.updateKline(event.kline());
@@ -451,7 +463,7 @@ public class StrategySlopeMonitorService {
         }
     }
 
-    private record Key(Long strategyId, Long credentialId) {
+    private record Key(Long strategyId, Long credentialId, String fallbackInterval) {
     }
 
     private record MonitorKey(Long strategyId, Long credentialId, String symbol, String interval) {
