@@ -1806,6 +1806,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (event.kline() != null) {
                 runtime.updateKline(event.kline());
                 runtime.market.lastKlineEventAt = event.eventTime();
+                runtime.market.lastKlineReceivedAt = event.receivedAt();
                 runtime.lastEvaluatedKlineOpenTime = event.kline().openTime();
             }
             if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
@@ -1813,6 +1814,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 if (runtime.plugin instanceof KlineSlopeRateStrategy && runtime.latestSlopeContext != null
                     && MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), Instant.now(),
                         Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode())),
+                        Math.max(1, properties.getMarket().getMaxEventAgeMillis()))
+                    && MarketEventFreshness.isFresh(runtime.market.lastKlineEventAt, runtime.market.lastKlineReceivedAt,
+                        Instant.now(), Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode())),
                         Math.max(1, properties.getMarket().getMaxEventAgeMillis()))) {
                     StrategyContext base = runtime.latestSlopeContext.context();
                     StrategyContext displayContext = new StrategyContext(base.symbol(), base.direction(), base.entryPrice(),
@@ -6474,6 +6478,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
          * 最近一次收到 K 线事件的时间。
          */
         private Instant lastKlineEventAt;
+        private Instant lastKlineReceivedAt;
         /** 最近 7 根已收盘 K 线的收盘价，用于确认均线窗口完整性。 */
         private final Deque<BigDecimal> closedKlineCloses = new ArrayDeque<>();
         private Instant lastClosedKlineOpenTime;
@@ -6486,6 +6491,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
             secondPreviousKlineOpen = null;
             thirdPreviousKlineOpen = null;
             lastKlineEventAt = null;
+            lastKlineReceivedAt = null;
             closedKlineCloses.clear();
             lastClosedKlineOpenTime = null;
         }
