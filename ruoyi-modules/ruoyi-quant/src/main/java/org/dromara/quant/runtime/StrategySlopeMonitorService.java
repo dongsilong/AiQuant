@@ -132,7 +132,13 @@ public class StrategySlopeMonitorService {
                     symbol.getSymbol(), interval, leverage, params);
                 try {
                     monitor.subscriptions.add(marketStreamHub.subscribe(
-                        credential.getRunMode(), symbol.getSymbol(), interval, monitor::onMarketEvent, ignored -> {
+                        credential.getRunMode(), symbol.getSymbol(), interval, event -> {
+                            try {
+                                monitor.onMarketEvent(event);
+                            } catch (RuntimeException ex) {
+                                monitor.reportFailure(ex);
+                            }
+                        }, ignored -> {
                         }));
                     if (!"1m".equalsIgnoreCase(interval)) {
                         Predicate<ExchangeGateway.MarketEvent> filter = event -> event != null
@@ -141,7 +147,13 @@ public class StrategySlopeMonitorService {
                             || "CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
                             || "ERROR".equals(event.type()));
                         monitor.subscriptions.add(marketStreamHub.subscribe(
-                            credential.getRunMode(), symbol.getSymbol(), "1m", monitor::onMaMarketEvent, ignored -> {
+                            credential.getRunMode(), symbol.getSymbol(), "1m", event -> {
+                                try {
+                                    monitor.onMaMarketEvent(event);
+                                } catch (RuntimeException ex) {
+                                    monitor.reportFailure(ex);
+                                }
+                            }, ignored -> {
                             }, filter));
                     }
                     session.monitors.add(monitor);
@@ -268,6 +280,7 @@ public class StrategySlopeMonitorService {
         private BigDecimal latestTradePrice;
         private Instant latestTradeEventAt;
         private SlopeInput latestSlopeInput;
+        private volatile long nextErrorLogAt;
 
         private Monitor(Long strategyId, Long credentialId, String runMode, String symbol,
                         String interval, int leverage, Map<String, Object> params) {
@@ -357,6 +370,15 @@ public class StrategySlopeMonitorService {
             }
             if (!event.replay() && (event.kline() != null || "MARK".equalsIgnoreCase(event.type()) || "CONNECTED".equals(event.type()))) {
                 publish(Monitor.this);
+            }
+        }
+
+        private void reportFailure(RuntimeException ex) {
+            long now = System.currentTimeMillis();
+            if (now >= nextErrorLogAt) {
+                nextErrorLogAt = now + 10_000L;
+                log.warn("实时斜率只读监控事件处理失败 strategyId={} credentialId={} symbol={} interval={}",
+                    strategyId, credentialId, symbol, interval, ex);
             }
         }
 
