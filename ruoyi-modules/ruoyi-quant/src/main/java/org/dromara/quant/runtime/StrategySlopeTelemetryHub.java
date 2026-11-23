@@ -44,7 +44,12 @@ public class StrategySlopeTelemetryHub {
         Key key = new Key(telemetry.strategyId(), telemetry.credentialId());
         Map<String, StrategySlopeTelemetry> bySymbol = latest.computeIfAbsent(key, ignored -> new ConcurrentHashMap<>());
         AtomicBoolean accepted = new AtomicBoolean();
-        bySymbol.compute(telemetry.symbol(), (ignored, previous) -> {
+        String snapshotKey = telemetry.symbol() + "\u0000" + telemetry.interval();
+        bySymbol.compute(snapshotKey, (ignored, previous) -> {
+            if (previous != null && previous.instanceId() != null && telemetry.instanceId() == null
+                && hasFreshSlope(previous, Instant.now())) {
+                return previous;
+            }
             if (previous != null && java.util.Objects.equals(previous.instanceId(), telemetry.instanceId())
                 && previous.sequence() >= telemetry.sequence()) {
                 return previous;
@@ -62,6 +67,14 @@ public class StrategySlopeTelemetryHub {
                 // 单个 SSE 客户端异常不能影响策略运行时。
             }
         }
+    }
+
+    private static boolean hasFreshSlope(StrategySlopeTelemetry snapshot, Instant now) {
+        if (!snapshot.slopeReady() || snapshot.publishedAt() == null) {
+            return false;
+        }
+        long elapsedMillis = Math.max(0L, Duration.between(snapshot.publishedAt(), now).toMillis());
+        return snapshot.slopeFreshForMillis() > elapsedMillis;
     }
 
     private static StrategySlopeTelemetry forReplay(StrategySlopeTelemetry snapshot, Instant now) {
