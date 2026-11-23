@@ -327,7 +327,7 @@ public class StrategySlopeMonitorService {
                 return;
             }
             if ("1m".equalsIgnoreCase(interval) && ("KLINE_READY".equals(event.type())
-                || "CONNECTED".equals(event.type()) || "MARK".equalsIgnoreCase(event.type()))) {
+                || "CONNECTED".equals(event.type()))) {
                 publish(Monitor.this);
                 return;
             }
