@@ -94,6 +94,23 @@ class StrategySlopeTelemetryHubTest {
     }
 
     @Test
+    void replayExpiresDisplaySlopeIndependentlyFromDecisionSlope() throws Exception {
+        var hub = new StrategySlopeTelemetryHub();
+        var replayed = new ArrayList<StrategySlopeTelemetry>();
+        Instant old = Instant.now().minusSeconds(10);
+        var snapshot = copyWithDisplay(telemetry(9L, new BigDecimal("100"), old, old, true, "UP"),
+            new BigDecimal("103"), new BigDecimal("72"), old, 3_000L, "MARK");
+        hub.publish(snapshot);
+        try (var subscription = hub.subscribe(2L, 3L, replayed::add)) {
+            assertEquals(1, replayed.size());
+            assertTrue(replayed.getFirst().slopeReady());
+            assertEquals(new BigDecimal("100"), replayed.getFirst().currentPrice());
+            assertNull(replayed.getFirst().displayCurrentPrice());
+            assertEquals(0L, replayed.getFirst().displayFreshForMillis());
+        }
+    }
+
+    @Test
     void markDisplaySlopeRemainsSeparateFromDecisionSlopeAndRuntimeSnapshotKeepsPriority() throws Exception {
         var hub = new StrategySlopeTelemetryHub();
         var events = new ArrayList<StrategySlopeTelemetry>();
@@ -150,7 +167,10 @@ class StrategySlopeTelemetryHubTest {
             source.entryThreshold(), source.entryApproved(), source.eventTime(), source.receivedAt(),
             source.sequence(), source.slopeReady(), source.ma5(), source.ma7(), source.maTrend(), source.maReady(),
             source.maBlockReason(), source.maLastClosedKlineOpenTime(), source.maEventTime(), source.maReceivedAt(),
-            source.slopeFreshForMillis(), source.maFreshForMillis(), source.publishedAt()
+            source.slopeFreshForMillis(), source.maFreshForMillis(), source.publishedAt(),
+            source.displayCurrentPrice(), source.displayReferenceOpenPrice(), source.displaySlopePercent(),
+            source.displayDegrees(), source.displayEventTime(), source.displayReceivedAt(),
+            source.displayFreshForMillis(), source.displaySource()
         );
     }
 
