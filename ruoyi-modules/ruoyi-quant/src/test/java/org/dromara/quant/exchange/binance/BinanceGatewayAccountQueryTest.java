@@ -272,7 +272,7 @@ class BinanceGatewayAccountQueryTest {
             String path = exchange.getRequestURI().getPath();
             String body;
             if (path.endsWith("/time")) {
-                body = "{\\"serverTime\\":" + System.currentTimeMillis() + "}";
+                body = "{\"serverTime\":" + System.currentTimeMillis() + "}";
             } else if (path.endsWith("/account")) {
                 int count = accountCalls.incrementAndGet();
                 if (count == 1) {
@@ -286,8 +286,8 @@ class BinanceGatewayAccountQueryTest {
                 } else if (count == 2) {
                     secondAccountEntered.countDown();
                 }
-                body = "{\\"totalWalletBalance\\":\\"100\\",\\"availableBalance\\":\\"90\\","
-                    + "\\"totalMarginBalance\\":\\"100\\",\\"totalUnrealizedProfit\\":\\"0\\"}";
+                body = "{\"totalWalletBalance\":\"100\",\"availableBalance\":\"90\","
+                    + "\"totalMarginBalance\":\"100\",\"totalUnrealizedProfit\":\"0\"}";
             } else {
                 body = "{}";
             }
