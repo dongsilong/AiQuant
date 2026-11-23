@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
- * 按策略和账户分发策略实际斜率及均线结果的进程内 SSE 事件中心。
+ * 按策略和账户分发交易决策斜率、展示斜率及均线结果的进程内 SSE 事件中心。
  */
 @Component
 public class StrategySlopeTelemetryHub {
