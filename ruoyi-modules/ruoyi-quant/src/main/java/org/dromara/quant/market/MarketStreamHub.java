@@ -318,6 +318,12 @@ public class MarketStreamHub {
                     return;
                 }
                 ExchangeGateway.MarketEvent event = delivery.event();
+                if ("TRADE_CURSOR".equals(event.type())) {
+                    if (event.sequenceId() != null) {
+                        consumedTradeIds.merge(id, event.sequenceId(), Math::max);
+                    }
+                    return;
+                }
                 if ("CONNECTED".equals(event.type())) {
                     synchronized (this) {
                         if (closed || delivery.generation() != generation || !connected) {
@@ -397,8 +403,7 @@ public class MarketStreamHub {
         private List<ExchangeGateway.Kline> history(Instant from, int limit) {
             if ("TESTNET".equals(key.runMode())) {
                 return from == null ? gateway.queryKlines(key.runMode(), key.symbol(), key.interval(), limit) : gateway.queryKlinesFrom(key.runMode(), key.symbol(),
-                    key.interval(), from, limit);            }
-            return from == null ? gateway.queryKlines(key.symbol(), key.interval(), limit) : gateway.queryKlinesFrom(key.symbol(), key.interval(), from, limit);
+                    key.interval(), from, limit);            }            return from == null ? gateway.queryKlines(key.symbol(), key.interval(), limit) : gateway.queryKlinesFrom(key.symbol(), key.interval(), from, limit);
         }
 
         private Instant exchangeNow() {            long offsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
@@ -797,8 +802,7 @@ public class MarketStreamHub {
             }
             if (recovering) {
                 long recoveryLockRequestedAtNanos = System.nanoTime();                synchronized (this) {
-                    monitorWaitNanos += Math.max(0L, System.nanoTime() - recoveryLockRequestedAtNanos);
-                    if (closed || attempt != generation || event == null) {
+                    monitorWaitNanos += Math.max(0L, System.nanoTime() - recoveryLockRequestedAtNanos);                    if (closed || attempt != generation || event == null) {
                         return;                    }
                     if (recovering) {
                         bufferRecoveryEvent(attempt, event, enqueuedAtNanos, dequeuedAtNanos);
@@ -935,6 +939,7 @@ public class MarketStreamHub {
                             // TRADE 与 KLINE 属于独立WebSocket流；新周期成交可能先到。
                             // 只推进已连续确认的成交游标，不发布该成交，等待新周期KLINE确认后再处理新鲜事件。
                             lastTradeId = event.sequenceId();
+                            publishTradeCursor(attempt, event);
                             return;
                         }
                         beginRecovery("成交到达非相邻周期，先确认K线状态", event.sequenceId());
@@ -1031,6 +1036,15 @@ public class MarketStreamHub {
         /**
          * 标记行情暂不可用并触发异步重连与缺口恢复。
          */
+        /**
+         * 按订阅者队列顺序推进被边界保护丢弃的成交游标，不把该成交暴露给策略。
+         */
+        private void publishTradeCursor(long attempt, ExchangeGateway.MarketEvent trade) {
+            ExchangeGateway.MarketEvent cursorEvent = new ExchangeGateway.MarketEvent("TRADE_CURSOR", key.symbol(), key.interval(),
+                null, null, trade.eventTime(), trade.sequenceId(), trade.receivedAt(), true);
+            listeners.values().forEach(listener -> listener.accept(new Incoming(attempt, cursorEvent)));
+        }
+
         private synchronized void scheduleDisconnect(String message) {
             connected = false;
             signalUnhealthy();
@@ -1197,8 +1211,7 @@ public class MarketStreamHub {
             listeners.values().forEach(StreamEventConsumer::clear);
             publish(status("DISCONNECTED"));            ExchangeGateway.MarketStreamSession old = upstream;
             upstream = null;
-            int baseReconnectDelay = Math.max(1, properties.getMarket().getReconnectDelaySeconds());
-            long jitterMillis = ThreadLocalRandom.current().nextLong(0, TimeUnit.SECONDS.toMillis(baseReconnectDelay) + 1L);
+            int baseReconnectDelay = Math.max(1, properties.getMarket().getReconnectDelaySeconds());            long jitterMillis = ThreadLocalRandom.current().nextLong(0, TimeUnit.SECONDS.toMillis(baseReconnectDelay) + 1L);
             long reconnectDelay = reconnectDelayMillis(baseReconnectDelay, jitterMillis);
             reconnect = scheduler.schedule(() -> {
                 synchronized (this) {
