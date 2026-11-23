@@ -1811,22 +1811,25 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
                 runtime.latestMarkPrice = event.price();
-                if (runtime.plugin instanceof KlineSlopeRateStrategy && runtime.latestSlopeContext != null
+                if (runtime.plugin instanceof KlineSlopeRateStrategy
                     && MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), Instant.now(),
                         Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode())),
                         Math.max(1, properties.getMarket().getMaxEventAgeMillis()))
                     && MarketEventFreshness.isFresh(runtime.market.lastKlineEventAt, runtime.market.lastKlineReceivedAt,
                         Instant.now(), Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode())),
                         Math.max(1, properties.getMarket().getMaxEventAgeMillis()))) {
-                    StrategyContext base = runtime.latestSlopeContext.context();
-                    StrategyContext displayContext = new StrategyContext(base.symbol(), base.direction(), base.entryPrice(),
-                        event.price(), base.referencePrice(), base.previousKlineOpenPrice(), base.klineOpenTime(),
-                        base.klineClosed(), event.eventTime(), base.quantity(), base.initialPositionQuantity(),
-                        base.initialMargin(), base.leverage(), base.highestPriceSinceEntry(), base.lowestPriceSinceEntry(),
-                        base.firstTakeProfitTriggered(), base.highestStep(), event.price());
                     synchronized (runtime.slopeTelemetryLock) {
-                        publishSlopeTelemetry(runtime, runtime.latestSlopeContext, runtime.entryMa.snapshot(),
-                            new SlopeContextSnapshot(displayContext, event.receivedAt()));
+                        SlopeContextSnapshot decisionContext = runtime.latestSlopeContext;
+                        if (decisionContext != null) {
+                            StrategyContext base = decisionContext.context();
+                            StrategyContext displayContext = new StrategyContext(base.symbol(), base.direction(), base.entryPrice(),
+                                event.price(), base.referencePrice(), base.previousKlineOpenPrice(), base.klineOpenTime(),
+                                base.klineClosed(), event.eventTime(), base.quantity(), base.initialPositionQuantity(),
+                                base.initialMargin(), base.leverage(), base.highestPriceSinceEntry(), base.lowestPriceSinceEntry(),
+                                base.firstTakeProfitTriggered(), base.highestStep(), event.price());
+                            publishSlopeTelemetry(runtime, decisionContext, runtime.entryMa.snapshot(),
+                                new SlopeContextSnapshot(displayContext, event.receivedAt()));
+                        }
                     }
                 }
                 if (runtime.position != null && !runtime.exitCoordinating.get()) {
