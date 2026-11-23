@@ -40,7 +40,7 @@ class StrategySlopeTelemetryHubTest {
     }
 
     @Test
-    void ignoresOutOfOrderSnapshotsForTheSameRuntime() {
+    void ignoresOutOfOrderSnapshotsForTheSameRuntime() throws Exception {
         var hub = new StrategySlopeTelemetryHub();
         var events = new ArrayList<StrategySlopeTelemetry>();
         try (var subscription = hub.subscribe(2L, 3L, events::add)) {
@@ -52,7 +52,7 @@ class StrategySlopeTelemetryHubTest {
     }
 
     @Test
-    void replayExpiresOldSlopeAndMaValuesInsteadOfRefreshingTheirAge() {
+    void replayExpiresOldSlopeAndMaValuesInsteadOfRefreshingTheirAge() throws Exception {
         var hub = new StrategySlopeTelemetryHub();
         var replayed = new ArrayList<StrategySlopeTelemetry>();
         var old = telemetry(7L, new BigDecimal("102"), Instant.now().minusSeconds(10), Instant.now().minusSeconds(10), true, "UP");
@@ -68,7 +68,7 @@ class StrategySlopeTelemetryHubTest {
     }
 
     @Test
-    void freshRuntimeTelemetryTakesPriorityOverReadOnlyMonitorTelemetry() {
+    void freshRuntimeTelemetryTakesPriorityOverReadOnlyMonitorTelemetry() throws Exception {
         var freshHub = new StrategySlopeTelemetryHub();
         var freshEvents = new ArrayList<StrategySlopeTelemetry>();
         Instant now = Instant.now();
