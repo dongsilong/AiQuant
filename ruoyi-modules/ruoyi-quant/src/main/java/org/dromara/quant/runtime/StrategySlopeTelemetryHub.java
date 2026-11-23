@@ -44,7 +44,7 @@ public class StrategySlopeTelemetryHub {
         Key key = new Key(telemetry.strategyId(), telemetry.credentialId());
         Map<String, StrategySlopeTelemetry> bySymbol = latest.computeIfAbsent(key, ignored -> new ConcurrentHashMap<>());
         AtomicBoolean accepted = new AtomicBoolean();
-        String snapshotKey = telemetry.symbol() + "\u0000" + telemetry.interval();
+        String snapshotKey = telemetry.symbol() + "|" + telemetry.interval();
         bySymbol.compute(snapshotKey, (ignored, previous) -> {
             if (previous != null && previous.instanceId() != null && telemetry.instanceId() == null
                 && hasFreshSlope(previous, Instant.now())) {
