@@ -6397,7 +6397,11 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
                 ma5 = event.maReady() ? event.ma5() : null;
                 ma7 = event.maReady() ? event.ma7() : null;
             }
-            if (!event.replay() && "CONNECTED".equals(event.type()) && event.eventTime() != null && event.receivedAt() != null) {
+            boolean freshLiveMarketEvent = !event.replay() && event.eventTime() != null && event.receivedAt() != null
+                && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type()));
+            if (freshLiveMarketEvent || (!event.replay() && "CONNECTED".equals(event.type())
+                && event.eventTime() != null && event.receivedAt() != null)) {
+                // CONNECTED 可能在订阅建立时缺少MARK时间戳；首条新鲜实时KLINE/MARK同样可以确认数据流已恢复。
                 streamReady = true;
             }
             if (!event.replay() && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
