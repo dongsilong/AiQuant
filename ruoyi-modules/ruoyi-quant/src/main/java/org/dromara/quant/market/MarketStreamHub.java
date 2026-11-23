@@ -235,6 +235,11 @@ public class MarketStreamHub {
             && !eventTime.isBefore(openTime) && eventTime.isBefore(nextOpen);
     }
 
+    static boolean isTradeInNextKlinePeriod(Instant eventTime, Instant currentOpen, Instant nextOpen) {
+        return eventTime != null && currentOpen != null && nextOpen != null
+            && !eventTime.isBefore(nextOpen) && eventTime.isBefore(nextOpen.plusSeconds(java.time.Duration.between(currentOpen, nextOpen).getSeconds()));
+    }
+
     private record Key(String runMode, String symbol, String interval) {
     }
 
@@ -397,8 +402,7 @@ public class MarketStreamHub {
             return from == null ? gateway.queryKlines(key.symbol(), key.interval(), limit) : gateway.queryKlinesFrom(key.symbol(), key.interval(), from, limit);
         }
 
-        private Instant exchangeNow() {
-            long offsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
+        private Instant exchangeNow() {            long offsetMillis = gateway.exchangeTimeOffsetMillis(key.runMode());
             return Instant.now().plusMillis(offsetMillis);
         }
 
@@ -797,8 +801,7 @@ public class MarketStreamHub {
                 synchronized (this) {
                     monitorWaitNanos += Math.max(0L, System.nanoTime() - recoveryLockRequestedAtNanos);
                     if (closed || attempt != generation || event == null) {
-                        return;
-                    }
+                        return;                    }
                     if (recovering) {
                         bufferRecoveryEvent(attempt, event, enqueuedAtNanos, dequeuedAtNanos);
                         return;
@@ -929,7 +932,14 @@ public class MarketStreamHub {
                         if (lastTradeId == null) {
                             lastTradeId = event.sequenceId() - 1;
                         }
-                        beginRecovery("成交到达新周期，先确认K线状态", event.sequenceId());
+                        if (isTradeInNextKlinePeriod(processingEventTime, lastKlineOpen,
+                            lastKlineOpen == null ? null : nextOpen(lastKlineOpen))) {
+                            // TRADE 与 KLINE 属于独立WebSocket流；新周期成交可能先到。
+                            // 只推进已连续确认的成交游标，不发布该成交，等待新周期KLINE确认后再处理新鲜事件。
+                            lastTradeId = event.sequenceId();
+                            return;
+                        }
+                        beginRecovery("成交到达非相邻周期，先确认K线状态", event.sequenceId());
                         return;
                     }
                     lastTradeId = event.sequenceId();
@@ -1197,8 +1207,7 @@ public class MarketStreamHub {
                 synchronized (this) {
                     reconnect = null;
                     start();
-                }
-            }, reconnectDelay, TimeUnit.MILLISECONDS);
+                }            }, reconnectDelay, TimeUnit.MILLISECONDS);
             if (old != null) {
                 try {
                     old.close();
