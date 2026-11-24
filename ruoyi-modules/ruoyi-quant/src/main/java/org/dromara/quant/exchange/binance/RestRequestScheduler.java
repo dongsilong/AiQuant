@@ -100,7 +100,7 @@ final class RestRequestScheduler {
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw deferred("INTERRUPTED", kind, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
+            throw deferred("INTERRUPTED", kind, environment, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
         } finally {
             queue.remove(ticket);
             notifyAll();
