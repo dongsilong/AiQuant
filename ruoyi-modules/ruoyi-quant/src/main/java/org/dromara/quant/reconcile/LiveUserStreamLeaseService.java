@@ -63,6 +63,11 @@ public class LiveUserStreamLeaseService {
         mapper.release(credentialId, ownerToken);
     }
 
+    /** Remaining lease time in milliseconds, calculated with the database clock. */
+    public Long remainingMillis(Long credentialId) {
+        return mapper.remainingMillis(credentialId);
+    }
+
     /** Diagnostic lease state without exposing the process ownership token. */
     public String describe(Long credentialId) {
         return mapper.describe(credentialId);
