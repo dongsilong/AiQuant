@@ -197,16 +197,16 @@ public class StrategySlopeMonitorService {
             StrategyContext decisionContext = input == null ? null : input.context();
             StrategyContext displayContext = displayInput == null ? null : displayInput.context();
             log.info("斜率输入对照 source=MONITOR mode={} strategyId={} credentialId={} symbol={} interval={} "
-                    + "decisionSource={} decisionEventTime={} decisionReceivedAt={} decisionCurrentPrice={} decisionPreviousKlineOpenPrice={} decisionKlineOpenTime={} decisionSlopePercent={} decisionDegrees={} decisionReady={} decisionFreshForMillis={} "
-                    + "displaySource={} displayEventTime={} displayReceivedAt={} displayCurrentPrice={} displayPreviousKlineOpenPrice={} displayKlineOpenTime={} displaySlopePercent={} displayDegrees={} displayReady={} displayFreshForMillis={}",
+                    + "decisionSource={} decisionEventType={} decisionEventTime={} decisionReceivedAt={} decisionCurrentPrice={} decisionPreviousKlineOpenPrice={} decisionKlineOpenTime={} decisionSlopePercent={} decisionDegrees={} decisionReady={} decisionFreshForMillis={} "
+                    + "displaySource={} displayEventType={} displayEventTime={} displayReceivedAt={} displayCurrentPrice={} displayPreviousKlineOpenPrice={} displayKlineOpenTime={} displaySlopePercent={} displayDegrees={} displayReady={} displayFreshForMillis={}",
                 monitor.runMode, monitor.strategyId, monitor.credentialId, monitor.symbol, monitor.interval,
-                input == null ? null : input.source(), decisionContext == null ? null : decisionContext.eventTime(),
+                input == null ? null : input.source(), input == null ? null : input.eventType(), decisionContext == null ? null : decisionContext.eventTime(),
                 input == null ? null : input.receivedAt(), decisionContext == null ? null : decisionContext.currentPrice(),
                 decisionContext == null ? null : decisionContext.previousKlineOpenPrice(),
                 decisionContext == null ? null : decisionContext.klineOpenTime(),
                 evaluation == null ? null : evaluation.slopePercent(), evaluation == null ? null : evaluation.degrees(),
                 slopeReady, slopeFreshForMillis,
-                displayInput == null ? null : displayInput.source(), displayContext == null ? null : displayContext.eventTime(),
+                displayInput == null ? null : displayInput.source(), displayInput == null ? null : displayInput.eventType(), displayContext == null ? null : displayContext.eventTime(),
                 displayInput == null ? null : displayInput.receivedAt(), displayContext == null ? null : displayContext.currentPrice(),
                 displayContext == null ? null : displayContext.previousKlineOpenPrice(),
                 displayContext == null ? null : displayContext.klineOpenTime(),
@@ -377,7 +377,7 @@ public class StrategySlopeMonitorService {
                 market.currentKlineOpen(), market.currentKlineClosed(), event.eventTime(),
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, leverage, null, null, false, 0, null
             );
-            SlopeInput input = new SlopeInput(context, event.receivedAt(), markEvent ? "MARK" : "TRADE_KLINE");
+            SlopeInput input = new SlopeInput(context, event.receivedAt(), markEvent ? "MARK" : "TRADE_KLINE", event.type());
             latestDisplaySlopeInput = input;
             if (!markEvent) {
                 latestSlopeInput = input;
@@ -552,6 +552,6 @@ public class StrategySlopeMonitorService {
     private record MonitorKey(Long strategyId, Long credentialId, String symbol, String interval) {
     }
 
-    private record SlopeInput(StrategyContext context, Instant receivedAt, String source) {
+    private record SlopeInput(StrategyContext context, Instant receivedAt, String source, String eventType) {
     }
 }
