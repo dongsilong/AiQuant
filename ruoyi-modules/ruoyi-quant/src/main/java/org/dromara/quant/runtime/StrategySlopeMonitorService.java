@@ -191,6 +191,29 @@ public class StrategySlopeMonitorService {
             input.context().eventTime(), input.receivedAt(), now, exchangeNow, maxAgeMillis);
         boolean slopeReady = evaluation != null && slopeFreshForMillis > 0;
 
+        long diagnosticNow = System.currentTimeMillis();
+        if ((input != null || displayInput != null) && diagnosticNow >= monitor.nextSlopeCompareLogAt) {
+            monitor.nextSlopeCompareLogAt = diagnosticNow + 30_000L;
+            StrategyContext decisionContext = input == null ? null : input.context();
+            StrategyContext displayContext = displayInput == null ? null : displayInput.context();
+            log.info("斜率输入对照 source=MONITOR mode={} strategyId={} credentialId={} symbol={} interval={} "
+                    + "decisionSource={} decisionEventTime={} decisionReceivedAt={} decisionCurrentPrice={} decisionPreviousKlineOpenPrice={} decisionKlineOpenTime={} decisionSlopePercent={} decisionDegrees={} decisionReady={} decisionFreshForMillis={} "
+                    + "displaySource={} displayEventTime={} displayReceivedAt={} displayCurrentPrice={} displayPreviousKlineOpenPrice={} displayKlineOpenTime={} displaySlopePercent={} displayDegrees={} displayReady={} displayFreshForMillis={}",
+                monitor.runMode, monitor.strategyId, monitor.credentialId, monitor.symbol, monitor.interval,
+                input == null ? null : input.source(), decisionContext == null ? null : decisionContext.eventTime(),
+                input == null ? null : input.receivedAt(), decisionContext == null ? null : decisionContext.currentPrice(),
+                decisionContext == null ? null : decisionContext.previousKlineOpenPrice(),
+                decisionContext == null ? null : decisionContext.klineOpenTime(),
+                evaluation == null ? null : evaluation.slopePercent(), evaluation == null ? null : evaluation.degrees(),
+                slopeReady, slopeFreshForMillis,
+                displayInput == null ? null : displayInput.source(), displayContext == null ? null : displayContext.eventTime(),
+                displayInput == null ? null : displayInput.receivedAt(), displayContext == null ? null : displayContext.currentPrice(),
+                displayContext == null ? null : displayContext.previousKlineOpenPrice(),
+                displayContext == null ? null : displayContext.klineOpenTime(),
+                displayEvaluation == null ? null : displayEvaluation.slopePercent(),
+                displayEvaluation == null ? null : displayEvaluation.degrees(), displayReady, displayFreshForMillis);
+        }
+
         String maBlockReason = maBlockReason(monitor.ma, now, exchangeNow, maxAgeMillis);
         boolean maReady = maBlockReason == null;
         long maFreshForMillis = maReady ? remainingFreshnessMillis(
@@ -291,6 +314,7 @@ public class StrategySlopeMonitorService {
         private SlopeInput latestSlopeInput;
         private SlopeInput latestDisplaySlopeInput;
         private volatile long nextErrorLogAt;
+        private long nextSlopeCompareLogAt;
 
         private Monitor(Long strategyId, Long credentialId, String runMode, String symbol,
                         String interval, int leverage, Map<String, Object> params) {
