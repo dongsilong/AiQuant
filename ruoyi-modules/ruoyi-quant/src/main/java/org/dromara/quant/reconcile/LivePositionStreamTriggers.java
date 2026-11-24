@@ -201,14 +201,18 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
         }
         cancelLeaseRetry(credentialId);
         long delayMillis = Math.max(250L, remainingMillis + 250L);
-        ScheduledFuture<?> task = leaseRetryScheduler.schedule(() -> {
+        ScheduledFuture<?>[] taskRef = new ScheduledFuture<?>[1];
+        taskRef[0] = leaseRetryScheduler.schedule(() -> {
             synchronized (LivePositionStreamTriggers.this) {
+                if (leaseRetryTasks.get(credentialId) != taskRef[0]) {
+                    return;
+                }
                 leaseRetryTasks.remove(credentialId);
                 log.debug("LIVE租约预计到期，提前触发账户租约竞争 credentialId={}", credentialId);
                 supervise();
             }
         }, delayMillis, TimeUnit.MILLISECONDS);
-        leaseRetryTasks.put(credentialId, task);
+        leaseRetryTasks.put(credentialId, taskRef[0]);
         log.debug("LIVE租约冲突已安排到期重试 credentialId={} remainingMs={} retryInMs={}", credentialId, remainingMillis, delayMillis);
     }
 
