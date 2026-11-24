@@ -117,6 +117,48 @@ class MarketStreamHubIsolationTest {
     }
 
     @Test
+    void concurrentRecoveryAndQuietCheckShareTheSameKlineHistoryRead() throws Exception {
+        ExchangeGateway gateway = mock(ExchangeGateway.class);
+        var queryEntered = new CountDownLatch(1);
+        var releaseQuery = new CountDownLatch(1);
+        when(gateway.queryKlines("BTCUSDT", "1m", 8)).thenAnswer(invocation -> {
+            queryEntered.countDown();
+            org.junit.jupiter.api.Assertions.assertTrue(releaseQuery.await(3, TimeUnit.SECONDS));
+            return history("1m");
+        });
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        var hub = new MarketStreamHub(gateway, scheduler, new QuantProperties());
+        var queryExecutor = Executors.newSingleThreadExecutor();
+        try {
+            hub.subscribe("BTCUSDT", "1m", ignored -> { });
+            org.junit.jupiter.api.Assertions.assertTrue(queryEntered.await(2, TimeUnit.SECONDS));
+
+            var streams = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(hub, "streams");
+            Object stream = streams.values().iterator().next();
+            var reads = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(stream, "klineHistoryReads");
+            var sharedRead = (java.util.concurrent.CompletableFuture<?>) reads.values().iterator().next();
+            var joinedRead = queryExecutor.submit(() ->
+                org.springframework.test.util.ReflectionTestUtils.invokeMethod(stream, "queryHistoryShared", 1L, null, 8));
+
+            long joinDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (sharedRead.getNumberOfDependents() == 0 && System.nanoTime() < joinDeadline) {
+                Thread.sleep(5L);
+            }
+            org.junit.jupiter.api.Assertions.assertTrue(sharedRead.getNumberOfDependents() > 0,
+                "the concurrent KLINE read did not join the in-flight recovery request");
+
+            releaseQuery.countDown();
+            assertEquals(2, ((java.util.List<?>) joinedRead.get(2, TimeUnit.SECONDS)).size());
+            verify(gateway, times(1)).queryKlines("BTCUSDT", "1m", 8);
+        } finally {
+            releaseQuery.countDown();
+            hub.close();
+            scheduler.shutdownNow();
+            queryExecutor.shutdownNow();
+        }
+    }
+
+    @Test
     void nextPeriodTradeBeforeKlineDoesNotStartRecoveryOrReachStrategy() throws Exception {
         ExchangeGateway gateway = mock(ExchangeGateway.class);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
