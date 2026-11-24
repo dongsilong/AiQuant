@@ -3187,8 +3187,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if ((slopeContext != null || displayContext != null) && diagnosticNow >= runtime.nextSlopeCompareLogAt) {
             runtime.nextSlopeCompareLogAt = diagnosticNow + 30_000L;
             log.info("斜率输入对照 source=RUNTIME mode={} strategyId={} instanceId={} credentialId={} symbol={} interval={} "
-                    + "decisionSource={} decisionEventTime={} decisionReceivedAt={} decisionCurrentPrice={} decisionPreviousKlineOpenPrice={} decisionKlineOpenTime={} decisionSlopePercent={} decisionDegrees={} decisionReady={} decisionFreshForMillis={} "
-                    + "displaySource={} displayEventTime={} displayReceivedAt={} displayCurrentPrice={} displayPreviousKlineOpenPrice={} displayKlineOpenTime={} displaySlopePercent={} displayDegrees={} displayReady={} displayFreshForMillis={}",
+                    + "decisionEventType={} decisionEventTime={} decisionReceivedAt={} decisionCurrentPrice={} decisionPreviousKlineOpenPrice={} decisionKlineOpenTime={} decisionSlopePercent={} decisionDegrees={} decisionReady={} decisionFreshForMillis={} "
+                    + "displayEventType={} displayEventTime={} displayReceivedAt={} displayCurrentPrice={} displayPreviousKlineOpenPrice={} displayKlineOpenTime={} displaySlopePercent={} displayDegrees={} displayReady={} displayFreshForMillis={}",
                 runtime.credential.getRunMode(), runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(),
                 runtime.symbol.getSymbol(), runtime.strategySymbol.getIntervalCode(),
                 slopeContext == null ? null : slopeContext.source(), context == null ? null : context.eventTime(), receivedAt,
