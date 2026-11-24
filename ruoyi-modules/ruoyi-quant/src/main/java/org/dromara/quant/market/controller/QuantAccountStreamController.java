@@ -60,7 +60,7 @@ public class QuantAccountStreamController {
      */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(HttpServletRequest request, HttpServletResponse response, @RequestParam Long credentialId) {
+    public SseEmitter stream(HttpServletRequest request, HttpServletResponse response, @RequestParam Long credentialId) throws IOException {
         QuantCredential credential = credentialMapper.selectById(credentialId);
         if (!accessible(credential)) {
             throw new IllegalArgumentException("无权访问交易账户");
