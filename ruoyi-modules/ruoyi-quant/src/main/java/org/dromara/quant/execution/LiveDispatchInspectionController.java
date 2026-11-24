@@ -64,7 +64,7 @@ public class LiveDispatchInspectionController {
 
     private static long parseId(String value) {
         if (value == null || !value.matches("[1-9][0-9]{0,18}")) {
-            throw new IllegalArgumentException("Positive decimal credential ID string required");
+            throw new IllegalArgumentException("必须提供正数格式的 credential ID 字符串");
         }
         return Long.parseLong(value);
     }
