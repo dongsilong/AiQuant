@@ -67,7 +67,7 @@ public class LiveManualRecoveryExecutionService {
     private static long number(Map<String, Object> row, String field) {
         Object value = row.get(field);
         if (!(value instanceof Number n) || n.longValue() <= 0) {
-            throw new IllegalStateException("恢复案例缺少字段：valid " + field);
+            throw new IllegalStateException("恢复案例缺少有效字段：" + field);
         }
         return n.longValue();
     }
