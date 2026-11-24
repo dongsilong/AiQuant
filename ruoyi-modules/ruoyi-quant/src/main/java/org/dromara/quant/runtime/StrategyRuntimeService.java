@@ -1916,7 +1916,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 org.dromara.quant.market.MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), localNow, exchangeNow, maxEventAgeMillis)) {
                 BigDecimal displayPrice = event.price() != null ? event.price() : runtime.currentPrice();
                 if (displayPrice != null && displayPrice.signum() > 0) {
-                    publishSlopeTelemetry(runtime, buildContext(runtime, displayPrice, event), event.receivedAt());
+                    publishSlopeTelemetry(runtime, buildContext(runtime, displayPrice, event), event.receivedAt(), event.type());
                 }
             }
             if (!event.replay()) {
