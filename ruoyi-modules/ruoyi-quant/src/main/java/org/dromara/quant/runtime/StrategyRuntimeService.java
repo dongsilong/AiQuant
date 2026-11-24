@@ -2558,7 +2558,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 // FIXED: 统计状态包含 OPEN_PENDING，避免并发下突破最大开仓数。
                 openCount = runtimeLedgerMapper.countStrategyExposures(runtime.strategy.getId(), runtime.credential.getId());
                 if (openCount == null) {
-                    throw new org.springframework.dao.DataRetrievalFailureException("Strategy exposure count unavailable");
+                    throw new org.springframework.dao.DataRetrievalFailureException("无法获取策略敞口数量");
                 }
             } catch (org.springframework.dao.DataAccessException ex) {
                 // 持仓事实不可读时必须停止本次开仓，不能在数据库连接异常期间放行交易。
@@ -5282,7 +5282,7 @@ runtime.market.previousKlineOpenPrice(), runtime.market.currentKlineOpen(), runt
             return positions.isEmpty() ? null : positions.get(0);
         }
         if (snapshots == null) {
-            throw new IllegalStateException("Binance symbol position snapshot missing");
+            throw new IllegalStateException("缺少 Binance 交易对持仓快照");
         }
         List<QuantPosition> localOpen =
 positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPosition::getCredentialId, credential.getId()).eq(QuantPosition::getSymbol, symbol).gt(QuantPosition::getQuantity, BigDecimal.ZERO));
