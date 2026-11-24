@@ -246,6 +246,9 @@ public class MarketStreamHub {
     private record AggregateTradeKey(String runMode, String symbol, long fromId, int limit) {
     }
 
+    private record KlineHistoryReadKey(long generation, Instant from, int limit) {
+    }
+
     private record Incoming(long generation, ExchangeGateway.MarketEvent event, long enqueuedAtNanos, long dequeuedAtNanos) {
         private Incoming(long generation, ExchangeGateway.MarketEvent event) {
             this(generation, event, System.nanoTime(), -1L);
@@ -268,6 +271,7 @@ public class MarketStreamHub {
          * Bounded independently; overflow invalidates this stream and triggers the existing safe replay.
          */
         private final java.util.ArrayDeque<Incoming> recoveryBuffer = new java.util.ArrayDeque<>();
+        private final Map<KlineHistoryReadKey, CompletableFuture<List<ExchangeGateway.Kline>>> klineHistoryReads = new ConcurrentHashMap<>();
         private final Map<UUID, Consumer<Boolean>> healthListeners = new ConcurrentHashMap<>();
         private final java.util.concurrent.atomic.LongAccumulator maxNetworkLag = new java.util.concurrent.atomic.LongAccumulator(Long::max, 0);
         private final java.util.concurrent.atomic.LongAccumulator maxQueueLag = new java.util.concurrent.atomic.LongAccumulator(Long::max, 0);
@@ -410,6 +414,36 @@ public class MarketStreamHub {
             return Instant.now().plusMillis(offsetMillis);
         }
 
+        /**
+         * 同一连接代次、同一K线游标的恢复与静默校验共用在途REST读取，不缓存已完成结果。
+         */
+        private List<ExchangeGateway.Kline> queryHistoryShared(long attempt, Instant from, int limit) {
+            KlineHistoryReadKey readKey = new KlineHistoryReadKey(attempt, from, limit);
+            CompletableFuture<List<ExchangeGateway.Kline>> created = new CompletableFuture<>();
+            CompletableFuture<List<ExchangeGateway.Kline>> existing = klineHistoryReads.putIfAbsent(readKey, created);
+            if (existing != null) {
+                try {
+                    return existing.join();
+                } catch (CompletionException ex) {
+                    if (ex.getCause() instanceof RuntimeException runtimeException) {
+                        throw runtimeException;
+                    }
+                    throw ex;
+                }
+            }
+            try {
+                List<ExchangeGateway.Kline> queried = recoveryRead(attempt, "KLINE", () -> from == null ? history(null, limit) : history(from, limit));
+                List<ExchangeGateway.Kline> result = queried == null ? List.of() : List.copyOf(queried);
+                created.complete(result);
+                return result;
+            } catch (RuntimeException ex) {
+                created.completeExceptionally(ex);
+                throw ex;
+            } finally {
+                klineHistoryReads.remove(readKey, created);
+            }
+        }
+
         private void remove(UUID id) {
             StreamEventConsumer<Incoming> listener = listeners.remove(id);
             if (listener != null) {
@@ -473,7 +507,7 @@ public class MarketStreamHub {
                 }
                 do {
                     Instant from = cursor;
-                    List<ExchangeGateway.Kline> history = recoveryRead(attempt, "KLINE", () -> from == null ? history(null, 8) : history(from, 1000));
+                    List<ExchangeGateway.Kline> history = queryHistoryShared(attempt, from, from == null ? 8 : 1000);
                     if (history == null || history.isEmpty()) {
                         throw new IllegalStateException("K线历史为空，不能确认行情已就绪");
                     }
@@ -1149,7 +1183,7 @@ public class MarketStreamHub {
             nextQuietCheckAt = System.currentTimeMillis() + 60_000L;
             quietCheckTask = recoveryExecutor.submit(() -> {
                 try {
-                    List<ExchangeGateway.Kline> history = recoveryRead(attempt, "KLINE", () -> history(expectedOpen, 1000));
+                    List<ExchangeGateway.Kline> history = queryHistoryShared(attempt, expectedOpen, 1000);
                     Instant exchangeNow = exchangeNow();
                     synchronized (this) {
                         if (closed || attempt != generation || recovering || !expectedOpen.equals(lastKlineOpen) || !java.util.Objects.equals(expectedReceived, lastReceived.get(
