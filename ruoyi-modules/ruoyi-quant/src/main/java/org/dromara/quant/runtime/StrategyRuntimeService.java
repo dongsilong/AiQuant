@@ -1686,8 +1686,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
 
     private void publishSlopeTelemetryForMaUpdate(ActiveRuntime runtime) {
         if (runtime.plugin instanceof KlineSlopeRateStrategy) {
+            EntryMaSnapshot snapshot = runtime.entryMa.snapshot();
+            // 新鲜 MA 只有在主策略下一次评估时才发布，避免终端提前显示策略尚未消费的 MA。
+            if (snapshot.ready()) {
+                return;
+            }
             synchronized (runtime.slopeTelemetryLock) {
-                publishSlopeTelemetry(runtime, runtime.latestSlopeContext, runtime.entryMa.snapshot());
+                publishSlopeTelemetry(runtime, runtime.latestSlopeContext, snapshot);
             }
         }
     }
@@ -1811,27 +1816,6 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
                 runtime.latestMarkPrice = event.price();
-                if (runtime.plugin instanceof KlineSlopeRateStrategy
-                    && MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), Instant.now(),
-                        Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode())),
-                        Math.max(1, properties.getMarket().getMaxEventAgeMillis()))
-                    && MarketEventFreshness.isFresh(runtime.market.lastKlineEventAt, runtime.market.lastKlineReceivedAt,
-                        Instant.now(), Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode())),
-                        Math.max(1, properties.getMarket().getMaxEventAgeMillis()))) {
-                    synchronized (runtime.slopeTelemetryLock) {
-                        SlopeContextSnapshot decisionContext = runtime.latestSlopeContext;
-                        if (decisionContext != null) {
-                            StrategyContext base = decisionContext.context();
-                            StrategyContext displayContext = new StrategyContext(base.symbol(), base.direction(), base.entryPrice(),
-                                event.price(), base.referencePrice(), base.previousKlineOpenPrice(), base.klineOpenTime(),
-                                base.klineClosed(), event.eventTime(), base.quantity(), base.initialPositionQuantity(),
-                                base.initialMargin(), base.leverage(), base.highestPriceSinceEntry(), base.lowestPriceSinceEntry(),
-                                base.firstTakeProfitTriggered(), base.highestStep(), event.price());
-                            publishSlopeTelemetry(runtime, decisionContext, runtime.entryMa.snapshot(),
-                                new SlopeContextSnapshot(displayContext, event.receivedAt(), "MARK", "MARK"));
-                        }
-                    }
-                }
                 if (runtime.position != null && !runtime.exitCoordinating.get()) {
                     updateRuntimeMaximumReturnRate(runtime, event.price());
                 }
@@ -1978,9 +1962,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return;
         }
         StrategyContext context = buildContext(runtime, price, event);
+        EntryMaSnapshot decisionMaSnapshot = runtime.entryMa.snapshot();
+        KlineSlopeRateStrategy.SlopeEvaluation decisionSlope = runtime.plugin instanceof KlineSlopeRateStrategy
+            ? KlineSlopeRateStrategy.calculateSlope(context, runtime.params) : null;
         if (decisionLogs != null && runtime.plugin instanceof KlineSlopeRateStrategy) {
-            var slope = KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
-            if (slope == null || !slope.entryApproved()) {
+            if (decisionSlope == null || !decisionSlope.entryApproved()) {
                 runtime.decisionLogCursor.reset();
             }
         }
@@ -1988,7 +1974,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             log.debug("evaluate 到达遥测 instanceId={} symbol={} eventType={} price={} prevKlineOpen={} klineOpen={} klineClosed={}", runtime.instance.getId(),
             runtime.symbol.getSymbol(), event.type(), price, context.previousKlineOpenPrice(), context.klineOpenTime(), context.klineClosed());
         }
-        publishSlopeTelemetry(runtime, context, event.receivedAt(), event.type());
+        publishSlopeTelemetry(runtime, context, event.receivedAt(), event.type(), decisionMaSnapshot, decisionSlope);
         fenceSnapshotClosedCandle(runtime, context);
         clearProtectionDegradedAfterConfirmedFlat(runtime);
         // 待确认交易或退出协调会暂停本轮开仓、退出和保护同步；实时斜率仍随有效行情更新。
@@ -2069,7 +2055,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 log.warn("计算是否产生开仓信号前判断问题4：{}，交易对：{}", "本地存在尚未确认关闭的持仓", runtime.symbol);
                 return;
             }
-            evaluateEntry(runtime, context);
+            evaluateEntry(runtime, context, decisionMaSnapshot, decisionSlope);
         } else {
             logEntryDecision(runtime, context, "POSITION_OPEN", "该策略实例已有持仓，不重复开仓");
             log.debug("持仓处理：跳过开仓并检查退出条件和保护单 instanceId={} symbol={}", runtime.instance.getId(), runtime.symbol.getSymbol());
@@ -2478,12 +2464,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /** 在原有准入门禁后核实历史保护清理证明，再使用当前有效行情开仓。 */
-    private void evaluateEntry(ActiveRuntime runtime, StrategyContext context) {
+    private void evaluateEntry(ActiveRuntime runtime, StrategyContext context, EntryMaSnapshot decisionMaSnapshot,
+                               KlineSlopeRateStrategy.SlopeEvaluation decisionSlope) {
         Long strategySymbolId = runtime.strategySymbol == null ? null : runtime.strategySymbol.getId();
         if (strategySymbolId == null) {
             // 未持久化的测试/构造上下文不应发起分布式锁请求；生产实例始终有绑定 ID。
             synchronized (runtime.entryDispatchLock) {
-                evaluateEntryLocked(runtime, context);
+                evaluateEntryLocked(runtime, context, decisionMaSnapshot, decisionSlope);
             }
             return;
         }
@@ -2491,7 +2478,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         distributedLock.lock();
         try {
             synchronized (runtime.entryDispatchLock) {
-                evaluateEntryLocked(runtime, context);
+                evaluateEntryLocked(runtime, context, decisionMaSnapshot, decisionSlope);
             }
         } finally {
             if (distributedLock.isHeldByCurrentThread()) distributedLock.unlock();
@@ -2499,7 +2486,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /** 开仓决策与实际派单共用同一临界区，避免暂停请求与开仓请求交错。 */
-    private void evaluateEntryLocked(ActiveRuntime runtime, StrategyContext context) {
+    private void evaluateEntryLocked(ActiveRuntime runtime, StrategyContext context, EntryMaSnapshot decisionMaSnapshot,
+                                     KlineSlopeRateStrategy.SlopeEvaluation decisionSlope) {
         // FIXED: 策略/凭证/交易对被停用后仅保留保护，不再允许开仓。
         if (!runtime.runtimeEnabled || Boolean.FALSE.equals(runtime.strategySymbol.getRuntimeEnabled())) {
             logEntryDecision(runtime, context, "SYMBOL_RUNTIME_DISABLED", "该策略交易对已单独暂停开仓");
@@ -2526,22 +2514,21 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         long strategyEvaluationStartedAt = System.nanoTime();
         Optional<EntrySignal> signal;
-        if (entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) {
-            KlineSlopeRateStrategy slopeStrategy = (KlineSlopeRateStrategy) runtime.plugin;
-            KlineSlopeRateStrategy.SlopeEvaluation slopeEvaluation =
-                KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
-            // 斜率无效或角度未达到阈值时，不读取/阻断 MA 行情；仍通过策略方法保留原有斜率诊断日志。
-            if (slopeEvaluation == null || !slopeEvaluation.entryApproved()) {
-                signal = slopeStrategy.evaluateEntry(context, runtime.params, null, null, slopeEvaluation);
+        if (runtime.plugin instanceof KlineSlopeRateStrategy slopeStrategy) {
+            if (!entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)) {
+                signal = slopeStrategy.evaluateEntry(context, runtime.params, null, null, decisionSlope);
+            } else if (decisionSlope == null || !decisionSlope.entryApproved()) {
+                // 斜率无效或角度未达到阈值时，不读取/阻断 MA 行情；复用本轮已计算的斜率结果。
+                signal = slopeStrategy.evaluateEntry(context, runtime.params, null, null, decisionSlope);
             } else {
-                EntryMaSnapshot entryMaSnapshot = runtime.entryMa.snapshot();
-                String entryMaBlockReason = entryMaMarketBlockReason(runtime, entryMaSnapshot);
+                String entryMaBlockReason = entryMaMarketBlockReason(runtime, decisionMaSnapshot);
                 if (entryMaBlockReason != null) {
                     logEntryDecision(runtime, context, "ENTRY_MA_" + entryMaBlockReason,
-                        entryMaMarketDiagnostic(runtime, entryMaSnapshot, entryMaBlockReason));
+                        entryMaMarketDiagnostic(runtime, decisionMaSnapshot, entryMaBlockReason));
                     return;
                 }
-                signal = slopeStrategy.evaluateEntry(context, runtime.params, entryMaSnapshot.ma5(), entryMaSnapshot.ma7(), slopeEvaluation);
+                signal = slopeStrategy.evaluateEntry(context, runtime.params, decisionMaSnapshot.ma5(),
+                    decisionMaSnapshot.ma7(), decisionSlope);
             }
         } else {
             signal = runtime.plugin.evaluateEntry(context, runtime.params);
@@ -3119,13 +3106,19 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      * 推送策略插件实际使用的斜率结果；交易决策仍由插件原逻辑执行。
      */
     private void publishSlopeTelemetry(ActiveRuntime runtime, StrategyContext context, Instant receivedAt, String eventType) {
+        publishSlopeTelemetry(runtime, context, receivedAt, eventType, runtime.entryMa.snapshot(),
+            context == null ? null : KlineSlopeRateStrategy.calculateSlope(context, runtime.params));
+    }
+
+    private void publishSlopeTelemetry(ActiveRuntime runtime, StrategyContext context, Instant receivedAt, String eventType,
+                                       EntryMaSnapshot maSnapshot, KlineSlopeRateStrategy.SlopeEvaluation evaluation) {
         if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
             return;
         }
         synchronized (runtime.slopeTelemetryLock) {
             SlopeContextSnapshot current = new SlopeContextSnapshot(context, receivedAt, "TRADE_KLINE", eventType);
             runtime.latestSlopeContext = current;
-            publishSlopeTelemetry(runtime, current, runtime.entryMa.snapshot());
+            publishSlopeTelemetry(runtime, current, maSnapshot, evaluation);
         }
     }
 
@@ -3136,9 +3129,20 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     private void publishSlopeTelemetry(ActiveRuntime runtime, SlopeContextSnapshot slopeContext, EntryMaSnapshot maSnapshot,
                                        SlopeContextSnapshot displayContext) {
         StrategyContext context = slopeContext == null ? null : slopeContext.context();
-        Instant receivedAt = slopeContext == null ? null : slopeContext.receivedAt();
         KlineSlopeRateStrategy.SlopeEvaluation evaluation = context == null ? null
             : KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
+        publishSlopeTelemetry(runtime, slopeContext, maSnapshot, displayContext, evaluation);
+    }
+
+    private void publishSlopeTelemetry(ActiveRuntime runtime, SlopeContextSnapshot slopeContext, EntryMaSnapshot maSnapshot,
+                                       KlineSlopeRateStrategy.SlopeEvaluation evaluation) {
+        publishSlopeTelemetry(runtime, slopeContext, maSnapshot, slopeContext, evaluation);
+    }
+
+    private void publishSlopeTelemetry(ActiveRuntime runtime, SlopeContextSnapshot slopeContext, EntryMaSnapshot maSnapshot,
+                                       SlopeContextSnapshot displayContext, KlineSlopeRateStrategy.SlopeEvaluation evaluation) {
+        StrategyContext context = slopeContext == null ? null : slopeContext.context();
+        Instant receivedAt = slopeContext == null ? null : slopeContext.receivedAt();
         if (runtime.hasPendingAction() && System.nanoTime() >= runtime.nextPendingSlopeLogNanos) {
             runtime.nextPendingSlopeLogNanos = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
             if (evaluation == null) {
