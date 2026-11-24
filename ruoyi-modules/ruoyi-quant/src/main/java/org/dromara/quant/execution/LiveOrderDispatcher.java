@@ -81,7 +81,7 @@ public class LiveOrderDispatcher {
         if (strategyId == null || strategyId <= 0 || instanceId == null || instanceId <= 0 || epoch == null || epoch <= 0 || normalizedOperation == null || normalizedPositionSide == null || normalizedExchangeSide == null ||
             !java.util.Set.of("OPEN", "CLOSE").contains(normalizedOperation) ||
             !java.util.Set.of("LONG", "SHORT").contains(normalizedPositionSide) || !java.util.Set.of("BUY", "SELL").contains(normalizedExchangeSide) || !directionMatches) {
-            throw new IllegalArgumentException("Unproven strategy order intent cannot be dispatched");
+            throw new IllegalArgumentException("未经验证的策略订单意图不能发送");
         }
         return reserve(credentialId, symbol, key, normalizedOperation, clientOrderId, instanceId, epoch, null, null, strategyId, normalizedPositionSide, normalizedExchangeSide);
     }
@@ -123,7 +123,7 @@ public class LiveOrderDispatcher {
                 }
                 if (strategyId != null && mapper.insertPreDispatchIntent(credentialId, normalized, key, clientOrderId, strategyId, instanceId, operation, positionSide, exchangeSide,
                     epoch) != 1) {
-                    throw new IllegalStateException("LIVE pre-send strategy intent is not durable");
+                    throw new IllegalStateException("LIVE 发送前的策略意图尚未持久化");
                 }
                 return new Ticket(credentialId, normalized, key);
             });
@@ -158,7 +158,7 @@ public class LiveOrderDispatcher {
      */
     public void configurationApplied(Ticket ticket) {
         if (ticket == null) {
-            throw new IllegalArgumentException("Missing configuration dispatch ticket");
+            throw new IllegalArgumentException("缺少配置变更发送票据");
         }
         // Persist the confirmed exchange outcome in its own transaction before releasing
         // the guard. If the process crashes between these commits, CONFIG_APPLIED is durable
@@ -202,14 +202,14 @@ public class LiveOrderDispatcher {
             || key == null || key.isBlank() || normalizedMode == null
             || !java.util.Set.of("ISOLATED", "CROSSED").contains(normalizedMode) || leverage < 1 || leverage > 125
             || !("SETTINGS:" + normalizedMode + ":" + leverage).equals(clientOrderId)) {
-            throw new IllegalArgumentException("Cannot recover configuration dispatch without exact desired-settings identity");
+            throw new IllegalArgumentException("缺少精确的目标配置标识，无法恢复配置变更发送");
         }
         return Boolean.TRUE.equals(transaction.execute(status -> {
             if (mapper.recoverConfiguration(credentialId, normalizedSymbol, key, clientOrderId, normalizedMode, leverage) != 1) {
                 return false;
             }
             if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
-                throw new IllegalStateException("Verified configuration fact but durable dispatch guard mismatch");
+                throw new IllegalStateException("配置事实已验证，但持久化发送保护条件不匹配");
             }
             return true;
         }));
@@ -223,7 +223,7 @@ public class LiveOrderDispatcher {
     public boolean supersedeProtectionCreate(Long credentialId, String symbol, String key, String clientOrderId) {
         if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank()
             || key == null || key.isBlank() || clientOrderId == null || clientOrderId.isBlank()) {
-            throw new IllegalArgumentException("Cannot supersede a protection ticket without exact identity");
+            throw new IllegalArgumentException("缺少精确标识，无法替代保护单票据");
         }
         String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
         return Boolean.TRUE.equals(transaction.execute(status -> {
@@ -231,7 +231,7 @@ public class LiveOrderDispatcher {
                 return false;
             }
             if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
-                throw new IllegalStateException("Superseded protection ticket but durable dispatch guard mismatch");
+                throw new IllegalStateException("保护单票据已被替代，但持久化发送保护条件不匹配");
             }
             return true;
         }));
@@ -257,7 +257,7 @@ public class LiveOrderDispatcher {
                                         java.util.function.BooleanSupplier finalizeExecution) {
         if (credentialId == null || symbol == null || symbol.isBlank() || key == null || key.isBlank()
             || clientOrderId == null || clientOrderId.isBlank() || instanceId == null || finalizeExecution == null) {
-            throw new IllegalArgumentException("Cannot verify a LIVE dispatch ticket without exact strategy identity");
+            throw new IllegalArgumentException("缺少精确的策略标识，无法核验 LIVE 发送票据");
         }
         String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
         return Boolean.TRUE.equals(transaction.execute(status -> {
@@ -301,14 +301,14 @@ public class LiveOrderDispatcher {
      */
     public boolean recoveredFromExchange(Long credentialId, String symbol, String key, String clientOrderId, Long exchangeOrderId) {
         if (credentialId == null || symbol == null || symbol.isBlank() || key == null || key.isBlank() || clientOrderId == null || clientOrderId.isBlank() || exchangeOrderId == null || exchangeOrderId <= 0) {
-            throw new IllegalArgumentException("Cannot reconcile a LIVE ticket without exact exchange identity");
+            throw new IllegalArgumentException("缺少精确的交易所标识，无法对账 LIVE 票据");
         }
         return Boolean.TRUE.equals(transaction.execute(status -> {
             if (mapper.recoverVerified(credentialId, symbol.toUpperCase(Locale.ROOT), key, clientOrderId, exchangeOrderId) != 1) {
                 return false;
             }
             if (mapper.release(credentialId, symbol.toUpperCase(Locale.ROOT), key) != 1) {
-                throw new IllegalStateException("Recovered exchange fact but durable dispatch guard mismatch");
+                throw new IllegalStateException("交易所事实已恢复，但持久化发送保护条件不匹配");
             }
             return true;
         }));
@@ -320,7 +320,7 @@ public class LiveOrderDispatcher {
      */
     public String activeProtectionTicket(Long credentialId, String symbol, String clientAlgoId, String operation) {
         if (credentialId == null || symbol == null || symbol.isBlank() || clientAlgoId == null || clientAlgoId.isBlank() || !java.util.Set.of("PROTECT_CREATE", "PROTECT_CANCEL").contains(operation)) {
-            throw new IllegalArgumentException("Cannot inspect protection dispatch without exact identity");
+            throw new IllegalArgumentException("缺少精确标识，无法检查保护单发送状态");
         }
         return mapper.activeProtectionTicket(credentialId, symbol.toUpperCase(Locale.ROOT), clientAlgoId, operation);
     }
@@ -330,7 +330,7 @@ public class LiveOrderDispatcher {
      */
     public ActiveDispatch activeDispatch(Long credentialId, String symbol) {
         if (credentialId == null || symbol == null || symbol.isBlank()) {
-            throw new IllegalArgumentException("Cannot inspect a dispatch slot without account and symbol");
+            throw new IllegalArgumentException("缺少账户和交易对，无法检查发送槽位");
         }
         return toActiveDispatch(mapper.activeDispatch(credentialId, symbol.toUpperCase(Locale.ROOT)));
     }
@@ -340,7 +340,7 @@ public class LiveOrderDispatcher {
      */
     public java.util.List<ActiveDispatch> activeProtectionCancels(Long credentialId, String symbol) {
         if (credentialId == null || credentialId <= 0) {
-            throw new IllegalArgumentException("Cannot inspect protection dispatches without account identity");
+            throw new IllegalArgumentException("缺少账户标识，无法检查保护单发送记录");
         }
         return mapper.activeProtectionCancels(credentialId, symbol == null ? null : symbol.toUpperCase(Locale.ROOT)).stream()
             .map(LiveOrderDispatcher::toActiveDispatch).filter(Objects::nonNull).toList();
@@ -349,7 +349,7 @@ public class LiveOrderDispatcher {
     /** List unresolved protection create and cancel tickets for connection recovery. */
     public java.util.List<ActiveDispatch> activeProtectionDispatches(Long credentialId, String symbol) {
         if (credentialId == null || credentialId <= 0) {
-            throw new IllegalArgumentException("Cannot inspect protection dispatches without account identity");
+            throw new IllegalArgumentException("缺少账户标识，无法检查保护单发送记录");
         }
         return mapper.activeProtectionDispatches(credentialId, symbol == null ? null : symbol.toUpperCase(Locale.ROOT)).stream()
             .map(LiveOrderDispatcher::toActiveDispatch).filter(Objects::nonNull).toList();
@@ -389,7 +389,7 @@ public class LiveOrderDispatcher {
      */
     public boolean recoverVerifiedProtection(Long credentialId, String symbol, String clientAlgoId, String operation, Long algoOrderId) {
         if (algoOrderId == null || algoOrderId <= 0) {
-            throw new IllegalArgumentException("Missing verified algo order ID");
+            throw new IllegalArgumentException("缺少已验证的算法订单 ID");
         }
         String key = activeProtectionTicket(credentialId, symbol, clientAlgoId, operation);
         return key != null && recoveredFromExchange(credentialId, symbol, key, clientAlgoId, algoOrderId);
