@@ -1828,7 +1828,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                                 base.initialMargin(), base.leverage(), base.highestPriceSinceEntry(), base.lowestPriceSinceEntry(),
                                 base.firstTakeProfitTriggered(), base.highestStep(), event.price());
                             publishSlopeTelemetry(runtime, decisionContext, runtime.entryMa.snapshot(),
-                                new SlopeContextSnapshot(displayContext, event.receivedAt()));
+                                new SlopeContextSnapshot(displayContext, event.receivedAt(), "MARK"));
                         }
                     }
                 }
@@ -1988,7 +1988,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             log.debug("evaluate 到达遥测 instanceId={} symbol={} eventType={} price={} prevKlineOpen={} klineOpen={} klineClosed={}", runtime.instance.getId(),
             runtime.symbol.getSymbol(), event.type(), price, context.previousKlineOpenPrice(), context.klineOpenTime(), context.klineClosed());
         }
-        publishSlopeTelemetry(runtime, context, event.receivedAt());
+        publishSlopeTelemetry(runtime, context, event.receivedAt(), event.type());
         fenceSnapshotClosedCandle(runtime, context);
         clearProtectionDegradedAfterConfirmedFlat(runtime);
         // 待确认交易或退出协调会暂停本轮开仓、退出和保护同步；实时斜率仍随有效行情更新。
@@ -3118,12 +3118,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     /**
      * 推送策略插件实际使用的斜率结果；交易决策仍由插件原逻辑执行。
      */
-    private void publishSlopeTelemetry(ActiveRuntime runtime, StrategyContext context, Instant receivedAt) {
+    private void publishSlopeTelemetry(ActiveRuntime runtime, StrategyContext context, Instant receivedAt, String eventType) {
         if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
             return;
         }
         synchronized (runtime.slopeTelemetryLock) {
-            SlopeContextSnapshot current = new SlopeContextSnapshot(context, receivedAt);
+            SlopeContextSnapshot current = new SlopeContextSnapshot(context, receivedAt, eventType);
             runtime.latestSlopeContext = current;
             publishSlopeTelemetry(runtime, current, runtime.entryMa.snapshot());
         }
@@ -3182,6 +3182,26 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         long displayFreshForMillis = remainingEventFreshnessMillis(
             display == null ? null : display.eventTime(), displayReceivedAt, now, exchangeNow, maxEventAgeMillis);
         boolean displayReady = displayEvaluation != null && displayFreshForMillis > 0;
+
+        long diagnosticNow = System.currentTimeMillis();
+        if ((slopeContext != null || displayContext != null) && diagnosticNow >= runtime.nextSlopeCompareLogAt) {
+            runtime.nextSlopeCompareLogAt = diagnosticNow + 30_000L;
+            log.info("斜率输入对照 source=RUNTIME mode={} strategyId={} instanceId={} credentialId={} symbol={} interval={} "
+                    + "decisionSource={} decisionEventTime={} decisionReceivedAt={} decisionCurrentPrice={} decisionPreviousKlineOpenPrice={} decisionKlineOpenTime={} decisionSlopePercent={} decisionDegrees={} decisionReady={} decisionFreshForMillis={} "
+                    + "displaySource={} displayEventTime={} displayReceivedAt={} displayCurrentPrice={} displayPreviousKlineOpenPrice={} displayKlineOpenTime={} displaySlopePercent={} displayDegrees={} displayReady={} displayFreshForMillis={}",
+                runtime.credential.getRunMode(), runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(),
+                runtime.symbol.getSymbol(), runtime.strategySymbol.getIntervalCode(),
+                slopeContext == null ? null : slopeContext.source(), context == null ? null : context.eventTime(), receivedAt,
+                context == null ? null : context.currentPrice(), context == null ? null : context.previousKlineOpenPrice(),
+                context == null ? null : context.klineOpenTime(), evaluation == null ? null : evaluation.slopePercent(),
+                evaluation == null ? null : evaluation.degrees(), slopeReady, slopeFreshForMillis,
+                displayContext == null ? null : displayContext.source(), display == null ? null : display.eventTime(),
+                displayReceivedAt, display == null ? null : display.currentPrice(),
+                display == null ? null : display.previousKlineOpenPrice(), display == null ? null : display.klineOpenTime(),
+                displayEvaluation == null ? null : displayEvaluation.slopePercent(),
+                displayEvaluation == null ? null : displayEvaluation.degrees(), displayReady, displayFreshForMillis);
+        }
+
         // MA 快照不应在每个整分钟边界被人为提前过期。
         // 是否仍可用于决策由实时事件新鲜度和最近已收盘 K 线时间共同判定。
 
@@ -3219,7 +3239,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             display == null ? null : display.eventTime(),
             displayReceivedAt,
             displayFreshForMillis,
-            displayContext == null || display == null ? null : displayContext == slopeContext ? "TRADE_KLINE" : "MARK"
+            displayContext == null || display == null ? null : displayContext.source()
         ));
     }
 
@@ -6394,7 +6414,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private record QuantExecutionRecordStatus(String value) {
     }
 
-    private record SlopeContextSnapshot(StrategyContext context, Instant receivedAt) {
+    private record SlopeContextSnapshot(StrategyContext context, Instant receivedAt, String source) {
     }
 
     private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines, Instant lastClosedKlineOpenTime) {
@@ -6730,6 +6750,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private volatile boolean closed;
 
         private long nextSlopeDiagLogAt;
+        private long nextSlopeCompareLogAt;
         private long nextMarketUnreadyLogAt;
         private volatile long nextExpiredMarketLogAt;
         private long marketUnreadySinceAt;
