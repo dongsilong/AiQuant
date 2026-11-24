@@ -3096,9 +3096,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /**
-     * 推送策略插件实际使用的斜率结果；交易决策仍由插件原逻辑执行。
+     * 推送与本轮策略决策共用的斜率结果和均线快照。
      */
     private void publishSlopeTelemetry(ActiveRuntime runtime, StrategyContext context, Instant receivedAt, String eventType) {
+        if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
+            return;
+        }
         publishSlopeTelemetry(runtime, context, receivedAt, eventType, runtime.entryMa.snapshot(),
             context == null ? null : KlineSlopeRateStrategy.calculateSlope(context, runtime.params));
     }
