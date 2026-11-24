@@ -42,6 +42,22 @@ class KlineSlopeRateStrategyTest {
     }
 
     @Test
+    void usesProvidedSlopeEvaluationInsteadOfRecalculatingFromContext() {
+        StrategyContext context = context(null, null, new BigDecimal("100"), new BigDecimal("98"), false, null, null);
+        KlineSlopeRateStrategy.SlopeEvaluation decisionSlope = new KlineSlopeRateStrategy.SlopeEvaluation(
+            new BigDecimal("102"), new BigDecimal("100"), new BigDecimal("2.00"),
+            new BigDecimal("63.43"), 63.43d, new BigDecimal("60"), true
+        );
+
+        EntrySignal signal = strategy.evaluateEntry(context, Map.of(), new BigDecimal("101.5"),
+            new BigDecimal("101.2"), decisionSlope).orElseThrow();
+
+        assertEquals(EntrySignal.Direction.LONG, signal.direction());
+        assertTrue(signal.reason().contains("1分钟5MA高于7MA"));
+    }
+
+
+    @Test
     void oneMinuteMaDirectionFilterAllowsShortOnlyWhenMa5BelowMa7() {
         StrategyContext c = context(null, null, new BigDecimal("100"), new BigDecimal("98"), false, null, null);
         var signal = strategy.evaluateEntry(c, Map.of(), new BigDecimal("98.8"), new BigDecimal("99.0")).orElseThrow();
