@@ -124,7 +124,7 @@ public class UserDataStreamHub {
             throw new IllegalArgumentException("用户数据流缺少凭证");
         }
         if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && !ownsLiveStream(credential.getId())) {
-            throw new IllegalStateException("LIVE private stream belongs to another node or no lease owner is active");
+            throw new IllegalStateException("LIVE 私有数据流归属于其他节点，或当前没有有效的租约持有者");
         }
         final AutoCloseable[] subscription = new AutoCloseable[1];
         streams.compute(credential.getId(), (id, current) -> {
@@ -149,7 +149,7 @@ public class UserDataStreamHub {
                     // A missing/failed lease verification is not permission
                     // to keep a Binance private connection alive.
                     currentOwner = false;
-                    log.warn("LIVE user-stream lease health verification failed credentialId={}", id, ex);
+                    log.warn("LIVE 用户数据流租约健康状态校验失败 credentialId={}", id, ex);
                 }
                 if (!currentOwner) {
                     if (streams.remove(id, stream)) {
@@ -157,7 +157,7 @@ public class UserDataStreamHub {
                         if (positionEvents != null) {
                             positionEvents.onUserDataEvent(id, new ExchangeGateway.UserDataEvent("DISCONNECTED", Instant.now(), null));
                         }
-                        log.warn("Closed obsolete LIVE private stream after lease loss credentialId={}", id);
+                        log.warn("租约丢失后已关闭过期的 LIVE 私有数据流 credentialId={}", id);
                     }
                     return;
                 }
@@ -291,7 +291,7 @@ public class UserDataStreamHub {
                     if (obsolete != null) {
                         obsolete.close();
                     }
-                    throw new IllegalStateException("LIVE private stream lease lost during connection establishment");
+                    throw new IllegalStateException("LIVE 私有数据流在建立连接期间丢失租约");
                 }
                 // SDK transport connects synchronously. RAW_OKHTTP connects asynchronously
                 // and reports CONNECTED from the actual WebSocket onOpen callback.
