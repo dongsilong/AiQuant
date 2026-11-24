@@ -21,7 +21,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
@@ -68,9 +67,11 @@ public class QuantAccountStreamController {
         }
         if ("LIVE".equalsIgnoreCase(credential.getRunMode())
             && !userDataStreamHub.hasLiveStreamOwnership(credentialId)) {
+            response.setStatus(HttpStatus.CONFLICT.value());
             response.setHeader("X-Quant-Stream-State", "LEASE_NOT_OWNED");
             log.debug("账户 SSE 等待本节点持有 LIVE 私有流租约 credentialId={}", credentialId);
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "LEASE_NOT_OWNED");
+            response.flushBuffer();
+            return null;
         }
         response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
         response.setCharacterEncoding("UTF-8");
