@@ -490,7 +490,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             try {
                 if ("LIVE".equalsIgnoreCase(runMode) && strategyId != null && strategyInstanceId != null) {
                     if (acceptanceJournal == null) {
-                        throw new IllegalStateException("Missing transactional strategy order provenance journal");
+                        throw new IllegalStateException("缺少事务性策略订单来源记录");
                     }
                     acceptanceJournal.persist(credentialId, strategyId, strategyInstanceId, runMode, operationType, request, exchangeResult,
                         openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),
