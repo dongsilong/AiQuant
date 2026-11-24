@@ -1895,14 +1895,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         if (!runtime.marketHealthy || !runtime.marketStreamReady || event.replay()) {
             String marketBlockReason = marketDecisionBlockReason(runtime, event);
-            // 行情未就绪时，新鲜的实时 TRADE/KLINE 仍可更新斜率遥测；回放或未就绪行情不能触发开仓、平仓判断。
-            if (!event.replay() && runtime.plugin instanceof KlineSlopeRateStrategy && ("TRADE".equalsIgnoreCase(event.type()) || "KLINE".equalsIgnoreCase(event.type())) &&
-                org.dromara.quant.market.MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), localNow, exchangeNow, maxEventAgeMillis)) {
-                BigDecimal displayPrice = event.price() != null ? event.price() : runtime.currentPrice();
-                if (displayPrice != null && displayPrice.signum() > 0) {
-                    publishSlopeTelemetry(runtime, buildContext(runtime, displayPrice, event), event.receivedAt(), event.type());
-                }
-            }
+            // 行情未满足策略决策门禁时不发布决策快照，避免终端把未参与策略判断的数据显示为有效输入。
             if (!event.replay()) {
                 logUnavailableEntry(runtime, event, marketBlockReason,
                     "行情尚未就绪，暂停策略决策；阻断原因=" + marketBlockReason
