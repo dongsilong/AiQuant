@@ -16,6 +16,8 @@ import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.market.UserDataStreamHub;
 import org.dromara.quant.runtime.StrategyPositionPerformanceHub;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -66,12 +68,9 @@ public class QuantAccountStreamController {
         }
         if ("LIVE".equalsIgnoreCase(credential.getRunMode())
             && !userDataStreamHub.hasLiveStreamOwnership(credentialId)) {
-            response.setStatus(HttpServletResponse.SC_CONFLICT);
             response.setHeader("X-Quant-Stream-State", "LEASE_NOT_OWNED");
             log.debug("账户 SSE 等待本节点持有 LIVE 私有流租约 credentialId={}", credentialId);
-            SseEmitter unavailable = new SseEmitter(0L);
-            unavailable.complete();
-            return unavailable;
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "LEASE_NOT_OWNED");
         }
         response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
         response.setCharacterEncoding("UTF-8");
