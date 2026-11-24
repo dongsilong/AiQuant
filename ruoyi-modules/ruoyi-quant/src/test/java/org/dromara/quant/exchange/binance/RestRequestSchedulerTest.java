@@ -214,4 +214,64 @@ class RestRequestSchedulerTest {
         assertEquals(3, RestRequestScheduler.Kind.ACCOUNT.ordinal());
         assertEquals(4, RestRequestScheduler.Kind.BACKGROUND.ordinal());
     }
+    @Test
+    void liveQueueCapacityDoesNotRejectTestnetRequests() throws InterruptedException {
+        var scheduler = new RestRequestScheduler(60_000L);
+        scheduler.acquire("fapi.binance.com", RestRequestScheduler.Kind.TRADE, 40);
+
+        var liveWaiters = new java.util.ArrayList<Thread>();
+        for (int i = 0; i < 16; i++) {
+            Thread waiter = new Thread(() -> {
+                try {
+                    scheduler.acquire("fapi.binance.com", RestRequestScheduler.Kind.TRADE, 1);
+                } catch (ExchangeMarketPort.RequestDeferredException ignored) {
+                    // The saturated test scheduler is expected to time out or be interrupted.
+                }
+            });
+            liveWaiters.add(waiter);
+            waiter.start();
+        }
+
+        Thread testnetWaiter = null;
+        try {
+            long liveQueueDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
+            while (!scheduler.diagnostics().contains("TRADE_LIVE=16(") && System.nanoTime() < liveQueueDeadline) {
+                Thread.sleep(5L);
+            }
+            assertTrue(scheduler.diagnostics().contains("TRADE_LIVE=16("),
+                "LIVE queue should reach its own capacity");
+
+            var testnetQueued = new java.util.concurrent.CountDownLatch(1);
+            testnetWaiter = new Thread(() -> {
+                try {
+                    scheduler.acquire("demo-fapi.binance.com", RestRequestScheduler.Kind.TRADE, 1);
+                } catch (ExchangeMarketPort.RequestDeferredException ignored) {
+                    // The test only verifies that TESTNET can enter its independent queue.
+                } finally {
+                    testnetQueued.countDown();
+                }
+            });
+            testnetWaiter.start();
+
+            long testnetQueueDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(500L);
+            while (!scheduler.diagnostics().contains("TRADE_TESTNET=1(") && System.nanoTime() < testnetQueueDeadline) {
+                Thread.sleep(5L);
+            }
+            assertTrue(scheduler.diagnostics().contains("TRADE_LIVE=16(")
+                    && scheduler.diagnostics().contains("TRADE_TESTNET=1("),
+                "TESTNET must be admitted while LIVE has reached its queue capacity");
+        } finally {
+            if (testnetWaiter != null) {
+                testnetWaiter.interrupt();
+                testnetWaiter.join(1_000L);
+            }
+            for (Thread waiter : liveWaiters) {
+                waiter.interrupt();
+            }
+            for (Thread waiter : liveWaiters) {
+                waiter.join(1_000L);
+            }
+        }
+    }
+
 }
