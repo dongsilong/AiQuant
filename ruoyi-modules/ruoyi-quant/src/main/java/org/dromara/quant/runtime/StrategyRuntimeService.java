@@ -1828,7 +1828,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                                 base.initialMargin(), base.leverage(), base.highestPriceSinceEntry(), base.lowestPriceSinceEntry(),
                                 base.firstTakeProfitTriggered(), base.highestStep(), event.price());
                             publishSlopeTelemetry(runtime, decisionContext, runtime.entryMa.snapshot(),
-                                new SlopeContextSnapshot(displayContext, event.receivedAt(), "MARK"));
+                                new SlopeContextSnapshot(displayContext, event.receivedAt(), "MARK", "MARK"));
                         }
                     }
                 }
@@ -3123,7 +3123,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return;
         }
         synchronized (runtime.slopeTelemetryLock) {
-            SlopeContextSnapshot current = new SlopeContextSnapshot(context, receivedAt, eventType);
+            SlopeContextSnapshot current = new SlopeContextSnapshot(context, receivedAt, "TRADE_KLINE", eventType);
             runtime.latestSlopeContext = current;
             publishSlopeTelemetry(runtime, current, runtime.entryMa.snapshot());
         }
@@ -3187,15 +3187,15 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if ((slopeContext != null || displayContext != null) && diagnosticNow >= runtime.nextSlopeCompareLogAt) {
             runtime.nextSlopeCompareLogAt = diagnosticNow + 30_000L;
             log.info("斜率输入对照 source=RUNTIME mode={} strategyId={} instanceId={} credentialId={} symbol={} interval={} "
-                    + "decisionEventType={} decisionEventTime={} decisionReceivedAt={} decisionCurrentPrice={} decisionPreviousKlineOpenPrice={} decisionKlineOpenTime={} decisionSlopePercent={} decisionDegrees={} decisionReady={} decisionFreshForMillis={} "
-                    + "displayEventType={} displayEventTime={} displayReceivedAt={} displayCurrentPrice={} displayPreviousKlineOpenPrice={} displayKlineOpenTime={} displaySlopePercent={} displayDegrees={} displayReady={} displayFreshForMillis={}",
+                    + "decisionSource={} decisionEventType={} decisionEventTime={} decisionReceivedAt={} decisionCurrentPrice={} decisionPreviousKlineOpenPrice={} decisionKlineOpenTime={} decisionSlopePercent={} decisionDegrees={} decisionReady={} decisionFreshForMillis={} "
+                    + "displaySource={} displayEventType={} displayEventTime={} displayReceivedAt={} displayCurrentPrice={} displayPreviousKlineOpenPrice={} displayKlineOpenTime={} displaySlopePercent={} displayDegrees={} displayReady={} displayFreshForMillis={}",
                 runtime.credential.getRunMode(), runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(),
                 runtime.symbol.getSymbol(), runtime.strategySymbol.getIntervalCode(),
-                slopeContext == null ? null : slopeContext.source(), context == null ? null : context.eventTime(), receivedAt,
+                slopeContext == null ? null : slopeContext.source(), slopeContext == null ? null : slopeContext.eventType(), context == null ? null : context.eventTime(), receivedAt,
                 context == null ? null : context.currentPrice(), context == null ? null : context.previousKlineOpenPrice(),
                 context == null ? null : context.klineOpenTime(), evaluation == null ? null : evaluation.slopePercent(),
                 evaluation == null ? null : evaluation.degrees(), slopeReady, slopeFreshForMillis,
-                displayContext == null ? null : displayContext.source(), display == null ? null : display.eventTime(),
+                displayContext == null ? null : displayContext.source(), displayContext == null ? null : displayContext.eventType(), display == null ? null : display.eventTime(),
                 displayReceivedAt, display == null ? null : display.currentPrice(),
                 display == null ? null : display.previousKlineOpenPrice(), display == null ? null : display.klineOpenTime(),
                 displayEvaluation == null ? null : displayEvaluation.slopePercent(),
@@ -6414,7 +6414,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private record QuantExecutionRecordStatus(String value) {
     }
 
-    private record SlopeContextSnapshot(StrategyContext context, Instant receivedAt, String source) {
+    private record SlopeContextSnapshot(StrategyContext context, Instant receivedAt, String source, String eventType) {
     }
 
     private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines, Instant lastClosedKlineOpenTime) {
