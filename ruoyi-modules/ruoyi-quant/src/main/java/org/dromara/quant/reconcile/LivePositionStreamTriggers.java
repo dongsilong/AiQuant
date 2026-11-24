@@ -15,6 +15,10 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Keep one LIVE subscription reference per enabled credential, via the existing
@@ -40,6 +44,12 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
      * Avoid flooding WARN when an account is leased to a different LIVE node.
      */
     private final Map<Long, Long> nextLeaseConflictLogAt = new HashMap<>();
+    private final ScheduledExecutorService leaseRetryScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "quant-live-lease-retry");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final Map<Long, ScheduledFuture<?>> leaseRetryTasks = new HashMap<>();
 
     /**
      * Establish the private-stream ownership before the application reports startup
@@ -54,7 +64,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
     /**
      * 检查活动账户的私有流状态并按需重建订阅。
      */
-    @Scheduled(fixedDelay = 30000, initialDelay = 0)
+    @Scheduled(fixedDelay = 30000, initialDelay = 30000)
     public synchronized void supervise() {
         Set<Long> liveIds = new HashSet<>();
         final java.util.List<QuantCredential> enabledCredentials;
@@ -67,6 +77,10 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
             // On discovery failure we cannot establish which accounts are still
             // enabled. Stop owned LIVE streams rather than continuing with a
             // previously authorized account and a renewable stale lease.
+            for (ScheduledFuture<?> task : leaseRetryTasks.values()) {
+                task.cancel(false);
+            }
+            leaseRetryTasks.clear();
             for (Long id : Set.copyOf(subscriptions.keySet())) {
                 closeSubscription(id);
                 freshness.privateStreamDisconnected(id, "CREDENTIAL_DISCOVERY_FAILED");
@@ -82,6 +96,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
         for (QuantCredential credential : enabledCredentials) {
             Long id = credential.getId();
             if (!"LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                cancelLeaseRetry(id);
                 if (!subscriptions.containsKey(id)) {
                     freshness.clearPrivateStreamRequirement(id, "RUN_MODE_NOT_LIVE");
                 }
@@ -102,10 +117,12 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                         }
                         log.warn("LIVE私有流租约竞争 credentialId={} dbLease=[{}]；本节点禁止创建交易策略运行时", id, leaseState);
                     }
+                    scheduleLeaseRetry(id);
                     closeSubscription(id);
                     freshness.privateStreamDisconnected(id, "LEASE_NOT_OWNED");
                     continue;
                 }
+                cancelLeaseRetry(id);
                 Long previousEpoch = subscriptionEpochs.get(id);
                 if (previousEpoch != null && !previousEpoch.equals(leaseEpoch)) {
                     // A process can reacquire an expired lease with the same token.
@@ -137,6 +154,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 nextLeaseConflictLogAt.remove(id);
                 log.info("LIVE私有流租约已获取并注册共享订阅 credentialId={}，等待WebSocket连接及完整持仓核验后开放开仓准入", id);
             } catch (RuntimeException ex) {
+                cancelLeaseRetry(id);
                 closeSubscription(id);
                 freshness.privateStreamDisconnected(id, "STREAM_ENROLLMENT_FAILED");
                 // A failed Hub enrollment must not strand a DB lease for 75 seconds.
@@ -147,6 +165,11 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                     log.warn("LIVE shared stream lease cleanup failed credentialId={}", id, releaseError);
                 }
                 log.warn("LIVE shared user stream enrollment failed credentialId={}", id, ex);
+            }
+        }
+        for (Long id : Set.copyOf(leaseRetryTasks.keySet())) {
+            if (!liveIds.contains(id)) {
+                cancelLeaseRetry(id);
             }
         }
         for (Long id : Set.copyOf(subscriptions.keySet())) {
@@ -161,6 +184,38 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                     log.warn("LIVE account removal lease cleanup failed credentialId={}", id, ex);
                 }
             }
+        }
+    }
+
+    private void scheduleLeaseRetry(Long credentialId) {
+        final Long remainingMillis;
+        try {
+            remainingMillis = lease.remainingMillis(credentialId);
+        } catch (RuntimeException ex) {
+            // The regular 30-second supervisor remains the fallback if the DB diagnostic is unavailable.
+            log.debug("LIVE租约剩余时间查询失败，保留常规监督重试 credentialId={}", credentialId, ex);
+            return;
+        }
+        if (remainingMillis == null) {
+            return;
+        }
+        cancelLeaseRetry(credentialId);
+        long delayMillis = Math.max(250L, remainingMillis + 250L);
+        ScheduledFuture<?> task = leaseRetryScheduler.schedule(() -> {
+            synchronized (LivePositionStreamTriggers.this) {
+                leaseRetryTasks.remove(credentialId);
+                log.debug("LIVE租约预计到期，提前触发账户租约竞争 credentialId={}", credentialId);
+                supervise();
+            }
+        }, delayMillis, TimeUnit.MILLISECONDS);
+        leaseRetryTasks.put(credentialId, task);
+        log.debug("LIVE租约冲突已安排到期重试 credentialId={} remainingMs={} retryInMs={}", credentialId, remainingMillis, delayMillis);
+    }
+
+    private void cancelLeaseRetry(Long credentialId) {
+        ScheduledFuture<?> task = leaseRetryTasks.remove(credentialId);
+        if (task != null) {
+            task.cancel(false);
         }
     }
 
@@ -185,6 +240,11 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
      */
     @PreDestroy
     public synchronized void close() {
+        for (ScheduledFuture<?> task : leaseRetryTasks.values()) {
+            task.cancel(false);
+        }
+        leaseRetryTasks.clear();
+        leaseRetryScheduler.shutdownNow();
         for (Long id : Set.copyOf(subscriptions.keySet())) {
             closeSubscription(id);
             freshness.privateStreamDisconnected(id, "APPLICATION_SHUTDOWN");
