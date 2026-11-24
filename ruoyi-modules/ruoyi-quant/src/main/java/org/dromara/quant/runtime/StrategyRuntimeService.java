@@ -3175,13 +3175,24 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         long maFreshForMillis = maReady
             ? remainingEventFreshnessMillis(maSnapshot.eventTime(), maSnapshot.receivedAt(), now, exchangeNow, maxEventAgeMillis)
             : 0L;
-        StrategyContext display = displayContext == null ? null : displayContext.context();
-        Instant displayReceivedAt = displayContext == null ? null : displayContext.receivedAt();
+        SlopeContextSnapshot effectiveDisplayContext = displayContext;
+        StrategyContext display = effectiveDisplayContext == null ? null : effectiveDisplayContext.context();
+        Instant displayReceivedAt = effectiveDisplayContext == null ? null : effectiveDisplayContext.receivedAt();
         KlineSlopeRateStrategy.SlopeEvaluation displayEvaluation = display == null ? null
             : KlineSlopeRateStrategy.calculateSlope(display, runtime.params);
         long displayFreshForMillis = remainingEventFreshnessMillis(
             display == null ? null : display.eventTime(), displayReceivedAt, now, exchangeNow, maxEventAgeMillis);
         boolean displayReady = displayEvaluation != null && displayFreshForMillis > 0;
+        // MARK 暂时失效时，仅回退到仍满足相同新鲜度约束的 TRADE/KLINE 决策快照。
+        // 该回退只用于遥测展示，不修改 slopeContext 或任何交易决策输入。
+        if (!displayReady && slopeReady) {
+            effectiveDisplayContext = slopeContext;
+            display = context;
+            displayReceivedAt = receivedAt;
+            displayEvaluation = evaluation;
+            displayFreshForMillis = slopeFreshForMillis;
+            displayReady = true;
+        }
 
         long diagnosticNow = System.currentTimeMillis();
         if ((slopeContext != null || displayContext != null) && diagnosticNow >= runtime.nextSlopeCompareLogAt) {
@@ -3195,7 +3206,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 context == null ? null : context.currentPrice(), context == null ? null : context.previousKlineOpenPrice(),
                 context == null ? null : context.klineOpenTime(), evaluation == null ? null : evaluation.slopePercent(),
                 evaluation == null ? null : evaluation.degrees(), slopeReady, slopeFreshForMillis,
-                displayContext == null ? null : displayContext.source(), displayContext == null ? null : displayContext.eventType(), display == null ? null : display.eventTime(),
+                effectiveDisplayContext == null || display == null ? null : effectiveDisplayContext.source(), displayContext == null ? null : displayContext.eventType(), display == null ? null : display.eventTime(),
                 displayReceivedAt, display == null ? null : display.currentPrice(),
                 display == null ? null : display.previousKlineOpenPrice(), display == null ? null : display.klineOpenTime(),
                 displayEvaluation == null ? null : displayEvaluation.slopePercent(),
