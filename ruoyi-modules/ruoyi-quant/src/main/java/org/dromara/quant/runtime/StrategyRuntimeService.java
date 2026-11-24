@@ -3206,7 +3206,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 context == null ? null : context.currentPrice(), context == null ? null : context.previousKlineOpenPrice(),
                 context == null ? null : context.klineOpenTime(), evaluation == null ? null : evaluation.slopePercent(),
                 evaluation == null ? null : evaluation.degrees(), slopeReady, slopeFreshForMillis,
-                effectiveDisplayContext == null || display == null ? null : effectiveDisplayContext.source(), displayContext == null ? null : displayContext.eventType(), display == null ? null : display.eventTime(),
+                effectiveDisplayContext == null || display == null ? null : effectiveDisplayContext.source(), effectiveDisplayContext == null ? null : effectiveDisplayContext.eventType(), display == null ? null : display.eventTime(),
                 displayReceivedAt, display == null ? null : display.currentPrice(),
                 display == null ? null : display.previousKlineOpenPrice(), display == null ? null : display.klineOpenTime(),
                 displayEvaluation == null ? null : displayEvaluation.slopePercent(),
