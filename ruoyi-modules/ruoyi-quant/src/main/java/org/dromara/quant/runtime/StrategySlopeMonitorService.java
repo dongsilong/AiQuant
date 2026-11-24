@@ -187,6 +187,9 @@ public class StrategySlopeMonitorService {
         long displayFreshForMillis = displayInput == null ? 0L : remainingFreshnessMillis(
             displayInput.context().eventTime(), displayInput.receivedAt(), now, exchangeNow, maxAgeMillis);
         boolean displayReady = displayEvaluation != null && displayFreshForMillis > 0;
+        long slopeFreshForMillis = input == null ? 0L : remainingFreshnessMillis(
+            input.context().eventTime(), input.receivedAt(), now, exchangeNow, maxAgeMillis);
+        boolean slopeReady = evaluation != null && slopeFreshForMillis > 0;
         // MARK 暂时失效时，回退到仍然新鲜的 TRADE/KLINE 输入；两者都过期则继续显示无效。
         if (!displayReady && slopeReady) {
             displayInput = input;
@@ -194,9 +197,6 @@ public class StrategySlopeMonitorService {
             displayFreshForMillis = slopeFreshForMillis;
             displayReady = true;
         }
-        long slopeFreshForMillis = input == null ? 0L : remainingFreshnessMillis(
-            input.context().eventTime(), input.receivedAt(), now, exchangeNow, maxAgeMillis);
-        boolean slopeReady = evaluation != null && slopeFreshForMillis > 0;
 
         long diagnosticNow = System.currentTimeMillis();
         if ((input != null || displayInput != null) && diagnosticNow >= monitor.nextSlopeCompareLogAt) {
