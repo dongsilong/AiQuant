@@ -49,16 +49,16 @@ final class RestRequestScheduler {
         if (requestWeight < 1 || requestWeight > TOKEN_CAPACITY) {
             throw new IllegalArgumentException("Binance REST 请求权重超出调度器支持范围: " + requestWeight);
         }
+        Environment environment = Environment.fromHost(host);
         long initialNow = System.nanoTime();
         if (manualBlock) {
-            throw deferred("MANUAL_BLOCK", kind, 0L, 0L);
+            throw deferred("MANUAL_BLOCK", kind, environment, 0L, 0L);
         }
         if (initialNow < blockedUntil) {
-            throw deferred("BLOCKED_UNTIL", kind, 0L, TimeUnit.NANOSECONDS.toMillis(blockedUntil - initialNow) + 1L);
+            throw deferred("BLOCKED_UNTIL", kind, environment, 0L, TimeUnit.NANOSECONDS.toMillis(blockedUntil - initialNow) + 1L);
         }
-        Environment environment = Environment.fromHost(host);
-        if (queueSize(kind) >= 16) {
-            throw deferred("QUEUE_FULL", kind, 0L, 2_000L);
+        if (queueSize(kind, environment) >= 16) {
+            throw deferred("QUEUE_FULL", kind, environment, 0L, 2_000L);
         }
         Ticket ticket = new Ticket(kind, environment, requestWeight, initialNow);
         ArrayDeque<Ticket> queue = queues[kind.ordinal()][environment.ordinal()];
@@ -67,21 +67,21 @@ final class RestRequestScheduler {
         try {
             for (;;) {
                 if (Thread.currentThread().isInterrupted()) {
-                    throw deferred("INTERRUPTED", kind, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
+                    throw deferred("INTERRUPTED", kind, environment, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
                 }
                 if (manualBlock) {
-                    throw deferred("MANUAL_BLOCK", kind, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
+                    throw deferred("MANUAL_BLOCK", kind, environment, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
                 }
                 long now = System.nanoTime();
                 if (now < blockedUntil) {
-                    throw deferred("BLOCKED_UNTIL", kind, TimeUnit.NANOSECONDS.toMillis(now - initialNow), TimeUnit.NANOSECONDS.toMillis(blockedUntil - now) + 1L);
+                    throw deferred("BLOCKED_UNTIL", kind, environment, TimeUnit.NANOSECONDS.toMillis(now - initialNow), TimeUnit.NANOSECONDS.toMillis(blockedUntil - now) + 1L);
                 }
                 if (now >= deadline) {
                     if (!queue.contains(ticket)) {
                         log.error("Binance REST 调度器队列状态异常 reason=QUEUE_TIMEOUT kind={} environment={} requestWeight={} waitedMs={} queueSizes={}",
                             kind, environment, requestWeight, TimeUnit.NANOSECONDS.toMillis(now - initialNow), java.util.Arrays.toString(queueSizes()));
                     }
-                    throw deferred("QUEUE_TIMEOUT", kind, TimeUnit.NANOSECONDS.toMillis(now - initialNow), 1_500L);
+                    throw deferred("QUEUE_TIMEOUT", kind, environment, TimeUnit.NANOSECONDS.toMillis(now - initialNow), 1_500L);
                 }
                 refillTokens(now);
                 Ticket selected = selectEligibleTicket(now);
@@ -199,25 +199,22 @@ final class RestRequestScheduler {
         };
     }
 
-    private int queueSize(Kind kind) {
-        int size = 0;
-        for (Environment environment : Environment.values()) {
-            size += queues[kind.ordinal()][environment.ordinal()].size();
-        }
-        return size;
+    private int queueSize(Kind kind, Environment environment) {
+        return queues[kind.ordinal()][environment.ordinal()].size();
     }
 
     private int[] queueSizes() {
         int[] sizes = new int[queues.length];
         for (Kind kind : Kind.values()) {
-            sizes[kind.ordinal()] = queueSize(kind);
+            sizes[kind.ordinal()] = java.util.Arrays.stream(Environment.values()).mapToInt(environment -> queueSize(kind, environment)).sum();
         }
         return sizes;
     }
 
-    private ExchangeMarketPort.RequestDeferredException deferred(String reason, Kind kind, long waitedMillis, long retryAfterMillis) {
+    private ExchangeMarketPort.RequestDeferredException deferred(String reason, Kind kind, Environment environment,
+                                                                    long waitedMillis, long retryAfterMillis) {
         int[] sizes = queueSizes();
-        return new ExchangeMarketPort.RequestDeferredException(reason, kind.name(), sizes[kind.ordinal()],
+        return new ExchangeMarketPort.RequestDeferredException(reason, kind.name(), queueSize(kind, environment),
             sizes, waitedMillis, retryAfterMillis);
     }
 
