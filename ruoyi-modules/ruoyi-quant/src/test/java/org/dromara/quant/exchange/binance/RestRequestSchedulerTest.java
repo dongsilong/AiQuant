@@ -217,13 +217,13 @@ class RestRequestSchedulerTest {
     @Test
     void liveQueueCapacityDoesNotRejectTestnetRequests() throws InterruptedException {
         var scheduler = new RestRequestScheduler(60_000L);
-        scheduler.acquire("fapi.binance.com", RestRequestScheduler.Kind.TRADE, 40);
+        scheduler.acquire("fapi.binance.com", RestRequestScheduler.Kind.BACKGROUND, 40);
 
         var liveWaiters = new java.util.ArrayList<Thread>();
         for (int i = 0; i < 16; i++) {
             Thread waiter = new Thread(() -> {
                 try {
-                    scheduler.acquire("fapi.binance.com", RestRequestScheduler.Kind.TRADE, 1);
+                    scheduler.acquire("fapi.binance.com", RestRequestScheduler.Kind.BACKGROUND, 1);
                 } catch (ExchangeMarketPort.RequestDeferredException ignored) {
                     // The saturated test scheduler is expected to time out or be interrupted.
                 }
@@ -234,16 +234,16 @@ class RestRequestSchedulerTest {
 
         Thread testnetWaiter = null;
         try {
-            long liveQueueDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
-            while (!scheduler.diagnostics().contains("TRADE_LIVE=16(") && System.nanoTime() < liveQueueDeadline) {
+            long liveQueueDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+            while (!scheduler.diagnostics().contains("BACKGROUND_LIVE=16(") && System.nanoTime() < liveQueueDeadline) {
                 Thread.sleep(5L);
             }
-            assertTrue(scheduler.diagnostics().contains("TRADE_LIVE=16("),
+            assertTrue(scheduler.diagnostics().contains("BACKGROUND_LIVE=16("),
                 "LIVE queue should reach its own capacity");
 
             testnetWaiter = new Thread(() -> {
                 try {
-                    scheduler.acquire("demo-fapi.binance.com", RestRequestScheduler.Kind.TRADE, 1);
+                    scheduler.acquire("demo-fapi.binance.com", RestRequestScheduler.Kind.BACKGROUND, 1);
                 } catch (ExchangeMarketPort.RequestDeferredException ignored) {
                     // The test only verifies that TESTNET can enter its independent queue.
                 }
@@ -251,11 +251,11 @@ class RestRequestSchedulerTest {
             testnetWaiter.start();
 
             long testnetQueueDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(500L);
-            while (!scheduler.diagnostics().contains("TRADE_TESTNET=1(") && System.nanoTime() < testnetQueueDeadline) {
+            while (!scheduler.diagnostics().contains("BACKGROUND_TESTNET=1(") && System.nanoTime() < testnetQueueDeadline) {
                 Thread.sleep(5L);
             }
-            assertTrue(scheduler.diagnostics().contains("TRADE_LIVE=16(")
-                    && scheduler.diagnostics().contains("TRADE_TESTNET=1("),
+            assertTrue(scheduler.diagnostics().contains("BACKGROUND_LIVE=16(")
+                    && scheduler.diagnostics().contains("BACKGROUND_TESTNET=1("),
                 "TESTNET must be admitted while LIVE has reached its queue capacity");
         } finally {
             if (testnetWaiter != null) {
