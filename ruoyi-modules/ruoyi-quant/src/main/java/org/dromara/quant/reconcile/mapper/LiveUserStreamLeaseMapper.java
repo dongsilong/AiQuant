@@ -22,6 +22,9 @@ public interface LiveUserStreamLeaseMapper {
 
     String describe(@Param("id") Long id);
 
+    /** Remaining lease duration calculated against the authoritative database clock. */
+    Long remainingMillis(@Param("id") Long id);
+
     long owns(@Param("id") Long id, @Param("owner") String owner);
 
     long ownsEpoch(@Param("id") Long id, @Param("owner") String owner, @Param("epoch") long epoch);
