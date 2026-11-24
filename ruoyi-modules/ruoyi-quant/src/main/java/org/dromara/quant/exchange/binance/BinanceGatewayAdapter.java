@@ -98,6 +98,11 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     private final java.util.concurrent.ConcurrentHashMap<OpenOrdersQueryKey, java.util.concurrent.CompletableFuture<List<OrderSnapshot>>> openOrdersQueries =
         new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * 同一凭证、同一交易对的持仓核验只允许一个 REST 请求在途；完成后立即移除，不缓存持仓快照。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<PositionQueryKey, java.util.concurrent.CompletableFuture<List<PositionSnapshot>>> positionQueries =
+        new java.util.concurrent.ConcurrentHashMap<>();
     private final RestRequestScheduler restScheduler = new RestRequestScheduler(50);
     /**
      * Binance 事件解析使用的 JSON 工具。
@@ -1024,7 +1029,39 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
      */
     @Override
     public List<PositionSnapshot> queryPositions(Credential credential, String symbol) {
-        return signedRead(credential, RestRequestScheduler.Kind.POSITION_VERIFY, client -> queryPositions(client, symbol));
+        String normalizedSymbol = symbol == null ? null : symbol.trim().toUpperCase(Locale.ROOT);
+        PositionQueryKey key = new PositionQueryKey(credential, normalizedSymbol);
+        var result = new java.util.concurrent.CompletableFuture<List<PositionSnapshot>>();
+        var running = positionQueries.putIfAbsent(key, result);
+        if (running != null) {
+            try {
+                return running.get(15, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException();
+            } catch (java.util.concurrent.TimeoutException ex) {
+                throw new org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException();
+            } catch (java.util.concurrent.ExecutionException ex) {
+                if (ex.getCause() instanceof RuntimeException error) {
+                    throw error;
+                }
+                if (ex.getCause() instanceof Error error) {
+                    throw error;
+                }
+                throw new IllegalStateException("持仓查询失败");
+            }
+        }
+        try {
+            List<PositionSnapshot> positions = signedRead(credential, RestRequestScheduler.Kind.POSITION_VERIFY,
+                client -> queryPositions(client, normalizedSymbol));
+            result.complete(positions);
+            return positions;
+        } catch (RuntimeException | Error ex) {
+            result.completeExceptionally(ex);
+            throw ex;
+        } finally {
+            positionQueries.remove(key, result);
+        }
     }
 
     private List<PositionSnapshot> queryPositions(DerivativesTradingUsdsFuturesRestApi client, String symbol) {
@@ -1211,6 +1248,9 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     }
 
     private record OpenOrdersQueryKey(Credential credential, String symbol) {
+    }
+    
+    private record PositionQueryKey(Credential credential, String symbol) {
     }
 
     /**
