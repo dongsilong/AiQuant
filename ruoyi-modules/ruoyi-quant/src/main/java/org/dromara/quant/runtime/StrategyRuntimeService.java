@@ -3064,6 +3064,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (decisionLogs == null || !(runtime.plugin instanceof KlineSlopeRateStrategy)) {
             return;
         }
+        // 当前交易对已有持仓时，不再记录重复的开仓阻止日志；平仓日志由独立记录路径保留。
+        if (runtime.position != null || runtime.state != null && !"CLOSED".equals(runtime.state.getStatus())
+            && runtime.state.getPositionQty() != null && runtime.state.getPositionQty().signum() > 0) {
+            return;
+        }
         try {
             var slope = KlineSlopeRateStrategy.calculateSlope(context, runtime.params);
             if (slope == null || !slope.entryApproved()) {
