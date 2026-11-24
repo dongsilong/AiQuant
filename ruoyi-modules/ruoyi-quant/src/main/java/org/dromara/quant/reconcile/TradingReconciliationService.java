@@ -550,17 +550,17 @@ public class TradingReconciliationService {
                 throw new SnapshotSupersededException();
             }
             if (runtimeSnapshotGeneration(credential.getId()) != runtimeGeneration) {
-                throw new SnapshotSupersededException("Account position snapshot superseded by a private-stream event");
+                throw new SnapshotSupersededException("账户持仓快照已被私有数据流事件取代");
             }
             Runnable commitSnapshot = () -> transaction.executeWithoutResult(status -> {
                 if (openCapacityMapper != null && openCapacityMapper.lockCredential(credential.getId()).isEmpty()) {
-                    throw new IllegalStateException("Cannot lock credential for position snapshot reconciliation");
+                    throw new IllegalStateException("无法锁定凭证以执行持仓快照对账");
                 }
                 if (snapshotFence != null) {
                     snapshotFence.ensure(credential.getId());
                     LocalDateTime previous = snapshotFence.lockAndRead(credential.getId());
                     if (previous != null && previous.isAfter(fetchStartedAt)) {
-                        throw new SnapshotSupersededException("Binance position snapshot superseded by a newer account or symbol snapshot");
+                        throw new SnapshotSupersededException("Binance 持仓快照已被更新的账户或交易对快照取代");
                     }
                 }
                 if (positionFreshness != null && positionFreshness.generation(credential.getId()) != eventGeneration) {
@@ -569,12 +569,12 @@ public class TradingReconciliationService {
                 syncAccount(credential, account);
                 syncPositions(credential, positions);
                 if (snapshotFence != null && snapshotFence.advance(credential.getId(), fetchStartedAt) != 1) {
-                    throw new IllegalStateException("Position snapshot fence advance failed");
+                    throw new IllegalStateException("持仓快照版本栅栏推进失败");
                 }
             });
             if (positionFreshness != null) {
                 if (!positionFreshness.runIfGenerationUnchanged(credential.getId(), eventGeneration, commitSnapshot)) {
-                    throw new SnapshotSupersededException("Position snapshot superseded before atomic commit");
+                    throw new SnapshotSupersededException("持仓快照在原子提交前已被取代");
                 }
             } else {
                 commitSnapshot.run();
@@ -583,7 +583,7 @@ public class TradingReconciliationService {
                 // A private-stream event can race the final commit/verification boundary.
                 // The database may contain this older snapshot, but it must never become
                 // a fresh runtime cache entry or release the LIVE entry gate.
-                throw new SnapshotSupersededException("Position snapshot changed before freshness verification");
+                throw new SnapshotSupersededException("持仓快照在新鲜度校验前发生变化");
             }
             runtimePositionSnapshots.put(credential.getId(), new CachedPositionSnapshot(eventGeneration, runtimeGeneration, Instant.now(), account, positions));
         } finally {
@@ -621,7 +621,7 @@ public class TradingReconciliationService {
      */
     public List<ExchangeGateway.PositionSnapshot> runtimePositionSnapshot(QuantCredential credential) {
         if (credential == null || credential.getId() == null) {
-            throw new IllegalArgumentException("Credential is required for a runtime position snapshot");
+            throw new IllegalArgumentException("运行时持仓快照必须提供凭证");
         }
         return loadAccountPositionSnapshot(credential, "runtime-reconcile", true, false).positions();
     }
@@ -646,7 +646,7 @@ public class TradingReconciliationService {
 
     private AccountPositionSnapshot loadAccountPositionSnapshot(QuantCredential credential, String trigger, boolean reuseFresh, boolean refreshAccount) {
         if (credential == null || credential.getId() == null) {
-            throw new IllegalArgumentException("Credential is required for an account position snapshot");
+            throw new IllegalArgumentException("账户持仓快照必须提供凭证");
         }
         long credentialId = credential.getId();
         long generation = positionGeneration(credentialId);
@@ -676,7 +676,7 @@ public class TradingReconciliationService {
                 java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStartedAt));
             if (positionGeneration(credentialId) != snapshot.positionGeneration()
                 || runtimeSnapshotGeneration(credentialId) != snapshot.runtimeGeneration()) {
-                throw new SnapshotSupersededException("Shared account position snapshot was invalidated before use");
+                throw new SnapshotSupersededException("共享账户持仓快照在使用前已失效");
             }
             // The in-flight position refresh already queried the account balance; reuse
             // that same fresh account fact instead of issuing another ACCOUNT request.
@@ -858,7 +858,7 @@ public class TradingReconciliationService {
     public void syncSymbolPositionSnapshot(QuantCredential credential, String symbol, List<ExchangeGateway.PositionSnapshot> snapshots, LocalDateTime fetchStartedAt,
                                            long eventGeneration) {
         if (credential == null || credential.getId() == null) {
-            throw new IllegalArgumentException("Credential is required for a symbol position snapshot");
+            throw new IllegalArgumentException("交易对持仓快照必须提供凭证");
         }
         syncSymbolPositionSnapshot(credential, symbol, snapshots, fetchStartedAt, eventGeneration, runtimeSnapshotGeneration(credential.getId()));
     }
@@ -866,7 +866,7 @@ public class TradingReconciliationService {
     private void syncSymbolPositionSnapshot(QuantCredential credential, String symbol, List<ExchangeGateway.PositionSnapshot> snapshots, LocalDateTime fetchStartedAt,
                                             long eventGeneration, long runtimeGeneration) {
         if (credential == null || credential.getId() == null || symbol == null || symbol.isBlank() || snapshots == null || fetchStartedAt == null) {
-            throw new IllegalArgumentException("Complete symbol position snapshot metadata is required");
+            throw new IllegalArgumentException("必须提供完整的交易对持仓快照元数据");
         }
         long generation = eventGeneration;
         var accountLock = positionLock(credential.getId());
@@ -876,17 +876,17 @@ public class TradingReconciliationService {
                 throw new SnapshotSupersededException();
             }
             if (runtimeSnapshotGeneration(credential.getId()) != runtimeGeneration) {
-                throw new SnapshotSupersededException("Binance symbol position snapshot superseded by a private-stream event");
+                throw new SnapshotSupersededException("Binance 交易对持仓快照已被私有数据流事件取代");
             }
             transaction.executeWithoutResult(status -> {
                 if (openCapacityMapper != null && openCapacityMapper.lockCredential(credential.getId()).isEmpty()) {
-                    throw new IllegalStateException("Cannot lock credential for symbol position snapshot");
+                    throw new IllegalStateException("无法锁定凭证以获取交易对持仓快照");
                 }
                 if (snapshotFence != null) {
                     snapshotFence.ensure(credential.getId());
                     LocalDateTime previous = snapshotFence.lockAndRead(credential.getId());
                     if (previous != null && previous.isAfter(fetchStartedAt)) {
-                        throw new SnapshotSupersededException("Binance symbol position snapshot superseded by another node");
+                        throw new SnapshotSupersededException("Binance 交易对持仓快照已被其他节点取代");
                     }
                 }
                 if (positionFreshness != null && positionFreshness.generation(credential.getId()) != generation) {
@@ -894,7 +894,7 @@ public class TradingReconciliationService {
                 }
                 syncSymbolPosition(credential, symbol, snapshots);
                 if (snapshotFence != null && snapshotFence.advance(credential.getId(), fetchStartedAt) != 1) {
-                    throw new IllegalStateException("Symbol position snapshot fence advance failed");
+                    throw new IllegalStateException("交易对持仓快照版本栅栏推进失败");
                 }
             });
             // A symbol snapshot is a partial account fact. Invalidate the cached full snapshot,
@@ -911,7 +911,7 @@ public class TradingReconciliationService {
      */
     public List<ExchangeGateway.PositionSnapshot> refreshSymbolPosition(QuantCredential credential, String symbol, ExchangeGateway.Credential exchangeCredential) {
         if (credential == null || credential.getId() == null || symbol == null || symbol.isBlank() || exchangeCredential == null) {
-            throw new IllegalArgumentException("Credential, symbol and exchange credentials are required");
+            throw new IllegalArgumentException("必须提供凭证、交易对和交易所凭证");
         }
         String normalizedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
         SymbolPositionQueryKey key = new SymbolPositionQueryKey(credential.getId(), normalizedSymbol, exchangeCredential);
@@ -978,7 +978,7 @@ public class TradingReconciliationService {
      */
     private void syncSymbolPosition(QuantCredential credential, String symbol, List<ExchangeGateway.PositionSnapshot> snapshots) {
         if (snapshots.stream().anyMatch(snapshot -> !symbol.equalsIgnoreCase(snapshot.symbol()))) {
-            throw new IllegalStateException("Binance returned a position outside the requested symbol: " + symbol);
+            throw new IllegalStateException("Binance 返回了请求交易对之外的持仓：" + symbol);
         }
         List<ExchangeGateway.PositionSnapshot> symbolFacts = snapshots.stream().filter(snapshot -> symbol.equalsIgnoreCase(snapshot.symbol())).toList();
         long nonZeroCount = symbolFacts.stream().filter(snapshot -> snapshot.quantity() != null && snapshot.quantity().signum() != 0).count();
@@ -1051,7 +1051,7 @@ public class TradingReconciliationService {
             Instant incomeFrom = initialRetainedHistoryStart(now, storedIncomeCursor);
             Instant incomeTo = range.to();
             if (incomeFrom.isAfter(incomeTo)) {
-                throw new IllegalStateException("Binance income-history cursor is in the future; refusing to skip financial events: credentialId="
+                throw new IllegalStateException("Binance 收入历史游标位于未来时间，拒绝跳过财务事件：credentialId="
                     + credential.getId() + ", cursor=" + storedIncomeCursor);
             }
             boolean incomeHistoryBacklog = Duration.between(incomeFrom, incomeTo).compareTo(INCOME_HISTORY_RECONCILE_WINDOW) > 0;
@@ -1117,7 +1117,7 @@ public class TradingReconciliationService {
      */
     static Instant initialRetainedHistoryStart(Instant now, LocalDateTime storedCursor) {
         if (now == null) {
-            throw new IllegalArgumentException("Exchange reconciliation time is required");
+            throw new IllegalArgumentException("必须提供交易所对账时间");
         }
         return storedCursor == null ? now.minus(Duration.ofDays(180)) : storedCursor.toInstant(ZoneOffset.UTC);
     }
@@ -1445,7 +1445,7 @@ public class TradingReconciliationService {
             // Pagination identity is mandatory, but incomplete money facts must still reach the
             // raw-fill journal so incomplete facts are retained for review without fabricating a trade row.
             if (s == null || s.symbol() == null || s.symbol().isBlank() || s.tradeId() == null || s.tradeId() <= 0 || s.time() == null) {
-                throw new IllegalStateException("Binance fill lacks stable symbol/trade/time identity; refusing to advance history");
+                throw new IllegalStateException("Binance 成交缺少稳定的交易对/成交/时间标识，拒绝推进历史游标");
             }
             QuantOrder sourceOrder = s.orderId() == null ? null : orderMapper.selectOne(new LambdaQueryWrapper<QuantOrder>()
                 .eq(QuantOrder::getCredentialId, credential.getId())
@@ -1464,10 +1464,10 @@ public class TradingReconciliationService {
             if (!completeFacts) {
                 String status = fillJournal.attribute(s, sourceOrder, credential.getId());
                 if ("CONFLICT".equals(status)) {
-                    log.error("Binance fill with incomplete immutable facts conflicts with persisted raw fact credentialId={} runMode={} symbol={} exchangeTradeId={} orderId={} missingFields={}",
+                    log.error("Binance 成交的不完整不可变事实与已持久化的原始事实冲突 credentialId={} runMode={} symbol={} exchangeTradeId={} orderId={} missingFields={}",
                         credential.getId(), credential.getRunMode(), s.symbol(), s.tradeId(), s.orderId(), incompleteFields);
                 } else {
-                    log.warn("Binance fill with incomplete immutable facts retained for review; local numeric trade row was not fabricated credentialId={} runMode={} symbol={} exchangeTradeId={} orderId={} missingFields={} journalStatus={}",
+                    log.warn("Binance 成交的不完整不可变事实已保留待核查；未伪造本地数值型成交记录 credentialId={} runMode={} symbol={} exchangeTradeId={} orderId={} missingFields={} journalStatus={}",
                         credential.getId(), credential.getRunMode(), s.symbol(), s.tradeId(), s.orderId(), incompleteFields, status);
                 }
                 continue;
@@ -1476,7 +1476,7 @@ public class TradingReconciliationService {
             if (!live) {
                 String journalStatus = fillJournal.attributeIfPresent(s, sourceOrder, credential.getId());
                 if ("CONFLICT".equals(journalStatus)) {
-                    log.error("Complete TESTNET fill conflicts with an earlier raw exchange fact; local trade row was not written credentialId={} symbol={} exchangeTradeId={} orderId={}",
+                    log.error("完整的 TESTNET 成交与较早的交易所原始事实冲突；未写入本地成交记录 credentialId={} symbol={} exchangeTradeId={} orderId={}",
                         credential.getId(), s.symbol(), s.tradeId(), s.orderId());
                     continue;
                 }
@@ -1487,7 +1487,7 @@ public class TradingReconciliationService {
             if (live) {
                 String rawStatus = fillJournal.attribute(s, null, credential.getId());
                 if ("CONFLICT".equals(rawStatus)) {
-                    log.error("LIVE fill journal quarantined conflicting raw fact; local trade ledger was not modified credentialId={} symbol={} exchangeTradeId={}",
+                    log.error("LIVE 成交日志已隔离冲突的原始事实；未修改本地成交账本 credentialId={} symbol={} exchangeTradeId={}",
                         credential.getId(), s.symbol(), s.tradeId());
                     continue;
                 }
@@ -1541,12 +1541,12 @@ public class TradingReconciliationService {
                             throw conflict;
                         }
                         fillJournal.quarantineConflict(credential.getId(), s.symbol(), s.tradeId(), conflict.getMessage());
-                        log.error("Concurrent local trade conflicts with Binance fill; quarantined raw fact credentialId={} symbol={} exchangeTradeId={}",
+                        log.error("并发写入的本地成交与 Binance 成交冲突；已隔离原始事实 credentialId={} symbol={} exchangeTradeId={}",
                             credential.getId(), s.symbol(), s.tradeId());
                         continue;
                     }
                     if ((attributionChanged || commissionAssetChanged || positionSideChanged) && tradeMapper.updateById(raced) != 1) {
-                        throw new IllegalStateException("Concurrent Binance fill attribution could not be enriched safely", concurrentInsert);
+                        throw new IllegalStateException("无法安全补充并发 Binance 成交的归属信息", concurrentInsert);
                     }
                     projectionDirty |= attributionChanged || commissionAssetChanged || positionSideChanged;
                     log.debug("并发对账已写入相同成交事实，跳过重复插入 credentialId={} symbol={} exchangeTradeId={}",
@@ -1566,12 +1566,12 @@ public class TradingReconciliationService {
                         throw conflict;
                     }
                     fillJournal.quarantineConflict(credential.getId(), s.symbol(), s.tradeId(), conflict.getMessage());
-                    log.error("Persisted local trade conflicts with Binance fill; quarantined raw fact credentialId={} symbol={} exchangeTradeId={}",
+                    log.error("已持久化的本地成交与 Binance 成交冲突；已隔离原始事实 credentialId={} symbol={} exchangeTradeId={}",
                         credential.getId(), s.symbol(), s.tradeId());
                     continue;
                 }
                 if ((attributionChanged || commissionAssetChanged || positionSideChanged) && tradeMapper.updateById(entity) != 1) {
-                    throw new IllegalStateException("Binance fill attribution could not be enriched safely: credentialId="
+                    throw new IllegalStateException("无法安全补充 Binance 成交的归属信息：credentialId="
                         + credential.getId() + ", symbol=" + s.symbol() + ", exchangeTradeId=" + s.tradeId());
                 }
                 projectionDirty |= attributionChanged || commissionAssetChanged || positionSideChanged;
@@ -1580,7 +1580,7 @@ public class TradingReconciliationService {
             if (live && sourceOrder != null && sourceOrder.getStrategyId() != null && sourceOrder.getStrategyInstanceId() != null) {
                 String status = fillJournal.attribute(s, sourceOrder, credential.getId());
                 if ("CONFLICT".equals(status)) {
-                    log.error("LIVE fill attribution became conflicting after local fact verification credentialId={} symbol={} exchangeTradeId={}",
+                    log.error("本地事实核验后，LIVE 成交归属出现冲突 credentialId={} symbol={} exchangeTradeId={}",
                         credential.getId(), s.symbol(), s.tradeId());
                 }
             }
@@ -1639,7 +1639,7 @@ public class TradingReconciliationService {
                     + ", incomingTradeTimeUtc=" + incomingTradeTimeUtc
                     + ", timeDeltaSeconds=" + deltaSeconds;
             }
-            throw new IllegalStateException("Persisted local trade conflicts with immutable Binance fill facts; refusing overwrite: symbol="
+            throw new IllegalStateException("已持久化的本地成交与 Binance 不可变成交事实冲突，拒绝覆盖：symbol="
                 + incoming.symbol() + ", exchangeTradeId=" + incoming.tradeId() + ", exchangeOrderId=" + incoming.orderId()
                 + ", conflictingFields=" + String.join(",", conflictingFields) + timeDetails);
         }
@@ -1654,7 +1654,7 @@ public class TradingReconciliationService {
         }
         if (trade.getStrategyId() != null && !trade.getStrategyId().equals(sourceOrder.getStrategyId())
             || trade.getStrategyInstanceId() != null && !trade.getStrategyInstanceId().equals(sourceOrder.getStrategyInstanceId())) {
-            throw new IllegalStateException("Binance fill strategy attribution conflicts with persisted ownership: exchangeOrderId="
+            throw new IllegalStateException("Binance 成交的策略归属与已持久化的所有权信息冲突：exchangeOrderId="
                 + sourceOrder.getExchangeOrderId());
         }
         boolean changed = false;
@@ -1765,7 +1765,7 @@ public class TradingReconciliationService {
             }
             // Missing financial facts are unknown, not zero/current-time defaults.
             if (s.incomeType() == null || s.incomeType().isBlank() || s.amount() == null || s.asset() == null || s.asset().isBlank() || s.time() == null) {
-                throw new IllegalStateException("Binance financial event is missing required facts: credentialId="
+                throw new IllegalStateException("Binance 财务事件缺少必要事实：credentialId="
                     + credential.getId() + ", transactionId=" + s.transactionId());
             }
             LocalDateTime eventTime = LocalDateTime.ofInstant(s.time(), ZoneOffset.UTC);
@@ -1804,15 +1804,15 @@ public class TradingReconciliationService {
                     if (legacyBeijingTime && entity.getId() != null) {
                         entity.setEventTime(eventTime);
                         if (financialEventMapper.updateById(entity) != 1) {
-                            throw new IllegalStateException("Legacy Beijing-time financial event could not be normalized safely: credentialId="
+                            throw new IllegalStateException("无法安全规范化旧版北京时间财务事件：credentialId="
                                 + credential.getId() + ", transactionId=" + s.transactionId());
                         }
-                        log.warn("Normalized legacy Beijing-local eventTime to UTC for matching Binance financial event credentialId={} transactionId={}",
+                        log.warn("为匹配 Binance 财务事件，已将旧版北京时间 eventTime 规范化为 UTC credentialId={} transactionId={}",
                             credential.getId(), s.transactionId());
                         continue;
                     }
                     // Any other mismatch remains a hard reconciliation failure; do not advance the cursor.
-                    throw new IllegalStateException("Binance financial event conflicts with persisted ledger: credentialId="
+                    throw new IllegalStateException("Binance 财务事件与已持久化账本冲突：credentialId="
                         + credential.getId() + ", transactionId=" + s.transactionId() + ", fields=" + String.join(",", conflictingFields));
                 }
                 continue;
@@ -1829,7 +1829,7 @@ public class TradingReconciliationService {
             entity.setInfo(s.info());
             entity.setEventTime(eventTime);
             if (financialEventMapper.insert(entity) != 1) {
-                throw new IllegalStateException("Binance financial event was not persisted: credentialId="
+                throw new IllegalStateException("Binance 财务事件未能持久化：credentialId="
                     + credential.getId() + ", transactionId=" + s.transactionId());
             }
         }
