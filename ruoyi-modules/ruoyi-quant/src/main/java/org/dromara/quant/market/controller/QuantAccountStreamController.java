@@ -64,6 +64,15 @@ public class QuantAccountStreamController {
         if (!accessible(credential)) {
             throw new IllegalArgumentException("无权访问交易账户");
         }
+        if ("LIVE".equalsIgnoreCase(credential.getRunMode())
+            && !userDataStreamHub.hasLiveStreamOwnership(credentialId)) {
+            response.setStatus(HttpServletResponse.SC_CONFLICT);
+            response.setHeader("X-Quant-Stream-State", "LEASE_NOT_OWNED");
+            log.debug("账户 SSE 等待本节点持有 LIVE 私有流租约 credentialId={}", credentialId);
+            SseEmitter unavailable = new SseEmitter(0L);
+            unavailable.complete();
+            return unavailable;
+        }
         response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
         response.setCharacterEncoding("UTF-8");
         response.setHeader("Cache-Control", "no-cache");
