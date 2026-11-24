@@ -124,7 +124,7 @@ public class LivePositionFreshness {
     private void invalidateLocked(Long credentialId, java.util.concurrent.atomic.AtomicLong counter, String reason) {
         long previous = counter.getAndIncrement();
         verified.remove(credentialId);
-        log.debug("LIVE position snapshot invalidated credentialId={} reason={} generation={}->{}",
+        log.debug("实时仓位快照已失效 credentialId={} reason={} generation={}->{}",
             credentialId, reason == null ? "UNSPECIFIED" : reason, previous, previous + 1);
     }
 

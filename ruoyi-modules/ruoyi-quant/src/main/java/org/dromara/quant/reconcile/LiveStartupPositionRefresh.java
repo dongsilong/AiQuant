@@ -45,24 +45,24 @@ public class LiveStartupPositionRefresh implements ApplicationRunner {
                 for (int attempt = 1; ; attempt++) {
                     try {
                         reconciliation.refreshPositionsOnly(credential);
-                        log.info("LIVE startup position snapshot verified credentialId={} attempt={}", credential.getId(), attempt);
+                        log.info("已验证实时启动位置快照 credentialId={} attempt={}", credential.getId(), attempt);
                         break;
                     } catch (TradingReconciliationService.SnapshotSupersededException ex) {
                         if (attempt >= 5) {
                             throw ex;
                         }
-                        log.warn("LIVE startup snapshot invalidated by newer account event, retrying credentialId={} attempt={}", credential.getId(), attempt);
+                        log.warn("LIVE 启动快照被更新的账户事件作废，正在重试 credentialId={} attempt={}", credential.getId(), attempt);
                         try {
                             Thread.sleep(200L * attempt);
                         } catch (InterruptedException interrupted) {
                             Thread.currentThread().interrupt();
-                            throw new IllegalStateException("LIVE startup position refresh interrupted", interrupted);
+                            throw new IllegalStateException("LIVE 启动位置刷新中断", interrupted);
                         }
                     }
                 }
             } catch (RuntimeException ex) {
-                log.error("LIVE startup refused: account position snapshot unverified credentialId={}", credential.getId(), ex);
-                throw new IllegalStateException("LIVE startup requires authenticated Binance position refresh for credentialId=" + credential.getId(), ex);
+                log.error("LIVE 启动被拒绝：账户持仓快照未验证 credentialId={}", credential.getId(), ex);
+                throw new IllegalStateException("LIVE 启动需要经过身份验证的 Binance 持仓刷新，credentialId=" + credential.getId(), ex);
             }
         }
     }

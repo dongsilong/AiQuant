@@ -201,7 +201,7 @@ public class LivePositionEventCoordinator {
                 long backoffMillis = Math.min(60000L, 2000L << Math.min(count - 1, 5));
                 retryNotBefore.put(id, System.currentTimeMillis() + backoffMillis);
                 pending.add(id);
-                log.warn("LIVE event-triggered position refresh failed credentialId={} retryInMs={}", id, backoffMillis, ex);
+                log.warn("实时事件触发的仓位刷新失败 credentialId={} retryInMs={}", id, backoffMillis, ex);
             }
         }
     }

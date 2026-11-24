@@ -18,7 +18,7 @@ public final class LiveTradingGate {
      */
     public void check(Checkpoint checkpoint) {
         if (checkpoint == null) {
-            log.warn("LIVE 交易闸门拒绝：安全检查快照为空");
+            log.warn("实时交易闸门拒绝：安全检查快照为空");
             throw new LiveTradingBlockedException();
         }
         List<String> failures = new ArrayList<>();
@@ -47,7 +47,7 @@ public final class LiveTradingGate {
             failures.add("风控未批准或已触发熔断");
         }
         if (!failures.isEmpty()) {
-            log.warn("LIVE 交易闸门拒绝: systemEnabled={}, accountEnabled={}, futuresTradePermission={}, connectivityVerified={}, accountAuthorized={}, " +
+            log.warn("实时交易闸门拒绝: systemEnabled={}, accountEnabled={}, futuresTradePermission={}, connectivityVerified={}, accountAuthorized={}, " +
                 "riskConfigured={}, symbolVerified={}, approvedAndNotTripped={}", checkpoint.systemEnabled(), checkpoint.accountEnabled(), checkpoint.futuresTradePermission(),
                 checkpoint.connectivityVerified(), checkpoint.accountAuthorized(), checkpoint.riskConfigured(), checkpoint.symbolVerified(),
                 checkpoint.approvedAndNotTripped());
