@@ -223,7 +223,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
     private static String validateWebsocketTransport(String input) {
         String value = input == null ? "" : input.trim().toUpperCase(Locale.ROOT);
         if (!"RAW_OKHTTP".equals(value) && !"BINANCE_SDK".equals(value)) {
-            throw new IllegalArgumentException("WebSocket transport must be RAW_OKHTTP or BINANCE_SDK");
+            throw new IllegalArgumentException("WebSocket 传输方式必须为 RAW_OKHTTP 或 BINANCE_SDK");
         }
         return value;
     }
@@ -288,7 +288,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 // Binance did not provide a parseable ban expiry. Do not guess that the ban
                 // expires after 60 seconds: require an operator-controlled process restart.
                 restScheduler.blockUntilManualReset();
-                log.error("Binance REST HTTP 418 has no trustworthy expiry; REST is latched closed until operator restart. stage={}", stage);
+                log.error("Binance REST HTTP 418 响应缺少可信的过期时间；REST 将保持关闭，直到运维人员重启。stage={}", stage);
                 return new ExchangeMarketPort.RateLimitException(stage, error.getCode(), errorCode(error), message, 86_400_000L);
             }
             restScheduler.deferFor(retryAfterMillis);
@@ -731,10 +731,10 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         }
         boolean hasHost = proxy.getHost() != null && !proxy.getHost().isBlank();
         if (hasHost && (proxy.getPort() == null || proxy.getPort() < 1 || proxy.getPort() > 65535)) {
-            throw new IllegalArgumentException("Binance SDK Streams HTTP proxy port is invalid");
+            throw new IllegalArgumentException("Binance SDK Streams HTTP 代理端口无效");
         }
         if (!hasHost && proxy.getPort() != null) {
-            throw new IllegalArgumentException("Binance SDK Streams HTTP proxy host is missing");
+            throw new IllegalArgumentException("Binance SDK Streams HTTP 代理主机缺失");
         }
     }
 
@@ -769,7 +769,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             stream.reconnect();
             count++;
         }
-        log.warn("Binance WebSocket transport changed to {} on this node, reconnecting {} streams", normalized, count);
+        log.warn("本节点的 Binance WebSocket 传输方式已切换为 {}，正在重连 {} 条行情流", normalized, count);
         return count;
     }
 
@@ -789,7 +789,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             stream.reconnect();
             reconnecting++;
         }
-        log.error("Binance SDK WebSocket bootstrap failed; switched this node to RAW_OKHTTP and requested reconnect for {} existing streams; errorType={}",
+        log.error("Binance SDK WebSocket 初始化失败；本节点已切换为 RAW_OKHTTP，并请求重连现有的 {} 条行情流；errorType={}",
             reconnecting, cause.getClass().getSimpleName());
     }
 
@@ -906,7 +906,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
         GetIncomeHistoryResponse data = signedRead(credential, RestRequestScheduler.Kind.BACKGROUND,
             client -> client.getIncomeHistory(symbol, type, start, end, null, limit == null ? 1000L : limit, RECV_WINDOW_MILLIS).getData());
         if (data == null) {
-            throw new IllegalStateException("Binance income-history response has no data payload; completeness cannot be proven");
+            throw new IllegalStateException("Binance 收入历史响应缺少数据载荷，无法确认数据完整性");
         }
         List<IncomeSnapshot> result = new ArrayList<>();
         for (GetIncomeHistoryResponseInner item : data) {
@@ -1992,7 +1992,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 // The listenKey is still valid: SDK bootstrap failed before a usable session was returned.
                 // Keep it for the raw socket, and downgrade the node so market and private streams agree.
                 fallbackToRawWebsocketTransport(ex);
-                log.error("Binance SDK user stream bootstrap failed; falling back to RAW_OKHTTP for this credential; errorType={}",
+                log.error("Binance SDK 用户数据流初始化失败；此凭证将回退到 RAW_OKHTTP；errorType={}",
                     ex.getClass().getSimpleName());
             }
         }
@@ -2133,14 +2133,14 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                         } catch (java.io.IOException inspectionFailure) {
                             // If the expiry cannot be inspected, fail closed instead of guessing.
                             restScheduler.blockUntilManualReset();
-                            log.error("Binance REST HTTP 418 expiry could not be inspected; REST is latched closed until operator restart.");
+                            log.error("无法检查 Binance REST HTTP 418 的过期时间；REST 将保持关闭，直到运维人员重启。");
                         }
                     }
                     if (!restScheduler.isManuallyBlocked()) {
                         long retryAfterMillis = retryAfterMillis(response.code(), response.header("Retry-After"), body);
                         if (retryAfterMillis < 0L) {
                             restScheduler.blockUntilManualReset();
-                            log.error("Binance REST HTTP 418 has no trustworthy expiry; REST is latched closed until operator restart.");
+                            log.error("Binance REST HTTP 418 响应缺少可信的过期时间；REST 将保持关闭，直到运维人员重启。");
                         } else {
                             restScheduler.deferFor(retryAfterMillis);
                             log.warn("Binance REST 触发限流，已延后后续请求 status={} method={} path={} kind={} usedWeight1m={} retryAfterMs={}",
@@ -2608,7 +2608,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
                 try {
                     closeTransport.run();
                 } catch (RuntimeException ex) {
-                    log.warn("Binance WebSocket close failed: {}", ex.getClass().getSimpleName());
+                    log.warn("Binance WebSocket 关闭失败：{}", ex.getClass().getSimpleName());
                 }
             }
         }
@@ -2621,7 +2621,7 @@ public class BinanceGatewayAdapter implements ExchangeGateway {
             try {
                 notifyDisconnected.run();
             } catch (RuntimeException ex) {
-                log.warn("Binance WebSocket reconnect notification failed");
+                log.warn("Binance WebSocket 重连通知发送失败");
             }
         }
     }
