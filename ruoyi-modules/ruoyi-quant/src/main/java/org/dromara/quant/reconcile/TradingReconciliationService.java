@@ -102,6 +102,10 @@ public class TradingReconciliationService {
     private final TransactionTemplate transaction;
     private final ConcurrentHashMap<Long, ReentrantLock> positionLocks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, CompletableFuture<AccountPositionSnapshot>> positionRefreshes = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<SymbolPositionQueryKey, CompletableFuture<List<ExchangeGateway.PositionSnapshot>>> symbolPositionRefreshes =
+        new ConcurrentHashMap<>();
+    private record SymbolPositionQueryKey(Long credentialId, String symbol, ExchangeGateway.Credential exchangeCredential) {
+    }
     private final ConcurrentHashMap<Long, CompletableFuture<ExchangeGateway.AccountSnapshot>> accountRefreshes = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, CachedPositionSnapshot> runtimePositionSnapshots = new ConcurrentHashMap<>();
     private final Set<Long> balanceSnapshotTasks = ConcurrentHashMap.newKeySet();
@@ -909,34 +913,64 @@ public class TradingReconciliationService {
         if (credential == null || credential.getId() == null || symbol == null || symbol.isBlank() || exchangeCredential == null) {
             throw new IllegalArgumentException("Credential, symbol and exchange credentials are required");
         }
-        LocalDateTime fetchStartedAt = LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
-        long generation = positionGeneration(credential.getId());
-        long runtimeGeneration = runtimeSnapshotGeneration(credential.getId());
-        final List<ExchangeGateway.PositionSnapshot> snapshots;
-        try {
-            snapshots = List.copyOf(java.util.Objects.requireNonNull(gateway.queryPositions(exchangeCredential, symbol),
-                "Binance symbol position snapshot missing"));
-        } catch (SnapshotSupersededException ex) {
-            // A newer private-stream fact won the race. Schedule a fresh read-only snapshot
-            // rather than leaving the strategy blocked until another market event arrives.
-            schedulePositionSnapshotRetry(credential, "symbol:" + symbol + ":superseded", 1_000L);
-            throw ex;
-        } catch (RuntimeException ex) {
-            long retryAfterMillis = snapshotRetryAfterMillis(ex);
-            if (retryAfterMillis > 0) {
-                schedulePositionSnapshotRetry(credential, "symbol:" + symbol, retryAfterMillis);
+        String normalizedSymbol = symbol.trim().toUpperCase(Locale.ROOT);
+        SymbolPositionQueryKey key = new SymbolPositionQueryKey(credential.getId(), normalizedSymbol, exchangeCredential);
+        CompletableFuture<List<ExchangeGateway.PositionSnapshot>> created = new CompletableFuture<>();
+        CompletableFuture<List<ExchangeGateway.PositionSnapshot>> running = symbolPositionRefreshes.putIfAbsent(key, created);
+        if (running != null) {
+            try {
+                return running.get(15, TimeUnit.SECONDS);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new ExchangeMarketPort.RequestDeferredException();
+            } catch (java.util.concurrent.TimeoutException ex) {
+                throw new ExchangeMarketPort.RequestDeferredException();
+            } catch (java.util.concurrent.ExecutionException ex) {
+                if (ex.getCause() instanceof RuntimeException error) {
+                    throw error;
+                }
+                if (ex.getCause() instanceof Error error) {
+                    throw error;
+                }
+                throw new IllegalStateException("交易对持仓查询失败");
             }
-            throw ex;
         }
         try {
-            syncSymbolPositionSnapshot(credential, symbol, snapshots, fetchStartedAt, generation, runtimeGeneration);
-        } catch (SnapshotSupersededException ex) {
-            // Supersession is detected at commit time, after the REST read. Retry the whole
-            // read/commit cycle so the latest facts can converge without waiting for market data.
-            schedulePositionSnapshotRetry(credential, "symbol:" + symbol + ":superseded", 1_000L);
+            LocalDateTime fetchStartedAt = LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
+            long generation = positionGeneration(credential.getId());
+            long runtimeGeneration = runtimeSnapshotGeneration(credential.getId());
+            final List<ExchangeGateway.PositionSnapshot> snapshots;
+            try {
+                snapshots = List.copyOf(java.util.Objects.requireNonNull(gateway.queryPositions(exchangeCredential, normalizedSymbol),
+                    "Binance symbol position snapshot missing"));
+            } catch (SnapshotSupersededException ex) {
+                // A newer private-stream fact won the race. Schedule a fresh read-only snapshot
+                // rather than leaving the strategy blocked until another market event arrives.
+                schedulePositionSnapshotRetry(credential, "symbol:" + normalizedSymbol + ":superseded", 1_000L);
+                throw ex;
+            } catch (RuntimeException ex) {
+                long retryAfterMillis = snapshotRetryAfterMillis(ex);
+                if (retryAfterMillis > 0) {
+                    schedulePositionSnapshotRetry(credential, "symbol:" + normalizedSymbol, retryAfterMillis);
+                }
+                throw ex;
+            }
+            try {
+                syncSymbolPositionSnapshot(credential, normalizedSymbol, snapshots, fetchStartedAt, generation, runtimeGeneration);
+            } catch (SnapshotSupersededException ex) {
+                // Supersession is detected at commit time, after the REST read. Retry the whole
+                // read/commit cycle so the latest facts can converge without waiting for market data.
+                schedulePositionSnapshotRetry(credential, "symbol:" + normalizedSymbol + ":superseded", 1_000L);
+                throw ex;
+            }
+            created.complete(snapshots);
+            return snapshots;
+        } catch (RuntimeException | Error ex) {
+            created.completeExceptionally(ex);
             throw ex;
+        } finally {
+            symbolPositionRefreshes.remove(key, created);
         }
-        return snapshots;
     }
 
     /**
