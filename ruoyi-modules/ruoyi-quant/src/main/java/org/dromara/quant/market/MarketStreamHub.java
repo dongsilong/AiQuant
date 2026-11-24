@@ -1033,7 +1033,20 @@ public class MarketStreamHub {
             }
             publish(status("CONNECTING"));
             long attempt = generation;
-            recoveryTask = recoveryExecutor.submit(() -> restoreHistory(attempt));
+            if ("K线周期已切换，REST校验当前状态".equals(reason)) {
+                // 周期边界附近多个交易对可能同时触发恢复；先暂停决策并缓冲WS，
+                // 再按流标识错峰启动REST，避免集中争抢全局请求预算。
+                long delayMillis = 250L + Math.floorMod(key.hashCode(), 2_001);
+                recoveryTask = scheduler.schedule(() -> {
+                    synchronized (this) {
+                        if (!closed && attempt == generation && recovering) {
+                            recoveryTask = recoveryExecutor.submit(() -> restoreHistory(attempt));
+                        }
+                    }
+                }, delayMillis, TimeUnit.MILLISECONDS);
+            } else {
+                recoveryTask = recoveryExecutor.submit(() -> restoreHistory(attempt));
+            }
         }
 
         /**
