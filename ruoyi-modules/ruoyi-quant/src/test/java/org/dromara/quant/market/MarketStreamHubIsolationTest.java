@@ -159,6 +159,35 @@ class MarketStreamHubIsolationTest {
     }
 
     @Test
+    void periodSwitchRecoveryIsStaggeredAfterDecisionGateCloses() throws Exception {
+        ExchangeGateway gateway = mock(ExchangeGateway.class);
+        when(gateway.queryKlines("BTCUSDT", "1m", 8)).thenAnswer(invocation -> history("1m"));
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        var hub = new MarketStreamHub(gateway, scheduler, new QuantProperties());
+        var ready = new CountDownLatch(1);
+        try {
+            hub.subscribe("BTCUSDT", "1m", event -> {
+                if ("KLINE_READY".equals(event.type())) {
+                    ready.countDown();
+                }
+            });
+            org.junit.jupiter.api.Assertions.assertTrue(ready.await(3, TimeUnit.SECONDS),
+                "initial KLINE recovery did not finish");
+
+            var streams = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(hub, "streams");
+            Object stream = streams.values().iterator().next();
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(stream, "beginRecovery",
+                "K线周期已切换，REST校验当前状态", null);
+
+            verify(gateway, times(1)).queryKlines("BTCUSDT", "1m", 8);
+            verify(gateway, timeout(3_500).times(2)).queryKlines("BTCUSDT", "1m", 8);
+        } finally {
+            hub.close();
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
     void nextPeriodTradeBeforeKlineDoesNotStartRecoveryOrReachStrategy() throws Exception {
         ExchangeGateway gateway = mock(ExchangeGateway.class);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
