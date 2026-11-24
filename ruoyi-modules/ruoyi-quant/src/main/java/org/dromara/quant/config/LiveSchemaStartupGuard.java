@@ -61,7 +61,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
         List<String> positionCycleKeyColumns = mapper.positionCycleKeyColumns();
         if (actualTables == null || actualUnique == null || leaseEpoch == null || entryGuardColumns == null
             || positionReturnRateColumns == null || orderBalanceSnapshotColumns == null || positionCycleKeyColumns == null) {
-            throw new IllegalStateException("LIVE database metadata unavailable; refuse to enable real trading");
+            throw new IllegalStateException("无法获取 LIVE 数据库元数据，拒绝启用实盘交易");
         }
         var missingTables = new java.util.TreeSet<>(TABLES);
         missingTables.removeAll(actualTables);
@@ -120,7 +120,7 @@ public class LiveSchemaStartupGuard implements ApplicationRunner {
             String migrationHint = requiredMigrations.isEmpty()
                 ? "apply the migrations corresponding to the missing schema contracts"
                 : "apply required migration(s): " + String.join(", ", requiredMigrations);
-            throw new IllegalStateException("LIVE schema preflight rejected startup; missing InnoDB tables=" + missingTables + ", missing unique-index contracts=" + missingUnique
+            throw new IllegalStateException("LIVE 数据库结构预检查未通过，缺少 InnoDB 表：" + missingTables + ", missing unique-index contracts=" + missingUnique
                 + ", leaseEpochMissing=" + missingEpoch + ", entryGuardTypeMissing=" + missingEntryGuardType
                 + ", missingOrderBalanceSnapshotColumns=" + missingOrderBalanceSnapshotColumns
                 + ", missingPositionCycleKeyColumns=" + missingPositionCycleKeyColumns
