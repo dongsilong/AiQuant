@@ -71,7 +71,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
         try {
             enabledCredentials = credentials.selectList(new LambdaQueryWrapper<QuantCredential>().eq(QuantCredential::getStatus, "0"));
             if (enabledCredentials == null) {
-                throw new IllegalStateException("LIVE credential discovery returned null");
+                throw new IllegalStateException("LIVE 凭证查询结果为空");
             }
         } catch (RuntimeException ex) {
             // On discovery failure we cannot establish which accounts are still
@@ -87,10 +87,10 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 try {
                     lease.release(id);
                 } catch (RuntimeException releaseError) {
-                    log.warn("LIVE stream discovery failure lease cleanup failed credentialId={}", id, releaseError);
+                    log.warn("LIVE 凭证查询失败后的数据流租约清理失败 credentialId={}", id, releaseError);
                 }
             }
-            log.error("LIVE user-stream credential discovery failed; subscriptions revoked", ex);
+            log.error("LIVE 用户数据流凭证查询失败，已撤销全部订阅", ex);
             return;
         }
         for (QuantCredential credential : enabledCredentials) {
@@ -113,7 +113,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                         try {
                             leaseState = lease.describe(id);
                         } catch (RuntimeException diagnosticError) {
-                            leaseState = "lease diagnostic unavailable: " + diagnosticError.getClass().getSimpleName();
+                            leaseState = "租约诊断信息不可用：" + diagnosticError.getClass().getSimpleName();
                         }
                         log.warn("LIVE私有流租约竞争 credentialId={} dbLease=[{}]；本节点禁止创建交易策略运行时", id, leaseState);
                     }
@@ -162,9 +162,9 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 try {
                     lease.release(id);
                 } catch (RuntimeException releaseError) {
-                    log.warn("LIVE shared stream lease cleanup failed credentialId={}", id, releaseError);
+                    log.warn("LIVE 共享数据流租约清理失败 credentialId={}", id, releaseError);
                 }
-                log.warn("LIVE shared user stream enrollment failed credentialId={}", id, ex);
+                log.warn("LIVE 共享用户数据流订阅注册失败 credentialId={}", id, ex);
             }
         }
         for (Long id : Set.copyOf(leaseRetryTasks.keySet())) {
@@ -181,7 +181,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
                 } catch (RuntimeException ex) {
                     // Account removal must never abort cleanup of other accounts.
                     // The DB lease expires without renewal; no stale local stream remains.
-                    log.warn("LIVE account removal lease cleanup failed credentialId={}", id, ex);
+                    log.warn("LIVE 账户移除后的数据流租约清理失败 credentialId={}", id, ex);
                 }
             }
         }
@@ -234,7 +234,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
             try {
                 subscription.close();
             } catch (Exception ex) {
-                log.warn("LIVE shared stream unsubscribe failed credentialId={}", id, ex);
+                log.warn("LIVE 共享数据流取消订阅失败 credentialId={}", id, ex);
             }
         }
     }
@@ -255,7 +255,7 @@ public class LivePositionStreamTriggers implements org.springframework.boot.Appl
             try {
                 lease.release(id);
             } catch (RuntimeException ex) {
-                log.warn("LIVE stream shutdown lease cleanup failed credentialId={}", id, ex);
+                log.warn("LIVE 数据流关闭时租约清理失败 credentialId={}", id, ex);
             }
         }
     }
