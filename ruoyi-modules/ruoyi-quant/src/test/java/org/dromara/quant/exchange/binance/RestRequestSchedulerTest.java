@@ -241,14 +241,11 @@ class RestRequestSchedulerTest {
             assertTrue(scheduler.diagnostics().contains("TRADE_LIVE=16("),
                 "LIVE queue should reach its own capacity");
 
-            var testnetQueued = new java.util.concurrent.CountDownLatch(1);
             testnetWaiter = new Thread(() -> {
                 try {
                     scheduler.acquire("demo-fapi.binance.com", RestRequestScheduler.Kind.TRADE, 1);
                 } catch (ExchangeMarketPort.RequestDeferredException ignored) {
                     // The test only verifies that TESTNET can enter its independent queue.
-                } finally {
-                    testnetQueued.countDown();
                 }
             });
             testnetWaiter.start();
