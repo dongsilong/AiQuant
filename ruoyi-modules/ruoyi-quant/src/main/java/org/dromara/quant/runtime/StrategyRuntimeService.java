@@ -3250,7 +3250,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             display == null ? null : display.eventTime(),
             displayReceivedAt,
             displayFreshForMillis,
-            displayContext == null || display == null ? null : displayContext.source()
+            effectiveDisplayContext == null || display == null ? null : effectiveDisplayContext.source()
         ));
     }
 
