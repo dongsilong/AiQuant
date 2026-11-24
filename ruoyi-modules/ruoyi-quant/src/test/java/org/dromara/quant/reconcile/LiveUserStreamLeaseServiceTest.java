@@ -8,6 +8,16 @@ import static org.mockito.Mockito.*;
 
 class LiveUserStreamLeaseServiceTest {
     @Test
+    void remainingLeaseTimeIsReadFromDatabaseMapper() {
+        var mapper = mock(LiveUserStreamLeaseMapper.class);
+        when(mapper.remainingMillis(7L)).thenReturn(11234L);
+        var service = new LiveUserStreamLeaseService(mapper);
+
+        assertEquals(11234L, service.remainingMillis(7L));
+        verify(mapper).remainingMillis(7L);
+    }
+
+    @Test
     void reacquisitionWithSameProcessTokenReturnsNewEpochAndFencesPreviousOne() {
         var mapper = mock(LiveUserStreamLeaseMapper.class);
         when(mapper.acquireOrRenew(eq(7L), anyString(), eq(75))).thenReturn(1);
