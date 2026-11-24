@@ -141,6 +141,50 @@ class RestRequestSchedulerTest {
     }
 
     @Test
+    void agedBackgroundRequestCannotReserveWeightAheadOfAccountRequests() throws InterruptedException {
+        var scheduler = new RestRequestScheduler(100);
+        scheduler.acquire(RestRequestScheduler.Kind.TRADE, 40);
+
+        var backgroundDone = new java.util.concurrent.CountDownLatch(1);
+        var accountDone = new java.util.concurrent.CountDownLatch(1);
+        var requestFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        Thread background = new Thread(() -> {
+            try {
+                scheduler.acquire(RestRequestScheduler.Kind.BACKGROUND, 30);
+            } catch (Throwable ex) {
+                requestFailure.compareAndSet(null, ex);
+            } finally {
+                backgroundDone.countDown();
+            }
+        });
+        Thread account = new Thread(() -> {
+            try {
+                scheduler.acquire(RestRequestScheduler.Kind.ACCOUNT, 20);
+            } catch (Throwable ex) {
+                requestFailure.compareAndSet(null, ex);
+            } finally {
+                accountDone.countDown();
+            }
+        });
+        try {
+            background.start();
+            Thread.sleep(2_100L);
+            account.start();
+
+            assertTrue(accountDone.await(1, java.util.concurrent.TimeUnit.SECONDS),
+                "account request must use available weight before an aged background read");
+            assertFalse(backgroundDone.await(100, java.util.concurrent.TimeUnit.MILLISECONDS),
+                "background read must not consume weight reserved for the account request");
+            assertNull(requestFailure.get());
+        } finally {
+            background.interrupt();
+            account.interrupt();
+            background.join(1_000L);
+            account.join(1_000L);
+        }
+    }
+
+    @Test
     void liveAndTestnetRequestsShareTheSameGlobalTokenBudget() throws InterruptedException {
         var scheduler = new RestRequestScheduler(100);
         scheduler.acquire("fapi.binance.com", RestRequestScheduler.Kind.BACKGROUND, 40);
