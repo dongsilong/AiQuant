@@ -179,7 +179,7 @@ public class ExecutionRecoveryService {
                     if (exact.symbol() == null || !record.getSymbol().equalsIgnoreCase(exact.symbol()) || record.getExchangeOrderId() != null && !record.getExchangeOrderId().equals(exact.orderId()) || record.getClientOrderId() != null && !record.getClientOrderId().equals(exact.clientOrderId())) {
                         // Query by orderId or clientOrderId must not accept the other
                         // identity changing unexpectedly. Keep UNKNOWN, block dispatch.
-                        throw new IllegalStateException("Binance recovery returned conflicting order identity");
+                        throw new IllegalStateException("Binance 恢复结果中的订单标识存在冲突");
                     }
                     if ("CANCEL".equalsIgnoreCase(record.getOperationType()) && ("CANCELED".equalsIgnoreCase(exact.status()) || "EXPIRED".equalsIgnoreCase(exact.status()) ||
                         "FILLED".equalsIgnoreCase(exact.status()) || "REJECTED".equalsIgnoreCase(exact.status())) && (exact.executedQuantity() == null || exact.executedQuantity().signum() < 0 || exact.originalQuantity() == null || exact.originalQuantity().signum() <= 0 || exact.executedQuantity().compareTo(exact.originalQuantity()) > 0)) {
@@ -226,7 +226,7 @@ public class ExecutionRecoveryService {
                 ExchangeGateway.OrderSnapshot matched = activeMatches.isEmpty() ? null : activeMatches.getFirst();
                 if (matched != null && !"CANCEL".equalsIgnoreCase(record.getOperationType())) {
                     if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && record.getStrategyInstanceId() != null) {
-                        throw new IllegalStateException("LIVE strategy ownership recovery requires an exact Binance query");
+                        throw new IllegalStateException("LIVE 策略所有权恢复必须执行精确的 Binance 查询");
                     }
                     // A fallback match must use actual exchange facts, not possibly stale local status.
                     orderLedgerService.syncSnapshot(record.getCredentialId(), matched);
@@ -331,7 +331,7 @@ public class ExecutionRecoveryService {
     private org.dromara.quant.order.domain.QuantOrder syncExchangeWithProvenance(QuantCredential credential, QuantExecutionRecord record, ExchangeGateway.OrderSnapshot snapshot) {
         if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && record.getStrategyInstanceId() != null && record.getStrategyId() != null) {
             if (crashRecovery == null) {
-                throw new IllegalStateException("Missing LIVE strategy crash recovery journal");
+                throw new IllegalStateException("缺少 LIVE 策略崩溃恢复记录");
             }
             return crashRecovery.restore(record, snapshot);
         }
