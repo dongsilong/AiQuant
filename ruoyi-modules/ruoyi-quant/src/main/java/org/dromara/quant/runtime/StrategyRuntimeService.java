@@ -3064,9 +3064,15 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         if (decisionLogs == null || !(runtime.plugin instanceof KlineSlopeRateStrategy)) {
             return;
         }
-        // 当前交易对已有持仓时，不再记录重复的开仓阻止日志；平仓日志由独立记录路径保留。
-        if (runtime.position != null || runtime.state != null && !"CLOSED".equals(runtime.state.getStatus())
+        // 仅当前交易对已有实际持仓时过滤开仓阻止日志；OPEN_PENDING 的预期数量不代表已成交持仓。
+        boolean hasPosition = runtime.position != null && runtime.position.getQuantity() != null
+            && runtime.position.getQuantity().signum() > 0;
+        if (!hasPosition && runtime.state != null && runtime.state.getPositionId() != null
+            && !"CLOSED".equals(runtime.state.getStatus()) && !"OPEN".equalsIgnoreCase(runtime.state.getPendingAction())
             && runtime.state.getPositionQty() != null && runtime.state.getPositionQty().signum() > 0) {
+            hasPosition = true;
+        }
+        if (hasPosition) {
             return;
         }
         try {
