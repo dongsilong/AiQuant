@@ -49,6 +49,21 @@ class StrategyHedgeRoundServiceTest {
     }
 
     @Test
+    void signalReadyRoundRequiresReferencePriceAndOriginalEventTime() {
+        QuantStrategyHedgeRound round = round();
+        round.setStatus(StrategyHedgeRoundService.STATUS_SIGNAL_READY);
+
+        assertThrows(IllegalArgumentException.class, () -> service.claim(round));
+        verify(mapper, never()).insert(any(QuantStrategyHedgeRound.class));
+
+        round.setReferencePrice(new BigDecimal("100"));
+        round.setSignalEventTime(LocalDateTime.of(2026, 11, 25, 15, 0, 1));
+        when(mapper.insert(any(QuantStrategyHedgeRound.class))).thenReturn(1);
+
+        assertTrue(service.claim(round));
+    }
+
+    @Test
     void rejectedOptimisticUpdateRestoresVersion() {
         QuantStrategyHedgeRound round = round();
         round.setId(9L);
