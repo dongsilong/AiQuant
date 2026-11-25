@@ -1691,16 +1691,20 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     private void logEntryMaMarketEventDiagnostic(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, EntryMaSnapshot snapshot) {
         String reason = !snapshot.historyReady() ? "HISTORY_NOT_READY"
             : !snapshot.streamReady() ? "STREAM_NOT_READY"
+            : snapshot.ma5() == null || snapshot.ma7() == null ? "INSUFFICIENT_CLOSED_KLINES"
             : snapshot.eventTime() == null ? "EVENT_TIME_MISSING"
             : snapshot.receivedAt() == null ? "RECEIVED_AT_MISSING" : "READY";
+        boolean readinessEventAccepted = !event.replay() && event.eventTime() != null && event.receivedAt() != null
+            && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
+                || "CONNECTED".equalsIgnoreCase(event.type()));
         long now = System.currentTimeMillis();
         if (reason.equals(runtime.lastEntryMaDiagnosticReason) && now < runtime.nextEntryMaDiagnosticLogAt) {
             return;
         }
         runtime.lastEntryMaDiagnosticReason = reason;
         runtime.nextEntryMaDiagnosticLogAt = now + 30_000L;
-        log.info("策略Runtime一分钟MA事件消费诊断 instanceId={} mode={} symbol={} eventType={} eventReplay={} eventTime={} receivedAt={} historyReady={} streamReady={} ready={} blockReason={} closedKlines={}/7 lastClosedKlineOpenTime={} klineOpenTime={} ma5={} ma7={}",
-            runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(),
+        log.info("策略Runtime一分钟MA事件消费诊断 instanceId={} mode={} symbol={} eventType={} eventReplay={} readinessEventAccepted={} eventTime={} receivedAt={} historyReady={} streamReady={} ready={} blockReason={} closedKlines={}/7 lastClosedKlineOpenTime={} klineOpenTime={} ma5={} ma7={}",
+            runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(), readinessEventAccepted,
             event.eventTime(), event.receivedAt(), snapshot.historyReady(), snapshot.streamReady(), snapshot.ready(), reason,
             snapshot.closedKlines(), snapshot.lastClosedKlineOpenTime(), event.kline() == null ? null : event.kline().openTime(),
             snapshot.ma5(), snapshot.ma7());
