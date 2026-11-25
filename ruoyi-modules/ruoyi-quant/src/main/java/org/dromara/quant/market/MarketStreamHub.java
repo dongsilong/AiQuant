@@ -492,8 +492,12 @@ public class MarketStreamHub {
                     } else {
                         if ("KLINE".equals(event.type()) && event.kline() != null) {
                             Instant ingressAt = event.receivedAt() == null ? Instant.now() : event.receivedAt();
-                            latestKlineIngressOpen = event.kline().openTime();
-                            latestKlineIngressAt = ingressAt;
+                            Instant ingressOpen = event.kline().openTime();
+                            Instant latestIngressOpen = latestKlineIngressOpen;
+                            if (latestIngressOpen == null || !ingressOpen.isBefore(latestIngressOpen)) {
+                                latestKlineIngressAt = ingressAt;
+                                latestKlineIngressOpen = ingressOpen;
+                            }
                             Instant expectedOpen = boundaryRecoveryOpen;
                             if (expectedOpen != null && expectedOpen.equals(event.kline().openTime())) {
                                 boundaryKlineIngressAt = ingressAt;
