@@ -18,8 +18,6 @@ import org.dromara.quant.strategy.DualHedgeSlopeSignalEvaluator;
 import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.strategy.domain.QuantStrategyInstance;
 import org.dromara.quant.strategy.domain.QuantStrategySymbol;
-import org.dromara.quant.strategy.mapper.QuantStrategyInstanceMapper;
-import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.springframework.stereotype.Service;
 
@@ -45,8 +43,6 @@ import java.util.concurrent.locks.ReentrantLock;
 @RequiredArgsConstructor
 @Service
 public class DualHedgeRuntimeService {
-    private final QuantStrategyInstanceMapper instanceMapper;
-    private final QuantStrategyMapper strategyMapper;
     private final QuantStrategySymbolMapper strategySymbolMapper;
     private final QuantCredentialMapper credentialMapper;
     private final QuantSymbolMapper symbolMapper;
@@ -87,7 +83,7 @@ public class DualHedgeRuntimeService {
             return false;
         }
         QuantSymbol symbol = symbolMapper.selectById(strategySymbol.getSymbolId());
-        if (symbol == null || !"0".equals(symbol.getStatus())) {
+        if (symbol == null || symbol.getSymbol() == null || symbol.getSymbol().isBlank() || !"0".equals(symbol.getStatus())) {
             stopInstance(instance.getId());
             return false;
         }
@@ -98,16 +94,23 @@ public class DualHedgeRuntimeService {
 
         DualHedgeRuntime current = runtimes.get(instance.getId());
         if (current != null && current.matches(credential, symbol.getSymbol(), strategySymbol.getIntervalCode())) {
-            StrategyRuntimeLeaseService.LeaseSnapshot snapshot = leaseService.acquireOrRenewSnapshot(
-                instance.getId(), credential.getId(), symbol.getSymbol(), credential.getCredentialRuntimeVersion());
-            if (snapshot != null) {
-                current.leaseSnapshot = snapshot;
-                current.credential = credential;
-                current.strategy = strategy;
-                current.strategySymbol = strategySymbol;
-                return true;
+            StrategyRuntimeLeaseService.LeaseSnapshot snapshot = null;
+            current.leaseOperationLock.lock();
+            try {
+                if (!current.closed) {
+                    snapshot = leaseService.acquireOrRenewSnapshot(instance.getId(), credential.getId(),
+                        symbol.getSymbol(), credential.getCredentialRuntimeVersion());
+                }
+                if (snapshot != null && !current.closed) {
+                    current.leaseSnapshot = snapshot;
+                    current.credential = credential;
+                    current.strategy = strategy;
+                    current.strategySymbol = strategySymbol;
+                }
+            } finally {
+                current.leaseOperationLock.unlock();
             }
-            return isLeaseSnapshotValid(current.leaseSnapshot);
+            return snapshot != null || isLeaseSnapshotValid(current.leaseSnapshot);
         }
 
         if (current != null) {
