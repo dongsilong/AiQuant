@@ -152,8 +152,9 @@ public class DualHedgeRuntimeService {
             runtime.marketStreamStatus = event.type();
             return;
         }
-        if (!isFreshClosed15mKlineEvent(event, runtime.symbol.getSymbol(), Instant.now(),
-            Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode())),
+        Instant localNow = Instant.now();
+        Instant exchangeNow = localNow.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
+        if (!isFreshClosed15mKlineEvent(event, runtime.symbol.getSymbol(), localNow, exchangeNow,
             properties.getMarket().getMaxEventAgeMillis())) {
             return;
         }
@@ -163,7 +164,7 @@ public class DualHedgeRuntimeService {
     static boolean isFreshClosed15mKlineEvent(ExchangeGateway.MarketEvent event, String expectedSymbol,
                                                Instant localNow, Instant exchangeNow, long maxAgeMillis) {
         return event != null && !event.replay() && event.kline() != null && event.kline().closed()
-            && "15m".equalsIgnoreCase(event.interval()) && expectedSymbol != null
+            && event.kline().openTime() != null && "15m".equalsIgnoreCase(event.interval()) && expectedSymbol != null
             && expectedSymbol.equalsIgnoreCase(event.symbol())
             && MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), localNow, exchangeNow, maxAgeMillis);
     }
