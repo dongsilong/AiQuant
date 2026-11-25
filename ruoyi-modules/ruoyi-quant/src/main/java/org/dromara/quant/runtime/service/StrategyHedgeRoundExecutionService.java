@@ -31,16 +31,17 @@ public class StrategyHedgeRoundExecutionService {
                                           Instant eventTime, Long credentialRuntimeVersion) {
         requireDispatchable(round, referencePrice, eventTime);
 
+        org.dromara.quant.execution.TradingPreparationService.Prepared prepared;
         try {
-            var prepared = preparationService.requireReady(round.getCredentialId(), round.getSymbol(),
+            prepared = preparationService.requireReady(round.getCredentialId(), round.getSymbol(),
                 round.getLeverage(), MARGIN_MODE);
-            if (prepared == null || prepared.positionMode() == null || !prepared.positionMode().hedgeMode()) {
-                abortBeforeDispatch(round, "账户未处于 HEDGE 双向持仓模式");
-                return new DispatchResult("ABORTED", "账户未处于 HEDGE 双向持仓模式");
-            }
         } catch (RuntimeException ex) {
-            abortBeforeDispatch(round, "交易准备未就绪，未发送双开订单");
+            abortBeforeDispatch(round);
             return new DispatchResult("ABORTED", "交易准备未就绪，未发送双开订单");
+        }
+        if (prepared == null || prepared.positionMode() == null || !prepared.positionMode().hedgeMode()) {
+            abortBeforeDispatch(round);
+            return new DispatchResult("ABORTED", "账户未处于 HEDGE 双向持仓模式");
         }
 
         BigDecimal quantity = round.getTargetNotionalPerLeg().divide(referencePrice, QUANTITY_SCALE, RoundingMode.DOWN);
@@ -76,11 +77,19 @@ public class StrategyHedgeRoundExecutionService {
     private DispatchResult dispatchLeg(QuantStrategyHedgeRound round, String leg, String side, BigDecimal quantity,
                                        BigDecimal referencePrice, Instant eventTime, Long credentialRuntimeVersion) {
         String key = "LONG".equals(leg) ? round.getLongIdempotencyKey() : round.getShortIdempotencyKey();
+        ExecutionResult result;
         try {
-            ExecutionResult result = executionService.openByRuntime(round.getCredentialId(), round.getStrategyId(),
+            result = executionService.openByRuntime(round.getCredentialId(), round.getStrategyId(),
                 round.getInstanceId(), round.getSymbol(), side, leg, quantity, referencePrice, round.getLeverage(),
                 MARGIN_MODE, key, eventTime, credentialRuntimeVersion);
-            if (result == null || !result.accepted() || result.orderId() == null) {
+        } catch (RuntimeException ex) {
+            markLeg(round, leg, StrategyHedgeRoundService.LEG_UNKNOWN, null);
+            round.setStatus(StrategyHedgeRoundService.STATUS_DEGRADED);
+            roundService.save(round);
+            return new DispatchResult(StrategyHedgeRoundService.STATUS_DEGRADED,
+                "开仓结果未知，已停止另一腿派发并等待订单恢复核实");
+        }
+        if (result == null || !result.accepted() || result.orderId() == null) {
                 markLeg(round, leg, result != null && !result.accepted()
                     ? StrategyHedgeRoundService.LEG_FAILED : StrategyHedgeRoundService.LEG_UNKNOWN, result);
                 boolean firstLeg = "LONG".equals(leg);
@@ -95,15 +104,8 @@ public class StrategyHedgeRoundExecutionService {
             }
 
             markLeg(round, leg, StrategyHedgeRoundService.LEG_ACCEPTED, result);
-            roundService.save(round);
-            return new DispatchResult("ACCEPTED", "订单已接受，等待成交事实核实");
-        } catch (RuntimeException ex) {
-            markLeg(round, leg, StrategyHedgeRoundService.LEG_UNKNOWN, null);
-            round.setStatus(StrategyHedgeRoundService.STATUS_DEGRADED);
-            roundService.save(round);
-            return new DispatchResult(StrategyHedgeRoundService.STATUS_DEGRADED,
-                "开仓结果未知，已停止另一腿派发并等待订单恢复核实");
-        }
+        roundService.save(round);
+        return new DispatchResult("ACCEPTED", "订单已接受，等待成交事实核实");
     }
 
     private static void markLeg(QuantStrategyHedgeRound round, String leg, String status, ExecutionResult result) {
@@ -122,7 +124,7 @@ public class StrategyHedgeRoundExecutionService {
         }
     }
 
-    private void abortBeforeDispatch(QuantStrategyHedgeRound round, String reason) {
+    private void abortBeforeDispatch(QuantStrategyHedgeRound round) {
         round.setStatus(StrategyHedgeRoundService.STATUS_ABORTED);
         round.setLongLegStatus(StrategyHedgeRoundService.LEG_FAILED);
         round.setShortLegStatus(StrategyHedgeRoundService.LEG_FAILED);
