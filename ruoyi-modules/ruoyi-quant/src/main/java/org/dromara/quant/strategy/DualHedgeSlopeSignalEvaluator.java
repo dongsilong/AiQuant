@@ -42,7 +42,7 @@ public final class DualHedgeSlopeSignalEvaluator {
 
         BigDecimal threshold = entryAngleDegrees(params);
         BigDecimal slopePercent = kline.close().subtract(referenceOpenPrice)
-            .multiply(HUNDRED).divide(referenceOpenPrice, 16, RoundingMode.HALF_EVEN);
+            .multiply(HUNDRED).divide(referenceOpenPrice, 2, RoundingMode.HALF_EVEN);
         double rawDegrees = Math.toDegrees(Math.atan(slopePercent.doubleValue()));
         BigDecimal degrees = BigDecimal.valueOf(rawDegrees).setScale(2, RoundingMode.HALF_UP);
         if (BigDecimal.valueOf(Math.abs(rawDegrees)).compareTo(threshold) <= 0) {
