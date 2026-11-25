@@ -331,7 +331,8 @@ class MarketStreamHubIsolationTest {
         ExchangeGateway gateway = mock(ExchangeGateway.class);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         Instant localNow = Instant.now();
-        Instant currentOpen = localNow.truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
+        Instant currentOpen = localNow.truncatedTo(java.time.temporal.ChronoUnit.MINUTES).plusSeconds(60);
+        Instant initialExchangeNow = currentOpen.plusSeconds(30);
         Instant nextOpen = currentOpen.plusSeconds(60);
         var history = java.util.List.of(
             new ExchangeGateway.Kline(currentOpen.minusSeconds(60), currentOpen.minusMillis(1), BigDecimal.ONE, BigDecimal.ONE,
@@ -339,7 +340,8 @@ class MarketStreamHubIsolationTest {
             new ExchangeGateway.Kline(currentOpen, nextOpen.minusMillis(1), BigDecimal.ONE, BigDecimal.ONE,
                 BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, false));
         when(gateway.queryKlines("BTCUSDT", "1m", 8)).thenReturn(history);
-        var exchangeOffsetMillis = new java.util.concurrent.atomic.AtomicLong();
+        var exchangeOffsetMillis = new java.util.concurrent.atomic.AtomicLong(
+            java.time.Duration.between(localNow, initialExchangeNow).toMillis());
         when(gateway.exchangeTimeOffsetMillis("LIVE")).thenAnswer(invocation -> exchangeOffsetMillis.get());
         var callback = new java.util.concurrent.atomic.AtomicReference<Consumer<ExchangeGateway.MarketEvent>>();
         when(gateway.subscribeMarket(eq("BTCUSDT"), eq("1m"), any())).thenAnswer(invocation -> {
@@ -370,10 +372,10 @@ class MarketStreamHubIsolationTest {
             });
             org.junit.jupiter.api.Assertions.assertTrue(initialReady.await(3, TimeUnit.SECONDS));
             callback.get().accept(new ExchangeGateway.MarketEvent("MARK", "BTCUSDT", "1m", BigDecimal.ONE, null,
-                localNow, null, Instant.now(), false));
+                initialExchangeNow, null, Instant.now(), false));
             org.junit.jupiter.api.Assertions.assertTrue(initiallyConnected.await(2, TimeUnit.SECONDS));
 
-            exchangeOffsetMillis.set(java.time.Duration.between(localNow, nextOpen.plusMillis(100)).toMillis());
+            exchangeOffsetMillis.set(java.time.Duration.between(Instant.now(), nextOpen.plusMillis(100)).toMillis());
             org.springframework.test.util.ReflectionTestUtils.invokeMethod(
                 org.springframework.test.util.ReflectionTestUtils.getField(hub, "streams") instanceof java.util.Map<?, ?> streams
                     ? streams.values().iterator().next() : null, "checkHealth");
