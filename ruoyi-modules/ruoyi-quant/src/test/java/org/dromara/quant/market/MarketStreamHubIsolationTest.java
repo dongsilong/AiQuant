@@ -405,6 +405,42 @@ class MarketStreamHubIsolationTest {
     }
 
     @Test
+    void boundaryWaitAllowsIngressKlineToDrainBeforeStartingRestRecovery() throws Exception {
+        ExchangeGateway gateway = mock(ExchangeGateway.class);
+        when(gateway.queryKlines(any(), any(), anyInt())).thenAnswer(i -> history(i.getArgument(1)));
+        when(gateway.queryKlinesFrom(any(), any(), any(), anyInt())).thenReturn(java.util.List.of());
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        var ready = new CountDownLatch(1);
+        var hub = new MarketStreamHub(gateway, scheduler, new QuantProperties());
+        try {
+            hub.subscribe("BTCUSDT", "1m", event -> {
+                if ("KLINE_READY".equals(event.type())) {
+                    ready.countDown();
+                }
+            });
+            org.junit.jupiter.api.Assertions.assertTrue(ready.await(3, TimeUnit.SECONDS));
+
+            var streams = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(hub, "streams");
+            Object stream = streams.values().iterator().next();
+            Instant lastOpen = (Instant) org.springframework.test.util.ReflectionTestUtils.getField(stream, "lastKlineOpen");
+            Instant expectedOpen = lastOpen.plusSeconds(60);
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(stream, "scheduleBoundaryRecovery", expectedOpen);
+            org.springframework.test.util.ReflectionTestUtils.setField(stream, "boundaryKlineIngressAt", Instant.now());
+
+            Thread.sleep(3_300L);
+            verify(gateway, never()).queryKlinesFrom(any(), any(), any(), anyInt());
+
+            org.springframework.test.util.ReflectionTestUtils.setField(stream, "boundaryKlineIngressAt", Instant.now().minusSeconds(4));
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(stream, "checkBoundaryRecovery", expectedOpen,
+                (long) org.springframework.test.util.ReflectionTestUtils.getField(stream, "generation"));
+            verify(gateway, timeout(2_000)).queryKlinesFrom(any(), any(), any(), anyInt());
+        } finally {
+            hub.close();
+            scheduler.shutdownNow();
+        }
+    }
+
+    @Test
     void nextPeriodBoundaryClosesDecisionGateUntilFreshKlineAndMarkArrive() throws Exception {
         ExchangeGateway gateway = mock(ExchangeGateway.class);
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
