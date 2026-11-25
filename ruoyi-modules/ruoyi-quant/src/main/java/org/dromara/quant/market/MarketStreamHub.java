@@ -965,6 +965,12 @@ public class MarketStreamHub {
                         return;
                     }
                     if (!currentKlineValid(exchangeNow)) {
+                        // 当前周期K线尚未确认时立即关闭决策门禁；即使相邻周期成交先到，也不能沿用上一周期的健康状态。
+                        if (connected) {
+                            connected = false;
+                            signalUnhealthy();
+                            publish(status("CONNECTING"));
+                        }
                         if (lastTradeId == null) {
                             lastTradeId = event.sequenceId() - 1;
                         }
