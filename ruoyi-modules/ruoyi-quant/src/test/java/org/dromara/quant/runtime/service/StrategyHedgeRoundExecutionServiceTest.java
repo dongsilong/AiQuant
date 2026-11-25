@@ -55,7 +55,7 @@ class StrategyHedgeRoundExecutionServiceTest {
         QuantStrategyHedgeRound round = round();
         when(preparationService.requireReady(3L, "BTCUSDT", 10, "ISOLATED"))
             .thenReturn(new TradingPreparationService.Prepared(new ExchangeGateway.PositionMode(true), null, Long.MAX_VALUE));
-        when(executionService.openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(executionService.openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), nullable(Long.class)))
             .thenThrow(new IllegalStateException("timeout"));
 
         var result = service.dispatchOpening(round, new BigDecimal("100"), Instant.parse("2026-11-25T07:00:00Z"), null);
