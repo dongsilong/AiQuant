@@ -557,10 +557,9 @@ public class StrategyRuntimeService {
         for (QuantStrategyInstance instance : instances) {
             try {
                 QuantStrategy strategy = strategyMapper.selectById(instance.getStrategyId());
-                Boolean dualHedgeReady = dualHedgeRuntimeService.ensureRuntimeIfApplicable(instance, strategy);
-                if (dualHedgeReady != null) {
+                if (strategy != null && DualHedgeSlopeSignalEvaluator.CODE.equals(strategy.getPluginCode())) {
                     stopInactiveRuntime(instance.getId());
-                    if (dualHedgeReady) {
+                    if (Boolean.TRUE.equals(dualHedgeRuntimeService.ensureRuntimeIfApplicable(instance, strategy))) {
                         activeIds.add(instance.getId());
                     }
                 } else {
