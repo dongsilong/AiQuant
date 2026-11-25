@@ -76,6 +76,8 @@ public class StrategyRuntimeService {
      * 量化模块配置。
      */
     private final QuantProperties properties;
+    /** 双开对敲策略使用独立 Runtime，避免进入单持仓 ActiveRuntime。 */
+    private final DualHedgeRuntimeService dualHedgeRuntimeService;
     /** 用于跨节点串行化交易对暂停操作与开仓派单。 */
     private final RedissonClient redissonClient;
     /** 凭证身份变化的跨节点即时失效通知；数据库版本轮询作为消息丢失兜底。 */
@@ -417,6 +419,7 @@ public class StrategyRuntimeService {
             if (stateChanged && strategySymbolMapper.updateById(binding) != 1) {
                 throw new org.dromara.common.core.exception.ServiceException("保存策略交易对运行状态失败");
             }
+            dualHedgeRuntimeService.setStrategySymbolRuntimeEnabled(strategySymbolId, enabled);
             activeRuntimes.values().stream()
                 .filter(runtime -> runtime.strategySymbol != null && strategySymbolId.equals(runtime.strategySymbol.getId()))
                 .forEach(runtime -> {
@@ -499,6 +502,7 @@ public class StrategyRuntimeService {
      * 只查询 ID、Runtime 版本和状态，不读取或加载 API Key/Secret。
      */
     public void refreshActiveRuntimeCredentialVersions() {
+        dualHedgeRuntimeService.refreshCredentialVersions();
         Map<Long, Set<Long>> runtimeVersions = new HashMap<>();
         for (ActiveRuntime runtime : activeRuntimes.values()) {
             if (runtime != null && !runtime.closed && runtime.credential.getId() != null) {
@@ -552,8 +556,18 @@ public class StrategyRuntimeService {
         Set<Long> activeIds = new HashSet<>();
         for (QuantStrategyInstance instance : instances) {
             try {
-                if (ensureRuntime(instance)) {
-                    activeIds.add(instance.getId());
+                QuantStrategy strategy = strategyMapper.selectById(instance.getStrategyId());
+                Boolean dualHedgeReady = dualHedgeRuntimeService.ensureRuntimeIfApplicable(instance, strategy);
+                if (dualHedgeReady != null) {
+                    stopInactiveRuntime(instance.getId());
+                    if (dualHedgeReady) {
+                        activeIds.add(instance.getId());
+                    }
+                } else {
+                    dualHedgeRuntimeService.stopInstance(instance.getId());
+                    if (ensureRuntime(instance)) {
+                        activeIds.add(instance.getId());
+                    }
                 }
             } catch (TradingReconciliationService.SnapshotSupersededException ex) {
                 // 快照被更新的私有流事实作废时，协调服务已安排只读重试；这不是策略执行故障。
@@ -567,6 +581,7 @@ public class StrategyRuntimeService {
                 recordError(instance, ex);
             }
         }
+        dualHedgeRuntimeService.retainOnly(activeIds);
         activeRuntimes.keySet().removeIf(id -> {
             if (!activeIds.contains(id)) {
                 ActiveRuntime runtime = activeRuntimes.remove(id);
@@ -586,6 +601,7 @@ public class StrategyRuntimeService {
         if (credentialId == null) {
             return;
         }
+        dualHedgeRuntimeService.invalidateCredential(credentialId);
         for (Map.Entry<Long, ActiveRuntime> entry : activeRuntimes.entrySet()) {
             ActiveRuntime runtime = entry.getValue();
             if (runtime != null && Objects.equals(runtime.credential.getId(), credentialId)
@@ -606,6 +622,7 @@ public class StrategyRuntimeService {
         if (credentialId == null) {
             return;
         }
+        dualHedgeRuntimeService.disableCredential(credentialId);
         QuantCredential latestCredential = credentialMapper.selectById(credentialId);
         for (Map.Entry<Long, ActiveRuntime> entry : activeRuntimes.entrySet()) {
             ActiveRuntime runtime = entry.getValue();
@@ -637,6 +654,7 @@ public class StrategyRuntimeService {
         if (instanceId == null) {
             return;
         }
+        dualHedgeRuntimeService.stopInstance(instanceId);
         QuantStrategyInstance instance = instanceMapper.selectById(instanceId);
         if (instance == null || instance.getStrategySymbolId() == null) {
             invalidateInstanceRuntime(instanceId);
@@ -862,6 +880,7 @@ public class StrategyRuntimeService {
      * 续期失败或结果不明确时不延长有效期，到期后行情决策自动 fail closed。
      */
     public void renewActiveRuntimeLeases() {
+        dualHedgeRuntimeService.renewActiveRuntimeLeases();
         for (ActiveRuntime runtime : activeRuntimes.values()) {
             if (runtime == null || runtime.closed || "PAPER".equalsIgnoreCase(runtime.credential.getRunMode())
                 || !runtime.leaseRenewing.compareAndSet(false, true)) {
@@ -6277,6 +6296,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
      * 关闭运行实例并释放订阅、租约和调度资源。
      */
     private void stopAll() {
+        dualHedgeRuntimeService.stopAll();
         activeRuntimes.values().forEach(this::closeRuntime);
         activeRuntimes.clear();
     }
