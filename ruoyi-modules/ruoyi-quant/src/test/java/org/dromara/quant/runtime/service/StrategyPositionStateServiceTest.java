@@ -62,6 +62,15 @@ class StrategyPositionStateServiceTest {
         verify(mapper, times(1)).updateById(cleanOpen);
     }
 
+    @Test
+    void legacyInstanceLookupOnlyReturnsSingleLegAndDualLegsCanCoexist() {
+        when(mapper.selectOne(any())).thenReturn(null);
+
+        assertEquals(null, service.findByInstance(2L));
+        assertEquals(null, service.findByInstanceAndLeg(2L, "LONG"));
+        verify(mapper, times(2)).selectOne(any());
+    }
+
     private QuantStrategyPositionState state(String status, String pendingAction, boolean recoveryRequired, boolean unsafeRecovery) {
         var state = new QuantStrategyPositionState();
         state.setId(1L);
