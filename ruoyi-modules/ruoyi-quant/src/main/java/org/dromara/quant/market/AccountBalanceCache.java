@@ -76,6 +76,17 @@ public class AccountBalanceCache {
     }
 
     /**
+     * 返回包含有效账户总权益的快照；不改变普通策略仅依赖可用余额的校验口径。
+     */
+    public AccountBalanceSnapshot requireTotalEquitySnapshot(Long id) {
+        AccountBalanceSnapshot snapshot = requireSnapshot(id);
+        if (!snapshot.hasTotalEquity()) {
+            throw new OpenCapacityService.CapacityBlockedException("账户总权益未就绪，等待后台校准");
+        }
+        return snapshot;
+    }
+
+    /**
      * 按用户数据流事件增量更新余额，并保留快照的新鲜度语义。
      */
     public void onEvent(Long id, ExchangeGateway.UserDataEvent event) {
@@ -134,7 +145,7 @@ public class AccountBalanceCache {
                     }
                     synchronized (account) {
                         if (accounts.get(id) == account && account.connected && account.healthy.getAsBoolean() && revision == account.revision && System.nanoTime() - started < MAX_AGE) {
-                            account.snapshot = new AccountBalanceSnapshot(id, balance.availableBalance(), covered, started + MAX_AGE);
+                            account.snapshot = new AccountBalanceSnapshot(id, balance.availableBalance(), balance.marginBalance(), covered, started + MAX_AGE);
                             account.snapshotAt = started;
                         }
                         account.failures = 0;

@@ -52,6 +52,7 @@ class AccountBalanceCacheTest {
         cache.onEvent(1L, new ExchangeGateway.UserDataEvent("CONNECTED", Instant.now(), "{}"));
         cache.refresh(1L).get(2, TimeUnit.SECONDS);
         assertEquals(new BigDecimal("100"), cache.requireSnapshot(1L).availableBalance());
+        assertEquals(new BigDecimal("200"), cache.requireTotalEquitySnapshot(1L).totalEquity());
         verify(gateway, times(2)).queryAccountFresh(credential);
     }
 
@@ -155,6 +156,19 @@ class AccountBalanceCacheTest {
         release.countDown();
         future.get(2, TimeUnit.SECONDS);
         assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> cache.requireSnapshot(1L));
+    }
+
+    @Test
+    void missingTotalEquityKeepsLegacyAvailableBalanceUsableButBlocksEquityBasedEntries() throws Exception {
+        when(capacity.balanceCoverage(1L)).thenReturn(Set.of());
+        when(gateway.queryAccountFresh(credential)).thenReturn(
+            new ExchangeGateway.AccountSnapshot(BigDecimal.TEN, new BigDecimal("100"), null, BigDecimal.ZERO));
+        var cache = new AccountBalanceCache(gateway, capacity);
+        cache.begin(1L, credential, () -> true);
+        cache.refresh(1L).get(2, TimeUnit.SECONDS);
+
+        assertEquals(new BigDecimal("100"), cache.requireSnapshot(1L).availableBalance());
+        assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> cache.requireTotalEquitySnapshot(1L));
     }
 
     @Test
