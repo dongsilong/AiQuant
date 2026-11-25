@@ -162,6 +162,11 @@ public class DualHedgeRuntimeService {
 
         DualHedgeRuntime runtime = new DualHedgeRuntime(instance, strategy, strategySymbol, credential, symbol, snapshot, params);
         try {
+            if (!"PAPER".equalsIgnoreCase(credential.getRunMode())) {
+                runtime.userSubscription = userDataStreamHub.subscribe(credential, event -> {
+                    // UserDataStreamHub centrally updates AccountBalanceCache before notifying subscribers.
+                });
+            }
             runtime.subscription = marketStreamHub.subscribe(credential.getRunMode(), symbol.getSymbol(),
                 strategySymbol.getIntervalCode(), event -> onMarketEvent(runtime, event),
                 ready -> runtime.marketStreamReady = ready);
@@ -452,6 +457,14 @@ public class DualHedgeRuntimeService {
             }
             runtime.subscription = null;
         }
+        if (runtime.userSubscription != null) {
+            try {
+                runtime.userSubscription.close();
+            } catch (Exception ex) {
+                log.warn("关闭双开策略用户数据订阅失败 instanceId={}", runtime.instance.getId(), ex);
+            }
+            runtime.userSubscription = null;
+        }
         boolean acquired = false;
         try {
             acquired = runtime.leaseOperationLock.tryLock(2, TimeUnit.SECONDS);
@@ -490,6 +503,7 @@ public class DualHedgeRuntimeService {
         private final QuantSymbol symbol;
         private volatile StrategyRuntimeLeaseService.LeaseSnapshot leaseSnapshot;
         private volatile AutoCloseable subscription;
+        private volatile AutoCloseable userSubscription;
         private final AtomicBoolean leaseRenewing = new AtomicBoolean();
         private final ReentrantLock leaseOperationLock = new ReentrantLock();
         private volatile boolean marketStreamReady;
