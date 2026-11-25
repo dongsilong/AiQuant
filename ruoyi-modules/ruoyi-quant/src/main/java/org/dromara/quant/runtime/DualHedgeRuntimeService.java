@@ -47,7 +47,7 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  * 双开对敲策略独立的行情订阅与运行租约生命周期。
  *
- * <p>本服务当前只管理运行资源和已收盘 K 线游标，不执行下单、持仓管理或保护单操作。
+ * <p>本服务计算并持久化双开入场信号，但不执行下单、持仓管理或保护单操作。
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -101,6 +101,19 @@ public class DualHedgeRuntimeService {
             params.putAll(QuantJsonMapper.readMap(strategySymbol.getParamsJson()));
         } catch (Exception ex) {
             log.error("双开策略参数解析失败，拒绝启动 Runtime instanceId={}", instance.getId(), ex);
+            stopInstance(instance.getId());
+            return false;
+        }
+        try {
+            DualHedgeSlopeSignalEvaluator.entryAngleDegrees(params);
+            DualHedgeSlopeSignalEvaluator.marginRatio(params);
+            Integer leverage = strategySymbol.getLeverage() == null
+                ? strategy.getDefaultLeverage() : strategySymbol.getLeverage();
+            if (leverage == null || leverage <= 0) {
+                throw new IllegalArgumentException("双开策略杠杆必须大于0");
+            }
+        } catch (RuntimeException ex) {
+            log.error("双开策略参数校验失败，拒绝启动 Runtime instanceId={}", instance.getId(), ex);
             stopInstance(instance.getId());
             return false;
         }
