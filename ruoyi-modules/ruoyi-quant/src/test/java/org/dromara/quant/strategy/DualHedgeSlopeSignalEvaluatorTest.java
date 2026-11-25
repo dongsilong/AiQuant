@@ -28,6 +28,14 @@ class DualHedgeSlopeSignalEvaluatorTest {
     }
 
     @Test
+    void roundsSlopePercentToTwoDecimalsBeforeCalculatingAngle() {
+        var signal = DualHedgeSlopeSignalEvaluator.evaluate("15m", kline("102.567", true),
+            new BigDecimal("100"), Map.of()).orElseThrow();
+
+        assertEquals(new BigDecimal("2.57"), signal.slopePercent());
+    }
+
+    @Test
     void negativeAngleAlsoTriggersBothLongAndShort() {
         var signal = DualHedgeSlopeSignalEvaluator.evaluate("15m", kline("98", true),
             new BigDecimal("100"), Map.of()).orElseThrow();
