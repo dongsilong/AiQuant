@@ -63,12 +63,29 @@ class StrategyPositionStateServiceTest {
     }
 
     @Test
-    void legacyInstanceLookupOnlyReturnsSingleLegAndDualLegsCanCoexist() {
+    void savesLongAndShortLegsAsSeparateRowsForOneInstance() {
+        when(mapper.selectOne(any())).thenReturn(null, null);
+        var longLeg = state("OPEN_PENDING", "OPEN", false, false);
+        longLeg.setId(null);
+        longLeg.setLegKey("LONG");
+        var shortLeg = state("OPEN_PENDING", "OPEN", false, false);
+        shortLeg.setId(null);
+        shortLeg.setLegKey("SHORT");
+
+        service.save(longLeg);
+        service.save(shortLeg);
+
+        verify(mapper, times(2)).insert(any(QuantStrategyPositionState.class));
+        assertEquals("LONG", longLeg.getLegKey());
+        assertEquals("SHORT", shortLeg.getLegKey());
+    }
+
+    @Test
+    void legacyInstanceLookupUsesSingleLegKey() {
         when(mapper.selectOne(any())).thenReturn(null);
 
         assertEquals(null, service.findByInstance(2L));
-        assertEquals(null, service.findByInstanceAndLeg(2L, "LONG"));
-        verify(mapper, times(2)).selectOne(any());
+        verify(mapper).selectOne(any());
     }
 
     private QuantStrategyPositionState state(String status, String pendingAction, boolean recoveryRequired, boolean unsafeRecovery) {
