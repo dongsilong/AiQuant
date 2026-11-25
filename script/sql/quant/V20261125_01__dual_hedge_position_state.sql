@@ -39,6 +39,14 @@ BEGIN
     UPDATE quant_strategy_position_state SET leg_key='SINGLE' WHERE leg_key IS NULL OR leg_key='';
 
     IF EXISTS (
+        SELECT 1 FROM quant_strategy_position_state
+        GROUP BY instance_id, leg_key HAVING COUNT(*) > 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Dual hedge state migration blocked: duplicate (instance_id, leg_key) rows exist';
+    END IF;
+
+    IF EXISTS (
         SELECT 1 FROM information_schema.statistics
         WHERE table_schema=DATABASE() AND table_name='quant_strategy_position_state'
           AND index_name='uk_quant_strategy_position_state_instance'
@@ -51,13 +59,6 @@ BEGIN
         WHERE table_schema=DATABASE() AND table_name='quant_strategy_position_state'
           AND index_name='uk_quant_strategy_position_state_instance_leg'
     ) THEN
-        IF EXISTS (
-            SELECT 1 FROM quant_strategy_position_state
-            GROUP BY instance_id, leg_key HAVING COUNT(*) > 1
-        ) THEN
-            SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Dual hedge state migration blocked: duplicate (instance_id, leg_key) rows exist';
-        END IF;
         ALTER TABLE quant_strategy_position_state
             ADD UNIQUE INDEX uk_quant_strategy_position_state_instance_leg (instance_id, leg_key);
     END IF;
