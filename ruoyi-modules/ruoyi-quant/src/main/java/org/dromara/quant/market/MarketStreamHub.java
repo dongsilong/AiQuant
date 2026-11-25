@@ -1086,6 +1086,7 @@ public class MarketStreamHub {
             if (boundaryRecoveryTask != null && !boundaryRecoveryTask.isDone() && expectedOpen.equals(boundaryRecoveryOpen)) {
                 return;
             }
+            cancelBoundaryRecovery();
             connected = false;
             signalUnhealthy();
             publish(status("CONNECTING"));
