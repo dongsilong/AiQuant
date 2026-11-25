@@ -63,7 +63,7 @@ class StrategyHedgeRoundExecutionServiceTest {
         assertEquals(StrategyHedgeRoundService.STATUS_DEGRADED, result.status());
         assertEquals(StrategyHedgeRoundService.LEG_UNKNOWN, round.getLongLegStatus());
         assertEquals(StrategyHedgeRoundService.LEG_NOT_STARTED, round.getShortLegStatus());
-        verify(executionService, times(1)).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(executionService, times(1)).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), nullable(Long.class));
     }
 
     @Test
