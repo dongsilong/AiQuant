@@ -1725,7 +1725,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
 
     /** 返回 1 分钟均线行情门禁的具体阻断原因；不改变原有 fail-closed 条件。 */
     private String entryMaMarketBlockReason(ActiveRuntime runtime, EntryMaSnapshot snapshot) {
-        if (!snapshot.ready()) {
+        if (!snapshot.historyReady()) {
+            return "HISTORY_NOT_READY";
+        }
+        if (!snapshot.streamReady()) {
             return "STREAM_NOT_READY";
         }
         if (snapshot.ma5() == null || snapshot.ma7() == null) {
@@ -1765,7 +1768,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     private String entryMaMarketDiagnostic(ActiveRuntime runtime, EntryMaSnapshot snapshot, String blockReason) {
         Instant now = Instant.now();
         return "1分钟均线行情不可用，禁止开仓；原因=" + blockReason
-            + "；streamReady=" + snapshot.ready()
+            + "；historyReady=" + snapshot.historyReady()
+            + "；streamReady=" + snapshot.streamReady()
+            + "；maReady=" + snapshot.ready()
             + "；closedKlines=" + snapshot.closedKlines() + "/7"
             + "；lastClosedKlineOpenTime=" + snapshot.lastClosedKlineOpenTime()
             + "；eventTime=" + snapshot.eventTime()
