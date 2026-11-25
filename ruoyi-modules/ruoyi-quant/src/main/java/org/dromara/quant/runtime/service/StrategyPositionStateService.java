@@ -44,7 +44,19 @@ public class StrategyPositionStateService {
         if (instanceId == null) {
             return null;
         }
-        return mapper.selectOne(new LambdaQueryWrapper<QuantStrategyPositionState>().eq(QuantStrategyPositionState::getInstanceId, instanceId));
+        return findByInstanceAndLeg(instanceId, "SINGLE");
+    }
+
+    /**
+     * 按策略实例和持仓腿查询运行状态。
+     */
+    public QuantStrategyPositionState findByInstanceAndLeg(Long instanceId, String legKey) {
+        if (instanceId == null || legKey == null) {
+            return null;
+        }
+        return mapper.selectOne(new LambdaQueryWrapper<QuantStrategyPositionState>()
+            .eq(QuantStrategyPositionState::getInstanceId, instanceId)
+            .eq(QuantStrategyPositionState::getLegKey, legKey));
     }
 
     /** Update the cycle's return-rate peak atomically without advancing the strategy-state optimistic-lock version. */
@@ -93,6 +105,9 @@ public class StrategyPositionStateService {
             return;
         }
         // FIXED: 锁对象仅创建不删除，防止多线程下锁被替换后并发穿越。
+        if (state.getLegKey() == null || state.getLegKey().isBlank()) {
+            state.setLegKey("SINGLE");
+        }
         Object lock = locks.computeIfAbsent(state.getInstanceId(), ignored -> new Object());
         synchronized (lock) {
             // updated_at 在数据库中是 NOT NULL 且没有默认值，插入和更新都由服务统一维护。
@@ -119,7 +134,7 @@ public class StrategyPositionStateService {
                 state.setUnsafeRecovery(false);
             }
             if (state.getId() == null) {
-                QuantStrategyPositionState existing = findByInstance(state.getInstanceId());
+                QuantStrategyPositionState existing = findByInstanceAndLeg(state.getInstanceId(), state.getLegKey());
                 if (existing == null) {
                     mapper.insert(state);
                 } else {
