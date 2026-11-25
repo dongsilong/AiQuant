@@ -228,17 +228,17 @@ public class DualHedgeRuntimeService {
         }
 
         if (fresh && runtime.pendingSignal != null) {
-            persistPendingSignal(runtime, event.eventTime(), localNow, exchangeNow);
+            persistPendingSignal(runtime, event.eventTime(), event.receivedAt(), localNow, exchangeNow);
         }
     }
 
-    private void persistPendingSignal(DualHedgeRuntime runtime, Instant signalEventTime,
+    private void persistPendingSignal(DualHedgeRuntime runtime, Instant signalEventTime, Instant receivedAt,
                                       Instant localNow, Instant exchangeNow) {
         DualHedgeSlopeSignalEvaluator.Signal signal = runtime.pendingSignal;
         if (signal == null || runtime.closed) {
             return;
         }
-        if (!MarketEventFreshness.isFresh(signalEventTime, Instant.now(), localNow, exchangeNow,
+        if (!MarketEventFreshness.isFresh(signalEventTime, receivedAt, localNow, exchangeNow,
             properties.getMarket().getMaxEventAgeMillis())) {
             runtime.pendingSignal = null;
             log.warn("双开信号超过有效窗口，放弃持久化 instanceId={} symbol={} klineOpenTime={} signalEventTime={}",
