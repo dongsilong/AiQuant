@@ -22,6 +22,14 @@ public class QuantStrategyPositionState {
      */
     private Long instanceId;
     /**
+     * 持仓腿标识：SINGLE 为既有单持仓策略，LONG/SHORT 为双向持仓策略。
+     */
+    private String legKey;
+    /**
+     * 双向持仓策略同一轮双开的关联标识。
+     */
+    private String hedgeRoundKey;
+    /**
      * 本地持仓主键。
      */
     @TableField(updateStrategy = FieldStrategy.ALWAYS)
@@ -81,6 +89,14 @@ public class QuantStrategyPositionState {
      */
     private BigDecimal initialMargin;
     /**
+     * 双开策略开仓前冻结的账户总权益快照。
+     */
+    private BigDecimal entryEquitySnapshot;
+    /**
+     * 当前持仓腿已实现盈亏累计值。
+     */
+    private BigDecimal realizedPnl;
+    /**
      * 开仓时冻结的硬止损比例。
      */
     private BigDecimal frozenStopLossRatio;
@@ -111,6 +127,14 @@ public class QuantStrategyPositionState {
      * 首次分批止盈是否已经确认完成。
      */
     private Boolean firstTakeProfitTriggered;
+    /**
+     * 移动止盈是否已武装。
+     */
+    private Boolean trailingArmed;
+    /**
+     * 当前移动止盈线对应的 ROI。
+     */
+    private BigDecimal trailingStopRoi;
     /**
      * 当前策略记录的止损触发价。
      */
