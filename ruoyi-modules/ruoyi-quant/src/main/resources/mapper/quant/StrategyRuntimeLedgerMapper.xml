@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLedgerMapper">
-    <select id="countStrategyExposures" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_strategy_position_state s
+    <select id="countStrategyExposures" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT COUNT(DISTINCT CASE
+    WHEN s.leg_key IN ('LONG','SHORT') AND s.hedge_round_key IS NOT NULL
+      THEN CONCAT('ROUND:', s.hedge_round_key)
+    ELSE CONCAT('STATE:', s.id)
+  END) FROM quant_strategy_position_state s
 JOIN quant_strategy_instance i ON i.id=s.instance_id
 LEFT JOIN quant_position p ON p.id=s.position_id
 WHERE i.strategy_id=#{strategyId} AND i.credential_id=#{credentialId}
@@ -9,6 +13,7 @@ WHERE i.strategy_id=#{strategyId} AND i.credential_id=#{credentialId}
   AND s.position_qty>0
   AND (s.status <> 'OPEN' OR p.quantity > 0 OR p.quantity IS NULL)]]></select>
     <select id="findStrategyExposures" resultType="map" timeout="3"><![CDATA[SELECT s.instance_id AS instanceId, i.status AS instanceStatus,
+       s.leg_key AS legKey, s.hedge_round_key AS hedgeRoundKey,
        s.position_id AS positionId, s.status AS positionStatus,
        s.position_qty AS strategyQty, s.pending_action AS pendingAction,
        s.pending_order_id AS pendingOrderId, s.pending_client_order_id AS pendingClientOrderId,
