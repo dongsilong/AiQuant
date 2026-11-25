@@ -1,7 +1,6 @@
 package org.dromara.quant.runtime.service;
 
 import lombok.RequiredArgsConstructor;
-import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.ExecutionResult;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
@@ -46,7 +45,7 @@ public class StrategyHedgeRoundExecutionService {
 
         BigDecimal quantity = round.getTargetNotionalPerLeg().divide(referencePrice, QUANTITY_SCALE, RoundingMode.DOWN);
         if (quantity.signum() <= 0) {
-            abortBeforeDispatch(round, "按参考价格计算的开仓数量无效");
+            abortBeforeDispatch(round);
             return new DispatchResult("ABORTED", "按参考价格计算的开仓数量无效");
         }
 
@@ -90,20 +89,20 @@ public class StrategyHedgeRoundExecutionService {
                 "开仓结果未知，已停止另一腿派发并等待订单恢复核实");
         }
         if (result == null || !result.accepted() || result.orderId() == null) {
-                markLeg(round, leg, result != null && !result.accepted()
-                    ? StrategyHedgeRoundService.LEG_FAILED : StrategyHedgeRoundService.LEG_UNKNOWN, result);
-                boolean firstLeg = "LONG".equals(leg);
-                round.setStatus(firstLeg && result != null && !result.accepted()
-                    ? StrategyHedgeRoundService.STATUS_ABORTED : StrategyHedgeRoundService.STATUS_DEGRADED);
-                if (firstLeg && result != null && !result.accepted()) {
-                    round.setShortLegStatus(StrategyHedgeRoundService.LEG_FAILED);
-                }
-                roundService.save(round);
-                return new DispatchResult(round.getStatus(), result == null ? "开仓执行结果缺失，保持待核查"
-                    : result.accepted() ? "执行层未返回可信订单号，保持待核查" : "开仓订单未被执行层接受，停止本轮后续派发");
+            markLeg(round, leg, result != null && !result.accepted()
+                ? StrategyHedgeRoundService.LEG_FAILED : StrategyHedgeRoundService.LEG_UNKNOWN, result);
+            boolean firstLeg = "LONG".equals(leg);
+            round.setStatus(firstLeg && result != null && !result.accepted()
+                ? StrategyHedgeRoundService.STATUS_ABORTED : StrategyHedgeRoundService.STATUS_DEGRADED);
+            if (firstLeg && result != null && !result.accepted()) {
+                round.setShortLegStatus(StrategyHedgeRoundService.LEG_FAILED);
             }
+            roundService.save(round);
+            return new DispatchResult(round.getStatus(), result == null ? "开仓执行结果缺失，保持待核查"
+                : result.accepted() ? "执行层未返回可信订单号，保持待核查" : "开仓订单未被执行层接受，停止本轮后续派发");
+        }
 
-            markLeg(round, leg, StrategyHedgeRoundService.LEG_ACCEPTED, result);
+        markLeg(round, leg, StrategyHedgeRoundService.LEG_ACCEPTED, result);
         roundService.save(round);
         return new DispatchResult("ACCEPTED", "订单已接受，等待成交事实核实");
     }
