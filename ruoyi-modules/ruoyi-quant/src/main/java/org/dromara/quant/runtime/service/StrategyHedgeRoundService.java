@@ -20,6 +20,7 @@ import java.util.UUID;
 @Service
 public class StrategyHedgeRoundService {
     public static final String STATUS_OPENING = "OPENING";
+    public static final String STATUS_SIGNAL_READY = "SIGNAL_READY";
     public static final String STATUS_DEGRADED = "DEGRADED";
     public static final String STATUS_OPEN = "OPEN";
     public static final String STATUS_CLOSING = "CLOSING";
