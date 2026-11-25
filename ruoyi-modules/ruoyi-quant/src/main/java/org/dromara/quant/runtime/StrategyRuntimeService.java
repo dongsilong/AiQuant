@@ -1642,7 +1642,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (runtime.entryMaSubscription == null) {
                 runtime.entryMaSubscription = marketStreamHub.subscribe(runtime.credential.getRunMode(), runtime.symbol.getSymbol(), "1m",
                     event -> onEntryMaMarketEvent(runtime, event), ready -> {
-                        // MA 就绪由独立的 K 线恢复状态和新鲜实时 KLINE/MARK 事件共同确认。
+                        // Hub 仅在历史恢复完成且当前K线与MARK通过新鲜度校验后才报告健康；
+                        // 该握手也可补足订阅队列中被旧连接代次丢弃的KLINE_READY通知。
+                        if (ready) {
+                            runtime.entryMa.setHistoryReady(true);
+                        }
                     }, event -> event != null && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
                         || "KLINE_READY".equals(event.type()) || "CONNECTED".equals(event.type())
                         || "CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
