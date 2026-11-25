@@ -206,6 +206,10 @@ public class DualHedgeRuntimeService {
         if (event.replay()) {
             return;
         }
+        if (runtime.pendingSignal != null && !MarketEventFreshness.isFresh(runtime.pendingSignalEventTime,
+            runtime.pendingSignalReceivedAt, localNow, exchangeNow, properties.getMarket().getMaxEventAgeMillis())) {
+            runtime.clearPendingSignal();
+        }
 
         if (isFreshClosed15mKlineEvent(event, runtime.symbol.getSymbol(), localNow, exchangeNow,
             properties.getMarket().getMaxEventAgeMillis())
