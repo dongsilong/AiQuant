@@ -228,13 +228,21 @@ public class DualHedgeRuntimeService {
         }
 
         if (fresh && runtime.pendingSignal != null) {
-            persistPendingSignal(runtime);
+            persistPendingSignal(runtime, event.eventTime(), localNow, exchangeNow);
         }
     }
 
-    private void persistPendingSignal(DualHedgeRuntime runtime) {
+    private void persistPendingSignal(DualHedgeRuntime runtime, Instant signalEventTime,
+                                      Instant localNow, Instant exchangeNow) {
         DualHedgeSlopeSignalEvaluator.Signal signal = runtime.pendingSignal;
         if (signal == null || runtime.closed) {
+            return;
+        }
+        if (!MarketEventFreshness.isFresh(signalEventTime, Instant.now(), localNow, exchangeNow,
+            properties.getMarket().getMaxEventAgeMillis())) {
+            runtime.pendingSignal = null;
+            log.warn("双开信号超过有效窗口，放弃持久化 instanceId={} symbol={} klineOpenTime={} signalEventTime={}",
+                runtime.instance.getId(), runtime.symbol.getSymbol(), signal.klineOpenTime(), signalEventTime);
             return;
         }
         try {
@@ -259,6 +267,8 @@ public class DualHedgeRuntimeService {
             round.setEntryKlineOpenTime(LocalDateTime.ofInstant(signal.klineOpenTime(), ZoneId.of("Asia/Shanghai")));
             round.setStatus(StrategyHedgeRoundService.STATUS_SIGNAL_READY);
             round.setEntryAngleDegrees(signal.angleDegrees());
+            round.setReferencePrice(signal.closePrice());
+            round.setSignalEventTime(LocalDateTime.ofInstant(signalEventTime, ZoneId.of("Asia/Shanghai")));
             round.setEntryEquitySnapshot(equity);
             round.setMarginRatio(marginRatio);
             round.setLeverage(leverage);
