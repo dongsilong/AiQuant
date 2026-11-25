@@ -974,7 +974,7 @@ public class MarketStreamHub {
                         if (lastTradeId == null) {
                             lastTradeId = event.sequenceId() - 1;
                         }
-                        if (lastKlineOpen != null && (
+                        if (fresh && lastKlineOpen != null && (
                             isEventTimeWithinKlinePeriod(processingEventTime, lastKlineOpen, nextOpen(lastKlineOpen))
                                 || isTradeInNextKlinePeriod(processingEventTime, nextOpen(lastKlineOpen), nextOpen(nextOpen(lastKlineOpen))))) {
                             // TRADE 与 KLINE 属于独立WebSocket流；周期边界附近可能先收到上一周期迟到成交或下一周期成交。
