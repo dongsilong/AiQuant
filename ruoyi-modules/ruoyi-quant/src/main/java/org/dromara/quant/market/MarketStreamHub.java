@@ -28,7 +28,8 @@ import java.util.function.Predicate;
 @Slf4j
 public class MarketStreamHub {
     private static final long MAX_FUTURE_CLOCK_SKEW_MILLIS = 10_000L;
-    private static final long KLINE_BOUNDARY_WAIT_MILLIS = 1_000L;
+    private static final long KLINE_BOUNDARY_WAIT_MILLIS = 3_000L;
+    private static final long KLINE_BOUNDARY_INGRESS_DRAIN_INTERVAL_MILLIS = 250L;
     private final ExchangeGateway gateway;
     private final ScheduledExecutorService scheduler;
     private final QuantProperties properties;
@@ -280,7 +281,9 @@ public class MarketStreamHub {
         private ScheduledFuture<?> watchdog;
         private ScheduledFuture<?> reconnect;
         private ScheduledFuture<?> boundaryRecoveryTask;
-        private Instant boundaryRecoveryOpen;
+        private volatile Instant boundaryRecoveryOpen;
+        private volatile Instant boundaryKlineIngressAt;
+        private long boundaryRecoveryDeadlineNanos;
         private Instant lastKlineOpen;
         private boolean lastKlineClosed;
         private Long lastTradeId;
@@ -485,6 +488,12 @@ public class MarketStreamHub {
                             scheduleDisconnect("上游行情流断开");
                         }
                     } else {
+                        if ("KLINE".equals(event.type()) && event.kline() != null) {
+                            Instant expectedOpen = boundaryRecoveryOpen;
+                            if (expectedOpen != null && expectedOpen.equals(event.kline().openTime())) {
+                                boundaryKlineIngressAt = event.receivedAt() == null ? Instant.now() : event.receivedAt();
+                            }
+                        }
                         ingress.accept(new Incoming(attempt, event));
                     }
                 };
@@ -1059,7 +1068,8 @@ public class MarketStreamHub {
             }
             publish(status("CONNECTING"));
             long attempt = generation;
-            if ("K线周期已切换，REST校验当前状态".equals(reason)) {
+            if ("K线周期已切换，REST校验当前状态".equals(reason)
+                || "K线周期切换等待超时，REST校验当前状态".equals(reason)) {
                 // 周期边界附近多个交易对可能同时触发恢复；先暂停决策并缓冲WS，
                 // 再按流标识错峰启动REST，避免集中争抢全局请求预算。
                 long delayMillis = 250L + Math.floorMod(key.hashCode(), 2_001);
@@ -1093,20 +1103,39 @@ public class MarketStreamHub {
             log.info("行情周期边界暂缓REST恢复，等待新周期K线: symbol={} interval={} expectedOpen={} waitMs={}",
                 key.symbol(), key.interval(), expectedOpen, KLINE_BOUNDARY_WAIT_MILLIS);
             boundaryRecoveryOpen = expectedOpen;
+            boundaryKlineIngressAt = null;
             long attempt = generation;
-            boundaryRecoveryTask = scheduler.schedule(() -> {
-                synchronized (this) {
-                    if (closed || attempt != generation || recovering || !expectedOpen.equals(boundaryRecoveryOpen)) {
-                        return;
-                    }
-                    boundaryRecoveryTask = null;
-                    boundaryRecoveryOpen = null;
-                    if (lastKlineOpen != null && !lastKlineOpen.isBefore(expectedOpen)) {
-                        return;
-                    }
-                    beginRecovery("K线周期切换等待超时，REST校验当前状态", null);
+            boundaryRecoveryDeadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
+                KLINE_BOUNDARY_WAIT_MILLIS + Math.max(1L, properties.getMarket().getMaxEventAgeMillis()));
+            boundaryRecoveryTask = scheduler.schedule(() -> checkBoundaryRecovery(expectedOpen, attempt),
+                KLINE_BOUNDARY_WAIT_MILLIS, TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * 入口已收到目标K线但Ingress尚未消费时，短暂等待队列排空；总等待时间有上限。
+         */
+        private void checkBoundaryRecovery(Instant expectedOpen, long attempt) {
+            synchronized (this) {
+                if (closed || attempt != generation || recovering || !expectedOpen.equals(boundaryRecoveryOpen)) {
+                    return;
                 }
-            }, KLINE_BOUNDARY_WAIT_MILLIS, TimeUnit.MILLISECONDS);
+                if (lastKlineOpen != null && !lastKlineOpen.isBefore(expectedOpen)) {
+                    cancelBoundaryRecovery();
+                    return;
+                }
+                Instant ingressAt = boundaryKlineIngressAt;
+                if (ingressAt != null
+                    && Duration.between(ingressAt, Instant.now()).toMillis() <= Math.max(1L, properties.getMarket().getMaxEventAgeMillis())
+                    && System.nanoTime() < boundaryRecoveryDeadlineNanos) {
+                    boundaryRecoveryTask = scheduler.schedule(() -> checkBoundaryRecovery(expectedOpen, attempt),
+                        KLINE_BOUNDARY_INGRESS_DRAIN_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+                    return;
+                }
+                boundaryRecoveryTask = null;
+                boundaryRecoveryOpen = null;
+                boundaryKlineIngressAt = null;
+                beginRecovery("K线周期切换等待超时，REST校验当前状态", null);
+            }
         }
 
         private void cancelBoundaryRecovery() {
@@ -1115,6 +1144,8 @@ public class MarketStreamHub {
                 boundaryRecoveryTask = null;
             }
             boundaryRecoveryOpen = null;
+            boundaryKlineIngressAt = null;
+            boundaryRecoveryDeadlineNanos = 0L;
         }
 
         /**
