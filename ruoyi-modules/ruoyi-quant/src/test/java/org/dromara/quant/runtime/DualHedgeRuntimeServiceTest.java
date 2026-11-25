@@ -36,6 +36,14 @@ class DualHedgeRuntimeServiceTest {
     }
 
     @Test
+    void pendingSignalMustStillBeFreshWhenAccountSnapshotBecomesAvailable() {
+        assertTrue(DualHedgeRuntimeService.isPendingSignalFresh(
+            NOW.minusMillis(1_000), NOW.minusMillis(900), NOW, NOW, 3_000));
+        assertFalse(DualHedgeRuntimeService.isPendingSignalFresh(
+            NOW.minusMillis(5_000), NOW.minusMillis(4_900), NOW, NOW, 3_000));
+    }
+
+    @Test
     void usesImmediatelyPreviousClosedKlineOpenAsSlopeReference() {
         ExchangeGateway.Kline previous = new ExchangeGateway.Kline(
             NOW.minusSeconds(1_800), NOW.minusSeconds(900).minusMillis(1), new BigDecimal("100"),
