@@ -191,6 +191,19 @@ public class DualHedgeRuntimeService {
         closeCredentialRuntimes(credentialId);
     }
 
+    public synchronized void setStrategySymbolRuntimeEnabled(Long strategySymbolId, boolean enabled) {
+        if (strategySymbolId == null || enabled) {
+            return;
+        }
+        for (Map.Entry<Long, DualHedgeRuntime> entry : runtimes.entrySet()) {
+            DualHedgeRuntime runtime = entry.getValue();
+            if (runtime.strategySymbol != null && strategySymbolId.equals(runtime.strategySymbol.getId())
+                && runtimes.remove(entry.getKey(), runtime)) {
+                closeRuntime(runtime);
+            }
+        }
+    }
+
     public synchronized void disableCredential(Long credentialId) {
         closeCredentialRuntimes(credentialId);
     }
