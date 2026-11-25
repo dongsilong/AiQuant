@@ -88,6 +88,19 @@ class StrategyPositionStateServiceTest {
         verify(mapper).selectOne(any());
     }
 
+    @Test
+    void legacyStateWithoutLegKeyDefaultsToSingle() {
+        when(mapper.selectOne(any())).thenReturn(null);
+        var legacy = state("OPEN", null, false, false);
+        legacy.setId(null);
+        legacy.setLegKey(null);
+
+        service.save(legacy);
+
+        assertEquals("SINGLE", legacy.getLegKey());
+        verify(mapper).insert(legacy);
+    }
+
     private QuantStrategyPositionState state(String status, String pendingAction, boolean recoveryRequired, boolean unsafeRecovery) {
         var state = new QuantStrategyPositionState();
         state.setId(1L);
