@@ -6474,10 +6474,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         }
 
         private synchronized void markUnready() {
-            historyReady = false;
+            // 断线或周期切换只撤销实时可用性；历史就绪由KLINE_READY/历史恢复维护，
+            // 边界等待期间若新K线及时到达，Hub可能直接恢复连接而不再发布KLINE_READY。
+            // streamReady=false及事件时间清空仍会阻断决策，且开仓前继续校验最新闭合K线时间。
             streamReady = false;
-            // 断线只撤销实时可用性，不销毁已计算的历史 MA；
-            // 恢复期间 streamReady=false 会阻断决策，恢复后仍需重新确认新鲜实时事件。
             eventTime = null;
             receivedAt = null;
         }
