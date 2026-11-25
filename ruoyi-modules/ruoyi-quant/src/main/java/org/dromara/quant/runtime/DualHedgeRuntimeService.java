@@ -8,25 +8,35 @@ import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.market.AccountBalanceCache;
+import org.dromara.quant.market.AccountBalanceSnapshot;
 import org.dromara.quant.market.MarketEventFreshness;
 import org.dromara.quant.market.MarketStreamHub;
 import org.dromara.quant.market.UserDataStreamHub;
 import org.dromara.quant.market.domain.QuantSymbol;
 import org.dromara.quant.market.mapper.QuantSymbolMapper;
 import org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService;
+import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
+import org.dromara.quant.runtime.service.StrategyHedgeRoundService;
 import org.dromara.quant.strategy.DualHedgeSlopeSignalEvaluator;
 import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.strategy.domain.QuantStrategyInstance;
 import org.dromara.quant.strategy.domain.QuantStrategySymbol;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
+import org.dromara.quant.util.QuantJsonMapper;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -51,6 +61,8 @@ public class DualHedgeRuntimeService {
     private final UserDataStreamHub userDataStreamHub;
     private final ExchangeGateway gateway;
     private final QuantProperties properties;
+    private final AccountBalanceCache balanceCache;
+    private final StrategyHedgeRoundService hedgeRoundService;
 
     private final Map<Long, DualHedgeRuntime> runtimes = new ConcurrentHashMap<>();
     private final ExecutorService leaseRenewalExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -83,6 +95,15 @@ public class DualHedgeRuntimeService {
             return false;
         }
         QuantSymbol symbol = symbolMapper.selectById(strategySymbol.getSymbolId());
+        Map<String, Object> params;
+        try {
+            params = new HashMap<>(QuantJsonMapper.readMap(strategy.getParamsJson()));
+            params.putAll(QuantJsonMapper.readMap(strategySymbol.getParamsJson()));
+        } catch (Exception ex) {
+            log.error("双开策略参数解析失败，拒绝启动 Runtime instanceId={}", instance.getId(), ex);
+            stopInstance(instance.getId());
+            return false;
+        }
         if (symbol == null || symbol.getSymbol() == null || symbol.getSymbol().isBlank() || !"0".equals(symbol.getStatus())) {
             stopInstance(instance.getId());
             return false;
@@ -106,6 +127,7 @@ public class DualHedgeRuntimeService {
                     current.credential = credential;
                     current.strategy = strategy;
                     current.strategySymbol = strategySymbol;
+                    current.params = params;
                 }
             } finally {
                 current.leaseOperationLock.unlock();
@@ -125,7 +147,7 @@ public class DualHedgeRuntimeService {
             return false;
         }
 
-        DualHedgeRuntime runtime = new DualHedgeRuntime(instance, strategy, strategySymbol, credential, symbol, snapshot);
+        DualHedgeRuntime runtime = new DualHedgeRuntime(instance, strategy, strategySymbol, credential, symbol, snapshot, params);
         try {
             runtime.subscription = marketStreamHub.subscribe(credential.getRunMode(), symbol.getSymbol(),
                 strategySymbol.getIntervalCode(), event -> onMarketEvent(runtime, event),
@@ -152,13 +174,103 @@ public class DualHedgeRuntimeService {
             runtime.marketStreamStatus = event.type();
             return;
         }
+
         Instant localNow = Instant.now();
         Instant exchangeNow = localNow.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
-        if (!isFreshClosed15mKlineEvent(event, runtime.symbol.getSymbol(), localNow, exchangeNow,
-            properties.getMarket().getMaxEventAgeMillis())) {
+        boolean fresh = event.eventTime() != null && event.receivedAt() != null
+            && runtime.symbol.getSymbol().equalsIgnoreCase(event.symbol())
+            && "15m".equalsIgnoreCase(event.interval())
+            && MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), localNow, exchangeNow,
+                properties.getMarket().getMaxEventAgeMillis());
+        if (event.kline() != null && (event.replay() || fresh)) {
+            runtime.rememberKline(event.kline());
+        }
+        if (event.replay()) {
             return;
         }
-        runtime.lastClosedKlineOpenTime = event.kline().openTime();
+
+        if (isFreshClosed15mKlineEvent(event, runtime.symbol.getSymbol(), localNow, exchangeNow,
+            properties.getMarket().getMaxEventAgeMillis())
+            && (runtime.lastClosedKlineOpenTime == null
+                || event.kline().openTime().isAfter(runtime.lastClosedKlineOpenTime))) {
+            ExchangeGateway.Kline kline = event.kline();
+            BigDecimal referenceOpenPrice = runtime.referenceOpenPrice(kline);
+            runtime.lastClosedKlineOpenTime = kline.openTime();
+            if (referenceOpenPrice == null) {
+                log.warn("双开策略参考K线未就绪或不连续，跳过本根信号 instanceId={} symbol={} klineOpenTime={}",
+                    runtime.instance.getId(), runtime.symbol.getSymbol(), kline.openTime());
+            } else {
+                DualHedgeSlopeSignalEvaluator.evaluate("15m", kline, referenceOpenPrice, runtime.params)
+                    .ifPresent(signal -> {
+                        runtime.pendingSignal = signal;
+                        runtime.pendingKline = kline;
+                    });
+            }
+        }
+
+        if (fresh && runtime.pendingSignal != null) {
+            persistPendingSignal(runtime);
+        }
+    }
+
+    private void persistPendingSignal(DualHedgeRuntime runtime) {
+        DualHedgeSlopeSignalEvaluator.Signal signal = runtime.pendingSignal;
+        if (signal == null || runtime.closed) {
+            return;
+        }
+        if (hedgeRoundService.findBlockingRound(runtime.instance.getId(), runtime.symbol.getSymbol()) != null) {
+            runtime.pendingSignal = null;
+            runtime.pendingKline = null;
+            return;
+        }
+
+        try {
+            AccountBalanceSnapshot balance = balanceCache.requireTotalEquitySnapshot(runtime.credential.getId());
+            BigDecimal equity = balance.totalEquity();
+            BigDecimal marginRatio = DualHedgeSlopeSignalEvaluator.marginRatio(runtime.params);
+            Integer leverage = runtime.strategySymbol.getLeverage() == null
+                ? runtime.strategy.getDefaultLeverage() : runtime.strategySymbol.getLeverage();
+            if (leverage == null || leverage <= 0) {
+                throw new IllegalArgumentException("双开策略杠杆必须大于0");
+            }
+            BigDecimal marginPerLeg = equity.multiply(marginRatio);
+            QuantStrategyHedgeRound round = new QuantStrategyHedgeRound();
+            round.setStrategyId(runtime.instance.getStrategyId());
+            round.setInstanceId(runtime.instance.getId());
+            round.setCredentialId(runtime.credential.getId());
+            round.setSymbol(runtime.symbol.getSymbol());
+            round.setEntryKlineOpenTime(LocalDateTime.ofInstant(signal.klineOpenTime(), ZoneId.of("Asia/Shanghai")));
+            round.setStatus(StrategyHedgeRoundService.STATUS_SIGNAL_READY);
+            round.setEntryAngleDegrees(signal.angleDegrees());
+            round.setEntryEquitySnapshot(equity);
+            round.setMarginRatio(marginRatio);
+            round.setLeverage(leverage);
+            round.setTargetMarginPerLeg(marginPerLeg);
+            round.setTargetNotionalPerLeg(marginPerLeg.multiply(BigDecimal.valueOf(leverage)));
+            round.setStrategyParamsSnapshot(QuantJsonMapper.writeMap(runtime.params));
+            if (hedgeRoundService.claim(round)) {
+                log.info("双开入场信号已持久化，等待执行阶段接管 instanceId={} symbol={} hedgeRoundKey={} klineOpenTime={} angle={} equity={} marginPerLeg={} notionalPerLeg={}",
+                    runtime.instance.getId(), runtime.symbol.getSymbol(), round.getHedgeRoundKey(),
+                    signal.klineOpenTime(), signal.angleDegrees(), equity, marginPerLeg,
+                    round.getTargetNotionalPerLeg());
+            } else {
+                log.debug("双开入场信号已被数据库唯一约束拦截 instanceId={} symbol={} klineOpenTime={}",
+                    runtime.instance.getId(), runtime.symbol.getSymbol(), signal.klineOpenTime());
+            }
+            runtime.pendingSignal = null;
+            runtime.pendingKline = null;
+        } catch (RuntimeException ex) {
+            long now = System.currentTimeMillis();
+            if (now >= runtime.nextSignalPersistLogAt) {
+                runtime.nextSignalPersistLogAt = now + 10_000L;
+                log.warn("双开入场信号暂未持久化，保留待处理信号等待账户权益或数据库恢复 instanceId={} symbol={} klineOpenTime={} errorType={}",
+                    runtime.instance.getId(), runtime.symbol.getSymbol(), signal.klineOpenTime(),
+                    ex.getClass().getSimpleName());
+            }
+        } catch (Exception ex) {
+            log.error("双开入场信号参数快照序列化失败 instanceId={} symbol={} klineOpenTime={}",
+                runtime.instance.getId(), runtime.symbol.getSymbol(), signal.klineOpenTime(), ex);
+        }
     }
 
     static boolean isFreshClosed15mKlineEvent(ExchangeGateway.MarketEvent event, String expectedSymbol,
@@ -354,17 +466,50 @@ public class DualHedgeRuntimeService {
         private volatile boolean marketStreamReady;
         private volatile String marketStreamStatus = "CONNECTING";
         private volatile Instant lastClosedKlineOpenTime;
+        private volatile Map<String, Object> params;
+        private final NavigableMap<Instant, ExchangeGateway.Kline> klineHistory = new TreeMap<>();
+        private volatile DualHedgeSlopeSignalEvaluator.Signal pendingSignal;
+        private volatile ExchangeGateway.Kline pendingKline;
+        private volatile long nextSignalPersistLogAt;
         private volatile boolean closed;
 
         private DualHedgeRuntime(QuantStrategyInstance instance, QuantStrategy strategy, QuantStrategySymbol strategySymbol,
                                  QuantCredential credential, QuantSymbol symbol,
-                                 StrategyRuntimeLeaseService.LeaseSnapshot leaseSnapshot) {
+                                 StrategyRuntimeLeaseService.LeaseSnapshot leaseSnapshot, Map<String, Object> params) {
             this.instance = instance;
             this.strategy = strategy;
             this.strategySymbol = strategySymbol;
             this.credential = credential;
             this.symbol = symbol;
             this.leaseSnapshot = leaseSnapshot;
+            this.params = params;
+        }
+
+        private synchronized void rememberKline(ExchangeGateway.Kline kline) {
+            if (kline == null || kline.openTime() == null) {
+                return;
+            }
+            klineHistory.put(kline.openTime(), kline);
+            while (klineHistory.size() > 8) {
+                klineHistory.pollFirstEntry();
+            }
+        }
+
+        private synchronized BigDecimal referenceOpenPrice(ExchangeGateway.Kline kline) {
+            if (kline == null || kline.openTime() == null) {
+                return null;
+            }
+            Map.Entry<Instant, ExchangeGateway.Kline> previous = klineHistory.lowerEntry(kline.openTime());
+            if (previous == null) {
+                return null;
+            }
+            ExchangeGateway.Kline reference = previous.getValue();
+            if (!reference.closed() || reference.closeTime() == null
+                || !reference.closeTime().plusMillis(1).equals(kline.openTime())
+                || reference.open() == null || reference.open().signum() <= 0) {
+                return null;
+            }
+            return reference.open();
         }
 
         private boolean matches(QuantCredential credential, String symbol, String interval) {
