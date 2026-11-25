@@ -85,7 +85,7 @@ public class StrategyHedgeRoundService {
     }
 
     /**
-     * 查找实例/交易对尚未结束的轮次。OPENING、UNKNOWN、DEGRADED 等状态都会阻止新一轮入场。
+     * 查找实例/交易对尚未结束的轮次。SIGNAL_READY、OPENING、UNKNOWN、DEGRADED 等状态都会阻止新一轮入场。
      */
     public QuantStrategyHedgeRound findBlockingRound(Long instanceId, String symbol) {
         if (instanceId == null || symbol == null || symbol.isBlank()) {
