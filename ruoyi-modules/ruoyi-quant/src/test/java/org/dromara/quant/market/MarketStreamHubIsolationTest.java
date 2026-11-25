@@ -424,9 +424,10 @@ class MarketStreamHubIsolationTest {
             Object stream = streams.values().iterator().next();
             Instant lastOpen = (Instant) org.springframework.test.util.ReflectionTestUtils.getField(stream, "lastKlineOpen");
             Instant expectedOpen = lastOpen.plusSeconds(60);
-            org.springframework.test.util.ReflectionTestUtils.invokeMethod(stream, "scheduleBoundaryRecovery", expectedOpen);
             Thread.sleep(2_000L);
-            org.springframework.test.util.ReflectionTestUtils.setField(stream, "boundaryKlineIngressAt", Instant.now());
+            org.springframework.test.util.ReflectionTestUtils.setField(stream, "latestKlineIngressOpen", expectedOpen);
+            org.springframework.test.util.ReflectionTestUtils.setField(stream, "latestKlineIngressAt", Instant.now());
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(stream, "scheduleBoundaryRecovery", expectedOpen);
 
             Thread.sleep(1_300L);
             verify(gateway, never()).queryKlinesFrom(any(), any(), any(), anyInt());
