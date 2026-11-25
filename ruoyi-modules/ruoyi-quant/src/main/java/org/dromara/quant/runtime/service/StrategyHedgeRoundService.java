@@ -28,6 +28,7 @@ public class StrategyHedgeRoundService {
 
     public static final String LEG_NOT_STARTED = "NOT_STARTED";
     public static final String LEG_DISPATCHING = "DISPATCHING";
+    public static final String LEG_ACCEPTED = "ACCEPTED";
     public static final String LEG_UNKNOWN = "UNKNOWN";
     public static final String LEG_PARTIALLY_FILLED = "PARTIALLY_FILLED";
     public static final String LEG_OPEN = "OPEN";
