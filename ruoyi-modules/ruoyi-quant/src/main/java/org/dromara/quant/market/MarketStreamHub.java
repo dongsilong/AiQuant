@@ -974,10 +974,11 @@ public class MarketStreamHub {
                         if (lastTradeId == null) {
                             lastTradeId = event.sequenceId() - 1;
                         }
-                        if (lastKlineOpen != null && isTradeInNextKlinePeriod(processingEventTime,
-                            nextOpen(lastKlineOpen), nextOpen(nextOpen(lastKlineOpen)))) {
-                            // TRADE 与 KLINE 属于独立WebSocket流；新周期成交可能先到。
-                            // 只推进已连续确认的成交游标，不发布该成交，等待新周期KLINE确认后再处理新鲜事件。
+                        if (lastKlineOpen != null && (
+                            isEventTimeWithinKlinePeriod(processingEventTime, lastKlineOpen, nextOpen(lastKlineOpen))
+                                || isTradeInNextKlinePeriod(processingEventTime, nextOpen(lastKlineOpen), nextOpen(nextOpen(lastKlineOpen))))) {
+                            // TRADE 与 KLINE 属于独立WebSocket流；周期边界附近可能先收到上一周期迟到成交或下一周期成交。
+                            // 两种情况都只推进连续成交游标，不发布给策略，也不因正常流到达顺序触发REST补偿。
                             lastTradeId = event.sequenceId();
                             publishTradeCursor(attempt, event);
                             return;
