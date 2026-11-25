@@ -15,7 +15,6 @@ import java.util.Map;
 public record StrategyDescriptor(String code, String version, String name, Map<String, Object> paramsExample,
                                  List<StrategyParameterDescriptor> parameters) {
     public StrategyDescriptor {
-        paramsExample = paramsExample == null ? Map.of() : Map.copyOf(paramsExample);
         parameters = parameters == null ? List.of() : List.copyOf(parameters);
     }
 
