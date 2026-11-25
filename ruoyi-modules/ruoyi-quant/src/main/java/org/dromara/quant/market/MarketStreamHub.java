@@ -28,6 +28,7 @@ import java.util.function.Predicate;
 @Slf4j
 public class MarketStreamHub {
     private static final long MAX_FUTURE_CLOCK_SKEW_MILLIS = 10_000L;
+    private static final long KLINE_BOUNDARY_WAIT_MILLIS = 1_000L;
     private final ExchangeGateway gateway;
     private final ScheduledExecutorService scheduler;
     private final QuantProperties properties;
@@ -278,6 +279,8 @@ public class MarketStreamHub {
         private ExchangeGateway.MarketStreamSession upstream;
         private ScheduledFuture<?> watchdog;
         private ScheduledFuture<?> reconnect;
+        private ScheduledFuture<?> boundaryRecoveryTask;
+        private Instant boundaryRecoveryOpen;
         private Instant lastKlineOpen;
         private boolean lastKlineClosed;
         private Long lastTradeId;
@@ -951,6 +954,9 @@ public class MarketStreamHub {
                     rememberReference(kline);
                     lastKlineOpen = kline.openTime();
                     lastKlineClosed = kline.closed();
+                    if (boundaryRecoveryOpen != null && !kline.openTime().isBefore(boundaryRecoveryOpen)) {
+                        cancelBoundaryRecovery();
+                    }
                 }
                 event = new ExchangeGateway.MarketEvent(event.type(), event.symbol(), event.interval(), event.price(), event.kline(), processingEventTime, event.sequenceId(),
                     receivedAt, event.replay() || !fresh);
@@ -977,11 +983,15 @@ public class MarketStreamHub {
                         if (fresh && lastKlineOpen != null && (
                             isEventTimeWithinKlinePeriod(processingEventTime, lastKlineOpen, nextOpen(lastKlineOpen))
                                 || isTradeInNextKlinePeriod(processingEventTime, nextOpen(lastKlineOpen), nextOpen(nextOpen(lastKlineOpen))))) {
-                            // TRADE 与 KLINE 属于独立WebSocket流；周期边界附近可能先收到上一周期迟到成交或下一周期成交。
-                            // 两种情况都只推进连续成交游标，不发布给策略，也不因正常流到达顺序触发REST补偿。
-                            lastTradeId = event.sequenceId();
-                            publishTradeCursor(attempt, event);
-                            return;
+                            Instant expectedNextOpen = nextOpen(lastKlineOpen);
+                            Instant expectedNextPeriodOpen = nextOpen(expectedNextOpen);
+                            if (isEventTimeWithinKlinePeriod(exchangeNow, expectedNextOpen, expectedNextPeriodOpen)) {
+                                // 仅跨入紧邻下一周期时等待KLINE；若交易所时间已跨越多个周期，必须立即补偿。
+                                scheduleBoundaryRecovery(expectedNextOpen);
+                                lastTradeId = event.sequenceId();
+                                publishTradeCursor(attempt, event);
+                                return;
+                            }
                         }
                         Instant expectedNextOpen = lastKlineOpen == null ? null : nextOpen(lastKlineOpen);
                         Instant expectedNextPeriodOpen = expectedNextOpen == null ? null : nextOpen(expectedNextOpen);
@@ -1033,6 +1043,7 @@ public class MarketStreamHub {
             if (closed || recovering) {
                 return;
             }
+            cancelBoundaryRecovery();
             connected = false;
             recovering = true;
             requiredTradeId = tradeId;
@@ -1062,6 +1073,45 @@ public class MarketStreamHub {
             } else {
                 recoveryTask = recoveryExecutor.submit(() -> restoreHistory(attempt));
             }
+        }
+
+        /**
+         * 紧邻周期切换时先关闭决策门禁，给独立KLINE流一个有界到达窗口；超时后才启动REST补偿。
+         * 必须在共享流锁内调用。
+         */
+        private void scheduleBoundaryRecovery(Instant expectedOpen) {
+            if (closed || recovering || expectedOpen == null) {
+                return;
+            }
+            if (boundaryRecoveryTask != null && !boundaryRecoveryTask.isDone() && expectedOpen.equals(boundaryRecoveryOpen)) {
+                return;
+            }
+            connected = false;
+            signalUnhealthy();
+            publish(status("CONNECTING"));
+            boundaryRecoveryOpen = expectedOpen;
+            long attempt = generation;
+            boundaryRecoveryTask = scheduler.schedule(() -> {
+                synchronized (this) {
+                    if (closed || attempt != generation || recovering || !expectedOpen.equals(boundaryRecoveryOpen)) {
+                        return;
+                    }
+                    boundaryRecoveryTask = null;
+                    boundaryRecoveryOpen = null;
+                    if (lastKlineOpen != null && !lastKlineOpen.isBefore(expectedOpen)) {
+                        return;
+                    }
+                    beginRecovery("K线周期切换等待超时，REST校验当前状态", null);
+                }
+            }, KLINE_BOUNDARY_WAIT_MILLIS, TimeUnit.MILLISECONDS);
+        }
+
+        private void cancelBoundaryRecovery() {
+            if (boundaryRecoveryTask != null) {
+                boundaryRecoveryTask.cancel(false);
+                boundaryRecoveryTask = null;
+            }
+            boundaryRecoveryOpen = null;
         }
 
         /**
@@ -1183,7 +1233,13 @@ public class MarketStreamHub {
                     return;
                 }
                 if (!currentKlineValid(exchangeNow)) {
-                    beginRecovery("K线周期已切换，REST校验当前状态", null);
+                    Instant expectedOpen = lastKlineOpen == null ? null : nextOpen(lastKlineOpen);
+                    Instant expectedPeriodOpen = expectedOpen == null ? null : nextOpen(expectedOpen);
+                    if (expectedOpen != null && isEventTimeWithinKlinePeriod(exchangeNow, expectedOpen, expectedPeriodOpen)) {
+                        scheduleBoundaryRecovery(expectedOpen);
+                    } else {
+                        beginRecovery("K线周期已切换，REST校验当前状态", null);
+                    }
                 } else if (lastReceived.getOrDefault("KLINE", Instant.EPOCH).isBefore(deadline)) {
                     checkQuietKline();
                 }
@@ -1252,6 +1308,7 @@ public class MarketStreamHub {
             }
             log.warn("行情中断，暂停决策并重建: symbol={}, interval={}", key.symbol(), key.interval(), cause);
             signalUnhealthy();
+            cancelBoundaryRecovery();
             ++generation;
             connected = false;
             recovering = false;
@@ -1292,6 +1349,7 @@ public class MarketStreamHub {
         private synchronized void close() {
             closed = true;
             signalUnhealthy();
+            cancelBoundaryRecovery();
             ++generation;
             recovering = false;
             notifyAll();
@@ -1327,6 +1385,7 @@ public class MarketStreamHub {
             }
             terminalFailure = true;
             signalUnhealthy();
+            cancelBoundaryRecovery();
             ++generation;
             connected = false;
             recovering = false;
