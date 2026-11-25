@@ -288,9 +288,9 @@ class MarketStreamHubIsolationTest {
                 localNow, null, Instant.now(), false));
             org.junit.jupiter.api.Assertions.assertTrue(initiallyConnected.await(2, TimeUnit.SECONDS), "initial market health was not established");
 
-            exchangeOffsetMillis.set(60_000L);
             Instant nextOpen = currentOpen.plusSeconds(60);
-            Instant nextPeriodTradeTime = localNow.plusSeconds(60);
+            Instant nextPeriodTradeTime = nextOpen.plusMillis(500L);
+            exchangeOffsetMillis.set(java.time.Duration.between(localNow, nextPeriodTradeTime).toMillis());
             callback.get().accept(new ExchangeGateway.MarketEvent("TRADE", "BTCUSDT", "1m", BigDecimal.ONE, null,
                 nextPeriodTradeTime, 100L, Instant.now(), false));
             org.junit.jupiter.api.Assertions.assertTrue(gateClosed.await(2, TimeUnit.SECONDS),
