@@ -3,6 +3,7 @@ package org.dromara.quant.runtime.service;
 import lombok.RequiredArgsConstructor;
 import org.dromara.quant.execution.ExecutionResult;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
+import org.dromara.quant.execution.TradingPreparationService;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
 import org.springframework.stereotype.Service;
 
@@ -24,13 +25,13 @@ public class StrategyHedgeRoundExecutionService {
 
     private final StrategyHedgeRoundService roundService;
     private final TradeExecutionApplicationService executionService;
-    private final org.dromara.quant.execution.TradingPreparationService preparationService;
+    private final TradingPreparationService preparationService;
 
     public DispatchResult dispatchOpening(QuantStrategyHedgeRound round, BigDecimal referencePrice,
                                           Instant eventTime, Long credentialRuntimeVersion) {
         requireDispatchable(round, referencePrice, eventTime);
 
-        org.dromara.quant.execution.TradingPreparationService.Prepared prepared;
+        TradingPreparationService.Prepared prepared;
         try {
             prepared = preparationService.requireReady(round.getCredentialId(), round.getSymbol(),
                 round.getLeverage(), MARGIN_MODE);
