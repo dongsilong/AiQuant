@@ -66,6 +66,11 @@ public class StrategyHedgeRoundService {
         if (round.getVersion() == null) {
             round.setVersion(0);
         }
+        if (STATUS_SIGNAL_READY.equals(round.getStatus())
+            && (round.getReferencePrice() == null || round.getReferencePrice().signum() <= 0
+                || round.getSignalEventTime() == null)) {
+            throw new IllegalArgumentException("双开待执行信号缺少有效参考价格或原始事件时间");
+        }
         LocalDateTime now = LocalDateTime.now(ZoneId.of("Asia/Shanghai"));
         round.setCreatedAt(now);
         round.setUpdatedAt(now);
