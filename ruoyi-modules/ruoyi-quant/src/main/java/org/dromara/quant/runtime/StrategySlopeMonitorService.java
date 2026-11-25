@@ -229,6 +229,19 @@ public class StrategySlopeMonitorService {
         // 是否仍可用于决策由实时事件新鲜度和最近已收盘 K 线时间共同判定。
         BigDecimal ma5 = maReady ? monitor.ma.ma5 : null;
         BigDecimal ma7 = maReady ? monitor.ma.ma7 : null;
+        if (diagnosticNow >= monitor.nextMaDiagnosticLogAt) {
+            monitor.nextMaDiagnosticLogAt = diagnosticNow + 30_000L;
+            Instant currentMinuteOpen = exchangeNow.truncatedTo(ChronoUnit.MINUTES);
+            Instant expectedLastClosedKlineOpenTime = currentMinuteOpen.minusSeconds(60L);
+            log.info("一分钟MA诊断 source=MONITOR mode={} strategyId={} credentialId={} symbol={} slopeInterval={} "
+                    + "maReady={} maBlockReason={} historyReady={} streamReady={} ma5={} ma7={} maTrend={} "
+                    + "lastClosedKlineOpenTime={} expectedLastClosedKlineOpenTime={} maEventTime={} maReceivedAt={} maFreshForMillis={}",
+                monitor.runMode, monitor.strategyId, monitor.credentialId, monitor.symbol, monitor.interval,
+                maReady, maBlockReason, monitor.ma.historyReady, monitor.ma.streamReady,
+                monitor.ma.ma5, monitor.ma.ma7, OneMinuteMovingAverage.trend(monitor.ma.ma5, monitor.ma.ma7),
+                monitor.ma.market.lastClosedKlineOpenTime, expectedLastClosedKlineOpenTime,
+                monitor.ma.eventTime, monitor.ma.receivedAt, maFreshForMillis);
+        }
         MonitorKey monitorKey = new MonitorKey(monitor.strategyId, monitor.credentialId, monitor.symbol, monitor.interval);
         telemetryHub.publish(new StrategySlopeTelemetry(
             monitor.strategyId, null, monitor.credentialId, monitor.symbol, monitor.interval,
@@ -322,6 +335,7 @@ public class StrategySlopeMonitorService {
         private SlopeInput latestDisplaySlopeInput;
         private volatile long nextErrorLogAt;
         private long nextSlopeCompareLogAt;
+        private long nextMaDiagnosticLogAt;
 
         private Monitor(Long strategyId, Long credentialId, String runMode, String symbol,
                         String interval, int leverage, Map<String, Object> params) {
