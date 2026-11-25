@@ -28,6 +28,8 @@ public class QuantStrategyHedgeRound {
     private LocalDateTime entryKlineOpenTime;
     private String status;
     private BigDecimal entryAngleDegrees;
+    private BigDecimal referencePrice;
+    private LocalDateTime signalEventTime;
     private BigDecimal entryEquitySnapshot;
     private BigDecimal marginRatio;
     private Integer leverage;
