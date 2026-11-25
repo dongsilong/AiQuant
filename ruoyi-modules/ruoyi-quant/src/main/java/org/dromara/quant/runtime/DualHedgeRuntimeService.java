@@ -222,32 +222,35 @@ public class DualHedgeRuntimeService {
                     .ifPresent(signal -> {
                         if (runtime.pendingSignal == null) {
                             runtime.pendingSignal = signal;
+                            runtime.pendingSignalEventTime = event.eventTime();
+                            runtime.pendingSignalReceivedAt = event.receivedAt();
                         }
                     });
             }
         }
 
         if (fresh && runtime.pendingSignal != null) {
-            persistPendingSignal(runtime, event.eventTime(), event.receivedAt(), localNow, exchangeNow);
+            persistPendingSignal(runtime, localNow, exchangeNow);
         }
     }
 
-    private void persistPendingSignal(DualHedgeRuntime runtime, Instant signalEventTime, Instant receivedAt,
-                                      Instant localNow, Instant exchangeNow) {
+    private void persistPendingSignal(DualHedgeRuntime runtime, Instant localNow, Instant exchangeNow) {
         DualHedgeSlopeSignalEvaluator.Signal signal = runtime.pendingSignal;
+        Instant signalEventTime = runtime.pendingSignalEventTime;
+        Instant receivedAt = runtime.pendingSignalReceivedAt;
         if (signal == null || runtime.closed) {
             return;
         }
         if (!MarketEventFreshness.isFresh(signalEventTime, receivedAt, localNow, exchangeNow,
             properties.getMarket().getMaxEventAgeMillis())) {
-            runtime.pendingSignal = null;
+            runtime.clearPendingSignal();
             log.warn("双开信号超过有效窗口，放弃持久化 instanceId={} symbol={} klineOpenTime={} signalEventTime={}",
                 runtime.instance.getId(), runtime.symbol.getSymbol(), signal.klineOpenTime(), signalEventTime);
             return;
         }
         try {
             if (hedgeRoundService.findBlockingRound(runtime.instance.getId(), runtime.symbol.getSymbol()) != null) {
-                runtime.pendingSignal = null;
+                runtime.clearPendingSignal();
                 return;
             }
             AccountBalanceSnapshot balance = balanceCache.requireTotalEquitySnapshot(runtime.credential.getId());
@@ -284,7 +287,7 @@ public class DualHedgeRuntimeService {
                 log.debug("双开入场信号已被数据库唯一约束拦截 instanceId={} symbol={} klineOpenTime={}",
                     runtime.instance.getId(), runtime.symbol.getSymbol(), signal.klineOpenTime());
             }
-            runtime.pendingSignal = null;
+            runtime.clearPendingSignal();
         } catch (RuntimeException ex) {
             long now = System.currentTimeMillis();
             if (now >= runtime.nextSignalPersistLogAt) {
@@ -522,6 +525,8 @@ public class DualHedgeRuntimeService {
         private volatile Map<String, Object> params;
         private final NavigableMap<Instant, ExchangeGateway.Kline> klineHistory = new TreeMap<>();
         private volatile DualHedgeSlopeSignalEvaluator.Signal pendingSignal;
+        private volatile Instant pendingSignalEventTime;
+        private volatile Instant pendingSignalReceivedAt;
         private volatile long nextSignalPersistLogAt;
         private volatile boolean closed;
 
@@ -535,6 +540,12 @@ public class DualHedgeRuntimeService {
             this.symbol = symbol;
             this.leaseSnapshot = leaseSnapshot;
             this.params = params;
+        }
+
+        private void clearPendingSignal() {
+            pendingSignal = null;
+            pendingSignalEventTime = null;
+            pendingSignalReceivedAt = null;
         }
 
         private synchronized void rememberKline(ExchangeGateway.Kline kline) {
