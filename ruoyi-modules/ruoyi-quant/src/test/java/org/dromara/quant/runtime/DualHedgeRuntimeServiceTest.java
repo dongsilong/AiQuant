@@ -38,7 +38,7 @@ class DualHedgeRuntimeServiceTest {
     @Test
     void usesImmediatelyPreviousClosedKlineOpenAsSlopeReference() {
         ExchangeGateway.Kline previous = new ExchangeGateway.Kline(
-            NOW.minusSeconds(1_800), NOW.minusSeconds(901), new BigDecimal("100"),
+            NOW.minusSeconds(1_800), NOW.minusSeconds(900).minusMillis(1), new BigDecimal("100"),
             new BigDecimal("103"), new BigDecimal("99"), new BigDecimal("102"),
             BigDecimal.ONE, true);
         ExchangeGateway.Kline current = new ExchangeGateway.Kline(
