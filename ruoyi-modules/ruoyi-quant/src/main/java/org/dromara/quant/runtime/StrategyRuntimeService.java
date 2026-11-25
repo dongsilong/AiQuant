@@ -1663,6 +1663,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(),
                     previous.closedKlines());
             }
+            logEntryMaMarketEventDiagnostic(runtime, event, current);
             publishSlopeTelemetryForMaUpdate(runtime);
             // 保留已收盘K线缓存，恢复期间继续从当前游标补偿。
             return;
@@ -1673,15 +1674,36 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             log.info("策略1分钟MA K线历史恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7 ma5={} ma7={} liveMarketEventSeen={}",
                 runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), current.closedKlines(),
                 current.ma5(), current.ma7(), current.eventTime() != null && current.receivedAt() != null);
+            logEntryMaMarketEventDiagnostic(runtime, event, current);
             publishSlopeTelemetryForMaUpdate(runtime);
             return;
         }
         if (event.kline() != null || "MARK".equalsIgnoreCase(event.type()) || "CONNECTED".equals(event.type())) {
-            runtime.entryMa.update(event);
+            EntryMaSnapshot current = runtime.entryMa.update(event);
+            logEntryMaMarketEventDiagnostic(runtime, event, current);
             if (!event.replay()) {
                 publishSlopeTelemetryForMaUpdate(runtime);
             }
         }
+    }
+
+    /** Runtime订阅者消费事件后的低频诊断；不参与行情状态或开仓门禁判定。 */
+    private void logEntryMaMarketEventDiagnostic(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, EntryMaSnapshot snapshot) {
+        String reason = !snapshot.historyReady() ? "HISTORY_NOT_READY"
+            : !snapshot.streamReady() ? "STREAM_NOT_READY"
+            : snapshot.eventTime() == null ? "EVENT_TIME_MISSING"
+            : snapshot.receivedAt() == null ? "RECEIVED_AT_MISSING" : "READY";
+        long now = System.currentTimeMillis();
+        if (reason.equals(runtime.lastEntryMaDiagnosticReason) && now < runtime.nextEntryMaDiagnosticLogAt) {
+            return;
+        }
+        runtime.lastEntryMaDiagnosticReason = reason;
+        runtime.nextEntryMaDiagnosticLogAt = now + 30_000L;
+        log.info("策略Runtime一分钟MA事件消费诊断 instanceId={} mode={} symbol={} eventType={} eventReplay={} eventTime={} receivedAt={} historyReady={} streamReady={} ready={} blockReason={} closedKlines={}/7 lastClosedKlineOpenTime={} klineOpenTime={} ma5={} ma7={}",
+            runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type(), event.replay(),
+            event.eventTime(), event.receivedAt(), snapshot.historyReady(), snapshot.streamReady(), snapshot.ready(), reason,
+            snapshot.closedKlines(), snapshot.lastClosedKlineOpenTime(), event.kline() == null ? null : event.kline().openTime(),
+            snapshot.ma5(), snapshot.ma7());
     }
 
     private void publishSlopeTelemetryForMaUpdate(ActiveRuntime runtime) {
@@ -6428,7 +6450,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
     private record SlopeContextSnapshot(StrategyContext context, Instant receivedAt, String source, String eventType) {
     }
 
-    private record EntryMaSnapshot(boolean ready, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines, Instant lastClosedKlineOpenTime) {
+    private record EntryMaSnapshot(boolean ready, boolean historyReady, boolean streamReady, BigDecimal ma5, BigDecimal ma7, Instant eventTime, Instant receivedAt, int closedKlines, Instant lastClosedKlineOpenTime) {
     }
 
     /**
@@ -6491,7 +6513,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
 
         private synchronized EntryMaSnapshot snapshot() {
             boolean ready = historyReady && streamReady && eventTime != null && receivedAt != null;
-            return new EntryMaSnapshot(ready, ma5, ma7, eventTime, receivedAt, market.closedKlineCloses.size(), market.lastClosedKlineOpenTime);
+            return new EntryMaSnapshot(ready, historyReady, streamReady, ma5, ma7, eventTime, receivedAt, market.closedKlineCloses.size(), market.lastClosedKlineOpenTime);
         }
     }
 
@@ -6627,6 +6649,8 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /** 独立维护 1 分钟 MA 状态，不参与 ActiveRuntime 主锁。 */
         private final EntryMaState entryMa = new EntryMaState();
         private volatile boolean entryMaEnabled;
+        private volatile String lastEntryMaDiagnosticReason;
+        private volatile long nextEntryMaDiagnosticLogAt;
         private final AtomicBoolean protectionSyncing = new AtomicBoolean();
         private final AtomicBoolean exitCoordinating = new AtomicBoolean();
         private final AtomicBoolean protectionRequested = new AtomicBoolean();
