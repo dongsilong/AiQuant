@@ -976,7 +976,15 @@ public class MarketStreamHub {
                             publishTradeCursor(attempt, event);
                             return;
                         }
-                        beginRecovery("成交到达非相邻周期，先确认K线状态", event.sequenceId());
+                        Instant expectedNextOpen = lastKlineOpen == null ? null : nextOpen(lastKlineOpen);
+                        Instant expectedNextPeriodOpen = expectedNextOpen == null ? null : nextOpen(expectedNextOpen);
+                        String recoveryReason = "成交到达非相邻周期，先确认K线状态"
+                            + " tradeEventTime=" + processingEventTime
+                            + " exchangeNow=" + exchangeNow
+                            + " lastKlineOpen=" + lastKlineOpen
+                            + " expectedNextOpen=" + expectedNextOpen
+                            + " expectedNextPeriodOpen=" + expectedNextPeriodOpen;
+                        beginRecovery(recoveryReason, event.sequenceId());
                         return;
                     }
                     lastTradeId = event.sequenceId();
