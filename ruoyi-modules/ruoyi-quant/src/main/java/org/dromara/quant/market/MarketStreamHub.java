@@ -1090,6 +1090,8 @@ public class MarketStreamHub {
             connected = false;
             signalUnhealthy();
             publish(status("CONNECTING"));
+            log.info("行情周期边界暂缓REST恢复，等待新周期K线: symbol={} interval={} expectedOpen={} waitMs={}",
+                key.symbol(), key.interval(), expectedOpen, KLINE_BOUNDARY_WAIT_MILLIS);
             boundaryRecoveryOpen = expectedOpen;
             long attempt = generation;
             boundaryRecoveryTask = scheduler.schedule(() -> {
