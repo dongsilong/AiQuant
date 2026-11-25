@@ -202,8 +202,9 @@ public class DualHedgeRuntimeService {
             } else {
                 DualHedgeSlopeSignalEvaluator.evaluate("15m", kline, referenceOpenPrice, runtime.params)
                     .ifPresent(signal -> {
-                        runtime.pendingSignal = signal;
-                        runtime.pendingKline = kline;
+                        if (runtime.pendingSignal == null) {
+                            runtime.pendingSignal = signal;
+                        }
                     });
             }
         }
@@ -218,13 +219,11 @@ public class DualHedgeRuntimeService {
         if (signal == null || runtime.closed) {
             return;
         }
-        if (hedgeRoundService.findBlockingRound(runtime.instance.getId(), runtime.symbol.getSymbol()) != null) {
-            runtime.pendingSignal = null;
-            runtime.pendingKline = null;
-            return;
-        }
-
         try {
+            if (hedgeRoundService.findBlockingRound(runtime.instance.getId(), runtime.symbol.getSymbol()) != null) {
+                runtime.pendingSignal = null;
+                return;
+            }
             AccountBalanceSnapshot balance = balanceCache.requireTotalEquitySnapshot(runtime.credential.getId());
             BigDecimal equity = balance.totalEquity();
             BigDecimal marginRatio = DualHedgeSlopeSignalEvaluator.marginRatio(runtime.params);
@@ -258,7 +257,6 @@ public class DualHedgeRuntimeService {
                     runtime.instance.getId(), runtime.symbol.getSymbol(), signal.klineOpenTime());
             }
             runtime.pendingSignal = null;
-            runtime.pendingKline = null;
         } catch (RuntimeException ex) {
             long now = System.currentTimeMillis();
             if (now >= runtime.nextSignalPersistLogAt) {
@@ -271,6 +269,24 @@ public class DualHedgeRuntimeService {
             log.error("双开入场信号参数快照序列化失败 instanceId={} symbol={} klineOpenTime={}",
                 runtime.instance.getId(), runtime.symbol.getSymbol(), signal.klineOpenTime(), ex);
         }
+    }
+
+    static BigDecimal referenceOpenPrice(NavigableMap<Instant, ExchangeGateway.Kline> history,
+                                         ExchangeGateway.Kline kline) {
+        if (history == null || kline == null || kline.openTime() == null) {
+            return null;
+        }
+        Map.Entry<Instant, ExchangeGateway.Kline> previous = history.lowerEntry(kline.openTime());
+        if (previous == null) {
+            return null;
+        }
+        ExchangeGateway.Kline reference = previous.getValue();
+        if (!reference.closed() || reference.closeTime() == null
+            || !reference.closeTime().plusMillis(1).equals(kline.openTime())
+            || reference.open() == null || reference.open().signum() <= 0) {
+            return null;
+        }
+        return reference.open();
     }
 
     static boolean isFreshClosed15mKlineEvent(ExchangeGateway.MarketEvent event, String expectedSymbol,
@@ -469,7 +485,6 @@ public class DualHedgeRuntimeService {
         private volatile Map<String, Object> params;
         private final NavigableMap<Instant, ExchangeGateway.Kline> klineHistory = new TreeMap<>();
         private volatile DualHedgeSlopeSignalEvaluator.Signal pendingSignal;
-        private volatile ExchangeGateway.Kline pendingKline;
         private volatile long nextSignalPersistLogAt;
         private volatile boolean closed;
 
@@ -496,20 +511,7 @@ public class DualHedgeRuntimeService {
         }
 
         private synchronized BigDecimal referenceOpenPrice(ExchangeGateway.Kline kline) {
-            if (kline == null || kline.openTime() == null) {
-                return null;
-            }
-            Map.Entry<Instant, ExchangeGateway.Kline> previous = klineHistory.lowerEntry(kline.openTime());
-            if (previous == null) {
-                return null;
-            }
-            ExchangeGateway.Kline reference = previous.getValue();
-            if (!reference.closed() || reference.closeTime() == null
-                || !reference.closeTime().plusMillis(1).equals(kline.openTime())
-                || reference.open() == null || reference.open().signum() <= 0) {
-                return null;
-            }
-            return reference.open();
+            return DualHedgeRuntimeService.referenceOpenPrice(klineHistory, kline);
         }
 
         private boolean matches(QuantCredential credential, String symbol, String interval) {
