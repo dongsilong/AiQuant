@@ -60,11 +60,15 @@ public class StrategySlopeMonitorService {
         Session session = sessions.compute(key, (ignored, current) -> {
             if (current != null) {
                 current.references++;
+                log.info("实时斜率SSE监控会话 action=REUSE strategyId={} credentialId={} fallbackInterval={} references={} monitorCount={}",
+                    strategy.getId(), credential.getId(), key.fallbackInterval(), current.references, current.monitors.size());
                 return current;
             }
             Session created = new Session();
             startMonitors(created, strategy, credential, fallbackInterval);
             created.references = 1;
+            log.info("实时斜率SSE监控会话 action=CREATE strategyId={} credentialId={} fallbackInterval={} references=1 monitorCount={}",
+                strategy.getId(), credential.getId(), key.fallbackInterval(), created.monitors.size());
             return created;
         });
         AtomicBoolean released = new AtomicBoolean();
@@ -74,7 +78,12 @@ public class StrategySlopeMonitorService {
                     if (current != session) {
                         return current;
                     }
-                    if (--current.references == 0) {
+                    current.references--;
+                    log.info("实时斜率SSE监控会话 action=RELEASE strategyId={} credentialId={} fallbackInterval={} references={} monitorCount={}",
+                        strategy.getId(), credential.getId(), key.fallbackInterval(), current.references, current.monitors.size());
+                    if (current.references == 0) {
+                        log.info("实时斜率SSE监控会话 action=CLOSE strategyId={} credentialId={} fallbackInterval={} monitorCount={}",
+                            strategy.getId(), credential.getId(), key.fallbackInterval(), current.monitors.size());
                         current.close();
                         return null;
                     }
@@ -426,6 +435,9 @@ public class StrategySlopeMonitorService {
             }
             if ("KLINE_READY".equals(event.type())) {
                 ma.historyReady = true;
+                log.info("一分钟MA历史就绪事件已消费 mode={} strategyId={} credentialId={} symbol={} slopeInterval={} eventReplay={} lastClosedKlineOpenTime={} ma5={} ma7={}",
+                    runMode, strategyId, credentialId, symbol, interval, event.replay(),
+                    ma.market.lastClosedKlineOpenTime, ma.ma5, ma.ma7);
                 if (publishTelemetry) {
                     publish(Monitor.this);
                 }
