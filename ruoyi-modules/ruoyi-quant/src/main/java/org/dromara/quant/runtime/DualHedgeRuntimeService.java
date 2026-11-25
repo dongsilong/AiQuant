@@ -206,7 +206,7 @@ public class DualHedgeRuntimeService {
         if (event.replay()) {
             return;
         }
-        if (runtime.pendingSignal != null && !MarketEventFreshness.isFresh(runtime.pendingSignalEventTime,
+        if (runtime.pendingSignal != null && !isPendingSignalFresh(runtime.pendingSignalEventTime,
             runtime.pendingSignalReceivedAt, localNow, exchangeNow, properties.getMarket().getMaxEventAgeMillis())) {
             runtime.clearPendingSignal();
         }
@@ -245,7 +245,7 @@ public class DualHedgeRuntimeService {
         if (signal == null || runtime.closed) {
             return;
         }
-        if (!MarketEventFreshness.isFresh(signalEventTime, receivedAt, localNow, exchangeNow,
+        if (!isPendingSignalFresh(signalEventTime, receivedAt, localNow, exchangeNow,
             properties.getMarket().getMaxEventAgeMillis())) {
             runtime.clearPendingSignal();
             log.warn("双开信号超过有效窗口，放弃持久化 instanceId={} symbol={} klineOpenTime={} signalEventTime={}",
@@ -304,6 +304,11 @@ public class DualHedgeRuntimeService {
             log.error("双开入场信号参数快照序列化失败 instanceId={} symbol={} klineOpenTime={}",
                 runtime.instance.getId(), runtime.symbol.getSymbol(), signal.klineOpenTime(), ex);
         }
+    }
+
+    static boolean isPendingSignalFresh(Instant signalEventTime, Instant receivedAt,
+                                        Instant localNow, Instant exchangeNow, long maxAgeMillis) {
+        return MarketEventFreshness.isFresh(signalEventTime, receivedAt, localNow, exchangeNow, maxAgeMillis);
     }
 
     static BigDecimal referenceOpenPrice(NavigableMap<Instant, ExchangeGateway.Kline> history,
