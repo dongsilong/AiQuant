@@ -283,6 +283,8 @@ public class MarketStreamHub {
         private ScheduledFuture<?> boundaryRecoveryTask;
         private volatile Instant boundaryRecoveryOpen;
         private volatile Instant boundaryKlineIngressAt;
+        private volatile Instant latestKlineIngressOpen;
+        private volatile Instant latestKlineIngressAt;
         private long boundaryRecoveryDeadlineNanos;
         private Instant lastKlineOpen;
         private boolean lastKlineClosed;
@@ -489,9 +491,12 @@ public class MarketStreamHub {
                         }
                     } else {
                         if ("KLINE".equals(event.type()) && event.kline() != null) {
+                            Instant ingressAt = event.receivedAt() == null ? Instant.now() : event.receivedAt();
+                            latestKlineIngressOpen = event.kline().openTime();
+                            latestKlineIngressAt = ingressAt;
                             Instant expectedOpen = boundaryRecoveryOpen;
                             if (expectedOpen != null && expectedOpen.equals(event.kline().openTime())) {
-                                boundaryKlineIngressAt = event.receivedAt() == null ? Instant.now() : event.receivedAt();
+                                boundaryKlineIngressAt = ingressAt;
                             }
                         }
                         ingress.accept(new Incoming(attempt, event));
@@ -1103,7 +1108,7 @@ public class MarketStreamHub {
             log.info("行情周期边界暂缓REST恢复，等待新周期K线: symbol={} interval={} expectedOpen={} waitMs={}",
                 key.symbol(), key.interval(), expectedOpen, KLINE_BOUNDARY_WAIT_MILLIS);
             boundaryRecoveryOpen = expectedOpen;
-            boundaryKlineIngressAt = null;
+            boundaryKlineIngressAt = expectedOpen.equals(latestKlineIngressOpen) ? latestKlineIngressAt : null;
             long attempt = generation;
             boundaryRecoveryDeadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
                 KLINE_BOUNDARY_WAIT_MILLIS + Math.max(1L, properties.getMarket().getMaxEventAgeMillis()));
