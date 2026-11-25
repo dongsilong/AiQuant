@@ -5,8 +5,12 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DualHedgeRuntimeServiceTest {
@@ -29,6 +33,46 @@ class DualHedgeRuntimeServiceTest {
     @Test
     void rejectsStaleEventsBeforeUpdatingTheClosedKlineCursor() {
         assertFalse(isAccepted(event("BTCUSDT", "15m", true, false, NOW.minusSeconds(5))));
+    }
+
+    @Test
+    void usesImmediatelyPreviousClosedKlineOpenAsSlopeReference() {
+        ExchangeGateway.Kline previous = new ExchangeGateway.Kline(
+            NOW.minusSeconds(1_800), NOW.minusSeconds(901), new BigDecimal("100"),
+            new BigDecimal("103"), new BigDecimal("99"), new BigDecimal("102"),
+            BigDecimal.ONE, true);
+        ExchangeGateway.Kline current = new ExchangeGateway.Kline(
+            NOW.minusSeconds(900), NOW.minusSeconds(1), new BigDecimal("102"),
+            new BigDecimal("104"), new BigDecimal("101"), new BigDecimal("103"),
+            BigDecimal.ONE, true);
+        NavigableMap<Instant, ExchangeGateway.Kline> history = new TreeMap<>();
+        history.put(previous.openTime(), previous);
+        history.put(current.openTime(), current);
+
+        assertEquals(new BigDecimal("100"),
+            DualHedgeRuntimeService.referenceOpenPrice(history, current));
+    }
+
+    @Test
+    void rejectsMissingUnclosedOrDiscontinuousReferenceKline() {
+        ExchangeGateway.Kline current = event("BTCUSDT", "15m", true, false, NOW).kline();
+        NavigableMap<Instant, ExchangeGateway.Kline> history = new TreeMap<>();
+        assertNull(DualHedgeRuntimeService.referenceOpenPrice(history, current));
+
+        ExchangeGateway.Kline unclosedPrevious = new ExchangeGateway.Kline(
+            current.openTime().minusSeconds(900), current.openTime().minusMillis(1),
+            new BigDecimal("100"), new BigDecimal("102"), new BigDecimal("99"),
+            new BigDecimal("101"), BigDecimal.ONE, false);
+        history.put(unclosedPrevious.openTime(), unclosedPrevious);
+        assertNull(DualHedgeRuntimeService.referenceOpenPrice(history, current));
+
+        ExchangeGateway.Kline gapPrevious = new ExchangeGateway.Kline(
+            current.openTime().minusSeconds(901), current.openTime().minusSeconds(2),
+            new BigDecimal("100"), new BigDecimal("102"), new BigDecimal("99"),
+            new BigDecimal("101"), BigDecimal.ONE, true);
+        history.clear();
+        history.put(gapPrevious.openTime(), gapPrevious);
+        assertNull(DualHedgeRuntimeService.referenceOpenPrice(history, current));
     }
 
     private static boolean isAccepted(ExchangeGateway.MarketEvent event) {
