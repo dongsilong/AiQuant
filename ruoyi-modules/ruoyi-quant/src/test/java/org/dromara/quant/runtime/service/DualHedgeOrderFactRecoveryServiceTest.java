@@ -75,6 +75,8 @@ class DualHedgeOrderFactRecoveryServiceTest {
             argThat(snapshot -> snapshot != null && Long.valueOf(101L).equals(snapshot.orderId())));
         verify(orderLedgerService).syncSnapshot(eq(3L), eq("BTCUSDT"),
             argThat(snapshot -> snapshot != null && Long.valueOf(102L).equals(snapshot.orderId())));
+        verify(executionRecordService).markRecovered(any(QuantExecutionRecord.class), eq(101L), eq("FILLED"));
+        verify(executionRecordService).markRecovered(any(QuantExecutionRecord.class), eq(102L), eq("FILLED"));
     }
 
     @Test
