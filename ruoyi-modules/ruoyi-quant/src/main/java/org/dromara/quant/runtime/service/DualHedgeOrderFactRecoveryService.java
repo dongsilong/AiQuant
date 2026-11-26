@@ -80,6 +80,7 @@ public class DualHedgeOrderFactRecoveryService {
         }
         QuantExecutionRecord execution = executionRecordService.find(round.getCredentialId(), idempotencyKey);
         boolean identityConflict = execution != null && (!"OPEN".equalsIgnoreCase(execution.getOperationType())
+            || "FAILED".equalsIgnoreCase(execution.getExecutionStatus())
             || !round.getSymbol().equalsIgnoreCase(execution.getSymbol())
             || !round.getStrategyId().equals(execution.getStrategyId())
             || !round.getInstanceId().equals(execution.getStrategyInstanceId())
@@ -123,6 +124,9 @@ public class DualHedgeOrderFactRecoveryService {
             if (!identityConflict) {
                 orderLedgerService.syncSnapshot(round.getCredentialId(), round.getSymbol(), exchangeOrder);
                 identityConflict = hasConflictingTradeFacts(round, leg, exchangeOrder);
+                if (execution != null && !identityConflict) {
+                    executionRecordService.markRecovered(execution, exchangeOrder.orderId(), exchangeOrder.status());
+                }
             }
         }
 
