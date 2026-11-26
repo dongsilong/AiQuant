@@ -7,6 +7,8 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.ExecutionRecordService;
 import org.dromara.quant.execution.OrderLedgerService;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
+import org.dromara.quant.account.domain.QuantTrade;
+import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
@@ -14,7 +16,6 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * 双开轮次订单事实恢复入口。
@@ -27,6 +28,7 @@ public class DualHedgeOrderFactRecoveryService {
     private final StrategyHedgeRoundService roundService;
     private final ExecutionRecordService executionRecordService;
     private final QuantOrderMapper orderMapper;
+    private final QuantTradeMapper tradeMapper;
     private final OrderLedgerService orderLedgerService;
     private final ExchangeGateway gateway;
     private final AccountPositionSnapshotQuery positionSnapshotQuery;
@@ -103,22 +105,22 @@ public class DualHedgeOrderFactRecoveryService {
             identityConflict |= !round.getSymbol().equalsIgnoreCase(exchangeOrder.symbol())
                 || !leg.equalsIgnoreCase(exchangeOrder.positionSide())
                 || !("LONG".equals(leg) ? "BUY" : "SELL").equalsIgnoreCase(exchangeOrder.side())
-                || exchangeOrderId != null && exchangeOrder.orderId() != null && !exchangeOrderId.equals(exchangeOrder.orderId())
+                || exchangeOrder.orderId() == null
+                || exchangeOrderId != null && !exchangeOrderId.equals(exchangeOrder.orderId())
                 || clientOrderId != null && exchangeOrder.clientOrderId() != null
                     && !clientOrderId.equals(exchangeOrder.clientOrderId());
             if (!identityConflict) {
                 orderLedgerService.syncSnapshot(round.getCredentialId(), round.getSymbol(), exchangeOrder);
+                identityConflict = hasConflictingTradeFacts(round, leg, exchangeOrder);
             }
         }
 
         BigDecimal positionQuantity = BigDecimal.ZERO;
-        boolean positionFound = false;
         for (ExchangeGateway.PositionSnapshot position : positions) {
             if (!round.getSymbol().equalsIgnoreCase(position.symbol())) {
                 continue;
             }
             if (leg.equalsIgnoreCase(position.side())) {
-                positionFound = true;
                 positionQuantity = position.quantity().abs();
                 break;
             }
@@ -136,7 +138,26 @@ public class DualHedgeOrderFactRecoveryService {
         String status = DualHedgeLegStateResolver.resolve(dispatchStarted, executionStatus, orderStatus,
             executed, original, positionQuantity, true, identityConflict);
         return new LegResult(status, exchangeOrder == null ? null : exchangeOrder.orderId(),
-            exchangeOrder == null ? null : exchangeOrder.clientOrderId(), exchangeOrder != null, positionFound);
+            exchangeOrder == null ? null : exchangeOrder.clientOrderId(), exchangeOrder != null);
+    }
+
+    private boolean hasConflictingTradeFacts(QuantStrategyHedgeRound round, String leg,
+                                             ExchangeGateway.OrderSnapshot order) {
+        List<QuantTrade> trades = tradeMapper.selectList(new LambdaQueryWrapper<QuantTrade>()
+            .eq(QuantTrade::getCredentialId, round.getCredentialId())
+            .eq(QuantTrade::getExchangeOrderId, order.orderId()));
+        BigDecimal recordedQuantity = BigDecimal.ZERO;
+        for (QuantTrade trade : trades) {
+            if (!round.getSymbol().equalsIgnoreCase(trade.getSymbol())
+                || trade.getPositionSide() != null && !leg.equalsIgnoreCase(trade.getPositionSide())
+                || trade.getSide() != null && !("LONG".equals(leg) ? "BUY" : "SELL").equalsIgnoreCase(trade.getSide())) {
+                return true;
+            }
+            if (trade.getQuantity() != null && trade.getQuantity().signum() > 0) {
+                recordedQuantity = recordedQuantity.add(trade.getQuantity());
+            }
+        }
+        return order.executedQuantity() != null && recordedQuantity.compareTo(order.executedQuantity()) > 0;
     }
 
     private QuantOrder findLocalOrder(QuantStrategyHedgeRound round, String clientOrderId, Long exchangeOrderId) {
@@ -162,7 +183,9 @@ public class DualHedgeOrderFactRecoveryService {
 
     private static void validatePositions(List<ExchangeGateway.PositionSnapshot> positions, String symbol) {
         for (ExchangeGateway.PositionSnapshot position : positions) {
-            if (position == null || position.symbol() == null || position.side() == null || position.quantity() == null) {
+            if (position == null || position.symbol() == null || position.side() == null || position.quantity() == null
+                || !("LONG".equalsIgnoreCase(position.side()) || "SHORT".equalsIgnoreCase(position.side())
+                    || "BOTH".equalsIgnoreCase(position.side()))) {
                 throw new IllegalStateException("交易所持仓快照字段不完整，暂停双开订单恢复");
             }
             if (symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0
@@ -231,6 +254,6 @@ public class DualHedgeOrderFactRecoveryService {
     }
 
     private record LegResult(String status, Long orderId, String clientOrderId,
-                             boolean exchangeOrderFound, boolean positionFound) {
+                             boolean exchangeOrderFound) {
     }
 }
