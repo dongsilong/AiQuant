@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.dromara.quant.execution.ExecutionResult;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.TradingPreparationService;
+import org.dromara.quant.runtime.DualHedgePositionCycleKey;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
 import org.springframework.stereotype.Service;
 
@@ -81,7 +82,7 @@ public class StrategyHedgeRoundExecutionService {
         try {
             result = executionService.openByRuntime(round.getCredentialId(), round.getStrategyId(),
                 round.getInstanceId(), round.getSymbol(), side, leg, quantity, referencePrice, round.getLeverage(),
-                MARGIN_MODE, key, eventTime, credentialRuntimeVersion, round.getHedgeRoundKey() + ":" + leg);
+                MARGIN_MODE, key, eventTime, credentialRuntimeVersion, DualHedgePositionCycleKey.of(round.getHedgeRoundKey(), leg));
         } catch (RuntimeException ex) {
             markLeg(round, leg, StrategyHedgeRoundService.LEG_UNKNOWN, null);
             round.setStatus(StrategyHedgeRoundService.STATUS_DEGRADED);
