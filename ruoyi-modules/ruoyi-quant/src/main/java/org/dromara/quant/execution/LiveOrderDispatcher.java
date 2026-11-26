@@ -50,7 +50,7 @@ public class LiveOrderDispatcher {
         if ("CONFIG_SETTINGS".equals(operation)) {
             throw new IllegalArgumentException("配置操作必须通过 beginConfiguration 核实全局参数契约");
         }
-        return reserve(credentialId, symbol, key, operation, clientOrderId, instanceId, epoch, null, null, null, null, null);
+        return reserve(credentialId, symbol, key, operation, clientOrderId, instanceId, epoch, null, null, null, null, null, null);
     }
 
     /**
@@ -60,7 +60,7 @@ public class LiveOrderDispatcher {
         if (!java.util.Set.of("ISOLATED", "CROSSED").contains(marginMode) || leverage < 1 || leverage > 125) {
             throw new IllegalArgumentException("LIVE Binance 配置范围或保证金模式无效");
         }
-        return reserve(credentialId, symbol, key, "CONFIG_SETTINGS", "SETTINGS:" + marginMode + ":" + leverage, null, null, marginMode, leverage, null, null, null);
+        return reserve(credentialId, symbol, key, "CONFIG_SETTINGS", "SETTINGS:" + marginMode + ":" + leverage, null, null, marginMode, leverage, null, null, null, null);
     }
 
     /**
@@ -69,6 +69,15 @@ public class LiveOrderDispatcher {
      */
     public Ticket beginStrategy(Long credentialId, String symbol, String key, String operation, String clientOrderId, Long strategyId, Long instanceId, Long epoch,
                                 String positionSide, String exchangeSide) {
+        return beginStrategy(credentialId, symbol, key, operation, clientOrderId, strategyId, instanceId, epoch,
+            positionSide, exchangeSide, null);
+    }
+
+    /**
+     * 双开首次入场在持仓状态尚未创建时，使用轮次派生的不可变周期键。
+     */
+    public Ticket beginStrategy(Long credentialId, String symbol, String key, String operation, String clientOrderId, Long strategyId, Long instanceId, Long epoch,
+                                String positionSide, String exchangeSide, String positionCycleKey) {
         String normalizedOperation = operation == null ? null : operation.toUpperCase(Locale.ROOT);
         String normalizedPositionSide = positionSide == null ? null : positionSide.toUpperCase(Locale.ROOT);
         String normalizedExchangeSide = exchangeSide == null ? null : exchangeSide.toUpperCase(Locale.ROOT);
@@ -83,7 +92,12 @@ public class LiveOrderDispatcher {
             !java.util.Set.of("LONG", "SHORT").contains(normalizedPositionSide) || !java.util.Set.of("BUY", "SELL").contains(normalizedExchangeSide) || !directionMatches) {
             throw new IllegalArgumentException("未经验证的策略订单意图不能发送");
         }
-        return reserve(credentialId, symbol, key, normalizedOperation, clientOrderId, instanceId, epoch, null, null, strategyId, normalizedPositionSide, normalizedExchangeSide);
+        if (positionCycleKey != null && (positionCycleKey.isBlank() || !"OPEN".equals(normalizedOperation)
+            || !key.equals(positionCycleKey + ":OPEN") || !positionCycleKey.endsWith(":" + normalizedPositionSide))) {
+            throw new IllegalArgumentException("双开入场周期键与轮次幂等键或持仓方向不匹配");
+        }
+        return reserve(credentialId, symbol, key, normalizedOperation, clientOrderId, instanceId, epoch, null, null,
+            strategyId, normalizedPositionSide, normalizedExchangeSide, positionCycleKey);
     }
 
     private static String logicalPositionSide(String operation, String exchangeSide) {
@@ -97,7 +111,7 @@ public class LiveOrderDispatcher {
     }
 
     private Ticket reserve(Long credentialId, String symbol, String key, String operation, String clientOrderId, Long instanceId, Long epoch, String marginMode, Integer leverage
-        , Long strategyId, String positionSide, String exchangeSide) {
+        , Long strategyId, String positionSide, String exchangeSide, String positionCycleKey) {
         if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank() || key == null || key.isBlank() || operation == null || operation.isBlank() || clientOrderId == null || clientOrderId.isBlank() || instanceId != null && (epoch == null || epoch <= 0)) {
             throw new IllegalArgumentException("LIVE dispatch 缺少可靠的订单或租约标识");
         }
@@ -121,9 +135,14 @@ public class LiveOrderDispatcher {
                 if (mapper.insertTicket(credentialId, normalized, key, operation, clientOrderId, instanceId, epoch) != 1) {
                     throw new IllegalStateException("LIVE dispatch 发送票据落库失败");
                 }
-                if (strategyId != null && mapper.insertPreDispatchIntent(credentialId, normalized, key, clientOrderId, strategyId, instanceId, operation, positionSide, exchangeSide,
-                    epoch) != 1) {
-                    throw new IllegalStateException("LIVE 发送前的策略意图尚未持久化");
+                if (strategyId != null) {
+                    int intentInserted = positionCycleKey == null
+                        ? mapper.insertPreDispatchIntent(credentialId, normalized, key, clientOrderId, strategyId, instanceId, operation, positionSide, exchangeSide, epoch)
+                        : mapper.insertPreDispatchIntentWithCycle(credentialId, normalized, key, clientOrderId, strategyId, instanceId,
+                            operation, positionSide, exchangeSide, epoch, positionCycleKey);
+                    if (intentInserted != 1) {
+                        throw new IllegalStateException("LIVE 发送前的策略意图尚未持久化");
+                    }
                 }
                 return new Ticket(credentialId, normalized, key);
             });
