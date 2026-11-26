@@ -45,9 +45,9 @@ class StrategyHedgeRoundExecutionServiceTest {
         verify(roundService, times(4)).save(round);
         var inOrder = inOrder(executionService);
         inOrder.verify(executionService).openByRuntime(eq(3L), eq(1L), eq(2L), eq("BTCUSDT"), eq("BUY"), eq("LONG"),
-            any(), eq(new BigDecimal("100")), eq(10), eq("ISOLATED"), eq("round-1:LONG:OPEN"), any(), isNull());
+            any(), eq(new BigDecimal("100")), eq(10), eq("ISOLATED"), eq("round-1:LONG:OPEN"), any(), isNull(), eq("round-1:LONG"));
         inOrder.verify(executionService).openByRuntime(eq(3L), eq(1L), eq(2L), eq("BTCUSDT"), eq("SELL"), eq("SHORT"),
-            any(), eq(new BigDecimal("100")), eq(10), eq("ISOLATED"), eq("round-1:SHORT:OPEN"), any(), isNull());
+            any(), eq(new BigDecimal("100")), eq(10), eq("ISOLATED"), eq("round-1:SHORT:OPEN"), any(), isNull(), eq("round-1:SHORT"));
     }
 
     @Test
@@ -72,10 +72,10 @@ class StrategyHedgeRoundExecutionServiceTest {
         when(preparationService.requireReady(3L, "BTCUSDT", 10, "ISOLATED"))
             .thenReturn(new TradingPreparationService.Prepared(new ExchangeGateway.PositionMode(true), null, Long.MAX_VALUE));
         when(executionService.openByRuntime(eq(3L), eq(1L), eq(2L), eq("BTCUSDT"), eq("BUY"), eq("LONG"),
-            any(), eq(new BigDecimal("100")), eq(10), eq("ISOLATED"), eq("round-1:LONG:OPEN"), any(), isNull()))
+            any(), eq(new BigDecimal("100")), eq(10), eq("ISOLATED"), eq("round-1:LONG:OPEN"), any(), isNull(), eq("round-1:LONG")))
             .thenReturn(new ExecutionResult(true, "NEW", 101L, "client-long"));
         when(executionService.openByRuntime(eq(3L), eq(1L), eq(2L), eq("BTCUSDT"), eq("SELL"), eq("SHORT"),
-            any(), eq(new BigDecimal("100")), eq(10), eq("ISOLATED"), eq("round-1:SHORT:OPEN"), any(), isNull()))
+            any(), eq(new BigDecimal("100")), eq(10), eq("ISOLATED"), eq("round-1:SHORT:OPEN"), any(), isNull(), eq("round-1:SHORT")))
             .thenThrow(new IllegalStateException("timeout"));
 
         var result = service.dispatchOpening(round, new BigDecimal("100"), Instant.parse("2026-11-25T07:00:00Z"), null);
