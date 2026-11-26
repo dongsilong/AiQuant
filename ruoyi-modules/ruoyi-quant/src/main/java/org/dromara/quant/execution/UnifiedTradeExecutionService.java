@@ -53,6 +53,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     private org.dromara.quant.config.QuantProperties quantProperties;
     private volatile LiveOrderDispatcher liveDispatcher;
     private volatile StrategyOrderAcceptanceJournal acceptanceJournal;
+    private volatile StrategyPreDispatchIntentService testnetPreDispatchIntentService;
     private volatile org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService runtimeLease;
     private org.dromara.quant.reconcile.LiveUserStreamLeaseService liveUserStreamLease;
     private volatile org.dromara.quant.runtime.coordination.StrategyCloseOwnershipGuard closeOwnershipGuard;
@@ -132,6 +133,14 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     @Autowired
     public void setAcceptanceJournal(StrategyOrderAcceptanceJournal journal) {
         this.acceptanceJournal = java.util.Objects.requireNonNull(journal);
+    }
+
+    /**
+     * 注入 TESTNET 双开预派发来源记录。
+     */
+    @Autowired
+    public void setTestnetPreDispatchIntentService(StrategyPreDispatchIntentService service) {
+        this.testnetPreDispatchIntentService = java.util.Objects.requireNonNull(service);
     }
 
     /**
@@ -482,6 +491,16 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                     if (accountLeaseEpoch != null) {
                         requireCurrentAccountLease(credentialId, accountLeaseEpoch);
                     }
+                }
+                if ("TESTNET".equalsIgnoreCase(runMode) && "OPEN".equalsIgnoreCase(operationType)
+                    && strategyId != null && strategyInstanceId != null && openCommand != null
+                    && openCommand.positionCycleKey() != null) {
+                    StrategyPreDispatchIntentService preDispatch = testnetPreDispatchIntentService;
+                    if (preDispatch == null) {
+                        throw new IllegalStateException("缺少 TESTNET 双开预派发来源记录服务，拒绝发送订单");
+                    }
+                    preDispatch.recordTestnetOpenIntent(credentialId, strategyId, strategyInstanceId, symbol,
+                        idempotencyKey, request.clientOrderId(), request.positionSide(), request.side(), openCommand.positionCycleKey());
                 }
                 exchangeAttempted = true;
                 long orderStarted = System.nanoTime();
