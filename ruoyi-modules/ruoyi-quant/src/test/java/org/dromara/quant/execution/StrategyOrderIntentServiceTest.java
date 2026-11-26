@@ -76,14 +76,16 @@ class StrategyOrderIntentServiceTest {
     }
 
     @Test
-    void testnetAcceptedDualOrderCanBeAttributedWithoutLivePreDispatchTicket() {
+    void testnetAcceptedDualOrderUsesTheImmutablePreDispatchCycle() {
+        when(mapper.pendingByClient(1L, "BTCUSDT", "cid-1")).thenReturn(preDispatch());
         when(mapper.insert(anyLong(), anyString(), anyLong(), anyLong(), anyLong(), anyString(), anyString(),
             anyString(), anyString(), anyString())).thenReturn(1);
 
-        service.recordAccepted(1L, 2L, 3L, "OPEN", request("BUY", "LONG", false), result(), org.dromara.quant.runtime.DualHedgePositionCycleKey.of("round-1", "LONG"), "round-1:LONG:OPEN");
+        service.recordAccepted(1L, 2L, 3L, "OPEN", request("BUY", "LONG", false), result(),
+            org.dromara.quant.runtime.DualHedgePositionCycleKey.of("round-1", "LONG"), "round-1:LONG:OPEN");
 
+        verify(mapper).pendingByClient(1L, "BTCUSDT", "cid-1");
         verify(mapper).insert(1L, "BTCUSDT", 77L, 2L, 3L, "LONG", "OPEN", "round-1:LONG", "BUY", "cid-1");
-        verify(mapper, never()).pendingByClient(anyLong(), anyString(), anyString());
     }
 
     @Test
