@@ -122,7 +122,8 @@ public class DualHedgeOrderFactRecoveryService {
                 || clientOrderId != null && exchangeOrder.clientOrderId() != null
                     && !clientOrderId.equals(exchangeOrder.clientOrderId());
             if (!identityConflict) {
-                orderLedgerService.syncSnapshot(round.getCredentialId(), round.getSymbol(), exchangeOrder);
+                QuantOrder syncedOrder = orderLedgerService.syncSnapshot(round.getCredentialId(), round.getSymbol(), exchangeOrder);
+                requireStrategyOwnership(round, syncedOrder);
                 identityConflict = hasConflictingTradeFacts(round, leg, exchangeOrder);
                 if (execution != null && !identityConflict) {
                     executionRecordService.markRecovered(execution, exchangeOrder.orderId(), exchangeOrder.status());
@@ -154,6 +155,23 @@ public class DualHedgeOrderFactRecoveryService {
             executed, original, positionQuantity, true, identityConflict);
         return new LegResult(status, exchangeOrder == null ? exchangeOrderId : exchangeOrder.orderId(),
             exchangeOrder == null ? clientOrderId : exchangeOrder.clientOrderId(), exchangeOrder != null);
+    }
+
+    private void requireStrategyOwnership(QuantStrategyHedgeRound round, QuantOrder order) {
+        if (order == null || order.getId() == null) {
+            throw new IllegalStateException("交易所订单已核实，但本地订单账本未返回可更新记录");
+        }
+        if (order.getStrategyId() == null || order.getStrategyInstanceId() == null) {
+            order.setStrategyId(round.getStrategyId());
+            order.setStrategyInstanceId(round.getInstanceId());
+            if (orderMapper.mergeExchangeFactIfMonotonic(order) != 1) {
+                throw new IllegalStateException("双开订单归属补齐失败，拒绝覆盖本地订单事实");
+            }
+        }
+        if (!round.getStrategyId().equals(order.getStrategyId())
+            || !round.getInstanceId().equals(order.getStrategyInstanceId())) {
+            throw new IllegalStateException("交易所订单已核实，但本地订单策略归属与双开轮次不一致");
+        }
     }
 
     private boolean hasConflictingTradeFacts(QuantStrategyHedgeRound round, String leg,
