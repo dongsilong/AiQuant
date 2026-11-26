@@ -1,5 +1,6 @@
 package org.dromara.quant.execution;
 
+import org.dromara.quant.runtime.DualHedgePositionCycleKey;
 import org.dromara.quant.execution.mapper.LiveOrderDispatchMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -92,8 +93,10 @@ public class LiveOrderDispatcher {
             !java.util.Set.of("LONG", "SHORT").contains(normalizedPositionSide) || !java.util.Set.of("BUY", "SELL").contains(normalizedExchangeSide) || !directionMatches) {
             throw new IllegalArgumentException("未经验证的策略订单意图不能发送");
         }
-        if (positionCycleKey != null && (positionCycleKey.isBlank() || !"OPEN".equals(normalizedOperation)
-            || !(positionCycleKey + ":OPEN").equals(key) || !positionCycleKey.endsWith(":" + normalizedPositionSide))) {
+        if (positionCycleKey != null && (!"OPEN".equals(normalizedOperation)
+            || !positionCycleKey.equals(DualHedgePositionCycleKey.fromOpenIdempotencyKey(key))
+            || !positionCycleKey.equals(DualHedgePositionCycleKey.of(
+                key.substring(0, key.lastIndexOf(':', key.lastIndexOf(':') - 1)), normalizedPositionSide)))) {
             throw new IllegalArgumentException("双开入场周期键与轮次幂等键或持仓方向不匹配");
         }
         return reserve(credentialId, symbol, key, normalizedOperation, clientOrderId, instanceId, epoch, null, null,
