@@ -44,6 +44,17 @@ class StrategyOrderAcceptanceJournalTest {
     }
 
     @Test
+    void testnetDualOrderPersistsImmutableCycleIntentAfterLocalOrderLedger() {
+        var order = new QuantOrder();
+        order.setId(19L);
+        when(ledger.upsert(any(), any(), any(), any(), any())).thenReturn(order);
+
+        journal.persist(1L, 2L, 3L, "TESTNET", "OPEN", request("LONG"), result(), 10, null, "round-1:LONG");
+
+        verify(intents).recordAccepted(1L, 2L, 3L, "OPEN", request("LONG"), result(), "round-1:LONG");
+    }
+
+    @Test
     void failedLedgerCannotPersistUnbackedIntent() {
         assertThrows(IllegalStateException.class, () -> journal.persist(1L, 2L, 3L, "LIVE", "OPEN", request("LONG"), result));
         verifyNoInteractions(intents);
