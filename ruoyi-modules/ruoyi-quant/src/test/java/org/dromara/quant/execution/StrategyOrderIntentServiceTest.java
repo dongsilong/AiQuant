@@ -80,7 +80,7 @@ class StrategyOrderIntentServiceTest {
         when(mapper.insert(anyLong(), anyString(), anyLong(), anyLong(), anyLong(), anyString(), anyString(),
             anyString(), anyString(), anyString())).thenReturn(1);
 
-        service.recordAccepted(1L, 2L, 3L, "OPEN", request("BUY", "LONG", false), result(), "round-1:LONG");
+        service.recordAccepted(1L, 2L, 3L, "OPEN", request("BUY", "LONG", false), result(), org.dromara.quant.runtime.DualHedgePositionCycleKey.of("round-1", "LONG"), "round-1:LONG:OPEN");
 
         verify(mapper).insert(1L, "BTCUSDT", 77L, 2L, 3L, "LONG", "OPEN", "round-1:LONG", "BUY", "cid-1");
         verify(mapper, never()).pendingByClient(anyLong(), anyString(), anyString());
@@ -89,7 +89,7 @@ class StrategyOrderIntentServiceTest {
     @Test
     void testnetDualOrderCannotBeAttributedToTheOppositeLegCycle() {
         assertThrows(IllegalStateException.class, () -> service.recordAccepted(
-            1L, 2L, 3L, "OPEN", request("BUY", "LONG", false), result(), "round-1:SHORT"));
+            1L, 2L, 3L, "OPEN", request("BUY", "LONG", false), result(), org.dromara.quant.runtime.DualHedgePositionCycleKey.of("round-1", "SHORT"), "round-1:LONG:OPEN"));
         verifyNoInteractions(mapper);
     }
 
