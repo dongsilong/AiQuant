@@ -23,7 +23,7 @@ import java.util.List;
 /**
  * 双开轮次订单事实恢复入口。
  *
- * <p>只查询交易所订单/持仓并补齐本地订单账本，不发送订单、不撤单、不重试 UNKNOWN。</p>
+ * <p>核对交易所订单、成交和持仓，并恢复双开腿策略状态；不发送订单、不撤单、不重试 UNKNOWN。</p>
  */
 @RequiredArgsConstructor
 @Service
@@ -182,7 +182,7 @@ public class DualHedgeOrderFactRecoveryService {
         if (position == null || order == null
             || order.executedQuantity() == null || order.executedQuantity().signum() <= 0
             || position.entryPrice() == null || position.entryPrice().signum() <= 0
-            || position.quantity() == null || position.quantity().signum() == 0) {
+            || position.quantity() == null || position.quantity().signum() == 0 || order.createTime() == null) {
             throw new IllegalStateException("双开腿已核实为 OPEN，但开仓价格/数量快照不完整，拒绝生成策略持仓状态");
         }
         QuantStrategyPositionState state = positionStateService.findByInstanceAndLeg(round.getInstanceId(), leg);
@@ -204,8 +204,7 @@ public class DualHedgeOrderFactRecoveryService {
             state.setStrategyParamsSnapshot(round.getStrategyParamsSnapshot());
             state.setTrailingArmed(false);
             state.setTrailingStopRoi(null);
-            state.setOpenedAt(order.createTime() == null ? round.getSignalEventTime()
-                : LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
+            state.setOpenedAt(LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
         } else {
             if (!round.getHedgeRoundKey().equals(state.getHedgeRoundKey())
                 || !leg.equals(state.getLegKey()) || !"OPEN".equalsIgnoreCase(state.getStatus())
@@ -227,8 +226,8 @@ public class DualHedgeOrderFactRecoveryService {
             if (state.getRealizedPnl() == null) state.setRealizedPnl(BigDecimal.ZERO);
             if (state.getStrategyParamsSnapshot() == null) state.setStrategyParamsSnapshot(round.getStrategyParamsSnapshot());
             if (state.getTrailingArmed() == null) state.setTrailingArmed(false);
-            if (state.getOpenedAt() == null) state.setOpenedAt(order.createTime() == null ? round.getSignalEventTime()
-                : LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
+            if (state.getOpenedAt() == null) state.setOpenedAt(
+                LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
         }
         if (state.getRecoveryRequired() == null) {
             state.setRecoveryRequired(true);
