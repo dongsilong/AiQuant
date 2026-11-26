@@ -59,6 +59,14 @@ class DualHedgeLegStateResolverTest {
     }
 
     @Test
+    void rejectsImpossibleFillQuantitiesAndUnfilledOrderWithExistingPosition() {
+        assertEquals(DualHedgeLegStateResolver.CONFLICT,
+            resolve(true, "CONFIRMED", "NEW", BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ONE, true, false));
+        assertEquals(DualHedgeLegStateResolver.CONFLICT,
+            resolve(true, "CONFIRMED", "FILLED", new BigDecimal("2"), BigDecimal.ONE, new BigDecimal("2"), true, false));
+    }
+
+    @Test
     void anyIdentityConflictOrUnattributedPositionFailsClosed() {
         assertEquals(DualHedgeLegStateResolver.CONFLICT,
             resolve(true, "CONFIRMED", "NEW", BigDecimal.ZERO, BigDecimal.ONE, BigDecimal.ZERO, true, true));
