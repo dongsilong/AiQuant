@@ -112,7 +112,7 @@ class LivePreDispatchIntentTest {
         parameters.put("positionSide", "LONG");
         parameters.put("exchangeSide", "BUY");
         parameters.put("epoch", 4L);
-        parameters.put("positionCycleKey", "round-1:LONG");
+        parameters.put("positionCycleKey", org.dromara.quant.runtime.DualHedgePositionCycleKey.of("round-1", "LONG"));
         var configuration = new org.apache.ibatis.session.Configuration();
         String resource = "mapper/quant/LiveOrderDispatchMapper.xml";
         try (java.io.InputStream input = org.apache.ibatis.io.Resources.getResourceAsStream(resource)) {
