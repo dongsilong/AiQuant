@@ -117,6 +117,7 @@ public class DualHedgeOrderFactRecoveryService {
         }
 
         ExchangeGateway.OrderSnapshot exchangeOrder = null;
+        boolean tradeFactsComplete = false;
         if (exchangeOrderId != null || clientOrderId != null && !clientOrderId.isBlank()) {
             exchangeOrder = gateway.queryOrder(credential, round.getSymbol(), exchangeOrderId, clientOrderId);
         }
@@ -132,6 +133,7 @@ public class DualHedgeOrderFactRecoveryService {
                 QuantOrder syncedOrder = orderLedgerService.syncSnapshot(round.getCredentialId(), round.getSymbol(), exchangeOrder);
                 requireStrategyOwnership(round, syncedOrder);
                 identityConflict = hasConflictingTradeFacts(round, leg, exchangeOrder);
+                tradeFactsComplete = !identityConflict && hasCompleteTradeFacts(round, leg, exchangeOrder);
                 if (execution != null && !identityConflict) {
                     executionRecordService.markRecovered(execution, exchangeOrder.orderId(), exchangeOrder.status());
                 }
@@ -162,6 +164,10 @@ public class DualHedgeOrderFactRecoveryService {
             && !StrategyHedgeRoundService.LEG_NOT_STARTED.equals(persistedLegStatus);
         String status = DualHedgeLegStateResolver.resolve(dispatchStarted, executionStatus, orderStatus,
             executed, original, positionQuantity, true, identityConflict);
+        if (DualHedgeLegStateResolver.OPEN.equals(status)
+            && (!tradeFactsComplete || executed == null || positionQuantity.compareTo(executed) != 0)) {
+            status = DualHedgeLegStateResolver.FILLED_POSITION_UNVERIFIED;
+        }
         return new LegResult(status, exchangeOrder == null ? exchangeOrderId : exchangeOrder.orderId(),
             exchangeOrder == null ? clientOrderId : exchangeOrder.clientOrderId(), exchangeOrder != null,
             exchangeOrder, matchedPosition);
@@ -265,6 +271,33 @@ public class DualHedgeOrderFactRecoveryService {
             }
         }
         return order.executedQuantity() != null && recordedQuantity.compareTo(order.executedQuantity()) > 0;
+    }
+
+    private boolean hasCompleteTradeFacts(QuantStrategyHedgeRound round, String leg,
+                                          ExchangeGateway.OrderSnapshot order) {
+        List<QuantTrade> trades = tradeMapper.selectList(new LambdaQueryWrapper<QuantTrade>()
+            .eq(QuantTrade::getCredentialId, round.getCredentialId())
+            .eq(QuantTrade::getExchangeOrderId, order.orderId()));
+        if (trades.isEmpty()) {
+            return false;
+        }
+        BigDecimal recordedQuantity = BigDecimal.ZERO;
+        for (QuantTrade trade : trades) {
+            if (!round.getSymbol().equalsIgnoreCase(trade.getSymbol())
+                || !leg.equalsIgnoreCase(trade.getPositionSide())
+                || !("LONG".equals(leg) ? "BUY" : "SELL").equalsIgnoreCase(trade.getSide())
+                || trade.getExchangeTradeId() == null
+                || trade.getQuantity() == null || trade.getQuantity().signum() <= 0
+                || trade.getPrice() == null || trade.getPrice().signum() <= 0
+                || trade.getTradeTime() == null
+                || trade.getCommission() == null
+                || trade.getCommissionAsset() == null || trade.getCommissionAsset().isBlank()
+                || trade.getRealizedPnl() == null) {
+                return false;
+            }
+            recordedQuantity = recordedQuantity.add(trade.getQuantity());
+        }
+        return order.executedQuantity() != null && recordedQuantity.compareTo(order.executedQuantity()) == 0;
     }
 
     private QuantOrder findLocalOrder(QuantStrategyHedgeRound round, String clientOrderId, Long exchangeOrderId) {
