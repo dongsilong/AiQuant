@@ -43,6 +43,12 @@ public class DualHedgeOrderFactRecoveryService {
             throw new IllegalArgumentException("双开订单恢复缺少轮次或有效凭证");
         }
 
+        if (StrategyHedgeRoundService.STATUS_SIGNAL_READY.equals(round.getStatus())
+            || StrategyHedgeRoundService.STATUS_CLOSED.equals(round.getStatus())
+            || StrategyHedgeRoundService.STATUS_ABORTED.equals(round.getStatus())) {
+            throw new IllegalStateException("当前轮次状态不允许执行订单事实恢复: " + round.getStatus());
+        }
+
         // 先取完整持仓快照；失败时不修改任何轮次状态。
         List<ExchangeGateway.PositionSnapshot> positions =
             positionSnapshotQuery.query(round.getCredentialId(), credential);
@@ -213,10 +219,6 @@ public class DualHedgeOrderFactRecoveryService {
             || DualHedgeLegStateResolver.CANCELED.equals(longStatus) || DualHedgeLegStateResolver.CANCELED.equals(shortStatus)) {
             round.setStatus(StrategyHedgeRoundService.STATUS_DEGRADED);
             return;
-        }
-        if (DualHedgeLegStateResolver.NOT_DISPATCHED.equals(longStatus)
-            && DualHedgeLegStateResolver.NOT_DISPATCHED.equals(shortStatus)) {
-            round.setStatus(StrategyHedgeRoundService.STATUS_ABORTED);
         }
     }
 
