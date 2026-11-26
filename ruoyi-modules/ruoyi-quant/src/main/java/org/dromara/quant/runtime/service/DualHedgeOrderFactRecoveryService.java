@@ -11,6 +11,7 @@ import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.dromara.quant.runtime.DualHedgePositionCycleKey;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
 import org.springframework.stereotype.Service;
@@ -190,7 +191,7 @@ public class DualHedgeOrderFactRecoveryService {
             state = new QuantStrategyPositionState();
             state.setInstanceId(round.getInstanceId());
             state.setLegKey(leg);
-            state.setPositionCycleKey(round.getHedgeRoundKey() + ":" + leg);
+            state.setPositionCycleKey(DualHedgePositionCycleKey.of(round.getHedgeRoundKey(), leg));
             state.setHedgeRoundKey(round.getHedgeRoundKey());
             state.setDirection(leg);
             state.setEntryPrice(position.entryPrice());
