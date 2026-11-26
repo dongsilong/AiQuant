@@ -79,7 +79,8 @@ public final class DualHedgeLegStateResolver {
             return CONFLICT;
         }
         if ("PENDING".equals(execution)) {
-            return DISPATCHING;
+            // PENDING may survive a crash after the request left the process but before UNKNOWN was persisted.
+            return UNKNOWN;
         }
         if ("UNKNOWN".equals(execution)) {
             return UNKNOWN;
