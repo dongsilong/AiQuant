@@ -213,6 +213,16 @@ public class TradeExecutionApplicationService {
     public ExecutionResult openByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
                                          BigDecimal price, int leverage, String marginMode, String idempotencyKey, java.time.Instant eventTime,
                                          Long credentialRuntimeVersion) {
+        return openByRuntime(credentialId, strategyId, strategyInstanceId, symbol, side, positionSide, quantity, price, leverage, marginMode,
+            idempotencyKey, eventTime, credentialRuntimeVersion, null);
+    }
+
+    /**
+     * 双开轮次显式传入每条腿的持仓周期键，避免首次开仓依赖尚未创建的持仓状态。
+     */
+    public ExecutionResult openByRuntime(Long credentialId, Long strategyId, Long strategyInstanceId, String symbol, String side, String positionSide, BigDecimal quantity,
+                                         BigDecimal price, int leverage, String marginMode, String idempotencyKey, java.time.Instant eventTime,
+                                         Long credentialRuntimeVersion, String positionCycleKey) {
         QuantCredential credential = requireCredential(credentialId);
         QuantSymbol symbolEntity = requireSymbol(symbol);
         ExchangeGateway.Credential exchangeCredential = toCredential(credential);
@@ -226,7 +236,7 @@ public class TradeExecutionApplicationService {
         String resolvedPositionSide = "PAPER".equalsIgnoreCase(credential.getRunMode()) ? normalizePositionSide(exchangeCredential, side, positionSide) : positionSide;
         return executionPort.open(new OpenPositionCommand(credentialId, strategyId, strategyInstanceId, exchangeCredential, symbol, side, "MARKET", quantity, null,
             resolvedPositionSide, idempotencyKey, credential.getRunMode(), symbolRule(symbolEntity), leverage, marginMode, safety(credential, risk, true), notional,
-            eventTime == null ? null : eventTime.plusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())), eventTime, credentialRuntimeVersion));
+            eventTime == null ? null : eventTime.plusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())), eventTime, credentialRuntimeVersion, positionCycleKey));
     }
 
     /**
