@@ -94,9 +94,7 @@ public class LiveOrderDispatcher {
             throw new IllegalArgumentException("未经验证的策略订单意图不能发送");
         }
         if (positionCycleKey != null && (!"OPEN".equals(normalizedOperation)
-            || !positionCycleKey.equals(DualHedgePositionCycleKey.fromOpenIdempotencyKey(key))
-            || !positionCycleKey.equals(DualHedgePositionCycleKey.of(
-                key.substring(0, key.lastIndexOf(':', key.lastIndexOf(':') - 1)), normalizedPositionSide)))) {
+            || !DualHedgePositionCycleKey.matchesOpenIdempotencyKey(key, normalizedPositionSide, positionCycleKey))) {
             throw new IllegalArgumentException("双开入场周期键与轮次幂等键或持仓方向不匹配");
         }
         return reserve(credentialId, symbol, key, normalizedOperation, clientOrderId, instanceId, epoch, null, null,
