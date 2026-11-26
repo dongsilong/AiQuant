@@ -429,8 +429,13 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                 if ("LIVE".equalsIgnoreCase(runMode)) {
                     if (strategyId != null && strategyInstanceId != null && java.util.Set.of("LONG", "SHORT", "BOTH").contains(request.positionSide() == null ? "" :
                         request.positionSide().toUpperCase(java.util.Locale.ROOT))) {
-                        dispatchTicket = requireLiveDispatcher().beginStrategy(credentialId, symbol, idempotencyKey, operationType, request.clientOrderId(), strategyId,
-                            strategyInstanceId, preparationEpoch, request.positionSide().toUpperCase(java.util.Locale.ROOT), request.side().toUpperCase(java.util.Locale.ROOT));
+                        String positionCycleKey = openCommand == null ? null : openCommand.positionCycleKey();
+                        dispatchTicket = positionCycleKey == null
+                            ? requireLiveDispatcher().beginStrategy(credentialId, symbol, idempotencyKey, operationType, request.clientOrderId(), strategyId,
+                                strategyInstanceId, preparationEpoch, request.positionSide().toUpperCase(java.util.Locale.ROOT), request.side().toUpperCase(java.util.Locale.ROOT))
+                            : requireLiveDispatcher().beginStrategy(credentialId, symbol, idempotencyKey, operationType, request.clientOrderId(), strategyId,
+                                strategyInstanceId, preparationEpoch, request.positionSide().toUpperCase(java.util.Locale.ROOT),
+                                request.side().toUpperCase(java.util.Locale.ROOT), positionCycleKey);
                     } else {
                         dispatchTicket = requireLiveDispatcher().begin(credentialId, symbol, idempotencyKey, operationType, request.clientOrderId(), strategyInstanceId,
                             preparationEpoch);
@@ -488,13 +493,17 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             recordDecision(operationType, credentialId, strategyId, strategyInstanceId, symbol, idempotencyKey, runMode, "PARTIALLY_FILLED".equals(exchangeResult.status()) ?
                 "PARTIALLY_FILLED" : "ACCEPTED", "交易所已受理，等待成交事实", request, exchangeResult, null, null);
             try {
-                if ("LIVE".equalsIgnoreCase(runMode) && strategyId != null && strategyInstanceId != null) {
+                boolean liveStrategyOrder = "LIVE".equalsIgnoreCase(runMode) && strategyId != null && strategyInstanceId != null;
+                boolean testnetDualOrder = "TESTNET".equalsIgnoreCase(runMode) && strategyId != null && strategyInstanceId != null
+                    && openCommand != null && openCommand.positionCycleKey() != null;
+                if (liveStrategyOrder || testnetDualOrder) {
                     if (acceptanceJournal == null) {
                         throw new IllegalStateException("缺少事务性策略订单来源记录");
                     }
                     acceptanceJournal.persist(credentialId, strategyId, strategyInstanceId, runMode, operationType, request, exchangeResult,
                         openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),
-                        openCommand == null || openCommand.symbolRule() == null ? null : openCommand.symbolRule().priceTickSize());
+                        openCommand == null || openCommand.symbolRule() == null ? null : openCommand.symbolRule().priceTickSize(),
+                        openCommand == null ? null : openCommand.positionCycleKey());
                 } else {
                     orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult,
                         openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),
