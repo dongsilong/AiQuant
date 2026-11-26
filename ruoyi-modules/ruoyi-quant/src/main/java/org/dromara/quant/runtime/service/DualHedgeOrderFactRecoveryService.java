@@ -82,13 +82,24 @@ public class DualHedgeOrderFactRecoveryService {
         boolean identityConflict = execution != null && (!"OPEN".equalsIgnoreCase(execution.getOperationType())
             || !round.getSymbol().equalsIgnoreCase(execution.getSymbol())
             || !round.getStrategyId().equals(execution.getStrategyId())
-            || !round.getInstanceId().equals(execution.getStrategyInstanceId()));
+            || !round.getInstanceId().equals(execution.getStrategyInstanceId())
+            || roundClientOrderId != null && execution.getClientOrderId() != null
+                && !roundClientOrderId.equals(execution.getClientOrderId())
+            || roundOrderId != null && execution.getExchangeOrderId() != null
+                && !roundOrderId.equals(execution.getExchangeOrderId()));
 
-        String clientOrderId = execution == null ? roundClientOrderId : execution.getClientOrderId();
-        Long exchangeOrderId = execution == null ? roundOrderId : execution.getExchangeOrderId();
+        String clientOrderId = execution != null && execution.getClientOrderId() != null
+            ? execution.getClientOrderId() : roundClientOrderId;
+        Long exchangeOrderId = execution != null && execution.getExchangeOrderId() != null
+            ? execution.getExchangeOrderId() : roundOrderId;
         QuantOrder localOrder = findLocalOrder(round, clientOrderId, exchangeOrderId);
         if (localOrder != null) {
             identityConflict |= !round.getSymbol().equalsIgnoreCase(localOrder.getSymbol())
+                || exchangeOrderId != null && localOrder.getExchangeOrderId() != null
+                    && !exchangeOrderId.equals(localOrder.getExchangeOrderId())
+                || clientOrderId != null && localOrder.getClientOrderId() != null
+                    && !localOrder.getClientOrderId().startsWith("EXCHANGE:")
+                    && !clientOrderId.equals(localOrder.getClientOrderId())
                 || localOrder.getStrategyInstanceId() != null && !round.getInstanceId().equals(localOrder.getStrategyInstanceId())
                 || localOrder.getStrategyId() != null && !round.getStrategyId().equals(localOrder.getStrategyId())
                 || localOrder.getPositionSide() != null && !leg.equalsIgnoreCase(localOrder.getPositionSide())
