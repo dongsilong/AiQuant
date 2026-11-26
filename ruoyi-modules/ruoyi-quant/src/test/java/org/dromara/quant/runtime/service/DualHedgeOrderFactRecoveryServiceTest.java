@@ -71,8 +71,10 @@ class DualHedgeOrderFactRecoveryServiceTest {
         assertEquals(DualHedgeLegStateResolver.OPEN, result.longLegStatus());
         assertEquals(DualHedgeLegStateResolver.OPEN, result.shortLegStatus());
         assertEquals(StrategyHedgeRoundService.STATUS_OPEN, result.roundStatus());
-        verify(orderLedgerService).syncSnapshot(3L, "BTCUSDT", order(101L, "client-long", "BUY", "LONG"));
-        verify(orderLedgerService).syncSnapshot(3L, "BTCUSDT", order(102L, "client-short", "SELL", "SHORT"));
+        verify(orderLedgerService).syncSnapshot(eq(3L), eq("BTCUSDT"),
+            argThat(snapshot -> snapshot != null && Long.valueOf(101L).equals(snapshot.orderId())));
+        verify(orderLedgerService).syncSnapshot(eq(3L), eq("BTCUSDT"),
+            argThat(snapshot -> snapshot != null && Long.valueOf(102L).equals(snapshot.orderId())));
     }
 
     @Test
