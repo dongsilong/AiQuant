@@ -29,7 +29,7 @@ class StrategyOrderAcceptanceJournalTest {
             ExchangeGateway.OrderRequest.class, ExchangeGateway.OrderResult.class).getAnnotation(Transactional.class));
         var order = new QuantOrder();
         order.setId(19L);
-        when(ledger.upsert(any(), any(), any(), any(), any())).thenReturn(order);
+        when(ledger.upsert(any(), any(), any(), any(), any(), any(), any())).thenReturn(order);
         journal.persist(1L, 2L, 3L, "LIVE", "OPEN", request("LONG"), result);
         verify(intents).record(1L, 2L, 3L, "OPEN", request("LONG"), result);
     }
@@ -38,7 +38,7 @@ class StrategyOrderAcceptanceJournalTest {
     void oneWayOrderPersistsIntentFromImmutablePreDispatchRecord() {
         var order = new QuantOrder();
         order.setId(19L);
-        when(ledger.upsert(any(), any(), any(), any(), any())).thenReturn(order);
+        when(ledger.upsert(any(), any(), any(), any(), any(), any(), any())).thenReturn(order);
         journal.persist(1L, 2L, 3L, "LIVE", "OPEN", request("BOTH"), result);
         verify(intents).record(1L, 2L, 3L, "OPEN", request("BOTH"), result);
     }
@@ -47,7 +47,7 @@ class StrategyOrderAcceptanceJournalTest {
     void testnetDualOrderPersistsImmutableCycleIntentAfterLocalOrderLedger() {
         var order = new QuantOrder();
         order.setId(19L);
-        when(ledger.upsert(any(), any(), any(), any(), any())).thenReturn(order);
+        when(ledger.upsert(any(), any(), any(), any(), any(), any(), any())).thenReturn(order);
 
         journal.persist(1L, 2L, 3L, "TESTNET", "OPEN", request("LONG"), result(), 10, null, "round-1:LONG");
 
@@ -64,7 +64,7 @@ class StrategyOrderAcceptanceJournalTest {
     void failedIntentPropagatesToTransactionalCaller() {
         var order = new QuantOrder();
         order.setId(19L);
-        when(ledger.upsert(any(), any(), any(), any(), any())).thenReturn(order);
+        when(ledger.upsert(any(), any(), any(), any(), any(), any(), any())).thenReturn(order);
         doThrow(new IllegalStateException("intent conflict")).when(intents).record(anyLong(), anyLong(), anyLong(), anyString(), any(), any());
         assertThrows(IllegalStateException.class, () -> journal.persist(1L, 2L, 3L, "LIVE", "OPEN", request("LONG"), result));
     }
