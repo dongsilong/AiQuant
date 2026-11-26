@@ -76,6 +76,33 @@ class StrategyOrderIntentServiceTest {
     }
 
     @Test
+    void testnetAcceptedDualOrderCanBeAttributedWithoutLivePreDispatchTicket() {
+        when(mapper.insert(anyLong(), anyString(), anyLong(), anyLong(), anyLong(), anyString(), anyString(),
+            anyString(), anyString(), anyString())).thenReturn(1);
+
+        service.recordAccepted(1L, 2L, 3L, "OPEN", request("BUY", "LONG", false), result(), "round-1:LONG");
+
+        verify(mapper).insert(1L, "BTCUSDT", 77L, 2L, 3L, "LONG", "OPEN", "round-1:LONG", "BUY", "cid-1");
+        verify(mapper, never()).pendingByClient(anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    void testnetDualOrderCannotBeAttributedToTheOppositeLegCycle() {
+        assertThrows(IllegalStateException.class, () -> service.recordAccepted(
+            1L, 2L, 3L, "OPEN", request("BUY", "LONG", false), result(), "round-1:SHORT"));
+        verifyNoInteractions(mapper);
+    }
+
+    @Test
+    void liveAcceptedOrderRequiresExpectedCycleToMatchPreDispatchFact() {
+        when(mapper.pendingByClient(1L, "BTCUSDT", "cid-1")).thenReturn(preDispatch());
+        assertThrows(IllegalStateException.class, () -> service.record(
+            1L, 2L, 3L, "OPEN", request("BUY", "LONG", false), result(), "round-2:LONG"));
+        verify(mapper, never()).insert(anyLong(), anyString(), anyLong(), anyLong(), anyLong(),
+            anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
     void verifiedProtectionChildPersistsLogicalPositionSideEvenWhenExchangePositionSideIsBoth() {
         when(mapper.insert(anyLong(), anyString(), anyLong(), anyLong(), anyLong(), anyString(), anyString(),
             anyString(), anyString(), anyString())).thenReturn(1);
