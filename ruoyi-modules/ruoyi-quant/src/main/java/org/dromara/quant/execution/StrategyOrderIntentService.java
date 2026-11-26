@@ -101,8 +101,7 @@ public class StrategyOrderIntentService {
         if (!expected.equals(side) || role.equals("CLOSE") && !request.reduceOnly() || role.equals("OPEN") && request.reduceOnly()) {
             throw new IllegalStateException("TESTNET 双开订单开平仓方向与持仓方向冲突");
         }
-        persistIntent(credentialId, request.symbol().toUpperCase(Locale.ROOT), accepted.orderId(), strategyId, instanceId,
-            positionSide, role, positionCycleKey, side, request.clientOrderId());
+        record(credentialId, strategyId, instanceId, role, request, accepted, positionCycleKey);
     }
 
     private void persistIntent(long credentialId, String symbol, long orderId, long strategyId, long instanceId, String positionSide,
