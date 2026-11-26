@@ -86,15 +86,16 @@ class LivePreDispatchIntentTest {
 
     @Test
     void dualHedgeOpeningPersistsExplicitCycleBeforeAnyExchangeRequest() {
+        String cycleKey = org.dromara.quant.runtime.DualHedgePositionCycleKey.of("round-1", "LONG");
         when(mapper.insertPreDispatchIntentWithCycle(1L, "BTCUSDT", "round-1:LONG:OPEN", "cid-a",
-            2L, 3L, "OPEN", "LONG", "BUY", 4L, "round-1:LONG")).thenReturn(1);
+            2L, 3L, "OPEN", "LONG", "BUY", 4L, cycleKey)).thenReturn(1);
 
         var ticket = dispatcher.beginStrategy(1L, "BTCUSDT", "round-1:LONG:OPEN", "OPEN", "cid-a",
-            2L, 3L, 4L, "LONG", "BUY", "round-1:LONG");
+            2L, 3L, 4L, "LONG", "BUY", cycleKey);
 
         assertEquals("round-1:LONG:OPEN", ticket.key());
         verify(mapper).insertPreDispatchIntentWithCycle(1L, "BTCUSDT", "round-1:LONG:OPEN", "cid-a",
-            2L, 3L, "OPEN", "LONG", "BUY", 4L, "round-1:LONG");
+            2L, 3L, "OPEN", "LONG", "BUY", 4L, cycleKey);
         verify(mapper, never()).insertPreDispatchIntent(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
