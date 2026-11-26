@@ -503,7 +503,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                     acceptanceJournal.persist(credentialId, strategyId, strategyInstanceId, runMode, operationType, request, exchangeResult,
                         openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),
                         openCommand == null || openCommand.symbolRule() == null ? null : openCommand.symbolRule().priceTickSize(),
-                        openCommand == null ? null : openCommand.positionCycleKey());
+                        openCommand == null ? null : openCommand.positionCycleKey(), idempotencyKey);
                 } else {
                     orderLedgerService.upsert(credentialId, strategyId, strategyInstanceId, request, exchangeResult,
                         openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),
