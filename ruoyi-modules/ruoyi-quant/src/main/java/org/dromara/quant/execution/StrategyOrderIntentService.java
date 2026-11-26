@@ -3,6 +3,7 @@ package org.dromara.quant.execution;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.runtime.DualHedgePositionCycleKey;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
@@ -80,20 +81,21 @@ public class StrategyOrderIntentService {
      * LIVE 仍必须使用发送前意图，不能通过此入口绕过派发门禁。
      */
     public void recordAccepted(long credentialId, long strategyId, long instanceId, String operation, ExchangeGateway.OrderRequest request,
-                               ExchangeGateway.OrderResult accepted, String positionCycleKey) {
+                               ExchangeGateway.OrderResult accepted, String positionCycleKey, String idempotencyKey) {
         if (credentialId <= 0 || strategyId <= 0 || instanceId <= 0 || request == null || accepted == null || accepted.orderId() == null || accepted.orderId() <= 0
             || request.symbol() == null || request.symbol().isBlank() || request.clientOrderId() == null || request.clientOrderId().isBlank()
             || accepted.clientOrderId() == null || !request.clientOrderId().equals(accepted.clientOrderId())
             || positionCycleKey == null || positionCycleKey.isBlank() || request.positionSide() == null
-            || operation == null || !java.util.Set.of("OPEN", "CLOSE").contains(operation.toUpperCase(Locale.ROOT))
+            || !"OPEN".equalsIgnoreCase(operation)
             || request.side() == null || !java.util.Set.of("BUY", "SELL").contains(request.side().toUpperCase(Locale.ROOT))) {
             throw new IllegalStateException("缺少 TESTNET 双开订单的确定身份或持仓周期键");
         }
         String role = operation.toUpperCase(Locale.ROOT);
         String side = request.side().toUpperCase(Locale.ROOT);
         String positionSide = request.positionSide().toUpperCase(Locale.ROOT);
-        if (!java.util.Set.of("LONG", "SHORT").contains(positionSide) || !positionCycleKey.endsWith(":" + positionSide)) {
-            throw new IllegalStateException("TESTNET 双开订单的持仓方向与周期键不匹配");
+        if (!java.util.Set.of("LONG", "SHORT").contains(positionSide)
+            || !DualHedgePositionCycleKey.matchesOpenIdempotencyKey(idempotencyKey, positionSide, positionCycleKey)) {
+            throw new IllegalStateException("TESTNET 双开订单的持仓方向与轮次周期键不匹配");
         }
         String expected = (positionSide.equals("LONG") == role.equals("OPEN")) ? "BUY" : "SELL";
         if (!expected.equals(side) || role.equals("CLOSE") && !request.reduceOnly() || role.equals("OPEN") && request.reduceOnly()) {
