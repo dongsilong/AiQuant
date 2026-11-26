@@ -29,8 +29,10 @@ class DualHedgeOrderFactRecoveryServiceTest {
     private final OrderLedgerService orderLedgerService = mock(OrderLedgerService.class);
     private final ExchangeGateway gateway = mock(ExchangeGateway.class);
     private final AccountPositionSnapshotQuery positionSnapshotQuery = mock(AccountPositionSnapshotQuery.class);
+    private final StrategyPositionStateService positionStateService = mock(StrategyPositionStateService.class);
     private final DualHedgeOrderFactRecoveryService service = new DualHedgeOrderFactRecoveryService(
-        roundService, executionRecordService, orderMapper, tradeMapper, orderLedgerService, gateway, positionSnapshotQuery);
+        roundService, executionRecordService, orderMapper, tradeMapper, orderLedgerService, gateway,
+        positionSnapshotQuery, positionStateService);
     private final ExchangeGateway.Credential credential =
         new ExchangeGateway.Credential("api", "secret", "HMAC", "TESTNET");
 
@@ -68,6 +70,8 @@ class DualHedgeOrderFactRecoveryServiceTest {
         when(orderLedgerService.syncSnapshot(eq(3L), eq("BTCUSDT"), any(ExchangeGateway.OrderSnapshot.class)))
             .thenAnswer(invocation -> ledgerOrder(invocation.getArgument(2)));
         when(orderMapper.mergeExchangeFactIfMonotonic(any())).thenReturn(1);
+        when(positionStateService.findByInstanceAndLeg(2L, "LONG")).thenReturn(null);
+        when(positionStateService.findByInstanceAndLeg(2L, "SHORT")).thenReturn(null);
 
         var result = service.inspect(round, credential);
 
@@ -81,6 +85,14 @@ class DualHedgeOrderFactRecoveryServiceTest {
         verify(executionRecordService).markRecovered(any(QuantExecutionRecord.class), eq(101L), eq("FILLED"));
         verify(executionRecordService).markRecovered(any(QuantExecutionRecord.class), eq(102L), eq("FILLED"));
         verify(orderMapper, times(2)).mergeExchangeFactIfMonotonic(any());
+        var recoveredStates = org.mockito.ArgumentCaptor.forClass(org.dromara.quant.runtime.domain.QuantStrategyPositionState.class);
+        verify(positionStateService, times(2)).save(recoveredStates.capture());
+        assertEquals(List.of("LONG", "SHORT"), recoveredStates.getAllValues().stream()
+            .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getLegKey).toList());
+        assertEquals(List.of("round-1", "round-1"), recoveredStates.getAllValues().stream()
+            .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getHedgeRoundKey).toList());
+        assertEquals(List.of(true, true), recoveredStates.getAllValues().stream()
+            .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getUnsafeRecovery).toList());
     }
 
     @Test
