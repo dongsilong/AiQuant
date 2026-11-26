@@ -93,6 +93,11 @@ class DualHedgeOrderFactRecoveryServiceTest {
             .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getLegKey).toList());
         assertEquals(List.of("round-1", "round-1"), recoveredStates.getAllValues().stream()
             .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getHedgeRoundKey).toList());
+        assertEquals(List.of(
+            org.dromara.quant.runtime.DualHedgePositionCycleKey.of("round-1", "LONG"),
+            org.dromara.quant.runtime.DualHedgePositionCycleKey.of("round-1", "SHORT")),
+            recoveredStates.getAllValues().stream()
+                .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getPositionCycleKey).toList());
         assertEquals(List.of(true, true), recoveredStates.getAllValues().stream()
             .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getUnsafeRecovery).toList());
     }
