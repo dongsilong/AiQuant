@@ -77,8 +77,8 @@ public class StrategyOrderIntentService {
     }
 
     /**
-     * TESTNET 双开订单在交易所返回确定订单身份后，保存本轮每条腿的不可变来源。
-     * LIVE 仍必须使用发送前意图，不能通过此入口绕过派发门禁。
+     * TESTNET 双开订单接受后，只能把订单身份绑定到发送前已持久化的轮次来源。
+     * 不允许在接受后凭订单方向补造预派发归属。
      */
     public void recordAccepted(long credentialId, long strategyId, long instanceId, String operation, ExchangeGateway.OrderRequest request,
                                ExchangeGateway.OrderResult accepted, String positionCycleKey, String idempotencyKey) {
