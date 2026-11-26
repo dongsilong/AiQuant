@@ -196,8 +196,8 @@ public class DualHedgeOrderFactRecoveryService {
             state.setEntryPrice(position.entryPrice());
             state.setPositionQty(position.quantity().abs());
             state.setInitialPositionQty(order.executedQuantity());
-            state.setInitialMargin(position.margin() != null && position.margin().signum() > 0
-                ? position.margin() : round.getTargetMarginPerLeg());
+            state.setInitialMargin(round.getTargetMarginPerLeg() != null && round.getTargetMarginPerLeg().signum() > 0
+                ? round.getTargetMarginPerLeg() : position.margin());
             state.setEntryEquitySnapshot(round.getEntryEquitySnapshot());
             state.setRealizedPnl(BigDecimal.ZERO);
             state.setFrozenLeverage(position.leverage() == null ? round.getLeverage() : position.leverage());
