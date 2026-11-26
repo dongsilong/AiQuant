@@ -24,6 +24,21 @@ public final class DualHedgePositionCycleKey {
         return UUID.nameUUIDFromBytes((hedgeRoundKey.trim() + ":" + leg).getBytes(StandardCharsets.UTF_8)).toString();
     }
 
+    public static boolean matchesOpenIdempotencyKey(String idempotencyKey, String positionSide, String positionCycleKey) {
+        if (positionCycleKey == null || !positionCycleKey.equals(fromOpenIdempotencyKey(idempotencyKey))
+            || idempotencyKey == null) {
+            return false;
+        }
+        int operationSeparator = idempotencyKey.lastIndexOf(':');
+        int legSeparator = idempotencyKey.lastIndexOf(':', operationSeparator - 1);
+        String roundKey = idempotencyKey.substring(0, legSeparator);
+        try {
+            return positionCycleKey.equals(of(roundKey, positionSide));
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
+    }
+
     public static String fromOpenIdempotencyKey(String idempotencyKey) {
         if (idempotencyKey == null) {
             return null;
