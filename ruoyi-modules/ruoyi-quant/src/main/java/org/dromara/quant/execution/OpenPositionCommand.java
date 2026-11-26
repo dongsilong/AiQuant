@@ -25,6 +25,7 @@ import java.math.BigDecimal;
  * @param notional           信号价格计算的名义金额，不作为 MARKET 订单价格发送
  * @param validUntil         信号有效期；运行时传入行情新鲜度截止时间
  * @param safety             本次执行安全检查快照
+ * @param positionCycleKey   可选的不可变持仓周期键，仅双开轮次显式传入
  */
 public record OpenPositionCommand(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol, String side, String type,
                                   BigDecimal quantity, BigDecimal price, String positionSide, String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule,
