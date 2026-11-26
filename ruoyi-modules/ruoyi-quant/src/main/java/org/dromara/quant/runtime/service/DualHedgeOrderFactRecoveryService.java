@@ -106,7 +106,8 @@ public class DualHedgeOrderFactRecoveryService {
                 || localOrder.getPositionSide() != null && !leg.equalsIgnoreCase(localOrder.getPositionSide())
                 || localOrder.getIdempotencyKey() != null
                     && !localOrder.getIdempotencyKey().equals(clientOrderId)
-                    && !localOrder.getIdempotencyKey().equals(idempotencyKeyFor(round, leg));
+                    && !localOrder.getIdempotencyKey().equals(idempotencyKeyFor(round, leg))
+                    && !localOrder.getIdempotencyKey().startsWith("EXCHANGE_ORDER:");
         }
 
         ExchangeGateway.OrderSnapshot exchangeOrder = null;
