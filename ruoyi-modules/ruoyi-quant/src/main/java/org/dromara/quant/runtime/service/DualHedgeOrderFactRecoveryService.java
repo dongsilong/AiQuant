@@ -12,6 +12,7 @@ import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
+import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
