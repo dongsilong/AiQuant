@@ -41,6 +41,14 @@ public class StrategyOrderAcceptanceJournal {
     public QuantOrder persist(Long credentialId, Long strategyId, Long instanceId, String runMode, String operation, ExchangeGateway.OrderRequest request,
                               ExchangeGateway.OrderResult result, Integer leverageSnapshot, java.math.BigDecimal priceTickSizeSnapshot,
                               String positionCycleKey) {
+        return persist(credentialId, strategyId, instanceId, runMode, operation, request, result,
+            leverageSnapshot, priceTickSizeSnapshot, positionCycleKey, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public QuantOrder persist(Long credentialId, Long strategyId, Long instanceId, String runMode, String operation, ExchangeGateway.OrderRequest request,
+                              ExchangeGateway.OrderResult result, Integer leverageSnapshot, java.math.BigDecimal priceTickSizeSnapshot,
+                              String positionCycleKey, String idempotencyKey) {
         if (credentialId == null || credentialId <= 0 || request == null || result == null) {
             throw new IllegalArgumentException("Missing accepted order identity");
         }
@@ -60,7 +68,7 @@ public class StrategyOrderAcceptanceJournal {
             }
         } else if ("TESTNET".equalsIgnoreCase(runMode) && positionCycleKey != null
             && strategyId != null && instanceId != null) {
-            intents.recordAccepted(credentialId, strategyId, instanceId, operation, request, result, positionCycleKey);
+            intents.recordAccepted(credentialId, strategyId, instanceId, operation, request, result, positionCycleKey, idempotencyKey);
         }
         return order;
     }
