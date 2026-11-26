@@ -33,6 +33,14 @@ public class StrategyOrderAcceptanceJournal {
     @Transactional(rollbackFor = Exception.class)
     public QuantOrder persist(Long credentialId, Long strategyId, Long instanceId, String runMode, String operation, ExchangeGateway.OrderRequest request,
                               ExchangeGateway.OrderResult result, Integer leverageSnapshot, java.math.BigDecimal priceTickSizeSnapshot) {
+        return persist(credentialId, strategyId, instanceId, runMode, operation, request, result,
+            leverageSnapshot, priceTickSizeSnapshot, null);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public QuantOrder persist(Long credentialId, Long strategyId, Long instanceId, String runMode, String operation, ExchangeGateway.OrderRequest request,
+                              ExchangeGateway.OrderResult result, Integer leverageSnapshot, java.math.BigDecimal priceTickSizeSnapshot,
+                              String positionCycleKey) {
         if (credentialId == null || credentialId <= 0 || request == null || result == null) {
             throw new IllegalArgumentException("Missing accepted order identity");
         }
@@ -45,7 +53,14 @@ public class StrategyOrderAcceptanceJournal {
                 : request.positionSide().toUpperCase(java.util.Locale.ROOT))) {
             // BOTH is resolved from the immutable logical LONG/SHORT pre-dispatch intent.
             // A failure rolls the ledger back and keeps the dispatch guard held.
-            intents.record(credentialId, strategyId, instanceId, operation, request, result);
+            if (positionCycleKey == null) {
+                intents.record(credentialId, strategyId, instanceId, operation, request, result);
+            } else {
+                intents.record(credentialId, strategyId, instanceId, operation, request, result, positionCycleKey);
+            }
+        } else if ("TESTNET".equalsIgnoreCase(runMode) && positionCycleKey != null
+            && strategyId != null && instanceId != null) {
+            intents.recordAccepted(credentialId, strategyId, instanceId, operation, request, result, positionCycleKey);
         }
         return order;
     }
