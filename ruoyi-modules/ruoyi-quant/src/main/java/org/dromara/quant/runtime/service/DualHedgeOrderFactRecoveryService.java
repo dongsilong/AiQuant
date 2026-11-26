@@ -192,7 +192,6 @@ public class DualHedgeOrderFactRecoveryService {
             state.setLegKey(leg);
             state.setPositionCycleKey(round.getHedgeRoundKey() + ":" + leg);
             state.setHedgeRoundKey(round.getHedgeRoundKey());
-            state.setStatus("OPEN");
             state.setDirection(leg);
             state.setEntryPrice(position.entryPrice());
             state.setPositionQty(position.quantity().abs());
@@ -209,8 +208,7 @@ public class DualHedgeOrderFactRecoveryService {
                 : LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
         } else {
             if (!round.getHedgeRoundKey().equals(state.getHedgeRoundKey())
-                || !leg.equals(state.getLegKey()) || state.getStatus() == null
-                || "CLOSED".equalsIgnoreCase(state.getStatus())
+                || !leg.equals(state.getLegKey()) || !"OPEN".equalsIgnoreCase(state.getStatus())
                 || state.getDirection() != null && !leg.equalsIgnoreCase(state.getDirection())
                 || state.getEntryPrice() != null && state.getEntryPrice().compareTo(position.entryPrice()) != 0) {
                 throw new IllegalStateException("双开持仓状态与已核实轮次冲突，拒绝覆盖: hedgeRoundKey="
@@ -232,8 +230,12 @@ public class DualHedgeOrderFactRecoveryService {
             if (state.getOpenedAt() == null) state.setOpenedAt(order.createTime() == null ? round.getSignalEventTime()
                 : LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
         }
-        state.setRecoveryRequired(true);
-        state.setUnsafeRecovery(true);
+        if (state.getRecoveryRequired() == null) {
+            state.setRecoveryRequired(true);
+        }
+        if (state.getUnsafeRecovery() == null) {
+            state.setUnsafeRecovery(true);
+        }
         positionStateService.save(state);
     }
 
@@ -367,6 +369,9 @@ public class DualHedgeOrderFactRecoveryService {
     }
 
     private static void updateRoundStatus(QuantStrategyHedgeRound round, String longStatus, String shortStatus) {
+        if (StrategyHedgeRoundService.STATUS_CLOSING.equals(round.getStatus())) {
+            return;
+        }
         if (DualHedgeLegStateResolver.OPEN.equals(longStatus) && DualHedgeLegStateResolver.OPEN.equals(shortStatus)) {
             round.setStatus(StrategyHedgeRoundService.STATUS_OPEN);
             return;
