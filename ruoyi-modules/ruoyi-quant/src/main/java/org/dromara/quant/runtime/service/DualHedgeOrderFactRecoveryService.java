@@ -1,0 +1,234 @@
+package org.dromara.quant.runtime.service;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
+import org.dromara.quant.exchange.AccountPositionSnapshotQuery;
+import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.execution.ExecutionRecordService;
+import org.dromara.quant.execution.OrderLedgerService;
+import org.dromara.quant.execution.domain.QuantExecutionRecord;
+import org.dromara.quant.order.domain.QuantOrder;
+import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * 双开轮次订单事实恢复入口。
+ *
+ * <p>只查询交易所订单/持仓并补齐本地订单账本，不发送订单、不撤单、不重试 UNKNOWN。</p>
+ */
+@RequiredArgsConstructor
+@Service
+public class DualHedgeOrderFactRecoveryService {
+    private final StrategyHedgeRoundService roundService;
+    private final ExecutionRecordService executionRecordService;
+    private final QuantOrderMapper orderMapper;
+    private final OrderLedgerService orderLedgerService;
+    private final ExchangeGateway gateway;
+    private final AccountPositionSnapshotQuery positionSnapshotQuery;
+
+    /**
+     * 对一轮 LONG/SHORT 做一次只读交易所核对。调用方必须提供当前有效凭证；
+     * 本方法不从旧 Runtime 或旧凭证版本恢复交易执行权。
+     */
+    public RecoveryResult inspect(QuantStrategyHedgeRound round, ExchangeGateway.Credential credential) {
+        if (round == null || round.getId() == null || round.getCredentialId() == null
+            || round.getStrategyId() == null || round.getInstanceId() == null
+            || round.getHedgeRoundKey() == null || round.getSymbol() == null || round.getSymbol().isBlank()
+            || credential == null) {
+            throw new IllegalArgumentException("双开订单恢复缺少轮次或有效凭证");
+        }
+
+        // 先取完整持仓快照；失败时不修改任何轮次状态。
+        List<ExchangeGateway.PositionSnapshot> positions =
+            positionSnapshotQuery.query(round.getCredentialId(), credential);
+        if (positions == null) {
+            throw new IllegalStateException("交易所未返回完整持仓快照，暂停双开订单恢复");
+        }
+        validatePositions(positions, round.getSymbol());
+
+        LegResult longResult = inspectLeg(round, credential, "LONG", round.getLongIdempotencyKey(),
+            round.getLongClientOrderId(), round.getLongOrderId(), round.getLongLegStatus(), positions);
+        LegResult shortResult = inspectLeg(round, credential, "SHORT", round.getShortIdempotencyKey(),
+            round.getShortClientOrderId(), round.getShortOrderId(), round.getShortLegStatus(), positions);
+
+        applyLeg(round, "LONG", longResult);
+        applyLeg(round, "SHORT", shortResult);
+        updateRoundStatus(round, longResult.status(), shortResult.status());
+        roundService.save(round);
+        return new RecoveryResult(longResult.status(), shortResult.status(), round.getStatus(),
+            longResult.exchangeOrderFound(), shortResult.exchangeOrderFound());
+    }
+
+    private LegResult inspectLeg(QuantStrategyHedgeRound round, ExchangeGateway.Credential credential,
+                                 String leg, String idempotencyKey, String roundClientOrderId, Long roundOrderId,
+                                 String persistedLegStatus, List<ExchangeGateway.PositionSnapshot> positions) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            idempotencyKey = round.getHedgeRoundKey() + ":" + leg + ":OPEN";
+        }
+        QuantExecutionRecord execution = executionRecordService.find(round.getCredentialId(), idempotencyKey);
+        boolean identityConflict = execution != null && (!"OPEN".equalsIgnoreCase(execution.getOperationType())
+            || !round.getSymbol().equalsIgnoreCase(execution.getSymbol())
+            || !round.getStrategyId().equals(execution.getStrategyId())
+            || !round.getInstanceId().equals(execution.getStrategyInstanceId()));
+
+        String clientOrderId = execution == null ? roundClientOrderId : execution.getClientOrderId();
+        Long exchangeOrderId = execution == null ? roundOrderId : execution.getExchangeOrderId();
+        QuantOrder localOrder = findLocalOrder(round, clientOrderId, exchangeOrderId);
+        if (localOrder != null) {
+            identityConflict |= !round.getSymbol().equalsIgnoreCase(localOrder.getSymbol())
+                || localOrder.getStrategyInstanceId() != null && !round.getInstanceId().equals(localOrder.getStrategyInstanceId())
+                || localOrder.getStrategyId() != null && !round.getStrategyId().equals(localOrder.getStrategyId())
+                || localOrder.getPositionSide() != null && !leg.equalsIgnoreCase(localOrder.getPositionSide())
+                || localOrder.getIdempotencyKey() != null
+                    && !localOrder.getIdempotencyKey().equals(clientOrderId)
+                    && !localOrder.getIdempotencyKey().equals(idempotencyKeyFor(round, leg));
+        }
+
+        ExchangeGateway.OrderSnapshot exchangeOrder = null;
+        if (exchangeOrderId != null || clientOrderId != null && !clientOrderId.isBlank()) {
+            exchangeOrder = gateway.queryOrder(credential, round.getSymbol(), exchangeOrderId, clientOrderId);
+        }
+        if (exchangeOrder != null) {
+            identityConflict |= !round.getSymbol().equalsIgnoreCase(exchangeOrder.symbol())
+                || !leg.equalsIgnoreCase(exchangeOrder.positionSide())
+                || !("LONG".equals(leg) ? "BUY" : "SELL").equalsIgnoreCase(exchangeOrder.side())
+                || exchangeOrderId != null && exchangeOrder.orderId() != null && !exchangeOrderId.equals(exchangeOrder.orderId())
+                || clientOrderId != null && exchangeOrder.clientOrderId() != null
+                    && !clientOrderId.equals(exchangeOrder.clientOrderId());
+            if (!identityConflict) {
+                orderLedgerService.syncSnapshot(round.getCredentialId(), round.getSymbol(), exchangeOrder);
+            }
+        }
+
+        BigDecimal positionQuantity = BigDecimal.ZERO;
+        boolean positionFound = false;
+        for (ExchangeGateway.PositionSnapshot position : positions) {
+            if (!round.getSymbol().equalsIgnoreCase(position.symbol())) {
+                continue;
+            }
+            if (leg.equalsIgnoreCase(position.side())) {
+                positionFound = true;
+                positionQuantity = position.quantity().abs();
+                break;
+            }
+            if ("BOTH".equalsIgnoreCase(position.side()) && position.quantity().signum() != 0) {
+                identityConflict = true;
+            }
+        }
+
+        String orderStatus = exchangeOrder == null ? null : exchangeOrder.status();
+        BigDecimal executed = exchangeOrder == null ? null : exchangeOrder.executedQuantity();
+        BigDecimal original = exchangeOrder == null ? null : exchangeOrder.originalQuantity();
+        String executionStatus = execution == null ? null : execution.getExecutionStatus();
+        boolean dispatchStarted = persistedLegStatus != null
+            && !StrategyHedgeRoundService.LEG_NOT_STARTED.equals(persistedLegStatus);
+        String status = DualHedgeLegStateResolver.resolve(dispatchStarted, executionStatus, orderStatus,
+            executed, original, positionQuantity, true, identityConflict);
+        return new LegResult(status, exchangeOrder == null ? null : exchangeOrder.orderId(),
+            exchangeOrder == null ? null : exchangeOrder.clientOrderId(), exchangeOrder != null, positionFound);
+    }
+
+    private QuantOrder findLocalOrder(QuantStrategyHedgeRound round, String clientOrderId, Long exchangeOrderId) {
+        LambdaQueryWrapper<QuantOrder> query = new LambdaQueryWrapper<QuantOrder>()
+            .eq(QuantOrder::getCredentialId, round.getCredentialId())
+            .eq(QuantOrder::getSymbol, round.getSymbol());
+        if (exchangeOrderId != null && clientOrderId != null) {
+            query.and(wrapper -> wrapper.eq(QuantOrder::getExchangeOrderId, exchangeOrderId)
+                .or().eq(QuantOrder::getClientOrderId, clientOrderId));
+        } else if (exchangeOrderId != null) {
+            query.eq(QuantOrder::getExchangeOrderId, exchangeOrderId);
+        } else if (clientOrderId != null && !clientOrderId.isBlank()) {
+            query.eq(QuantOrder::getClientOrderId, clientOrderId);
+        } else {
+            return null;
+        }
+        List<QuantOrder> matches = orderMapper.selectList(query);
+        if (matches.size() > 1) {
+            throw new IllegalStateException("双开腿关联到多条本地订单，标记冲突并停止恢复");
+        }
+        return matches.isEmpty() ? null : matches.getFirst();
+    }
+
+    private static void validatePositions(List<ExchangeGateway.PositionSnapshot> positions, String symbol) {
+        for (ExchangeGateway.PositionSnapshot position : positions) {
+            if (position == null || position.symbol() == null || position.side() == null || position.quantity() == null) {
+                throw new IllegalStateException("交易所持仓快照字段不完整，暂停双开订单恢复");
+            }
+            if (symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0
+                && !"BOTH".equalsIgnoreCase(position.side()) && position.updateTime() == null) {
+                throw new IllegalStateException("交易所持仓缺少更新时间，不能确认双开腿状态");
+            }
+        }
+    }
+
+    private static void applyLeg(QuantStrategyHedgeRound round, String leg, LegResult result) {
+        String status = switch (result.status()) {
+            case DualHedgeLegStateResolver.NOT_DISPATCHED -> StrategyHedgeRoundService.LEG_NOT_STARTED;
+            case DualHedgeLegStateResolver.DISPATCHING -> StrategyHedgeRoundService.LEG_DISPATCHING;
+            case DualHedgeLegStateResolver.ACCEPTED -> StrategyHedgeRoundService.LEG_ACCEPTED;
+            case DualHedgeLegStateResolver.UNKNOWN, DualHedgeLegStateResolver.FILLED_POSITION_UNVERIFIED,
+                DualHedgeLegStateResolver.CONFLICT -> result.status();
+            case DualHedgeLegStateResolver.PARTIALLY_FILLED -> StrategyHedgeRoundService.LEG_PARTIALLY_FILLED;
+            case DualHedgeLegStateResolver.OPEN -> StrategyHedgeRoundService.LEG_OPEN;
+            case DualHedgeLegStateResolver.REJECTED, DualHedgeLegStateResolver.CANCELED -> result.status();
+            default -> throw new IllegalStateException("未知双开腿恢复状态: " + result.status());
+        };
+        if ("LONG".equals(leg)) {
+            round.setLongLegStatus(status);
+            if (result.orderId() != null) {
+                round.setLongOrderId(result.orderId());
+            }
+            if (result.clientOrderId() != null) {
+                round.setLongClientOrderId(result.clientOrderId());
+            }
+        } else {
+            round.setShortLegStatus(status);
+            if (result.orderId() != null) {
+                round.setShortOrderId(result.orderId());
+            }
+            if (result.clientOrderId() != null) {
+                round.setShortClientOrderId(result.clientOrderId());
+            }
+        }
+    }
+
+    private static void updateRoundStatus(QuantStrategyHedgeRound round, String longStatus, String shortStatus) {
+        if (DualHedgeLegStateResolver.OPEN.equals(longStatus) && DualHedgeLegStateResolver.OPEN.equals(shortStatus)) {
+            round.setStatus(StrategyHedgeRoundService.STATUS_OPEN);
+            return;
+        }
+        if (DualHedgeLegStateResolver.CONFLICT.equals(longStatus) || DualHedgeLegStateResolver.CONFLICT.equals(shortStatus)
+            || DualHedgeLegStateResolver.UNKNOWN.equals(longStatus) || DualHedgeLegStateResolver.UNKNOWN.equals(shortStatus)
+            || DualHedgeLegStateResolver.FILLED_POSITION_UNVERIFIED.equals(longStatus)
+            || DualHedgeLegStateResolver.FILLED_POSITION_UNVERIFIED.equals(shortStatus)
+            || DualHedgeLegStateResolver.PARTIALLY_FILLED.equals(longStatus)
+            || DualHedgeLegStateResolver.PARTIALLY_FILLED.equals(shortStatus)
+            || DualHedgeLegStateResolver.OPEN.equals(longStatus) || DualHedgeLegStateResolver.OPEN.equals(shortStatus)
+            || DualHedgeLegStateResolver.REJECTED.equals(longStatus) || DualHedgeLegStateResolver.REJECTED.equals(shortStatus)
+            || DualHedgeLegStateResolver.CANCELED.equals(longStatus) || DualHedgeLegStateResolver.CANCELED.equals(shortStatus)) {
+            round.setStatus(StrategyHedgeRoundService.STATUS_DEGRADED);
+            return;
+        }
+        if (DualHedgeLegStateResolver.NOT_DISPATCHED.equals(longStatus)
+            && DualHedgeLegStateResolver.NOT_DISPATCHED.equals(shortStatus)) {
+            round.setStatus(StrategyHedgeRoundService.STATUS_ABORTED);
+        }
+    }
+
+    private static String idempotencyKeyFor(QuantStrategyHedgeRound round, String leg) {
+        return round.getHedgeRoundKey() + ":" + leg + ":OPEN";
+    }
+
+    public record RecoveryResult(String longLegStatus, String shortLegStatus, String roundStatus,
+                                 boolean longExchangeOrderFound, boolean shortExchangeOrderFound) {
+    }
+
+    private record LegResult(String status, Long orderId, String clientOrderId,
+                             boolean exchangeOrderFound, boolean positionFound) {
+    }
+}
