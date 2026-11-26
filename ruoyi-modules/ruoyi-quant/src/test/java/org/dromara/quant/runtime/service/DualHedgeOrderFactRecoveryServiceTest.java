@@ -64,7 +64,9 @@ class DualHedgeOrderFactRecoveryServiceTest {
         when(executionRecordService.find(3L, "round-1:LONG:OPEN")).thenReturn(execution("round-1:LONG:OPEN", "CONFIRMED"));
         when(executionRecordService.find(3L, "round-1:SHORT:OPEN")).thenReturn(execution("round-1:SHORT:OPEN", "CONFIRMED"));
         when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-        when(tradeMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(tradeMapper.selectList(any(Wrapper.class))).thenReturn(
+            List.of(trade(101L, "LONG", "BUY")), List.of(trade(101L, "LONG", "BUY")),
+            List.of(trade(102L, "SHORT", "SELL")), List.of(trade(102L, "SHORT", "SELL")));
         when(gateway.queryOrder(credential, "BTCUSDT", 101L, "client-long")).thenReturn(order(101L, "client-long", "BUY", "LONG"));
         when(gateway.queryOrder(credential, "BTCUSDT", 102L, "client-short")).thenReturn(order(102L, "client-short", "SELL", "SHORT"));
         when(orderLedgerService.syncSnapshot(eq(3L), eq("BTCUSDT"), any(ExchangeGateway.OrderSnapshot.class)))
@@ -93,6 +95,28 @@ class DualHedgeOrderFactRecoveryServiceTest {
             .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getHedgeRoundKey).toList());
         assertEquals(List.of(true, true), recoveredStates.getAllValues().stream()
             .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getUnsafeRecovery).toList());
+    }
+
+    @Test
+    void filledOrdersWithoutCompleteTradeFactsDoNotCreateStrategyPositionState() {
+        QuantStrategyHedgeRound round = round();
+        when(positionSnapshotQuery.query(3L, credential)).thenReturn(List.of(
+            position("LONG", "2"), position("SHORT", "2")));
+        when(executionRecordService.find(3L, "round-1:LONG:OPEN")).thenReturn(execution("round-1:LONG:OPEN", "CONFIRMED"));
+        when(executionRecordService.find(3L, "round-1:SHORT:OPEN")).thenReturn(execution("round-1:SHORT:OPEN", "CONFIRMED"));
+        when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(tradeMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(gateway.queryOrder(credential, "BTCUSDT", 101L, "client-long")).thenReturn(order(101L, "client-long", "BUY", "LONG"));
+        when(gateway.queryOrder(credential, "BTCUSDT", 102L, "client-short")).thenReturn(order(102L, "client-short", "SELL", "SHORT"));
+        when(orderLedgerService.syncSnapshot(eq(3L), eq("BTCUSDT"), any(ExchangeGateway.OrderSnapshot.class)))
+            .thenAnswer(invocation -> ledgerOrder(invocation.getArgument(2)));
+        when(orderMapper.mergeExchangeFactIfMonotonic(any())).thenReturn(1);
+
+        var result = service.inspect(round, credential);
+
+        assertEquals(DualHedgeLegStateResolver.FILLED_POSITION_UNVERIFIED, result.longLegStatus());
+        assertEquals(DualHedgeLegStateResolver.FILLED_POSITION_UNVERIFIED, result.shortLegStatus());
+        verify(positionStateService, never()).save(any());
     }
 
     @Test
@@ -149,6 +173,23 @@ class DualHedgeOrderFactRecoveryServiceTest {
         order.setClientOrderId(snapshot.clientOrderId());
         order.setPositionSide(snapshot.positionSide());
         return order;
+    }
+
+    private static org.dromara.quant.account.domain.QuantTrade trade(Long orderId, String positionSide, String side) {
+        var trade = new org.dromara.quant.account.domain.QuantTrade();
+        trade.setCredentialId(3L);
+        trade.setSymbol("BTCUSDT");
+        trade.setExchangeOrderId(orderId);
+        trade.setExchangeTradeId(orderId + 1000L);
+        trade.setPositionSide(positionSide);
+        trade.setSide(side);
+        trade.setQuantity(new BigDecimal("2"));
+        trade.setPrice(new BigDecimal("100"));
+        trade.setCommission(BigDecimal.ZERO);
+        trade.setCommissionAsset("USDT");
+        trade.setRealizedPnl(BigDecimal.ZERO);
+        trade.setTradeTime(java.time.LocalDateTime.now());
+        return trade;
     }
 
     private static ExchangeGateway.OrderSnapshot order(Long id, String clientId, String side, String positionSide) {
