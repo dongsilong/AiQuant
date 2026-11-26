@@ -81,7 +81,7 @@ public class StrategyHedgeRoundExecutionService {
         try {
             result = executionService.openByRuntime(round.getCredentialId(), round.getStrategyId(),
                 round.getInstanceId(), round.getSymbol(), side, leg, quantity, referencePrice, round.getLeverage(),
-                MARGIN_MODE, key, eventTime, credentialRuntimeVersion);
+                MARGIN_MODE, key, eventTime, credentialRuntimeVersion, round.getHedgeRoundKey() + ":" + leg);
         } catch (RuntimeException ex) {
             markLeg(round, leg, StrategyHedgeRoundService.LEG_UNKNOWN, null);
             round.setStatus(StrategyHedgeRoundService.STATUS_DEGRADED);
