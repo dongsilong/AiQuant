@@ -148,8 +148,8 @@ public class DualHedgeOrderFactRecoveryService {
             && !StrategyHedgeRoundService.LEG_NOT_STARTED.equals(persistedLegStatus);
         String status = DualHedgeLegStateResolver.resolve(dispatchStarted, executionStatus, orderStatus,
             executed, original, positionQuantity, true, identityConflict);
-        return new LegResult(status, exchangeOrder == null ? null : exchangeOrder.orderId(),
-            exchangeOrder == null ? null : exchangeOrder.clientOrderId(), exchangeOrder != null);
+        return new LegResult(status, exchangeOrder == null ? exchangeOrderId : exchangeOrder.orderId(),
+            exchangeOrder == null ? clientOrderId : exchangeOrder.clientOrderId(), exchangeOrder != null);
     }
 
     private boolean hasConflictingTradeFacts(QuantStrategyHedgeRound round, String leg,
