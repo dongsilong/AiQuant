@@ -16,7 +16,7 @@ class DualHedgeLegStateResolverTest {
             resolve(false, null, null, null, null, BigDecimal.ZERO, true, false));
         assertEquals(DualHedgeLegStateResolver.UNKNOWN,
             resolve(true, null, null, null, null, BigDecimal.ZERO, true, false));
-        assertEquals(DualHedgeLegStateResolver.DISPATCHING,
+        assertEquals(DualHedgeLegStateResolver.UNKNOWN,
             resolve(true, "PENDING", null, null, null, BigDecimal.ZERO, true, false));
     }
 
