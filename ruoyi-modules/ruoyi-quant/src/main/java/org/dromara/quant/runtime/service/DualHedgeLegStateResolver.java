@@ -45,6 +45,11 @@ public final class DualHedgeLegStateResolver {
         String order = normalize(orderStatus);
         String execution = normalize(executionStatus);
 
+        if (original.signum() > 0 && executed.compareTo(original) > 0
+            || positionSnapshotComplete && position.signum() > 0 && executed.signum() == 0) {
+            return CONFLICT;
+        }
+
         if (order != null) {
             if ("REJECTED".equals(order)) {
                 return executed.signum() > 0 ? PARTIALLY_FILLED : REJECTED;
