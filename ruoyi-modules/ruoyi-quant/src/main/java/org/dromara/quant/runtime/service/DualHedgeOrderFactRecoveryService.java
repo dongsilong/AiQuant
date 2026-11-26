@@ -15,6 +15,8 @@ import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 
 /**
@@ -32,6 +34,7 @@ public class DualHedgeOrderFactRecoveryService {
     private final OrderLedgerService orderLedgerService;
     private final ExchangeGateway gateway;
     private final AccountPositionSnapshotQuery positionSnapshotQuery;
+    private final StrategyPositionStateService positionStateService;
 
     /**
      * 对一轮 LONG/SHORT 做一次只读交易所核对。调用方必须提供当前有效凭证；
@@ -66,6 +69,8 @@ public class DualHedgeOrderFactRecoveryService {
 
         applyLeg(round, "LONG", longResult);
         applyLeg(round, "SHORT", shortResult);
+        persistOpenLegState(round, "LONG", longResult);
+        persistOpenLegState(round, "SHORT", shortResult);
         updateRoundStatus(round, longResult.status(), shortResult.status());
         roundService.save(round);
         return new RecoveryResult(longResult.status(), shortResult.status(), round.getStatus(),
@@ -133,12 +138,14 @@ public class DualHedgeOrderFactRecoveryService {
         }
 
         BigDecimal positionQuantity = BigDecimal.ZERO;
+        ExchangeGateway.PositionSnapshot matchedPosition = null;
         for (ExchangeGateway.PositionSnapshot position : positions) {
             if (!round.getSymbol().equalsIgnoreCase(position.symbol())) {
                 continue;
             }
             if (leg.equalsIgnoreCase(position.side())) {
                 positionQuantity = position.quantity().abs();
+                matchedPosition = position;
                 break;
             }
             if ("BOTH".equalsIgnoreCase(position.side()) && position.quantity().signum() != 0) {
@@ -155,7 +162,72 @@ public class DualHedgeOrderFactRecoveryService {
         String status = DualHedgeLegStateResolver.resolve(dispatchStarted, executionStatus, orderStatus,
             executed, original, positionQuantity, true, identityConflict);
         return new LegResult(status, exchangeOrder == null ? exchangeOrderId : exchangeOrder.orderId(),
-            exchangeOrder == null ? clientOrderId : exchangeOrder.clientOrderId(), exchangeOrder != null);
+            exchangeOrder == null ? clientOrderId : exchangeOrder.clientOrderId(), exchangeOrder != null,
+            exchangeOrder, matchedPosition);
+    }
+
+    private void persistOpenLegState(QuantStrategyHedgeRound round, String leg, LegResult result) {
+        if (!DualHedgeLegStateResolver.OPEN.equals(result.status())) {
+            return;
+        }
+        ExchangeGateway.PositionSnapshot position = result.position();
+        ExchangeGateway.OrderSnapshot order = result.order();
+        if (position == null || order == null
+            || order.executedQuantity() == null || order.executedQuantity().signum() <= 0
+            || position.entryPrice() == null || position.entryPrice().signum() <= 0
+            || position.quantity() == null || position.quantity().signum() == 0) {
+            throw new IllegalStateException("双开腿已核实为 OPEN，但开仓价格/数量快照不完整，拒绝生成策略持仓状态");
+        }
+        QuantStrategyPositionState state = positionStateService.findByInstanceAndLeg(round.getInstanceId(), leg);
+        if (state == null) {
+            state = new QuantStrategyPositionState();
+            state.setInstanceId(round.getInstanceId());
+            state.setLegKey(leg);
+            state.setPositionCycleKey(round.getHedgeRoundKey() + ":" + leg);
+            state.setHedgeRoundKey(round.getHedgeRoundKey());
+            state.setStatus("OPEN");
+            state.setDirection(leg);
+            state.setEntryPrice(position.entryPrice());
+            state.setPositionQty(position.quantity().abs());
+            state.setInitialPositionQty(order.executedQuantity());
+            state.setInitialMargin(position.margin() != null && position.margin().signum() > 0
+                ? position.margin() : round.getTargetMarginPerLeg());
+            state.setEntryEquitySnapshot(round.getEntryEquitySnapshot());
+            state.setRealizedPnl(BigDecimal.ZERO);
+            state.setFrozenLeverage(position.leverage() == null ? round.getLeverage() : position.leverage());
+            state.setStrategyParamsSnapshot(round.getStrategyParamsSnapshot());
+            state.setTrailingArmed(false);
+            state.setTrailingStopRoi(null);
+            state.setOpenedAt(order.createTime() == null ? round.getSignalEventTime()
+                : LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
+        } else {
+            if (!round.getHedgeRoundKey().equals(state.getHedgeRoundKey())
+                || !leg.equals(state.getLegKey()) || state.getStatus() == null
+                || "CLOSED".equalsIgnoreCase(state.getStatus())
+                || state.getDirection() != null && !leg.equalsIgnoreCase(state.getDirection())
+                || state.getEntryPrice() != null && state.getEntryPrice().compareTo(position.entryPrice()) != 0) {
+                throw new IllegalStateException("双开持仓状态与已核实轮次冲突，拒绝覆盖: hedgeRoundKey="
+                    + round.getHedgeRoundKey() + ", leg=" + leg);
+            }
+            state.setStatus("OPEN");
+            state.setDirection(leg);
+            state.setPositionQty(position.quantity().abs());
+            if (state.getInitialPositionQty() == null) state.setInitialPositionQty(order.executedQuantity());
+            if (state.getEntryPrice() == null) state.setEntryPrice(position.entryPrice());
+            if (state.getInitialMargin() == null) state.setInitialMargin(position.margin() != null && position.margin().signum() > 0
+                ? position.margin() : round.getTargetMarginPerLeg());
+            if (state.getEntryEquitySnapshot() == null) state.setEntryEquitySnapshot(round.getEntryEquitySnapshot());
+            if (state.getFrozenLeverage() == null) state.setFrozenLeverage(position.leverage() == null ? round.getLeverage() : position.leverage());
+            if (state.getPositionCycleKey() == null) state.setPositionCycleKey(round.getHedgeRoundKey() + ":" + leg);
+            if (state.getRealizedPnl() == null) state.setRealizedPnl(BigDecimal.ZERO);
+            if (state.getStrategyParamsSnapshot() == null) state.setStrategyParamsSnapshot(round.getStrategyParamsSnapshot());
+            if (state.getTrailingArmed() == null) state.setTrailingArmed(false);
+            if (state.getOpenedAt() == null) state.setOpenedAt(order.createTime() == null ? round.getSignalEventTime()
+                : LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
+        }
+        state.setRecoveryRequired(true);
+        state.setUnsafeRecovery(true);
+        positionStateService.save(state);
     }
 
     private void requireStrategyOwnership(QuantStrategyHedgeRound round, QuantOrder order) {
@@ -288,6 +360,7 @@ public class DualHedgeOrderFactRecoveryService {
     }
 
     private record LegResult(String status, Long orderId, String clientOrderId,
-                             boolean exchangeOrderFound) {
+                             boolean exchangeOrderFound, ExchangeGateway.OrderSnapshot order,
+                             ExchangeGateway.PositionSnapshot position) {
     }
 }
