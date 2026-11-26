@@ -29,7 +29,18 @@ import java.math.BigDecimal;
 public record OpenPositionCommand(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol, String side, String type,
                                   BigDecimal quantity, BigDecimal price, String positionSide, String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule,
                                   Integer leverage, String marginMode, ExecutionSafetyContext safety, BigDecimal notional, java.time.Instant validUntil,
-                                  java.time.Instant signalEventTime, Long credentialRuntimeVersion) {
+                                  java.time.Instant signalEventTime, Long credentialRuntimeVersion, String positionCycleKey) {
+    /**
+     * 兼容原有完整命令构造方式。
+     */
+    public OpenPositionCommand(Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol, String side, String type,
+                               BigDecimal quantity, BigDecimal price, String positionSide, String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule,
+                               Integer leverage, String marginMode, ExecutionSafetyContext safety, BigDecimal notional, java.time.Instant validUntil,
+                               java.time.Instant signalEventTime, Long credentialRuntimeVersion) {
+        this(credentialId, strategyId, strategyInstanceId, credential, symbol, side, type, quantity, price, positionSide, idempotencyKey, runMode, symbolRule, leverage,
+            marginMode, safety, notional, validUntil, signalEventTime, credentialRuntimeVersion, null);
+    }
+
     /**
      * 兼容原有完整命令构造方式。
      */
@@ -38,7 +49,7 @@ public record OpenPositionCommand(Long credentialId, Long strategyId, Long strat
                                Integer leverage, String marginMode, ExecutionSafetyContext safety, BigDecimal notional, java.time.Instant validUntil,
                                java.time.Instant signalEventTime) {
         this(credentialId, strategyId, strategyInstanceId, credential, symbol, side, type, quantity, price, positionSide, idempotencyKey, runMode, symbolRule, leverage,
-            marginMode, safety, notional, validUntil, signalEventTime, null);
+            marginMode, safety, notional, validUntil, signalEventTime, null, null);
     }
 
     /**
@@ -48,7 +59,7 @@ public record OpenPositionCommand(Long credentialId, Long strategyId, Long strat
                                BigDecimal quantity, BigDecimal price, String positionSide, String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule,
                                Integer leverage, String marginMode, ExecutionSafetyContext safety, BigDecimal notional, java.time.Instant validUntil) {
         this(credentialId, strategyId, strategyInstanceId, credential, symbol, side, type, quantity, price, positionSide, idempotencyKey, runMode, symbolRule, leverage,
-            marginMode, safety, notional, validUntil, null, null);
+            marginMode, safety, notional, validUntil, null, null, null);
     }
 
     /**
@@ -58,6 +69,6 @@ public record OpenPositionCommand(Long credentialId, Long strategyId, Long strat
                                BigDecimal quantity, BigDecimal price, String positionSide, String idempotencyKey, String runMode, ExchangeGateway.SymbolRule symbolRule,
                                Integer leverage, String marginMode, ExecutionSafetyContext safety) {
         this(credentialId, strategyId, strategyInstanceId, credential, symbol, side, type, quantity, price, positionSide, idempotencyKey, runMode, symbolRule, leverage,
-            marginMode, safety, price == null ? null : quantity.multiply(price), null);
+            marginMode, safety, price == null ? null : quantity.multiply(price), null, null, null);
     }
 }
