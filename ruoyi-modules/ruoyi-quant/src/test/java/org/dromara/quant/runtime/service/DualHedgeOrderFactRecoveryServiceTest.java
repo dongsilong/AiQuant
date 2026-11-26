@@ -65,6 +65,9 @@ class DualHedgeOrderFactRecoveryServiceTest {
         when(tradeMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
         when(gateway.queryOrder(credential, "BTCUSDT", 101L, "client-long")).thenReturn(order(101L, "client-long", "BUY", "LONG"));
         when(gateway.queryOrder(credential, "BTCUSDT", 102L, "client-short")).thenReturn(order(102L, "client-short", "SELL", "SHORT"));
+        when(orderLedgerService.syncSnapshot(eq(3L), eq("BTCUSDT"), any(ExchangeGateway.OrderSnapshot.class)))
+            .thenAnswer(invocation -> ledgerOrder(invocation.getArgument(2)));
+        when(orderMapper.mergeExchangeFactIfMonotonic(any())).thenReturn(1);
 
         var result = service.inspect(round, credential);
 
@@ -77,6 +80,7 @@ class DualHedgeOrderFactRecoveryServiceTest {
             argThat(snapshot -> snapshot != null && Long.valueOf(102L).equals(snapshot.orderId())));
         verify(executionRecordService).markRecovered(any(QuantExecutionRecord.class), eq(101L), eq("FILLED"));
         verify(executionRecordService).markRecovered(any(QuantExecutionRecord.class), eq(102L), eq("FILLED"));
+        verify(orderMapper, times(2)).mergeExchangeFactIfMonotonic(any());
     }
 
     @Test
@@ -122,6 +126,17 @@ class DualHedgeOrderFactRecoveryServiceTest {
         record.setExchangeOrderId(key.endsWith(":LONG:OPEN") ? 101L : 102L);
         record.setExecutionStatus(status);
         return record;
+    }
+
+    private static org.dromara.quant.order.domain.QuantOrder ledgerOrder(ExchangeGateway.OrderSnapshot snapshot) {
+        var order = new org.dromara.quant.order.domain.QuantOrder();
+        order.setId(snapshot.orderId());
+        order.setCredentialId(3L);
+        order.setSymbol(snapshot.symbol());
+        order.setExchangeOrderId(snapshot.orderId());
+        order.setClientOrderId(snapshot.clientOrderId());
+        order.setPositionSide(snapshot.positionSide());
+        return order;
     }
 
     private static ExchangeGateway.OrderSnapshot order(Long id, String clientId, String side, String positionSide) {
