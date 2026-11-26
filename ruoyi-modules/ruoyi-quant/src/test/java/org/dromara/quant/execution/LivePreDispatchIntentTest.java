@@ -85,6 +85,20 @@ class LivePreDispatchIntentTest {
     }
 
     @Test
+    void dualHedgeOpeningPersistsExplicitCycleBeforeAnyExchangeRequest() {
+        when(mapper.insertPreDispatchIntentWithCycle(1L, "BTCUSDT", "round-1:LONG:OPEN", "cid-a",
+            2L, 3L, "OPEN", "LONG", "BUY", 4L, "round-1:LONG")).thenReturn(1);
+
+        var ticket = dispatcher.beginStrategy(1L, "BTCUSDT", "round-1:LONG:OPEN", "OPEN", "cid-a",
+            2L, 3L, 4L, "LONG", "BUY", "round-1:LONG");
+
+        assertEquals("round-1:LONG:OPEN", ticket.key());
+        verify(mapper).insertPreDispatchIntentWithCycle(1L, "BTCUSDT", "round-1:LONG:OPEN", "cid-a",
+            2L, 3L, "OPEN", "LONG", "BUY", 4L, "round-1:LONG");
+        verify(mapper, never()).insertPreDispatchIntent(any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void contradictoryOpeningSideNeverAcquiresGuard() {
         assertThrows(IllegalArgumentException.class, () -> dispatcher.beginStrategy(1L, "BTCUSDT", "dispatch-a", "OPEN", "cid-a", 2L, 3L, 4L, "LONG", "SELL"));
         verifyNoInteractions(mapper);
