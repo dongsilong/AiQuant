@@ -98,6 +98,36 @@ class DualHedgeOrderFactRecoveryServiceTest {
     }
 
     @Test
+    void doesNotRegressExistingClosingLegState() {
+        QuantStrategyHedgeRound round = round();
+        when(positionSnapshotQuery.query(3L, credential)).thenReturn(List.of(
+            position("LONG", "2"), position("SHORT", "2")));
+        when(executionRecordService.find(3L, "round-1:LONG:OPEN")).thenReturn(execution("round-1:LONG:OPEN", "CONFIRMED"));
+        when(executionRecordService.find(3L, "round-1:SHORT:OPEN")).thenReturn(execution("round-1:SHORT:OPEN", "CONFIRMED"));
+        when(orderMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+        when(tradeMapper.selectList(any(Wrapper.class))).thenReturn(
+            List.of(trade(101L, "LONG", "BUY")), List.of(trade(101L, "LONG", "BUY")),
+            List.of(trade(102L, "SHORT", "SELL")), List.of(trade(102L, "SHORT", "SELL")));
+        when(gateway.queryOrder(credential, "BTCUSDT", 101L, "client-long")).thenReturn(order(101L, "client-long", "BUY", "LONG"));
+        when(gateway.queryOrder(credential, "BTCUSDT", 102L, "client-short")).thenReturn(order(102L, "client-short", "SELL", "SHORT"));
+        when(orderLedgerService.syncSnapshot(eq(3L), eq("BTCUSDT"), any(ExchangeGateway.OrderSnapshot.class)))
+            .thenAnswer(invocation -> ledgerOrder(invocation.getArgument(2)));
+        when(orderMapper.mergeExchangeFactIfMonotonic(any())).thenReturn(1);
+        var closing = new org.dromara.quant.runtime.domain.QuantStrategyPositionState();
+        closing.setInstanceId(2L);
+        closing.setLegKey("LONG");
+        closing.setHedgeRoundKey("round-1");
+        closing.setStatus("CLOSING");
+        when(positionStateService.findByInstanceAndLeg(2L, "LONG")).thenReturn(closing);
+
+        assertThrows(IllegalStateException.class, () -> service.inspect(round, credential));
+
+        assertEquals("CLOSING", closing.getStatus());
+        verify(positionStateService, never()).save(any());
+        verify(roundService, never()).save(any());
+    }
+
+    @Test
     void filledOrdersWithoutCompleteTradeFactsDoNotCreateStrategyPositionState() {
         QuantStrategyHedgeRound round = round();
         when(positionSnapshotQuery.query(3L, credential)).thenReturn(List.of(
@@ -138,6 +168,10 @@ class DualHedgeOrderFactRecoveryServiceTest {
         round.setInstanceId(2L);
         round.setCredentialId(3L);
         round.setSymbol("BTCUSDT");
+        round.setEntryEquitySnapshot(new BigDecimal("1000"));
+        round.setTargetMarginPerLeg(new BigDecimal("100"));
+        round.setLeverage(10);
+        round.setSignalEventTime(java.time.LocalDateTime.now());
         round.setStatus(StrategyHedgeRoundService.STATUS_OPENING);
         round.setLongLegStatus(StrategyHedgeRoundService.LEG_DISPATCHING);
         round.setShortLegStatus(StrategyHedgeRoundService.LEG_DISPATCHING);
