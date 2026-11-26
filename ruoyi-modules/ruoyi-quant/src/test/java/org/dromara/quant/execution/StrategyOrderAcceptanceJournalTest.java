@@ -2,6 +2,7 @@ package org.dromara.quant.execution;
 
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.order.domain.QuantOrder;
+import org.dromara.quant.runtime.DualHedgePositionCycleKey;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,9 +50,11 @@ class StrategyOrderAcceptanceJournalTest {
         order.setId(19L);
         when(ledger.upsert(any(), any(), any(), any(), any(), any(), any())).thenReturn(order);
 
-        journal.persist(1L, 2L, 3L, "TESTNET", "OPEN", request("LONG"), result(), 10, null, "round-1:LONG");
+        journal.persist(1L, 2L, 3L, "TESTNET", "OPEN", request("LONG"), result(), 10, null,
+            DualHedgePositionCycleKey.of("round-1", "LONG"), "round-1:LONG:OPEN");
 
-        verify(intents).recordAccepted(1L, 2L, 3L, "OPEN", request("LONG"), result(), "round-1:LONG");
+        verify(intents).recordAccepted(1L, 2L, 3L, "OPEN", request("LONG"), result(),
+            DualHedgePositionCycleKey.of("round-1", "LONG"), "round-1:LONG:OPEN");
     }
 
     @Test
