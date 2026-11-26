@@ -44,6 +44,12 @@ public interface LiveOrderDispatchMapper {
                                 @Param("strategyId") Long strategyId, @Param("instanceId") Long instanceId, @Param("operation") String operation,
                                 @Param("positionSide") String positionSide, @Param("exchangeSide") String exchangeSide, @Param("epoch") Long epoch);
 
+    int insertPreDispatchIntentWithCycle(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key,
+                                         @Param("clientOrderId") String clientOrderId, @Param("strategyId") Long strategyId,
+                                         @Param("instanceId") Long instanceId, @Param("operation") String operation,
+                                         @Param("positionSide") String positionSide, @Param("exchangeSide") String exchangeSide,
+                                         @Param("epoch") Long epoch, @Param("positionCycleKey") String positionCycleKey);
+
     int acknowledge(@Param("credentialId") Long credentialId, @Param("key") String key, @Param("orderId") Long orderId);
 
     /**
