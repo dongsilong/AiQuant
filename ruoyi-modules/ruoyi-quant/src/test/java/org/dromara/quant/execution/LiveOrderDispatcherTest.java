@@ -64,7 +64,9 @@ class LiveOrderDispatcherTest {
         var f = fixture();
         var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-run-1", "ISOLATED", 10);
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "config-run-1"));
-        assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null));
+        var occupied = assertThrows(LiveOrderDispatcher.DispatchBlockedException.class,
+            () -> f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null));
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.DISPATCH_SLOT_OCCUPIED, occupied.reason());
         f.first().configurationApplied(setup);
         assertEquals("CONFIG_APPLIED", f.mapper().ticketStatus(1L, "config-run-1"));
         var next = f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null);
