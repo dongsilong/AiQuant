@@ -11,6 +11,16 @@ VALUES (#{credentialId},#{symbol},#{orderId},#{strategyId},#{instanceId},
 FROM quant_strategy_order_intent
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND exchange_order_id=#{orderId}]]></select>
+    <select id="findOrdersByCycle" resultType="map" timeout="3"><![CDATA[
+SELECT exchange_order_id AS orderId,fill_role AS fillRole,
+       position_side AS positionSide,exchange_side AS exchangeSide
+FROM quant_strategy_order_intent
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND strategy_instance_id=#{instanceId}
+  AND position_cycle_key=#{positionCycleKey}
+  AND position_side=#{positionSide}
+ORDER BY exchange_order_id
+]]></select>
     <select id="pending" resultType="map" timeout="3"><![CDATA[SELECT credential_id,symbol,idempotency_key,client_order_id,strategy_id,
        strategy_instance_id,operation_type,position_side,exchange_side,position_cycle_key,lease_epoch
 FROM quant_strategy_pre_dispatch_intent
