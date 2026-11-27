@@ -1763,6 +1763,11 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 synchronized (runtime) {
                     if (!runtime.closed && runtime.latestDecisionMarketEvent == candidate) {
                         onMarketEvent(runtime, candidate);
+                        if (runtime.latestMaBlockedEntryEvent == candidate
+                            && marketEventFreshnessFailure(runtime, candidate) == null) {
+                            // 若评估期间恰逢1m收盘边界，允许该事件在闭合K线水位补齐后再尝试一次。
+                            runtime.lastEntryMaRecoveryEvaluationEvent = null;
+                        }
                     }
                 }
             } finally {
