@@ -115,8 +115,14 @@ public class LiveOrderDispatcher {
                 }
                 if (marginMode != null) {
                     mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
-                    if (mapper.matchingSettingsIntent(credentialId, normalized, marginMode, leverage) != 1L) {
-                        throw new DispatchFailureException(DispatchFailureReason.SETTINGS_INTENT_MISMATCH, "同账户交易对存在冲突的保证金/杠杆配置契约，拒绝更改交易所");
+                    java.util.Map<String, Object> existingIntent = mapper.settingsIntent(credentialId, normalized);
+                    String existingMarginMode = stringValue(existingIntent, "marginMode");
+                    Long existingLeverage = value(existingIntent, "leverage");
+                    if (!marginMode.equals(existingMarginMode) || existingLeverage == null || existingLeverage != leverage) {
+                        String detail = "existingMarginMode=" + existingMarginMode + ", existingLeverage=" + existingLeverage
+                            + ", requestedMarginMode=" + marginMode + ", requestedLeverage=" + leverage;
+                        throw new DispatchFailureException(DispatchFailureReason.SETTINGS_INTENT_MISMATCH,
+                            "同账户交易对存在冲突的保证金/杠杆配置契约，拒绝更改交易所", detail);
                     }
                 }
                 if (mapper.insertTicket(credentialId, normalized, key, operation, clientOrderId, instanceId, epoch) != 1) {
@@ -451,19 +457,32 @@ public class LiveOrderDispatcher {
     /** A safe, stable diagnostic classification; never includes database or request details. */
     public static class DispatchFailureException extends IllegalStateException {
         private final DispatchFailureReason reason;
+        private final String diagnosticDetail;
 
         public DispatchFailureException(DispatchFailureReason reason, String message) {
-            super(message);
-            this.reason = Objects.requireNonNull(reason);
+            this(reason, message, null, null);
+        }
+
+        public DispatchFailureException(DispatchFailureReason reason, String message, String diagnosticDetail) {
+            this(reason, message, diagnosticDetail, null);
         }
 
         public DispatchFailureException(DispatchFailureReason reason, String message, Throwable cause) {
+            this(reason, message, null, cause);
+        }
+
+        private DispatchFailureException(DispatchFailureReason reason, String message, String diagnosticDetail, Throwable cause) {
             super(message, cause);
             this.reason = Objects.requireNonNull(reason);
+            this.diagnosticDetail = diagnosticDetail;
         }
 
         public DispatchFailureReason reason() {
             return reason;
+        }
+
+        public String diagnosticDetail() {
+            return diagnosticDetail;
         }
     }
 
