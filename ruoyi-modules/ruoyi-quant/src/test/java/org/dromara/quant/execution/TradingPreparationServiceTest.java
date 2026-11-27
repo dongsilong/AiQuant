@@ -41,6 +41,9 @@ class TradingPreparationServiceTest {
     @Test
     void warmupChangesSettingsOnceAndEntryReadsNeverUseRest() throws Exception {
         ready();
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT"))).thenReturn(
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "CROSSED", 5),
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10));
         assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> service.requireReady(1L, "BTCUSDT", 10, "ISOLATED"));
         service.request(1L, testnet, "BTCUSDT", 10, "ISOLATED", null).get(2, TimeUnit.SECONDS);
         var token = service.requireReady(1L, "BTCUSDT", 10, "ISOLATED");
@@ -50,6 +53,7 @@ class TradingPreparationServiceTest {
         }
         service.request(1L, testnet, "BTCUSDT", 10, "ISOLATED", null).get(2, TimeUnit.SECONDS);
         verify(gateway, times(1)).queryPositionMode(testnet);
+        verify(gateway, times(2)).querySymbolTradingSettings(testnet, "BTCUSDT");
         verify(gateway, times(1)).setMarginType(testnet, "BTCUSDT", "ISOLATED");
         verify(gateway, times(1)).setLeverage(testnet, "BTCUSDT", 10);
     }
@@ -169,6 +173,11 @@ class TradingPreparationServiceTest {
     @Test
     void changedDesiredSettingsCannotReuseOldToken() throws Exception {
         ready();
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT"))).thenReturn(
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10),
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10),
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10),
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "CROSSED", 20));
         service.request(1L, testnet, "BTCUSDT", 10, "ISOLATED", null).get(2, TimeUnit.SECONDS);
         assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> service.requireReady(1L, "BTCUSDT", 20, "CROSSED"));
         service.request(1L, testnet, "BTCUSDT", 20, "CROSSED", null).get(2, TimeUnit.SECONDS);

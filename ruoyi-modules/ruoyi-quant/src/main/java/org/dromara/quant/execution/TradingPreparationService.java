@@ -295,8 +295,25 @@ public class TradingPreparationService {
                                     dispatcher.configurationApplied(configTicket);
                                     configTicket = null;
                                 } else {
-                                    stage = "SET_MARGIN_TYPE";
-                                    gateway.setMarginType(state.credential, state.symbol, state.marginMode);
+                                    stage = "QUERY_TESTNET_CONFIGURATION";
+                                    var current = gateway.querySymbolTradingSettings(state.credential, state.symbol);
+                                    if (current == null || !state.symbol.equalsIgnoreCase(current.symbol())
+                                        || current.marginMode() == null || current.leverage() < 1) {
+                                        throw new IllegalStateException("无法取得 TESTNET 当前交易对配置");
+                                    }
+                                    synchronized (state) {
+                                        if (states.get(key) != state || revision != state.revision) {
+                                            throw new IllegalStateException("查询 TESTNET 配置期间发生版本变化，拒绝旧配置写入");
+                                        }
+                                    }
+                                    balances.requireSnapshot(state.id);
+                                    if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
+                                        throw new IllegalStateException("查询 TESTNET 配置后出现持仓，禁止修改保证金或杠杆");
+                                    }
+                                    if (!state.marginMode.equalsIgnoreCase(current.marginMode())) {
+                                        stage = "SET_MARGIN_TYPE";
+                                        gateway.setMarginType(state.credential, state.symbol, state.marginMode);
+                                    }
                                     synchronized (state) {
                                         if (states.get(key) != state || revision != state.revision) {
                                             throw new IllegalStateException("保证金设置后配置版本变化，拒绝继续修改杠杆");
@@ -304,10 +321,18 @@ public class TradingPreparationService {
                                     }
                                     balances.requireSnapshot(state.id);
                                     if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
-                                        throw new IllegalStateException("准备期间出现持仓，禁止修改交易设置");
+                                        throw new IllegalStateException("准备期间出现持仓，禁止修改杠杆");
                                     }
-                                    stage = "SET_LEVERAGE";
-                                    gateway.setLeverage(state.credential, state.symbol, state.leverage);
+                                    if (current.leverage() != state.leverage) {
+                                        stage = "SET_LEVERAGE";
+                                        gateway.setLeverage(state.credential, state.symbol, state.leverage);
+                                    }
+                                    stage = "VERIFY_TESTNET_CONFIGURATION";
+                                    var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
+                                    if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol())
+                                        || !state.marginMode.equalsIgnoreCase(verified.marginMode()) || state.leverage != verified.leverage()) {
+                                        throw new IllegalStateException("TESTNET 实际保证金或杠杆与目标配置不一致");
+                                    }
                                 }
                             } catch (RuntimeException ex) {
                                 if (configTicket != null) {
