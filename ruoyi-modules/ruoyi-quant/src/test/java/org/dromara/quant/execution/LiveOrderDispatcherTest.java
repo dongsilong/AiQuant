@@ -118,6 +118,33 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
+    void configurationDispatchClassifiesImmutableIntentConflictAndRollsBackClaim() throws Exception {
+        var f = fixture();
+        var approved = f.first().beginConfiguration(1L, "BTCUSDT", "approved-settings", "ISOLATED", 10);
+        f.first().configurationApplied(approved);
+
+        var conflict = assertThrows(LiveOrderDispatcher.DispatchFailureException.class,
+            () -> f.other().beginConfiguration(1L, "BTCUSDT", "conflicting-settings", "CROSSED", 10));
+
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.SETTINGS_INTENT_MISMATCH, conflict.reason());
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+        assertEquals(10, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+    }
+
+    @Test
+    void configurationDispatchClassifiesTicketInsertFailureAndRollsBackClaim() throws Exception {
+        var f = fixture();
+        var first = f.first().beginConfiguration(1L, "BTCUSDT", "same-config-key", "ISOLATED", 10);
+        f.first().configurationApplied(first);
+
+        var failure = assertThrows(LiveOrderDispatcher.DispatchFailureException.class,
+            () -> f.other().beginConfiguration(1L, "BTCUSDT", "same-config-key", "ISOLATED", 10));
+
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.CONFIGURATION_PERSISTENCE_FAILURE, failure.reason());
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+    }
+
+    @Test
     void strategyDispatchReportsExpiredLeaseSeparatelyFromOccupiedAccountSymbolSlot() throws Exception {
         var f = fixture();
         var expired = assertThrows(LiveOrderDispatcher.DispatchBlockedException.class,
