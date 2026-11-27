@@ -87,10 +87,13 @@ public class DualHedgeLegAccountingService {
         Map<Long, QuantOrder> ordersById = new HashMap<>();
         for (QuantOrder order : orders) {
             if (order.getExchangeOrderId() == null || ordersById.putIfAbsent(order.getExchangeOrderId(), order) != null
-                || !normalizedSymbol.equalsIgnoreCase(order.getSymbol())
+                 || !normalizedSymbol.equalsIgnoreCase(order.getSymbol())
+                || !Objects.equals(instanceId, order.getStrategyInstanceId())
                 || !leg.equalsIgnoreCase(order.getPositionSide())
                 || !Objects.equals(expectedSides.get(order.getExchangeOrderId()), upper(order.getSide()))
-                || order.getExecutedQuantity() == null || order.getExecutedQuantity().signum() < 0) {
+                || order.getExecutedQuantity() == null || order.getExecutedQuantity().signum() < 0
+                || order.getStatus() == null || !Set.of("NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED", "REJECTED")
+                    .contains(order.getStatus().toUpperCase(Locale.ROOT))) {
                 return blocked("ORDER_LEDGER_CONFLICT");
             }
         }
