@@ -22,6 +22,12 @@ public interface StrategyOrderIntentMapper {
     Map<String, Object> find(@Param("credentialId") long credentialId,
                              @Param("symbol") String symbol, @Param("orderId") long orderId);
 
+    List<Map<String, Object>> findOrdersByCycle(@Param("credentialId") long credentialId,
+                                                @Param("symbol") String symbol,
+                                                @Param("instanceId") long instanceId,
+                                                @Param("positionCycleKey") String positionCycleKey,
+                                                @Param("positionSide") String positionSide);
+
     /**
      * Resolve a close order only from immutable strategy-cycle identity and its accepted local order.
      */
