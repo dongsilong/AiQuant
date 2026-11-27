@@ -118,7 +118,7 @@ public class LiveOrderDispatcher {
                     java.util.Map<String, Object> existingIntent = mapper.settingsIntent(credentialId, normalized);
                     String existingMarginMode = stringValue(existingIntent, "marginMode");
                     Long existingLeverage = value(existingIntent, "leverage");
-                    if (!marginMode.equals(existingMarginMode) || existingLeverage == null || existingLeverage != leverage) {
+                    if (!marginMode.equals(existingMarginMode) || !Objects.equals(existingLeverage, leverage == null ? null : leverage.longValue())) {
                         String detail = "existingMarginMode=" + existingMarginMode + ", existingLeverage=" + existingLeverage
                             + ", requestedMarginMode=" + marginMode + ", requestedLeverage=" + leverage;
                         throw new DispatchFailureException(DispatchFailureReason.SETTINGS_INTENT_MISMATCH,
