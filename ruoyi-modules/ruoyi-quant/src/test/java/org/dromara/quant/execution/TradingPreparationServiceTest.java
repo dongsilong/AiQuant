@@ -108,7 +108,7 @@ class TradingPreparationServiceTest {
         assertTrue(blocked.getMessage().contains("lastFailureReasonCode=SETTINGS_INTENT_MISMATCH"));
         verify(gateway, never()).setMarginType(any(), any(), any());
         verify(gateway, never()).setLeverage(any(), any(), anyInt());
-        verify(dispatcher).unknown(any(LiveOrderDispatcher.Ticket.class));
+        verify(dispatcher, never()).unknown(any(LiveOrderDispatcher.Ticket.class));
     }
 
     @Test

@@ -17,7 +17,10 @@ import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyUserMapper;
 import org.dromara.quant.strategy.service.QuantStrategyService;
 import org.dromara.quant.runtime.StrategyRuntimeService;
+import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -46,9 +49,65 @@ public class QuantStrategyBindingController {
     private final QuantStrategyUserMapper userMapper;
     private final QuantStrategyService strategyService;
     private final StrategyRuntimeService runtimeService;
+    private final TradeExecutionApplicationService executionService;
 
     private void checkStrategy(Long strategyId) {
         strategyService.checkAccess(strategyMapper.selectById(strategyId));
+    }
+
+    /**
+     * 策略交易对配置提交后，异步准备已变更杠杆/保证金模式的账户交易对。
+     */
+    private void prepareTradingSettingsAfterCommit(Long strategyId, java.util.Set<Long> symbolIds) {
+        if (symbolIds.isEmpty()) {
+            return;
+        }
+        java.util.Set<Long> changedIds = java.util.Set.copyOf(symbolIds);
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                QuantStrategy strategy = strategyMapper.selectById(strategyId);
+                if (strategy == null) {
+                    return;
+                }
+                var accounts = accountMapper.selectList(new LambdaQueryWrapper<QuantStrategyAccount>()
+                    .eq(QuantStrategyAccount::getStrategyId, strategyId).eq(QuantStrategyAccount::getStatus, "0"));
+                var symbols = symbolMapper.selectList(new LambdaQueryWrapper<QuantStrategySymbol>()
+                    .eq(QuantStrategySymbol::getStrategyId, strategyId).eq(QuantStrategySymbol::getStatus, "0")
+                    .in(QuantStrategySymbol::getSymbolId, changedIds));
+                for (QuantStrategyAccount account : accounts) {
+                    QuantCredential credential = credentialMapper.selectById(account.getCredentialId());
+                    if (credential == null || !"0".equals(credential.getStatus())) {
+                        continue;
+                    }
+                    String expectedConnectionStatus = "PAPER".equalsIgnoreCase(credential.getRunMode()) ? "PAPER" : "NORMAL";
+                    if (!expectedConnectionStatus.equalsIgnoreCase(credential.getConnectionStatus() == null ? "" : credential.getConnectionStatus())) {
+                        continue;
+                    }
+                    for (QuantStrategySymbol binding : symbols) {
+                        if (Boolean.FALSE.equals(binding.getRuntimeEnabled())) {
+                            continue;
+                        }
+                        QuantSymbol symbol = quantSymbolMapper.selectById(binding.getSymbolId());
+                        if (symbol == null || !"0".equals(symbol.getStatus())) {
+                            continue;
+                        }
+                        Integer leverage = binding.getLeverage() == null ? strategy.getDefaultLeverage() : binding.getLeverage();
+                        String marginMode = binding.getMarginMode() == null || binding.getMarginMode().isBlank()
+                            ? strategy.getDefaultMarginMode() : binding.getMarginMode();
+                        if (leverage == null || leverage < 1 || marginMode == null || marginMode.isBlank()) {
+                            continue;
+                        }
+                        Long credentialId = account.getCredentialId();
+                        String symbolCode = symbol.getSymbol();
+                        int targetLeverage = leverage;
+                        String targetMarginMode = marginMode;
+                        Thread.ofVirtual().name("quant-strategy-config-preparation").start(
+                            () -> executionService.prepareOpenForRuntime(credentialId, symbolCode, targetLeverage, targetMarginMode));
+                    }
+                }
+            }
+        });
     }
 
     /**
@@ -124,6 +183,7 @@ public class QuantStrategyBindingController {
             throw new ServiceException("运行中的策略必须先停止，才能修改交易对配置");
         }
         List<QuantStrategySymbol> items = request == null || request.items() == null ? List.of() : request.items();
+        var changedTradingSymbols = new java.util.HashSet<Long>();
         var existing = symbolMapper.selectList(new LambdaQueryWrapper<QuantStrategySymbol>().eq(QuantStrategySymbol::getStrategyId, strategyId));
         var incomingIds = items.stream().map(QuantStrategySymbol::getSymbolId).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
         for (QuantStrategySymbol old : existing) {
@@ -164,6 +224,11 @@ public class QuantStrategyBindingController {
             QuantStrategySymbol old = existing.stream().filter(e -> java.util.Objects.equals(e.getSymbolId(), item.getSymbolId())).findFirst().orElse(null);
             // 编辑其他交易对参数时，未提交运行开关就保留原值，避免意外恢复已暂停的交易对。
             if (item.getRuntimeEnabled() == null) item.setRuntimeEnabled(old == null ? Boolean.TRUE : old.getRuntimeEnabled());
+            if ("0".equals(item.getStatus()) && !Boolean.FALSE.equals(item.getRuntimeEnabled())
+                && (old == null || !java.util.Objects.equals(old.getLeverage(), item.getLeverage())
+                    || !java.util.Objects.equals(old.getMarginMode(), item.getMarginMode()))) {
+                changedTradingSymbols.add(item.getSymbolId());
+            }
             if (old == null) {
                 item.setId(null);
                 symbolMapper.insert(item);
@@ -172,6 +237,7 @@ public class QuantStrategyBindingController {
                 symbolMapper.updateById(item);
             }
         }
+        prepareTradingSettingsAfterCommit(strategyId, changedTradingSymbols);
         return R.ok();
     }
 
