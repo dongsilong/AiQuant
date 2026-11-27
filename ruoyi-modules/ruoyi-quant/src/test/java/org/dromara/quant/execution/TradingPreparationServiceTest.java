@@ -93,6 +93,25 @@ class TradingPreparationServiceTest {
     }
 
     @Test
+    void liveConfigurationDispatchFailureReasonIsVisibleInEntryBlockReason() throws Exception {
+        ready();
+        var dispatcher = liveDispatcher();
+        when(dispatcher.beginConfiguration(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10)))
+            .thenThrow(new LiveOrderDispatcher.DispatchFailureException(
+                LiveOrderDispatcher.DispatchFailureReason.SETTINGS_INTENT_MISMATCH, "配置契约冲突"));
+        service.setLiveOrderDispatcher(dispatcher);
+
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive()).get(3, TimeUnit.SECONDS);
+
+        var blocked = assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> service.requireReady(1L, "BTCUSDT", 10, "ISOLATED"));
+        assertTrue(blocked.getMessage().contains("lastFailureReasonCode=SETTINGS_INTENT_MISMATCH"));
+        verify(gateway, never()).setMarginType(any(), any(), any());
+        verify(gateway, never()).setLeverage(any(), any(), anyInt());
+        verify(dispatcher).unknown(any(LiveOrderDispatcher.Ticket.class));
+    }
+
+    @Test
     void disabledLiveGateNeverChangesAccountSettings() throws Exception {
         ready();
         var live = new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE");
