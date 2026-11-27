@@ -163,6 +163,7 @@ public class TradingPreparationService {
                 + ", lastFailureAt=" + state.lastFailureAt
                 + ", lastFailureStage=" + state.lastFailureStage
                 + ", lastFailureType=" + state.lastFailureType
+                + ", lastFailureReasonCode=" + state.lastFailureReasonCode
                 + ", retryRemainingMillis=" + TimeUnit.NANOSECONDS.toMillis(Math.max(0L, state.retryAt - System.nanoTime()));
         }
         String ex = "交易设置未准备好或已变化，等待后台校准及新的行情: symbol=" + symbol + ", leverage=" + leverage
@@ -314,6 +315,7 @@ public class TradingPreparationService {
                                 state.lastFailureAt = null;
                                 state.lastFailureStage = null;
                                 state.lastFailureType = null;
+                            state.lastFailureReasonCode = null;
                             }
                         }
                     }
@@ -327,6 +329,8 @@ public class TradingPreparationService {
                     String failureType = ex.getClass().getSimpleName();
                     String rootFailureType = rootCause.getClass().getSimpleName();
                     String failureSummary = failureType.equals(rootFailureType) ? failureType : failureType + "/" + rootFailureType;
+                    String failureReasonCode = ex instanceof LiveOrderDispatcher.DispatchFailureException dispatchFailure
+                        ? dispatchFailure.reason().name() : null;
                     boolean shouldLogFailure;
                     synchronized (state) {
                         state.prepared = null;
@@ -335,6 +339,7 @@ public class TradingPreparationService {
                             state.lastFailureAt = Instant.now();
                             state.lastFailureStage = stage;
                             state.lastFailureType = failureSummary;
+                            state.lastFailureReasonCode = failureReasonCode;
                         }
                         state.retryAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retryDelayMillis);
                         shouldLogFailure = System.nanoTime() >= state.nextFailureLogAt;
@@ -343,8 +348,8 @@ public class TradingPreparationService {
                         }
                     }
                     if (shouldLogFailure) {
-                        log.warn("交易后台准备未就绪 credentialId={} symbol={} stage={} failureType={} configured={} revision={} elapsedMillis={} retryDelayMillis={}",
-                            state.id, state.symbol, stage, failureSummary, state.configured, revision,
+                        log.warn("交易后台准备未就绪 credentialId={} symbol={} stage={} failureType={} failureReasonCode={} configured={} revision={} elapsedMillis={} retryDelayMillis={}",
+                            state.id, state.symbol, stage, failureSummary, failureReasonCode, state.configured, revision,
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), retryDelayMillis);
                     }
                 } finally {
@@ -504,6 +509,7 @@ public class TradingPreparationService {
         private Instant lastFailureAt;
         private String lastFailureStage;
         private String lastFailureType;
+        private String lastFailureReasonCode;
         private long nextFailureLogAt;
         private CompletableFuture<Void> loading;
 
