@@ -64,6 +64,79 @@ public class LiveOrderDispatcher {
     }
 
     /**
+     * 为策略明确变更后的 LIVE 配置建立独占票据。旧意图只在交易所读回确认后迁移。
+     */
+    public ConfigurationReservation beginConfigurationChange(Long credentialId, String symbol, String key, String marginMode, int leverage) {
+        if (!java.util.Set.of("ISOLATED", "CROSSED").contains(marginMode) || leverage < 1 || leverage > 125) {
+            throw new IllegalArgumentException("LIVE Binance 配置范围或保证金模式无效");
+        }
+        if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank() || key == null || key.isBlank()) {
+            throw new IllegalArgumentException("LIVE 配置派发缺少账户、交易对或幂等标识");
+        }
+        String normalized = symbol.toUpperCase(Locale.ROOT);
+        try {
+            return transaction.execute(status -> {
+                mapper.ensureGuard(credentialId, normalized);
+                if (mapper.claim(credentialId, normalized, key) != 1) {
+                    boolean occupied = mapper.activeDispatch(credentialId, normalized) != null;
+                    throw new DispatchBlockedException(occupied ? DispatchFailureReason.DISPATCH_SLOT_OCCUPIED : DispatchFailureReason.DISPATCH_GUARD_CLAIM_FAILED,
+                        occupied ? "同账户交易对存在未完成交易所操作，配置未发送" : "LIVE 配置派发槽未能取得，配置未发送");
+                }
+                java.util.Map<String, Object> intent = mapper.settingsIntent(credentialId, normalized);
+                if (intent == null || intent.isEmpty()) {
+                    mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
+                    intent = mapper.settingsIntent(credentialId, normalized);
+                }
+                String previousMode = stringValue(intent, "marginMode");
+                Long previousLeverageValue = value(intent, "leverage");
+                if (previousMode == null || previousLeverageValue == null) {
+                    throw new DispatchFailureException(DispatchFailureReason.CONFIGURATION_PERSISTENCE_FAILURE, "LIVE 配置意图记录不完整，拒绝修改交易所");
+                }
+                int previousLeverage = Math.toIntExact(previousLeverageValue);
+                long conflicts = mapper.conflictingStrategySettings(credentialId, normalized, marginMode, leverage);
+                if (conflicts > 0) {
+                    String detail = "conflictingStrategySettings=" + conflicts + ", requestedMarginMode=" + marginMode + ", requestedLeverage=" + leverage;
+                    throw new DispatchFailureException(DispatchFailureReason.SETTINGS_INTENT_MISMATCH,
+                        "同账户交易对存在其他策略配置冲突，拒绝迁移实盘配置意图", detail);
+                }
+                boolean migration = !marginMode.equals(previousMode) || leverage != previousLeverage;
+                if (mapper.insertTicket(credentialId, normalized, key, "CONFIG_SETTINGS", "SETTINGS:" + marginMode + ":" + leverage, null, null) != 1) {
+                    throw new DispatchFailureException(DispatchFailureReason.DISPATCH_TICKET_INSERT_FAILED, "LIVE 配置派发票据落库失败");
+                }
+                return new ConfigurationReservation(new Ticket(credentialId, normalized, key), previousMode, previousLeverage,
+                    marginMode, leverage, migration);
+            });
+        } catch (DispatchBlockedException blocked) {
+            ApplicationEventPublisher publisher = eventPublisher;
+            if (publisher != null) {
+                publisher.publishEvent(new DispatchBlockedEvent(credentialId, normalized, "CONFIG_SETTINGS"));
+            }
+            throw blocked;
+        } catch (DispatchFailureException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw new DispatchFailureException(DispatchFailureReason.CONFIGURATION_PERSISTENCE_FAILURE,
+                "LIVE 配置派发持久化失败，拒绝修改交易所", failure);
+        }
+    }
+
+    /**
+     * 交易所配置读回确认后，才使用旧值条件更新 LIVE 配置意图。
+     */
+    public void configurationIntentApplied(ConfigurationReservation reservation) {
+        if (reservation == null || !reservation.intentMigration()) {
+            return;
+        }
+        Ticket ticket = reservation.ticket();
+        transaction.executeWithoutResult(status -> {
+            if (mapper.migrateSettingsIntent(ticket.credentialId(), ticket.symbol(), ticket.key(), reservation.previousMarginMode(),
+                reservation.previousLeverage(), reservation.targetMarginMode(), reservation.targetLeverage()) != 1) {
+                throw new IllegalStateException("Binance 配置已核实，但 LIVE 配置意图迁移条件不匹配，保持派发阻断");
+            }
+        });
+    }
+
+    /**
      * Proof-carrying LIVE strategy reservation. This commits immutable
      * OPEN/CLOSE and logical LONG/SHORT provenance with the dispatch ticket.
      */
@@ -221,6 +294,12 @@ public class LiveOrderDispatcher {
             throw new IllegalArgumentException("缺少精确的目标配置标识，无法恢复配置变更发送");
         }
         return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (mapper.matchingSettingsIntent(credentialId, normalizedSymbol, normalizedMode, leverage) != 1L) {
+                if (mapper.conflictingStrategySettings(credentialId, normalizedSymbol, normalizedMode, leverage) > 0
+                    || mapper.recoverSettingsIntent(credentialId, normalizedSymbol, key, clientOrderId, normalizedMode, leverage) != 1) {
+                    return false;
+                }
+            }
             if (mapper.recoverConfiguration(credentialId, normalizedSymbol, key, clientOrderId, normalizedMode, leverage) != 1) {
                 return false;
             }
@@ -436,6 +515,10 @@ public class LiveOrderDispatcher {
      * 用于串行化同账户、同交易对派发的本地队列票据。
      */
     public record Ticket(Long credentialId, String symbol, String key) {
+    }
+
+    public record ConfigurationReservation(Ticket ticket, String previousMarginMode, Integer previousLeverage,
+                                           String targetMarginMode, int targetLeverage, boolean intentMigration) {
     }
 
     /** 当前账户交易对门禁占用的不可变票据事实。 */

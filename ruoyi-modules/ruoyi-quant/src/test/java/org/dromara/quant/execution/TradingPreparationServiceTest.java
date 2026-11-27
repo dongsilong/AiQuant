@@ -96,7 +96,7 @@ class TradingPreparationServiceTest {
     void liveConfigurationDispatchFailureReasonIsVisibleInEntryBlockReason() throws Exception {
         ready();
         var dispatcher = liveDispatcher();
-        when(dispatcher.beginConfiguration(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10)))
+        when(dispatcher.beginConfigurationChange(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10)))
             .thenThrow(new LiveOrderDispatcher.DispatchFailureException(
                 LiveOrderDispatcher.DispatchFailureReason.SETTINGS_INTENT_MISMATCH, "配置契约冲突"));
         service.setLiveOrderDispatcher(dispatcher);
@@ -115,7 +115,7 @@ class TradingPreparationServiceTest {
     void liveConfigurationIntentMismatchDetailIsVisibleInEntryBlockReason() throws Exception {
         ready();
         var dispatcher = liveDispatcher();
-        when(dispatcher.beginConfiguration(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10)))
+        when(dispatcher.beginConfigurationChange(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10)))
             .thenThrow(new LiveOrderDispatcher.DispatchFailureException(
                 LiveOrderDispatcher.DispatchFailureReason.SETTINGS_INTENT_MISMATCH, "配置契约冲突",
                 "existingMarginMode=CROSSED, existingLeverage=20, requestedMarginMode=ISOLATED, requestedLeverage=10"));
@@ -179,8 +179,9 @@ class TradingPreparationServiceTest {
 
     private LiveOrderDispatcher liveDispatcher() {
         var dispatcher = mock(LiveOrderDispatcher.class);
-        when(dispatcher.beginConfiguration(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10))).thenAnswer(inv -> new LiveOrderDispatcher.Ticket(1L, "BTCUSDT",
-            inv.getArgument(2)));
+        when(dispatcher.beginConfigurationChange(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10))).thenAnswer(inv ->
+            new LiveOrderDispatcher.ConfigurationReservation(new LiveOrderDispatcher.Ticket(1L, "BTCUSDT", inv.getArgument(2)),
+                "ISOLATED", 10, "ISOLATED", 10, false));
         return dispatcher;
     }
 
@@ -193,14 +194,42 @@ class TradingPreparationServiceTest {
     }
 
     @Test
+    void liveStrategyLeverageChangeMigratesIntentAfterFreshExchangeReadback() throws Exception {
+        ready();
+        var dispatcher = liveDispatcher();
+        var reservation = new LiveOrderDispatcher.ConfigurationReservation(
+            new LiveOrderDispatcher.Ticket(1L, "BTCUSDT", "config-change"), "ISOLATED", 5, "ISOLATED", 10, true);
+        when(dispatcher.beginConfigurationChange(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10))).thenReturn(reservation);
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT"))).thenReturn(
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 5),
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10));
+        service.setLiveOrderDispatcher(dispatcher);
+
+        service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive()).get(3, TimeUnit.SECONDS);
+
+        var sequence = inOrder(dispatcher, gateway);
+        sequence.verify(dispatcher).beginConfigurationChange(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10));
+        sequence.verify(gateway).querySymbolTradingSettings(any(), eq("BTCUSDT"));
+        sequence.verify(gateway).setLeverage(any(), eq("BTCUSDT"), eq(10));
+        sequence.verify(gateway).querySymbolTradingSettings(any(), eq("BTCUSDT"));
+        sequence.verify(dispatcher).configurationIntentApplied(reservation);
+        sequence.verify(dispatcher).configurationApplied(reservation.ticket());
+        verify(gateway, never()).setMarginType(any(), any(), any());
+    }
+
+    @Test
     void liveConfigHoldsOneDurableSlotAcrossMarginAndLeverageMutations() throws Exception {
         ready();
         var dispatcher = liveDispatcher();
         service.setLiveOrderDispatcher(dispatcher);
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT"))).thenReturn(
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "CROSSED", 5),
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10));
         service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive()).get(3, TimeUnit.SECONDS);
         service.requireReady(1L, "BTCUSDT", 10, "ISOLATED");
         var sequence = inOrder(dispatcher, gateway);
-        sequence.verify(dispatcher).beginConfiguration(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10));
+        sequence.verify(dispatcher).beginConfigurationChange(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10));
+        sequence.verify(gateway).querySymbolTradingSettings(any(), eq("BTCUSDT"));
         sequence.verify(gateway).setMarginType(any(), eq("BTCUSDT"), eq("ISOLATED"));
         sequence.verify(gateway).setLeverage(any(), eq("BTCUSDT"), eq(10));
         sequence.verify(dispatcher).configurationApplied(any(LiveOrderDispatcher.Ticket.class));
@@ -212,6 +241,9 @@ class TradingPreparationServiceTest {
         ready();
         var dispatcher = liveDispatcher();
         service.setLiveOrderDispatcher(dispatcher);
+        when(gateway.querySymbolTradingSettings(any(), eq("BTCUSDT"))).thenReturn(
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "CROSSED", 5),
+            new org.dromara.quant.exchange.ExchangeAccountPort.SymbolTradingSettings("BTCUSDT", "ISOLATED", 10));
         service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive()).get(3, TimeUnit.SECONDS);
         service.requireReady(1L, "BTCUSDT", 10, "ISOLATED");
 
@@ -281,7 +313,7 @@ class TradingPreparationServiceTest {
         ready();
         var dispatcher = liveDispatcher();
         service.setLiveOrderDispatcher(dispatcher);
-        when(dispatcher.beginConfiguration(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10))).thenThrow(new IllegalStateException("Unknown remote order holds " +
+        when(dispatcher.beginConfigurationChange(eq(1L), eq("BTCUSDT"), anyString(), eq("ISOLATED"), eq(10))).thenThrow(new IllegalStateException("Unknown remote order holds " +
             "account-symbol"));
         service.request(1L, liveCredential(), "BTCUSDT", 10, "ISOLATED", approvedLive()).get(3, TimeUnit.SECONDS);
         verify(gateway, never()).setMarginType(any(), any(), any());

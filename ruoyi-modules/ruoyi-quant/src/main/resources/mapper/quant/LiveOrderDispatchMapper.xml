@@ -13,6 +13,63 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
     <select id="settingsIntent" resultType="map" timeout="3"><![CDATA[SELECT margin_mode AS marginMode, leverage
 FROM quant_live_account_settings_intent
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}]]></select>
+    <select id="conflictingStrategySettings" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*)
+FROM quant_strategy_account a
+JOIN quant_strategy s ON s.id=a.strategy_id
+JOIN quant_strategy_symbol ss ON ss.strategy_id=s.id AND ss.status='0'
+JOIN quant_symbol q ON q.id=ss.symbol_id
+WHERE a.credential_id=#{credentialId} AND a.status='0' AND q.symbol=#{symbol}
+  AND (COALESCE(ss.leverage, s.default_leverage, 0) <> #{leverage}
+    OR COALESCE(UPPER(NULLIF(ss.margin_mode, '')), UPPER(s.default_margin_mode), '') <> #{marginMode})]]></select>
+    <update id="migrateSettingsIntent" timeout="3"><![CDATA[UPDATE quant_live_account_settings_intent
+SET margin_mode=#{marginMode}, leverage=#{leverage}
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND margin_mode=#{previousMarginMode} AND leverage=#{previousLeverage}
+  AND EXISTS (
+    SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key}
+  )
+  AND EXISTS (
+    SELECT 1 FROM quant_order_dispatch_ticket t
+    WHERE t.credential_id=#{credentialId} AND t.symbol=#{symbol}
+      AND t.idempotency_key=#{key} AND t.operation_type='CONFIG_SETTINGS'
+      AND t.client_order_id=CONCAT('SETTINGS:', #{marginMode}, ':', #{leverage})
+      AND t.dispatch_status='DISPATCHING'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM quant_strategy_account a
+    JOIN quant_strategy s ON s.id=a.strategy_id
+    JOIN quant_strategy_symbol ss ON ss.strategy_id=s.id AND ss.status='0'
+    JOIN quant_symbol q ON q.id=ss.symbol_id
+    WHERE a.credential_id=#{credentialId} AND a.status='0' AND q.symbol=#{symbol}
+      AND (COALESCE(ss.leverage, s.default_leverage, 0) <> #{leverage}
+        OR COALESCE(UPPER(NULLIF(ss.margin_mode, '')), UPPER(s.default_margin_mode), '') <> #{marginMode})
+  )]]></update>
+    <update id="recoverSettingsIntent" timeout="3"><![CDATA[UPDATE quant_live_account_settings_intent
+SET margin_mode=#{marginMode}, leverage=#{leverage}
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND EXISTS (
+    SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key}
+  )
+  AND EXISTS (
+    SELECT 1 FROM quant_order_dispatch_ticket t
+    WHERE t.credential_id=#{credentialId} AND t.symbol=#{symbol}
+      AND t.idempotency_key=#{key} AND t.operation_type='CONFIG_SETTINGS'
+      AND t.client_order_id=#{clientOrderId}
+      AND t.dispatch_status IN ('DISPATCHING','UNKNOWN','CONFIG_APPLIED')
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM quant_strategy_account a
+    JOIN quant_strategy s ON s.id=a.strategy_id
+    JOIN quant_strategy_symbol ss ON ss.strategy_id=s.id AND ss.status='0'
+    JOIN quant_symbol q ON q.id=ss.symbol_id
+    WHERE a.credential_id=#{credentialId} AND a.status='0' AND q.symbol=#{symbol}
+      AND (COALESCE(ss.leverage, s.default_leverage, 0) <> #{leverage}
+        OR COALESCE(UPPER(NULLIF(ss.margin_mode, '')), UPPER(s.default_margin_mode), '') <> #{marginMode})
+  )]]></update>
     <update id="claim" timeout="3"><![CDATA[UPDATE quant_live_dispatch_guard
 SET active_dispatch_key=#{key}, updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}

@@ -232,6 +232,7 @@ public class TradingPreparationService {
                                 throw new IllegalStateException("准备期间出现持仓，禁止修改交易设置");
                             }
                             LiveOrderDispatcher.Ticket configTicket = null;
+                            LiveOrderDispatcher.ConfigurationReservation configReservation = null;
                             LiveOrderDispatcher dispatcher = null;
                             try {
                                 if ("LIVE".equalsIgnoreCase(state.credential.runMode())) {
@@ -239,13 +240,10 @@ public class TradingPreparationService {
                                     if (dispatcher == null) {
                                         throw new IllegalStateException("LIVE 账户配置缺少跨节点调度器，拒绝直接修改 Binance");
                                     }
-                                    // Hold ONE durable account+symbol slot across BOTH Binance writes.
-                                    // An order or another node's preparation cannot enter between them.
                                     String dispatchKey = "CFG:" + java.util.UUID.randomUUID();
                                     stage = "LIVE_CONFIGURATION_DISPATCH";
-                                    configTicket = dispatcher.beginConfiguration(state.id, state.symbol, dispatchKey, state.marginMode, state.leverage);
-                                    // Another node may have acquired/released the slot while we waited.
-                                    // Revalidate local revision and fresh position facts AFTER claim.
+                                    configReservation = dispatcher.beginConfigurationChange(state.id, state.symbol, dispatchKey, state.marginMode, state.leverage);
+                                    configTicket = configReservation.ticket();
                                     synchronized (state) {
                                         if (states.get(key) != state || revision != state.revision) {
                                             throw new IllegalStateException("配置等待调度锁期间发生版本变化，拒绝旧配置写入");
@@ -255,32 +253,61 @@ public class TradingPreparationService {
                                     if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
                                         throw new IllegalStateException("取得配置锁后出现持仓，禁止修改保证金或杠杆");
                                     }
-                                }
-                                stage = "SET_MARGIN_TYPE";
-                                gateway.setMarginType(state.credential, state.symbol, state.marginMode);
-                                synchronized (state) {
-                                    if (states.get(key) != state || revision != state.revision) {
-                                        throw new IllegalStateException("保证金设置后配置版本变化，拒绝继续修改杠杆");
+                                    stage = "QUERY_LIVE_CONFIGURATION";
+                                    var current = gateway.querySymbolTradingSettings(state.credential, state.symbol);
+                                    if (current == null || !state.symbol.equalsIgnoreCase(current.symbol())
+                                        || current.marginMode() == null || current.leverage() < 1) {
+                                        throw new IllegalStateException("无法取得 Binance 当前交易对配置，保留调度阻断");
                                     }
-                                }
-                                balances.requireSnapshot(state.id);
-                                if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
-                                    throw new IllegalStateException("准备期间出现持仓，禁止修改杠杆");
-                                }
-                                stage = "SET_LEVERAGE";
-                                gateway.setLeverage(state.credential, state.symbol, state.leverage);
-                                if (configTicket != null) {
+                                    synchronized (state) {
+                                        if (states.get(key) != state || revision != state.revision) {
+                                            throw new IllegalStateException("查询 Binance 配置期间发生版本变化，拒绝旧配置写入");
+                                        }
+                                    }
+                                    balances.requireSnapshot(state.id);
+                                    if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
+                                        throw new IllegalStateException("查询 Binance 配置后出现持仓，禁止修改保证金或杠杆");
+                                    }
+                                    if (!state.marginMode.equalsIgnoreCase(current.marginMode())) {
+                                        stage = "SET_MARGIN_TYPE";
+                                        gateway.setMarginType(state.credential, state.symbol, state.marginMode);
+                                    }
+                                    synchronized (state) {
+                                        if (states.get(key) != state || revision != state.revision) {
+                                            throw new IllegalStateException("保证金设置后配置版本变化，拒绝继续修改杠杆");
+                                        }
+                                    }
+                                    balances.requireSnapshot(state.id);
+                                    if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
+                                        throw new IllegalStateException("准备期间出现持仓，禁止修改杠杆");
+                                    }
+                                    if (current.leverage() != state.leverage) {
+                                        stage = "SET_LEVERAGE";
+                                        gateway.setLeverage(state.credential, state.symbol, state.leverage);
+                                    }
                                     stage = "VERIFY_LIVE_CONFIGURATION";
-                                    // A setter HTTP success is not independent proof of
-                                    // actual Binance leverage/margin, especially after
-                                    // retries or ambiguous exchanges. Read fresh facts
-                                    // under the same persistent cross-node dispatch slot.
                                     var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
-                                    if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol()) || !state.marginMode.equals(verified.marginMode()) || state.leverage != verified.leverage()) {
+                                    if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol())
+                                        || !state.marginMode.equalsIgnoreCase(verified.marginMode()) || state.leverage != verified.leverage()) {
                                         throw new IllegalStateException("Binance 实际保证金或杠杆与目标配置不一致，保留调度阻断");
                                     }
+                                    dispatcher.configurationIntentApplied(configReservation);
                                     dispatcher.configurationApplied(configTicket);
                                     configTicket = null;
+                                } else {
+                                    stage = "SET_MARGIN_TYPE";
+                                    gateway.setMarginType(state.credential, state.symbol, state.marginMode);
+                                    synchronized (state) {
+                                        if (states.get(key) != state || revision != state.revision) {
+                                            throw new IllegalStateException("保证金设置后配置版本变化，拒绝继续修改杠杆");
+                                        }
+                                    }
+                                    balances.requireSnapshot(state.id);
+                                    if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
+                                        throw new IllegalStateException("准备期间出现持仓，禁止修改交易设置");
+                                    }
+                                    stage = "SET_LEVERAGE";
+                                    gateway.setLeverage(state.credential, state.symbol, state.leverage);
                                 }
                             } catch (RuntimeException ex) {
                                 if (configTicket != null) {

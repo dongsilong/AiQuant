@@ -44,6 +44,23 @@ class LiveOrderDispatcherTest {
               PRIMARY KEY(credential_id,symbol))
             """);
         jdbc.execute("""
+            CREATE TABLE quant_strategy (
+              id BIGINT PRIMARY KEY, default_leverage INT, default_margin_mode VARCHAR(12))
+            """);
+        jdbc.execute("""
+            CREATE TABLE quant_strategy_account (
+              strategy_id BIGINT NOT NULL, credential_id BIGINT NOT NULL, status VARCHAR(8))
+            """);
+        jdbc.execute("""
+            CREATE TABLE quant_strategy_symbol (
+              strategy_id BIGINT NOT NULL, symbol_id BIGINT NOT NULL, status VARCHAR(8),
+              leverage INT, margin_mode VARCHAR(12))
+            """);
+        jdbc.execute("""
+            CREATE TABLE quant_symbol (
+              id BIGINT PRIMARY KEY, symbol VARCHAR(32) NOT NULL)
+            """);
+        jdbc.execute("""
             CREATE TABLE quant_strategy_runtime_lease (
               instance_id BIGINT NOT NULL, credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
               owner_token VARCHAR(80), lease_epoch BIGINT, lease_until TIMESTAMP,
@@ -57,6 +74,61 @@ class LiveOrderDispatcherTest {
         var mapper = new SqlSessionTemplate(Objects.requireNonNull(bean.getObject())).getMapper(LiveOrderDispatchMapper.class);
         var manager = new DataSourceTransactionManager(source);
         return new Fixture(new LiveOrderDispatcher(mapper, manager), new LiveOrderDispatcher(mapper, manager), mapper, jdbc);
+    }
+
+    @Test
+    void explicitStrategyConfigurationChangeMigratesLiveIntentOnlyAfterVerifiedReadback() throws Exception {
+        var f = fixture();
+        var initial = f.first().beginConfigurationChange(1L, "BTCUSDT", "initial-5x", "ISOLATED", 5);
+        assertFalse(initial.intentMigration());
+        f.first().configurationApplied(initial.ticket());
+        f.jdbc().update("INSERT INTO quant_strategy (id, default_leverage, default_margin_mode) VALUES (7, 10, 'ISOLATED')");
+        f.jdbc().update("INSERT INTO quant_strategy_account (strategy_id, credential_id, status) VALUES (7, 1, '0')");
+        f.jdbc().update("INSERT INTO quant_symbol (id, symbol) VALUES (9, 'BTCUSDT')");
+        f.jdbc().update("INSERT INTO quant_strategy_symbol (strategy_id, symbol_id, status, leverage, margin_mode) VALUES (7, 9, '0', 10, 'ISOLATED')");
+
+        var changed = f.other().beginConfigurationChange(1L, "BTCUSDT", "change-to-10x", "ISOLATED", 10);
+        assertTrue(changed.intentMigration());
+        assertEquals(5, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+        f.other().configurationIntentApplied(changed);
+        assertEquals(10, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+        f.other().configurationApplied(changed.ticket());
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+    }
+
+    @Test
+    void unresolvedLiveIntentMigrationCanRecoverAfterExchangeVerification() throws Exception {
+        var f = fixture();
+        var initial = f.first().beginConfigurationChange(1L, "BTCUSDT", "initial-5x", "ISOLATED", 5);
+        f.first().configurationApplied(initial.ticket());
+        f.jdbc().update("INSERT INTO quant_strategy (id, default_leverage, default_margin_mode) VALUES (7, 10, 'ISOLATED')");
+        f.jdbc().update("INSERT INTO quant_strategy_account (strategy_id, credential_id, status) VALUES (7, 1, '0')");
+        f.jdbc().update("INSERT INTO quant_symbol (id, symbol) VALUES (9, 'BTCUSDT')");
+        f.jdbc().update("INSERT INTO quant_strategy_symbol (strategy_id, symbol_id, status, leverage, margin_mode) VALUES (7, 9, '0', 10, 'ISOLATED')");
+        var changed = f.other().beginConfigurationChange(1L, "BTCUSDT", "change-to-10x", "ISOLATED", 10);
+        f.other().unknown(changed.ticket());
+
+        assertTrue(f.first().recoveredConfigurationFromExchange(1L, "BTCUSDT", "change-to-10x",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
+        assertEquals(10, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+        assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "change-to-10x"));
+    }
+
+    @Test
+    void conflictingStrategyBindingsPreventLiveIntentMigration() throws Exception {
+        var f = fixture();
+        var initial = f.first().beginConfigurationChange(1L, "BTCUSDT", "initial-5x", "ISOLATED", 5);
+        f.first().configurationApplied(initial.ticket());
+        f.jdbc().update("INSERT INTO quant_strategy (id, default_leverage, default_margin_mode) VALUES (7, 5, 'ISOLATED')");
+        f.jdbc().update("INSERT INTO quant_strategy_account (strategy_id, credential_id, status) VALUES (7, 1, '0')");
+        f.jdbc().update("INSERT INTO quant_symbol (id, symbol) VALUES (9, 'BTCUSDT')");
+        f.jdbc().update("INSERT INTO quant_strategy_symbol (strategy_id, symbol_id, status, leverage, margin_mode) VALUES (7, 9, '0', 5, 'ISOLATED')");
+
+        var conflict = assertThrows(LiveOrderDispatcher.DispatchFailureException.class,
+            () -> f.other().beginConfigurationChange(1L, "BTCUSDT", "change-to-10x", "ISOLATED", 10));
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.SETTINGS_INTENT_MISMATCH, conflict.reason());
+        assertEquals(5, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
     }
 
     @Test

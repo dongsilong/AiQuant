@@ -23,6 +23,16 @@ public interface LiveOrderDispatchMapper {
 
     java.util.Map<String, Object> settingsIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
 
+    long conflictingStrategySettings(@Param("credentialId") Long credentialId, @Param("symbol") String symbol,
+                                     @Param("marginMode") String marginMode, @Param("leverage") int leverage);
+
+    int migrateSettingsIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key,
+                              @Param("previousMarginMode") String previousMarginMode, @Param("previousLeverage") int previousLeverage,
+                              @Param("marginMode") String marginMode, @Param("leverage") int leverage);
+
+    int recoverSettingsIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key,
+                              @Param("clientOrderId") String clientOrderId, @Param("marginMode") String marginMode, @Param("leverage") int leverage);
+
     int claim(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
     /**
