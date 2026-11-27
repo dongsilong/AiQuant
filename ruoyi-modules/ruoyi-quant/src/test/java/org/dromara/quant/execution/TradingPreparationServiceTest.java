@@ -81,6 +81,18 @@ class TradingPreparationServiceTest {
     }
 
     @Test
+    void preparationFailureIsVisibleInEntryBlockReason() throws Exception {
+        when(balances.requireSnapshot(1L)).thenThrow(new IllegalStateException("balance snapshot unavailable"));
+
+        service.request(1L, testnet, "BTCUSDT", 10, "ISOLATED", null).get(2, TimeUnit.SECONDS);
+
+        var blocked = assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> service.requireReady(1L, "BTCUSDT", 10, "ISOLATED"));
+        assertTrue(blocked.getMessage().contains("lastFailureStage=BALANCE_SNAPSHOT"));
+        assertTrue(blocked.getMessage().contains("lastFailureType=IllegalStateException"));
+    }
+
+    @Test
     void disabledLiveGateNeverChangesAccountSettings() throws Exception {
         ready();
         var live = new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE");
