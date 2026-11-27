@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -140,7 +141,7 @@ public class TradingPreparationService {
         String normalizedMode = normalizeMode(marginMode);
         State state = states.get(key(id, symbol));
         if (state == null) {
-            throw new OpenCapacityService.CapacityBlockedException("交易设置尚未初始化，等待后台首次校准: symbol=" + symbol);
+            throw new OpenCapacityService.CapacityBlockedException("交易设置尚未初始化，等待后台首次校准: symbol=" + symbol + ", preparation={state=MISSING}");
         }
         if (state != null) {
             synchronized (state) {
@@ -153,7 +154,19 @@ public class TradingPreparationService {
                 }
             }
         }
-        String ex = "交易设置未准备好或已变化，等待后台校准及新的行情: symbol=" + symbol + ", leverage=" + leverage + ", marginMode=" + normalizedMode;
+        String detail;
+        synchronized (state) {
+            detail = "configured=" + state.configured
+                + ", loading=" + (state.loading != null)
+                + ", lastAttemptAt=" + state.lastAttemptAt
+                + ", lastSuccessAt=" + state.lastSuccessAt
+                + ", lastFailureAt=" + state.lastFailureAt
+                + ", lastFailureStage=" + state.lastFailureStage
+                + ", lastFailureType=" + state.lastFailureType
+                + ", retryRemainingMillis=" + TimeUnit.NANOSECONDS.toMillis(Math.max(0L, state.retryAt - System.nanoTime()));
+        }
+        String ex = "交易设置未准备好或已变化，等待后台校准及新的行情: symbol=" + symbol + ", leverage=" + leverage
+            + ", marginMode=" + normalizedMode + ", preparation={" + detail + "}";
         throw new OpenCapacityService.CapacityBlockedException(ex);
     }
 
@@ -170,24 +183,34 @@ public class TradingPreparationService {
             state.loading = future;
             Thread.ofVirtual().name("quant-trading-preparation").start(() -> {
                 long started = System.nanoTime();
+                String stage = "ACCOUNT_FACTS";
+                synchronized (state) {
+                    state.lastAttemptAt = Instant.now();
+                }
                 try {
                     // 同账户同交易对的旧/新配置任务串行，网络等待不占用行情线程或数据库事务。
                     synchronized (locks.computeIfAbsent(key, ignored -> new Object())) {
                         if (states.get(key) != state) {
                             return;
                         }
+                        stage = "BALANCE_SNAPSHOT";
                         balances.requireSnapshot(state.id);
+                        stage = "POSITION_SNAPSHOT";
                         var active = positions.requirePositions(state.id);
+                        stage = "POSITION_MODE";
                         var mode = queryPositionMode(state.id, state.credential);
+                        stage = "TRADING_RULE";
                         var rule = gateway.queryTradingRule(state.credential, state.symbol);
                         if (mode == null || rule == null || rule.minNotional() == null || rule.minNotional().signum() <= 0 || state.leverage <= 0) {
                             throw new IllegalStateException("交易准备缺少有效模式、规则或杠杆");
                         }
                         if (!state.configured) {
+                            stage = "INITIAL_CONFIGURATION_CHECK";
                             if (active.stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
                                 throw new IllegalStateException("已有持仓，禁止后台修改保证金模式或杠杆");
                             }
                             if ("LIVE".equalsIgnoreCase(state.credential.runMode())) {
+                                stage = "LIVE_SAFETY_GATE";
                                 var safety = state.safety;
                                 if (safety == null) {
                                     throw new LiveTradingGate.LiveTradingBlockedException();
@@ -217,6 +240,7 @@ public class TradingPreparationService {
                                     // Hold ONE durable account+symbol slot across BOTH Binance writes.
                                     // An order or another node's preparation cannot enter between them.
                                     String dispatchKey = "CFG:" + java.util.UUID.randomUUID();
+                                    stage = "LIVE_CONFIGURATION_DISPATCH";
                                     configTicket = dispatcher.beginConfiguration(state.id, state.symbol, dispatchKey, state.marginMode, state.leverage);
                                     // Another node may have acquired/released the slot while we waited.
                                     // Revalidate local revision and fresh position facts AFTER claim.
@@ -230,6 +254,7 @@ public class TradingPreparationService {
                                         throw new IllegalStateException("取得配置锁后出现持仓，禁止修改保证金或杠杆");
                                     }
                                 }
+                                stage = "SET_MARGIN_TYPE";
                                 gateway.setMarginType(state.credential, state.symbol, state.marginMode);
                                 synchronized (state) {
                                     if (states.get(key) != state || revision != state.revision) {
@@ -240,8 +265,10 @@ public class TradingPreparationService {
                                 if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
                                     throw new IllegalStateException("准备期间出现持仓，禁止修改杠杆");
                                 }
+                                stage = "SET_LEVERAGE";
                                 gateway.setLeverage(state.credential, state.symbol, state.leverage);
                                 if (configTicket != null) {
+                                    stage = "VERIFY_LIVE_CONFIGURATION";
                                     // A setter HTTP success is not independent proof of
                                     // actual Binance leverage/margin, especially after
                                     // retries or ambiguous exchanges. Read fresh facts
@@ -269,6 +296,7 @@ public class TradingPreparationService {
                         // A previously configured account can drift out of band.
                         // Verify exchange facts before renewing the entry token.
                         if (state.configured && "LIVE".equalsIgnoreCase(state.credential.runMode())) {
+                            stage = "VERIFY_CONFIG_DRIFT";
                             var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
                             if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol()) || !state.marginMode.equals(verified.marginMode()) || state.leverage != verified.leverage()) {
                                 throw new IllegalStateException("Binance 账户配置漂移或无法核实，拒绝续期交易准备令牌");
@@ -276,25 +304,49 @@ public class TradingPreparationService {
                         }
                         synchronized (state) {
                             if (states.get(key) == state && revision == state.revision) {
+                                stage = "FINAL_BALANCE_SNAPSHOT";
                                 balances.requireSnapshot(state.id);
                                 state.configured = true;
                                 state.liveFailures = null;
                                 state.checkedAt = System.nanoTime();
                                 state.prepared = new Prepared(mode, rule, state.checkedAt + TimeUnit.SECONDS.toNanos(60));
+                                state.lastSuccessAt = Instant.now();
+                                state.lastFailureAt = null;
+                                state.lastFailureStage = null;
+                                state.lastFailureType = null;
                             }
                         }
                     }
                     log.debug("交易后台准备 credentialId={} symbol={} elapsedMillis={}", state.id, state.symbol, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
                 } catch (Exception ex) {
+                    long retryDelayMillis = retryDelayMillis(ex);
+                    Throwable rootCause = ex;
+                    while (rootCause.getCause() != null && rootCause.getCause() != rootCause) {
+                        rootCause = rootCause.getCause();
+                    }
+                    String failureType = ex.getClass().getSimpleName();
+                    String rootFailureType = rootCause.getClass().getSimpleName();
+                    String failureSummary = failureType.equals(rootFailureType) ? failureType : failureType + "/" + rootFailureType;
+                    boolean shouldLogFailure;
                     synchronized (state) {
                         state.prepared = null;
                         if (states.get(key) == state && revision == state.revision) {
                             state.liveFailures = ex instanceof LiveTradingGate.LiveTradingBlockedException blocked ? blocked.getFailures() : null;
+                            state.lastFailureAt = Instant.now();
+                            state.lastFailureStage = stage;
+                            state.lastFailureType = failureSummary;
                         }
-                        state.retryAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retryDelayMillis(ex));
+                        state.retryAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retryDelayMillis);
+                        shouldLogFailure = System.nanoTime() >= state.nextFailureLogAt;
+                        if (shouldLogFailure) {
+                            state.nextFailureLogAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                        }
                     }
-                    log.debug("交易后台准备未就绪 credentialId={} symbol={} elapsedMillis={} reason={}", state.id, state.symbol,
-                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), ex.getClass().getSimpleName());
+                    if (shouldLogFailure) {
+                        log.warn("交易后台准备未就绪 credentialId={} symbol={} stage={} failureType={} configured={} revision={} elapsedMillis={} retryDelayMillis={}",
+                            state.id, state.symbol, stage, failureSummary, state.configured, revision,
+                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), retryDelayMillis);
+                    }
                 } finally {
                     synchronized (state) {
                         if (state.loading == future) {
@@ -447,6 +499,12 @@ public class TradingPreparationService {
         private long revision;
         private long checkedAt;
         private long retryAt;
+        private Instant lastAttemptAt;
+        private Instant lastSuccessAt;
+        private Instant lastFailureAt;
+        private String lastFailureStage;
+        private String lastFailureType;
+        private long nextFailureLogAt;
         private CompletableFuture<Void> loading;
 
         private State(Long id, ExchangeGateway.Credential credential, String symbol, int leverage, String marginMode, ExecutionSafetyContext safety) {
