@@ -81,11 +81,13 @@ class DualHedgeLegAccountingServiceTest {
     private QuantOrder order(long orderId, String side, String positionSide, String executed) {
         QuantOrder order = new QuantOrder();
         order.setCredentialId(1L);
+        order.setStrategyInstanceId(2L);
         order.setSymbol("BTCUSDT");
         order.setExchangeOrderId(orderId);
         order.setSide(side);
         order.setPositionSide(positionSide);
         order.setExecutedQuantity(new BigDecimal(executed));
+        order.setStatus("FILLED");
         return order;
     }
 
