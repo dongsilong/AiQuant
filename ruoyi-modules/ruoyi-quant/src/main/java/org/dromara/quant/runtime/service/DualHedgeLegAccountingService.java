@@ -87,7 +87,7 @@ public class DualHedgeLegAccountingService {
         Map<Long, QuantOrder> ordersById = new HashMap<>();
         for (QuantOrder order : orders) {
             if (order.getExchangeOrderId() == null || ordersById.putIfAbsent(order.getExchangeOrderId(), order) != null
-                 || !normalizedSymbol.equalsIgnoreCase(order.getSymbol())
+                || !normalizedSymbol.equalsIgnoreCase(order.getSymbol())
                 || !Objects.equals(instanceId, order.getStrategyInstanceId())
                 || !leg.equalsIgnoreCase(order.getPositionSide())
                 || !Objects.equals(expectedSides.get(order.getExchangeOrderId()), upper(order.getSide()))
