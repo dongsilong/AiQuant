@@ -10,6 +10,9 @@ VALUES (#{credentialId}, #{symbol}, #{marginMode}, #{leverage}, UTC_TIMESTAMP())
     <select id="matchingSettingsIntent" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_live_account_settings_intent
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND margin_mode=#{marginMode} AND leverage=#{leverage}]]></select>
+    <select id="settingsIntent" resultType="map" timeout="3"><![CDATA[SELECT margin_mode AS marginMode, leverage
+FROM quant_live_account_settings_intent
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}]]></select>
     <update id="claim" timeout="3"><![CDATA[UPDATE quant_live_dispatch_guard
 SET active_dispatch_key=#{key}, updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
