@@ -134,6 +134,22 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
+    void configurationIntentMismatchReportsExistingAndRequestedSettings() throws Exception {
+        var f = fixture();
+        var approved = f.first().beginConfiguration(1L, "BTCUSDT", "approved-settings", "CROSSED", 20);
+        f.first().configurationApplied(approved);
+
+        var conflict = assertThrows(LiveOrderDispatcher.DispatchFailureException.class,
+            () -> f.other().beginConfiguration(1L, "BTCUSDT", "conflicting-settings", "ISOLATED", 10));
+
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.SETTINGS_INTENT_MISMATCH, conflict.reason());
+        assertTrue(conflict.diagnosticDetail().contains("existingMarginMode=CROSSED"));
+        assertTrue(conflict.diagnosticDetail().contains("existingLeverage=20"));
+        assertTrue(conflict.diagnosticDetail().contains("requestedMarginMode=ISOLATED"));
+        assertTrue(conflict.diagnosticDetail().contains("requestedLeverage=10"));
+    }
+
+    @Test
     void configurationDispatchClassifiesTicketInsertFailureAndRollsBackClaim() throws Exception {
         var f = fixture();
         var first = f.first().beginConfiguration(1L, "BTCUSDT", "same-config-key", "ISOLATED", 10);
