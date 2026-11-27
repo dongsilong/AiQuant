@@ -108,18 +108,19 @@ public class LiveOrderDispatcher {
                 int claimed = instanceId == null ? mapper.claim(credentialId, normalized, key) : mapper.claimWithLease(credentialId, normalized, key, instanceId, epoch);
                 if (claimed != 1) {
                     boolean slotOccupied = mapper.activeDispatch(credentialId, normalized) != null;
-                    String reason = slotOccupied ? "同账户交易对存在未完成交易所操作，订单未发送"
-                        : "策略租约已过期或转移，订单未发送";
-                    throw new DispatchBlockedException(reason);
+                    if (slotOccupied) {
+                        throw new DispatchBlockedException(DispatchFailureReason.DISPATCH_SLOT_OCCUPIED, "同账户交易对存在未完成交易所操作，订单未发送");
+                    }
+                    throw new DispatchBlockedException(DispatchFailureReason.DISPATCH_GUARD_CLAIM_FAILED, "LIVE 交易对派发槽未能取得，订单未发送");
                 }
                 if (marginMode != null) {
                     mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
                     if (mapper.matchingSettingsIntent(credentialId, normalized, marginMode, leverage) != 1L) {
-                        throw new IllegalStateException("同账户交易对存在冲突的保证金/杠杆配置契约，拒绝更改交易所");
+                        throw new DispatchFailureException(DispatchFailureReason.SETTINGS_INTENT_MISMATCH, "同账户交易对存在冲突的保证金/杠杆配置契约，拒绝更改交易所");
                     }
                 }
                 if (mapper.insertTicket(credentialId, normalized, key, operation, clientOrderId, instanceId, epoch) != 1) {
-                    throw new IllegalStateException("LIVE dispatch 发送票据落库失败");
+                    throw new DispatchFailureException(DispatchFailureReason.DISPATCH_TICKET_INSERT_FAILED, "LIVE dispatch 发送票据落库失败");
                 }
                 if (strategyId != null && mapper.insertPreDispatchIntent(credentialId, normalized, key, clientOrderId, strategyId, instanceId, operation, positionSide, exchangeSide,
                     epoch) != 1) {
@@ -134,6 +135,15 @@ public class LiveOrderDispatcher {
                 publisher.publishEvent(new DispatchBlockedEvent(credentialId, normalized, operation));
             }
             throw blocked;
+        } catch (DispatchFailureException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            if (marginMode != null) {
+                // Keep database/mapper details out of logs and callers; expose only a stable diagnostic code.
+                throw new DispatchFailureException(DispatchFailureReason.CONFIGURATION_PERSISTENCE_FAILURE,
+                    "LIVE 配置派发持久化失败，拒绝修改交易所", failure);
+            }
+            throw failure;
         }
     }
 
@@ -430,9 +440,40 @@ public class LiveOrderDispatcher {
     /**
      * 派发槽或策略租约校验在任何交易所请求发送前失败。
      */
-    public static final class DispatchBlockedException extends IllegalStateException {
-        public DispatchBlockedException(String message) {
+    public enum DispatchFailureReason {
+        DISPATCH_SLOT_OCCUPIED,
+        DISPATCH_GUARD_CLAIM_FAILED,
+        SETTINGS_INTENT_MISMATCH,
+        DISPATCH_TICKET_INSERT_FAILED,
+        CONFIGURATION_PERSISTENCE_FAILURE
+    }
+
+    /** A safe, stable diagnostic classification; never includes database or request details. */
+    public static class DispatchFailureException extends IllegalStateException {
+        private final DispatchFailureReason reason;
+
+        public DispatchFailureException(DispatchFailureReason reason, String message) {
             super(message);
+            this.reason = Objects.requireNonNull(reason);
+        }
+
+        public DispatchFailureException(DispatchFailureReason reason, String message, Throwable cause) {
+            super(message, cause);
+            this.reason = Objects.requireNonNull(reason);
+        }
+
+        public DispatchFailureReason reason() {
+            return reason;
+        }
+    }
+
+    public static final class DispatchBlockedException extends DispatchFailureException {
+        public DispatchBlockedException(String message) {
+            this(DispatchFailureReason.DISPATCH_GUARD_CLAIM_FAILED, message);
+        }
+
+        public DispatchBlockedException(DispatchFailureReason reason, String message) {
+            super(reason, message);
         }
     }
 }
