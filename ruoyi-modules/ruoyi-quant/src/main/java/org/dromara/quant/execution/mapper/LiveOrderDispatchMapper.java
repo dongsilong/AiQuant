@@ -21,6 +21,8 @@ public interface LiveOrderDispatchMapper {
 
     long matchingSettingsIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("marginMode") String marginMode, @Param("leverage") int leverage);
 
+    java.util.Map<String, Object> settingsIntent(@Param("credentialId") Long credentialId, @Param("symbol") String symbol);
+
     int claim(@Param("credentialId") Long credentialId, @Param("symbol") String symbol, @Param("key") String key);
 
     /**
