@@ -1673,6 +1673,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return;
         }
         if ("KLINE_READY".equals(event.type())) {
+            EntryMaSnapshot previous = runtime.entryMa.snapshot();
+            String previousBlockReason = entryMaMarketBlockReason(runtime, previous);
             runtime.entryMa.setHistoryReady(true);
             EntryMaSnapshot current = runtime.entryMa.snapshot();
             log.info("策略1分钟MA K线历史恢复完成 instanceId={} mode={} symbol={} closedKlines={}/7 ma5={} ma7={} liveMarketEventSeen={}",
@@ -1680,13 +1682,21 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 current.ma5(), current.ma7(), current.eventTime() != null && current.receivedAt() != null);
             logEntryMaMarketEventDiagnostic(runtime, event, current);
             publishSlopeTelemetryForMaUpdate(runtime);
+            if (previousBlockReason != null && entryMaMarketBlockReason(runtime, current) == null) {
+                scheduleEntryMaRecoveryEvaluation(runtime);
+            }
             return;
         }
         if (event.kline() != null || "MARK".equalsIgnoreCase(event.type()) || "CONNECTED".equals(event.type())) {
+            EntryMaSnapshot previous = runtime.entryMa.snapshot();
+            String previousBlockReason = entryMaMarketBlockReason(runtime, previous);
             EntryMaSnapshot current = runtime.entryMa.update(event);
             logEntryMaMarketEventDiagnostic(runtime, event, current);
             if (!event.replay()) {
                 publishSlopeTelemetryForMaUpdate(runtime);
+            }
+            if (previousBlockReason != null && entryMaMarketBlockReason(runtime, current) == null) {
+                scheduleEntryMaRecoveryEvaluation(runtime);
             }
         }
     }
@@ -1725,6 +1735,40 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 publishSlopeTelemetry(runtime, runtime.latestSlopeContext, snapshot);
             }
         }
+    }
+
+    /**
+     * MA门禁从阻断恢复后，仅重新评估最近一次因MA被阻断的原始行情事件。
+     * 重新进入主行情入口，重新执行新鲜度、租约、持仓和全部开仓门禁。
+     */
+    private void scheduleEntryMaRecoveryEvaluation(ActiveRuntime runtime) {
+        if (runtime == null || !entryMaDirectionFilterEnabled(runtime.plugin, runtime.params)
+            || runtime.closed || !runtime.entryMaEnabled) {
+            return;
+        }
+        ExchangeGateway.MarketEvent candidate;
+        synchronized (runtime) {
+            candidate = runtime.latestMaBlockedEntryEvent;
+            if (candidate == null || candidate.replay() || !runtime.marketHealthy || !runtime.marketStreamReady
+                || !("TRADE".equalsIgnoreCase(candidate.type()) || "KLINE".equalsIgnoreCase(candidate.type()))
+                || candidate != runtime.latestDecisionMarketEvent
+                || runtime.lastEntryMaRecoveryEvaluationEvent == candidate
+                || !runtime.entryMaRecoveryEvaluationPending.compareAndSet(false, true)) {
+                return;
+            }
+            runtime.lastEntryMaRecoveryEvaluationEvent = candidate;
+        }
+        Thread.ofVirtual().name("quant-entry-ma-recovery").start(() -> {
+            try {
+                synchronized (runtime) {
+                    if (!runtime.closed && runtime.latestDecisionMarketEvent == candidate) {
+                        onMarketEvent(runtime, candidate);
+                    }
+                }
+            } finally {
+                runtime.entryMaRecoveryEvaluationPending.set(false);
+            }
+        });
     }
 
     /** 返回 1 分钟均线行情门禁的具体阻断原因；不改变原有 fail-closed 条件。 */
@@ -1886,6 +1930,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 if (runtime.position != null && !runtime.exitCoordinating.get() && "PAPER".equalsIgnoreCase(runtime.credential.getRunMode()) && event.price() != null) {
                     paperTradingService.updateMarkPrice(runtime.position, event.price());
                 }
+                runtime.latestDecisionMarketEvent = event;
+                runtime.latestMaBlockedEntryEvent = null;
                 evaluate(runtime, event, callbackStartedNanos, runtimeLockRequestedNanos, runtimeLockAcquiredNanos);
             }
         }
@@ -2551,6 +2597,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             } else {
                 String entryMaBlockReason = entryMaMarketBlockReason(runtime, decisionMaSnapshot);
                 if (entryMaBlockReason != null) {
+                    runtime.latestMaBlockedEntryEvent = runtime.latestDecisionMarketEvent;
                     logEntryDecision(runtime, context, "ENTRY_MA_" + entryMaBlockReason,
                         entryMaMarketDiagnostic(runtime, decisionMaSnapshot, entryMaBlockReason));
                     return;
@@ -6662,6 +6709,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         /** 独立维护 1 分钟 MA 状态，不参与 ActiveRuntime 主锁。 */
         private final EntryMaState entryMa = new EntryMaState();
         private volatile boolean entryMaEnabled;
+        private volatile ExchangeGateway.MarketEvent latestDecisionMarketEvent;
+        private volatile ExchangeGateway.MarketEvent latestMaBlockedEntryEvent;
+        private volatile ExchangeGateway.MarketEvent lastEntryMaRecoveryEvaluationEvent;
+        private final AtomicBoolean entryMaRecoveryEvaluationPending = new AtomicBoolean();
         private volatile String lastEntryMaDiagnosticReason;
         private volatile long nextEntryMaDiagnosticLogAt;
         private final AtomicBoolean protectionSyncing = new AtomicBoolean();
