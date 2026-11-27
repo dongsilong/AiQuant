@@ -315,7 +315,7 @@ public class TradingPreparationService {
                                 state.lastFailureAt = null;
                                 state.lastFailureStage = null;
                                 state.lastFailureType = null;
-                            state.lastFailureReasonCode = null;
+                                state.lastFailureReasonCode = null;
                             }
                         }
                     }
