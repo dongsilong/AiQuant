@@ -295,11 +295,11 @@ public class DualHedgeLocalProtectionService {
             BigDecimal exchangeQuantity = currentPositionQuantity(runtime, currentPosition);
             if (exchangeQuantity.compareTo(latest.getPositionQty()) != 0) {
                 if (partialFirstProfit) {
-                    refreshFirstTakeProfitFacts(latest, runtime, currentPosition);
                     BigDecimal knownExchangeExecuted = zero(latest.getFirstTakeProfitExecutedQty())
                         .subtract(zero(latest.getFirstTakeProfitLocalExecutedQty())).max(ZERO);
-                    BigDecimal nowExchangeExecuted = protectionOrderService.firstTakeProfitExecutedQuantity(
-                        runtime.credential.getId(), scopedPosition);
+                    refreshFirstTakeProfitFacts(latest, runtime, currentPosition);
+                    BigDecimal nowExchangeExecuted = zero(latest.getFirstTakeProfitExecutedQty())
+                        .subtract(zero(latest.getFirstTakeProfitLocalExecutedQty())).max(ZERO);
                     BigDecimal expectedPosition = latest.getPositionQty()
                         .subtract(nowExchangeExecuted.subtract(knownExchangeExecuted).max(ZERO)).max(ZERO);
                     if (exchangeQuantity.compareTo(expectedPosition) == 0) {
@@ -400,13 +400,20 @@ public class DualHedgeLocalProtectionService {
                 || !expectedSide.equalsIgnoreCase(order.side())
                 || orderId != null && !orderId.equals(order.orderId())
                 || order.executedQuantity() == null
-                || order.executedQuantity().compareTo(state.getPendingTargetQuantity()) != 0) {
+                || order.executedQuantity().compareTo(state.getPendingTargetQuantity()) > 0) {
                 state.setRecoveryRequired(true);
                 state.setUnsafeRecovery(true);
                 stateService.save(state);
                 return;
             }
-            if (!"FILLED".equalsIgnoreCase(order.status())) {
+            if ("NEW".equalsIgnoreCase(order.status()) || "PARTIALLY_FILLED".equalsIgnoreCase(order.status())) {
+                return;
+            }
+            if (!"FILLED".equalsIgnoreCase(order.status())
+                || order.executedQuantity().compareTo(state.getPendingTargetQuantity()) != 0) {
+                state.setRecoveryRequired(true);
+                state.setUnsafeRecovery(true);
+                stateService.save(state);
                 return;
             }
             List<ExchangeGateway.PositionSnapshot> snapshots =
@@ -440,6 +447,7 @@ public class DualHedgeLocalProtectionService {
     }
 
     private void restoreAfterExplicitFailure(QuantStrategyPositionState state, LocalRuntime runtime) {
+        positionSnapshots.remove(runtime.credential.getId() + ":" + runtime.credential.getRunMode());
         List<ExchangeGateway.PositionSnapshot> snapshots =
             positionSnapshotQuery.query(runtime.credential.getId(), executionService.toCredential(runtime.credential));
         BigDecimal actual = findPositionQuantity(snapshots, runtime.symbol, state.getDirection());
@@ -521,6 +529,7 @@ public class DualHedgeLocalProtectionService {
     }
 
     private BigDecimal currentPositionQuantity(LocalRuntime runtime, QuantPosition position) {
+        positionSnapshots.remove(runtime.credential.getId() + ":" + runtime.credential.getRunMode());
         List<ExchangeGateway.PositionSnapshot> snapshots =
             queryPositionSnapshot(runtime.credential.getId(), executionService.toCredential(runtime.credential));
         return findPositionQuantity(snapshots, runtime.symbol, position.getPositionSide());

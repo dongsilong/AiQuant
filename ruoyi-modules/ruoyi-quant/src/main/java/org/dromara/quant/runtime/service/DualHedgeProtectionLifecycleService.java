@@ -81,12 +81,17 @@ public class DualHedgeProtectionLifecycleService {
                 + ":" + Boolean.TRUE.equals(state.getFirstTakeProfitTriggered());
             long now = System.currentTimeMillis();
             Long checkedAt = protectionCheckAt.get(checkKey);
-            if (checkedAt != null && now - checkedAt < PROTECTION_RECHECK_MILLIS) {
+            if (Boolean.TRUE.equals(state.getExchangeProtectionReady())
+                && checkedAt != null && now - checkedAt < PROTECTION_RECHECK_MILLIS) {
                 continue;
             }
             try {
                 ensureExchangeProtections(state, position);
                 state.setExchangeProtectionReady(true);
+                if (state.getPendingAction() == null) {
+                    state.setRecoveryRequired(false);
+                    state.setUnsafeRecovery(false);
+                }
                 positionStateService.save(state);
                 protectionCheckAt.put(checkKey, now);
             } catch (RuntimeException ex) {
@@ -137,7 +142,13 @@ public class DualHedgeProtectionLifecycleService {
                 FIRST_TAKE_PROFIT_QUANTITY_RATE, ProtectionSignal.QuantityBase.INITIAL,
                 firstTakeProfitPrice, "双开策略 +5% 首次止盈，平初始仓位 50%"));
         }
-        boolean breakEvenArmed = Boolean.TRUE.equals(state.getTrailingArmed());
+        BigDecimal maximumRoi = state.getMaximumReturnRate() == null ? ZERO : state.getMaximumReturnRate();
+        int stepIndex = maximumRoi.signum() <= 0 ? 0
+            : maximumRoi.divide(new BigDecimal("0.10"), 0, java.math.RoundingMode.FLOOR).intValue();
+        BigDecimal lockRoi = stepIndex == 0 ? ZERO
+            : stepIndex == 1 ? new BigDecimal("0.05")
+            : new BigDecimal("0.10").multiply(BigDecimal.valueOf(stepIndex - 1L));
+        boolean breakEvenArmed = Boolean.TRUE.equals(state.getTrailingArmed()) || stepIndex > 0;
         if (!breakEvenArmed) {
             MarketStreamHub.ProtectionPriceSnapshot price = marketStreamHub.protectionPriceAt(
                 credential.getRunMode(), position.getSymbol(), Instant.now());
@@ -146,13 +157,16 @@ public class DualHedgeProtectionLifecycleService {
                 && ("LONG".equalsIgnoreCase(state.getDirection())
                     ? markPrice.compareTo(state.getEntryPrice()) > 0
                     : markPrice.compareTo(state.getEntryPrice()) < 0);
-            if (breakEvenArmed) {
-                state.setTrailingArmed(true);
-            }
         }
         if (breakEvenArmed) {
+            BigDecimal stepPrice = stepIndex == 0 ? breakEvenPrice
+                : KlineSlopeRateStrategy.priceForMarkReturn(state.getEntryPrice(), state.getDirection(), lockRoi, leverage);
             desired.add(new ProtectionSignal("STEP_TP", "STOP_MARKET", BigDecimal.ONE,
-                ProtectionSignal.QuantityBase.CURRENT, breakEvenPrice, "双开策略未达到阶梯目标前的回本保护", 0));
+                ProtectionSignal.QuantityBase.CURRENT, stepPrice,
+                "双开策略阶梯回撤保护，最高 ROI=" + maximumRoi + "，锁定 ROI=" + lockRoi, stepIndex));
+            state.setTrailingArmed(true);
+            state.setHighestStep(Math.max(state.getHighestStep() == null ? 0 : state.getHighestStep(), stepIndex));
+            state.setTrailingStopRoi(lockRoi);
         }
 
         protectionOrderService.syncStrategyProtections(position.getCredentialId(), position,
