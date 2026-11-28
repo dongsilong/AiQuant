@@ -115,13 +115,19 @@ class StrategySlopeTelemetryHubTest {
         var staleHub = new StrategySlopeTelemetryHub();
         var staleEvents = new ArrayList<StrategySlopeTelemetry>();
         staleHub.publish(copyWithSource(runtime, runtime.instanceId(), runtime.sequence(), now.minusSeconds(10)));
-        staleHub.unregisterRuntime(2L, 3L, "BTCUSDT", "15m", runtime.instanceId());
         try (var subscription = staleHub.subscribe(2L, 3L, staleEvents::add)) {
             assertEquals(1, staleEvents.size());
-            assertNull(staleEvents.getFirst().instanceId());
-            assertEquals("MONITOR", staleEvents.getFirst().dataSource());
+            assertEquals(runtime.instanceId(), staleEvents.getFirst().instanceId());
+            assertEquals("RUNTIME", staleEvents.getFirst().dataSource());
             staleHub.publish(monitor);
+            assertEquals(1, staleEvents.size());
+
+            staleHub.unregisterRuntime(2L, 3L, "BTCUSDT", "15m", runtime.instanceId());
             assertEquals(2, staleEvents.size());
+            assertNull(staleEvents.getLast().instanceId());
+            assertEquals("MONITOR", staleEvents.getLast().dataSource());
+            staleHub.publish(monitor);
+            assertEquals(3, staleEvents.size());
             assertEquals(monitor.currentPrice(), staleEvents.getLast().currentPrice());
         }
     }
