@@ -1619,6 +1619,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     /**
      * 将行情流状态事件映射为仅用于斜率面板的阻断原因；不改变行情健康状态。
      */
+    static boolean shouldInvalidateSlopeForExpiredEvent(String eventType) {
+        return "TRADE".equalsIgnoreCase(eventType) || "KLINE".equalsIgnoreCase(eventType);
+    }
+
     static String slopeBlockReasonForStreamStatus(String eventType) {
         return switch (eventType == null ? "" : eventType.toUpperCase(Locale.ROOT)) {
             case "CONNECTING" -> "STREAM_CONNECTING_OR_RECOVERING";
@@ -1921,6 +1925,14 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
                 runtime.latestMarkPrice = event.price();
+                if (runtime.marketHealthy && runtime.marketStreamReady && runtime.plugin instanceof KlineSlopeRateStrategy) {
+                    // MARK 仅刷新面板展示快照；决策斜率仍保留最近一次 TRADE/KLINE 输入。
+                    SlopeContextSnapshot displaySnapshot = new SlopeContextSnapshot(
+                        buildContext(runtime, event.price(), event), event.receivedAt(), "MARK", "MARK");
+                    synchronized (runtime.slopeTelemetryLock) {
+                        publishSlopeTelemetry(runtime, runtime.latestSlopeContext, runtime.entryMa.snapshot(), displaySnapshot);
+                    }
+                }
                 if (runtime.position != null && !runtime.exitCoordinating.get()) {
                     updateRuntimeMaximumReturnRate(runtime, event.price());
                 }
@@ -2272,7 +2284,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             if (runtime.closed) {
                 return;
             }
-            publishSlopeUnavailable(runtime, reason, event.eventTime(), event.receivedAt());
+            if (shouldInvalidateSlopeForExpiredEvent(event.type())) {
+                publishSlopeUnavailable(runtime, reason, event.eventTime(), event.receivedAt());
+            }
         }
         long now = System.currentTimeMillis();
         if (now < runtime.nextExpiredMarketLogAt) {

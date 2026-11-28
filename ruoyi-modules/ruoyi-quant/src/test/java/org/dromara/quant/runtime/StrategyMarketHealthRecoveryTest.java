@@ -13,6 +13,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class StrategyMarketHealthRecoveryTest {
 
     @Test
+    void onlyExpiredTradeAndKlineEventsInvalidateDecisionSlope() {
+        assertTrue(StrategyRuntimeService.shouldInvalidateSlopeForExpiredEvent("TRADE"));
+        assertTrue(StrategyRuntimeService.shouldInvalidateSlopeForExpiredEvent("KLINE"));
+        assertFalse(StrategyRuntimeService.shouldInvalidateSlopeForExpiredEvent("MARK"));
+        assertFalse(StrategyRuntimeService.shouldInvalidateSlopeForExpiredEvent("CONNECTED"));
+    }
+
+    @Test
     void mapsStreamStatusEventsToSlopeTelemetryReasons() {
         assertEquals("STREAM_CONNECTING_OR_RECOVERING", StrategyRuntimeService.slopeBlockReasonForStreamStatus("CONNECTING"));
         assertEquals("STREAM_DISCONNECTED", StrategyRuntimeService.slopeBlockReasonForStreamStatus("DISCONNECTED"));
