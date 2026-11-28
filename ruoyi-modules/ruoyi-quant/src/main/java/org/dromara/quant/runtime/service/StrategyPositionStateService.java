@@ -179,6 +179,7 @@ public class StrategyPositionStateService {
         state.setPendingOrderId(null);
         state.setPendingOrderTime(null);
         state.setPendingIdempotencyKey(null);
+        state.setPendingTargetQuantity(null);
         state.setRecoveryRequired(false);
         state.setUnsafeRecovery(false);
         save(state);

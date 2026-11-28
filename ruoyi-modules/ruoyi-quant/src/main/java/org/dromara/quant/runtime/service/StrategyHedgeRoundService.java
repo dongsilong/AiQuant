@@ -146,6 +146,29 @@ public class StrategyHedgeRoundService {
             .last("LIMIT 100"));
     }
 
+    /**
+     * 双开某条腿已核实平仓后推进轮次状态；另一条腿仍在持仓时保留 CLOSING 阻断。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void markLegClosed(String hedgeRoundKey, String leg) {
+        if (!"LONG".equals(leg) && !"SHORT".equals(leg)) {
+            throw new IllegalArgumentException("双开轮次平仓腿必须为 LONG 或 SHORT");
+        }
+        QuantStrategyHedgeRound round = findByRoundKey(hedgeRoundKey);
+        if (round == null) {
+            throw new IllegalStateException("双开平仓找不到对应轮次: " + hedgeRoundKey);
+        }
+        if ("LONG".equals(leg)) {
+            round.setLongLegStatus(LEG_CLOSED);
+        } else {
+            round.setShortLegStatus(LEG_CLOSED);
+        }
+        boolean bothClosed = LEG_CLOSED.equals(round.getLongLegStatus())
+            && LEG_CLOSED.equals(round.getShortLegStatus());
+        round.setStatus(bothClosed ? STATUS_CLOSED : STATUS_CLOSING);
+        save(round);
+    }
+
     public QuantStrategyHedgeRound findByRoundKey(String hedgeRoundKey) {
         if (hedgeRoundKey == null || hedgeRoundKey.isBlank()) {
             return null;

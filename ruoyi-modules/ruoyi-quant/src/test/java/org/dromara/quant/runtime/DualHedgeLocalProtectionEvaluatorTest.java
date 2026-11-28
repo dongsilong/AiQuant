@@ -41,7 +41,7 @@ class DualHedgeLocalProtectionEvaluatorTest {
     @Test
     void doesNotRegressPreviouslyObservedMaximumReturn() {
         var decision = DualHedgeLocalProtectionEvaluator.evaluate(
-            "LONG", bd("112"), bd("100"), 1, bd("0.20"), true);
+            "LONG", bd("110"), bd("100"), 1, bd("0.20"), true);
 
         assertEquals(bd("0.20"), decision.maximumRoi());
         assertEquals(bd("0.10"), decision.lockRoi());

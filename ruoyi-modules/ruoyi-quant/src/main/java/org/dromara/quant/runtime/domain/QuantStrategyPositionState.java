@@ -175,6 +175,9 @@ public class QuantStrategyPositionState {
     private Boolean unsafeRecovery;
     /** 双开腿的 Binance 硬止损、首次止盈和回本保护均已确认生效。 */
     private Boolean exchangeProtectionReady;
+    /** 本地 CLOSE 动作预期提交的数量，用于进程重启后的成交核实。 */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
+    private BigDecimal pendingTargetQuantity;
     /**
      * 待确认订单连续未查询到的确认次数。
      */
