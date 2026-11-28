@@ -2,6 +2,7 @@ package org.dromara.quant.runtime;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,6 +11,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * strategy lease was temporarily fenced.
  */
 class StrategyMarketHealthRecoveryTest {
+
+    @Test
+    void mapsStreamStatusEventsToSlopeTelemetryReasons() {
+        assertEquals("STREAM_CONNECTING_OR_RECOVERING", StrategyRuntimeService.slopeBlockReasonForStreamStatus("CONNECTING"));
+        assertEquals("STREAM_DISCONNECTED", StrategyRuntimeService.slopeBlockReasonForStreamStatus("DISCONNECTED"));
+        assertEquals("STREAM_TERMINAL_ERROR", StrategyRuntimeService.slopeBlockReasonForStreamStatus("ERROR"));
+        assertEquals("WAITING_FOR_LIVE_MARKET_EVENT", StrategyRuntimeService.slopeBlockReasonForStreamStatus("CONNECTED"));
+    }
 
     @Test
     void restoresHealthOnFreshTradeWhenSharedStreamIsReady() {

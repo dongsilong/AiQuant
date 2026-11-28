@@ -1617,6 +1617,19 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     }
 
     /**
+     * 将行情流状态事件映射为仅用于斜率面板的阻断原因；不改变行情健康状态。
+     */
+    static String slopeBlockReasonForStreamStatus(String eventType) {
+        return switch (eventType == null ? "" : eventType.toUpperCase(Locale.ROOT)) {
+            case "CONNECTING" -> "STREAM_CONNECTING_OR_RECOVERING";
+            case "DISCONNECTED" -> "STREAM_DISCONNECTED";
+            case "ERROR" -> "STREAM_TERMINAL_ERROR";
+            case "CONNECTED" -> "WAITING_FOR_LIVE_MARKET_EVENT";
+            default -> "STREAM_READINESS_NOT_CONFIRMED";
+        };
+    }
+
+    /**
      * A fresh live trade/kline proves data is flowing only after the shared stream has
      * completed its own recovery handshake. Replay and status events cannot reopen the gate.
      */
@@ -1861,8 +1874,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.marketStreamStatus = event.type();
             }
             if (!ensureEventLease(runtime)) {
-                // Losing the strategy lease fences decisions, but does not mean the public
-                // market feed is unhealthy. MarketStreamHub reports feed readiness separately.
+                // 租约失效继续阻断策略事件，只发布状态，不更新交易决策输入。
+                publishSlopeUnavailable(runtime, "RUNTIME_LEASE_NOT_READY", event.eventTime(), event.receivedAt());
                 return;
             }
             if ("CONNECTING".equals(event.type())) {
@@ -1872,6 +1885,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.latestTradePrice = null;
                 runtime.latestTradeEventAt = null;
                 runtime.latestMarkPrice = null;
+                publishSlopeUnavailable(runtime, slopeBlockReasonForStreamStatus(event.type()), event.eventTime(), event.receivedAt());
                 return;
             }
             if ("DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
@@ -1880,10 +1894,13 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                 runtime.latestTradePrice = null;
                 runtime.latestTradeEventAt = null;
                 runtime.latestMarkPrice = null;
+                publishSlopeUnavailable(runtime, slopeBlockReasonForStreamStatus(event.type()), event.eventTime(), event.receivedAt());
                 return;
             }
             if ("CONNECTED".equals(event.type())) {
                 runtime.marketHealthy = true;
+                // CONNECTED 只证明流已恢复；仍需等待首条通过新鲜度门禁的实时 TRADE/KLINE。
+                publishSlopeUnavailable(runtime, slopeBlockReasonForStreamStatus(event.type()), event.eventTime(), event.receivedAt());
                 return;
             }
             // CONNECTED may have reached this runtime while its strategy lease was temporarily
@@ -1915,6 +1932,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
                     !localEventTime.isBefore(runtime.state.getOpenedAt().atZone(java.time.ZoneId.systemDefault()).toInstant())) {
                     updateRuntimeExtrema(runtime, event.price());
                 }
+                publishSlopeUnavailable(runtime, "REPLAY_EVENT", event.eventTime(), event.receivedAt());
                 return;
             }
             if (event.price() != null && "TRADE".equals(event.type())) {
@@ -2250,6 +2268,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
 
     private void reportExpiredMarketEvent(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, String reason, String stage, long callbackStartedNanos,
                                           long runtimeLockRequestedNanos, long runtimeLockAcquiredNanos) {
+        synchronized (runtime) {
+            if (runtime.closed) {
+                return;
+            }
+            publishSlopeUnavailable(runtime, reason, event.eventTime(), event.receivedAt());
+        }
         long now = System.currentTimeMillis();
         if (now < runtime.nextExpiredMarketLogAt) {
             return;
@@ -3332,7 +3356,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         BigDecimal ma5 = maReady ? maSnapshot.ma5() : null;
         BigDecimal ma7 = maReady ? maSnapshot.ma7() : null;
         String maTrend = maReady ? org.dromara.quant.market.OneMinuteMovingAverage.trend(ma5, ma7) : null;
-        slopeTelemetryHub.publish(new StrategySlopeTelemetry(
+        synchronized (runtime.slopeTelemetryLock) {
+            runtime.lastSlopeUnavailableReason = null;
+            slopeTelemetryHub.publish(new StrategySlopeTelemetry(
             runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
             runtime.strategySymbol.getIntervalCode(),
             slopeReady ? evaluation.currentPrice() : null,
@@ -3366,7 +3392,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             effectiveDisplayContext == null || display == null ? null : effectiveDisplayContext.source(),
             "RUNTIME",
             slopeBlockReason
-        ));
+            ));
+        }
     }
 
     /**
@@ -3374,9 +3401,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
      * 该快照不携带价格/角度，不进入策略计算或交易流程。
      */
     private void publishSlopeUnavailable(ActiveRuntime runtime, String reason, Instant eventTime, Instant receivedAt) {
-        if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
+        if (runtime == null || runtime.closed || !(runtime.plugin instanceof KlineSlopeRateStrategy)) {
             return;
         }
+        String unavailableReason = reason == null ? "MARKET_UNREADY" : reason;
         EntryMaSnapshot maSnapshot = runtime.entryMa.snapshot();
         Instant now = Instant.now();
         Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
@@ -3393,7 +3421,12 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         boolean maReady = maBlockReason == null;
         BigDecimal ma5 = maReady ? maSnapshot.ma5() : null;
         BigDecimal ma7 = maReady ? maSnapshot.ma7() : null;
-        slopeTelemetryHub.publish(new StrategySlopeTelemetry(
+        synchronized (runtime.slopeTelemetryLock) {
+            if (runtime.closed || Objects.equals(runtime.lastSlopeUnavailableReason, unavailableReason)) {
+                return;
+            }
+            runtime.lastSlopeUnavailableReason = unavailableReason;
+            slopeTelemetryHub.publish(new StrategySlopeTelemetry(
             runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
             runtime.strategySymbol.getIntervalCode(),
             null, null, null, null, null, false, eventTime, receivedAt,
@@ -3403,8 +3436,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             maSnapshot.lastClosedKlineOpenTime(), maSnapshot.eventTime(), maSnapshot.receivedAt(),
             0L, maFreshForMillis, now,
             null, null, null, null, null, null, 0L, null,
-            "RUNTIME", reason == null ? "MARKET_UNREADY" : reason
-        ));
+            "RUNTIME", unavailableReason
+            ));
+        }
     }
 
     private static long remainingEventFreshnessMillis(Instant eventTime, Instant receivedAt, Instant localNow,
@@ -6895,6 +6929,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private final Object slopeTelemetryLock = new Object();
         private volatile SlopeContextSnapshot latestSlopeContext;
         private final java.util.concurrent.atomic.AtomicLong slopeTelemetrySequence = new java.util.concurrent.atomic.AtomicLong();
+        private volatile String lastSlopeUnavailableReason;
         // 健康回调直接关闭决策，不能等待普通行情队列的断线通知。
         private volatile boolean marketStreamReady;
         /** 最近收到的共享行情流状态事件，仅用于解释决策门禁，不参与健康判定。 */
