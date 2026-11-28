@@ -20,6 +20,8 @@ WHERE credential_id=#{id} AND owner_token=#{owner} AND lease_until>NOW(6)]]></se
     ', remaining_ms=', TIMESTAMPDIFF(MICROSECOND, NOW(6), lease_until) DIV 1000
 )
 FROM quant_live_user_stream_lease WHERE credential_id=#{id}]]></select>
+    <select id="remainingMillis" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT GREATEST(0, TIMESTAMPDIFF(MICROSECOND, NOW(6), lease_until) DIV 1000)
+FROM quant_live_user_stream_lease WHERE credential_id=#{id}]]></select>
     <select id="owns" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_live_user_stream_lease
 WHERE credential_id=#{id} AND owner_token=#{owner} AND lease_until>NOW(6)]]></select>
     <select id="ownsEpoch" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_live_user_stream_lease

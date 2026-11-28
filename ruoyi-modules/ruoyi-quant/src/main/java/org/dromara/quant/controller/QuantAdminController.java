@@ -13,6 +13,7 @@ import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.dromara.quant.market.domain.QuantSymbol;
@@ -22,6 +23,7 @@ import org.dromara.quant.notification.mapper.QuantNotificationMapper;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
+import org.dromara.quant.runtime.coordination.mapper.StrategyRuntimeLeaseMapper;
 import org.dromara.quant.runtime.mapper.QuantStrategyPositionStateMapper;
 import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.strategy.domain.QuantStrategyInstance;
@@ -30,11 +32,15 @@ import org.dromara.quant.strategy.mapper.QuantStrategyInstanceMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.strategy.service.QuantStrategyService;
+import org.dromara.quant.strategy.KlineSlopeRateStrategy;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.*;
 
 /**
@@ -45,6 +51,7 @@ import java.util.*;
 @RequestMapping("/quant")
 public class QuantAdminController {
     private final QuantCredentialMapper credentialMapper;
+    private final QuantProperties quantProperties;
     private final QuantSymbolMapper symbolMapper;
     private final QuantStrategyMapper strategyMapper;
     private final QuantStrategySymbolMapper strategySymbolMapper;
@@ -56,6 +63,7 @@ public class QuantAdminController {
     private final QuantExecutionRecordMapper executionMapper;
     private final QuantNotificationMapper notificationMapper;
     private final QuantStrategyService strategyService;
+    private final StrategyRuntimeLeaseMapper runtimeLeaseMapper;
 
     private static Map<String, Object> map() {
         return new LinkedHashMap<>();
@@ -151,6 +159,9 @@ public class QuantAdminController {
             QuantStrategySymbol binding = strategySymbols.get(item.getStrategySymbolId());
             row.put("symbol", binding == null || symbols.get(binding.getSymbolId()) == null ? null : symbols.get(binding.getSymbolId()).getSymbol());
             row.put("runtimeEnabled", binding == null || !Boolean.FALSE.equals(binding.getRuntimeEnabled()));
+            boolean strategyEnabled = strategies.get(item.getStrategyId()) != null && "1".equals(strategies.get(item.getStrategyId()).getStatus());
+            row.put("strategyEnabled", strategyEnabled);
+            row.put("runtimeActive", strategyEnabled && "RUNNING".equals(item.getStatus()) && runtimeLeaseMapper.countActiveInstance(item.getId()) > 0);
             row.put("status", item.getStatus());
             row.put("lastSignalAt", item.getLastSignalAt());
             row.put("lastError", item.getLastError());
@@ -219,6 +230,17 @@ public class QuantAdminController {
             row.put("highestPriceSinceEntry", item.getHighestPriceSinceEntry());
             row.put("lowestPriceSinceEntry", item.getLowestPriceSinceEntry());
             row.put("maximumReturnRate", item.getMaximumReturnRate());
+            java.math.BigDecimal favorablePrice = "SHORT".equalsIgnoreCase(item.getDirection())
+                ? item.getLowestPriceSinceEntry() : item.getHighestPriceSinceEntry();
+            java.math.BigDecimal ladderMaximumReturnRate = null;
+            if (strategy != null && KlineSlopeRateStrategy.CODE.equalsIgnoreCase(strategy.getPluginCode())
+                && item.getEntryPrice() != null && item.getEntryPrice().signum() > 0 && favorablePrice != null
+                && item.getFrozenLeverage() != null && item.getFrozenLeverage() > 0) {
+                ladderMaximumReturnRate = KlineSlopeRateStrategy.leveragedReturn(
+                    item.getDirection(), favorablePrice, item.getEntryPrice(), item.getFrozenLeverage())
+                    .max(java.math.BigDecimal.ZERO).multiply(java.math.BigDecimal.valueOf(100));
+            }
+            row.put("ladderMaximumReturnRate", ladderMaximumReturnRate);
             row.put("highestStep", item.getHighestStep());
             row.put("confirmedProtectionStep", item.getConfirmedProtectionStep());
             row.put("firstTakeProfitTriggered", item.getFirstTakeProfitTriggered());
@@ -241,11 +263,14 @@ public class QuantAdminController {
                                                         @RequestParam(required = false) String executionStatus, @RequestParam(required = false) String symbol,
                                                         @RequestParam(required = false) String exchangeOrderStatus,
                                                         @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime startTime, @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") java.time.LocalDateTime endTime) {
-        var until = endTime == null ? java.time.LocalDateTime.now() : endTime;
-        var from = startTime == null ? until.minusHours(24) : startTime;
-        if (from.isAfter(until)) {
+        ZoneId displayZone = ZoneId.of(quantProperties.getTimeZone());
+        LocalDateTime displayUntil = endTime == null ? LocalDateTime.now(displayZone) : endTime;
+        LocalDateTime displayFrom = startTime == null ? displayUntil.minusHours(24) : startTime;
+        if (displayFrom.isAfter(displayUntil)) {
             throw new ServiceException("开始时间不能晚于结束时间");
         }
+        LocalDateTime from = displayFrom.atZone(displayZone).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        LocalDateTime until = displayUntil.atZone(displayZone).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
         List<Long> ids = scopedIds(credentialId);
         if (ids.isEmpty()) {
             return R.ok(emptyPage());
@@ -269,8 +294,8 @@ public class QuantAdminController {
                 item.getErrorMessage())));
             row.put("operationType", item.getOperationType());
             row.put("idempotencyKey", item.getIdempotencyKey());
-            row.put("createdAt", item.getCreatedAt());
-            row.put("updatedAt", item.getUpdatedAt());
+            row.put("createdAt", item.getCreatedAt() == null ? null : item.getCreatedAt().atOffset(ZoneOffset.UTC));
+            row.put("updatedAt", item.getUpdatedAt() == null ? null : item.getUpdatedAt().atOffset(ZoneOffset.UTC));
             return row;
         }).toList();
         return R.ok(PageResult.build(rows, page.getTotal()));

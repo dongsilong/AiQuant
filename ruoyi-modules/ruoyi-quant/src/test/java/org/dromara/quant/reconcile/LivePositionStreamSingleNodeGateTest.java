@@ -32,7 +32,7 @@ class LivePositionStreamSingleNodeGateTest {
             stream.run(new org.springframework.boot.DefaultApplicationArguments());
             verify(hub).registerLeaseOwner(108L, 1L);
             verify(hub).subscribe(eq(account), any());
-            verify(coordinator).request(108L);
+            verifyNoInteractions(coordinator);
         } finally {
             stream.close();
         }
@@ -58,7 +58,7 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         stream.supervise();
         verify(hub, times(1)).subscribe(eq(account), any());
-        verify(coordinator).request(71L);
+            verifyNoInteractions(coordinator);
         verify(hub, times(2)).registerLeaseOwner(71L, 1L);
         stream.close();
         verify(subscription).close();
@@ -91,7 +91,7 @@ class LivePositionStreamSingleNodeGateTest {
         verify(hub).unregisterLeaseOwner(110L, 4L);
         verify(hub).registerLeaseOwner(110L, 5L);
         verify(hub, times(2)).subscribe(eq(account), any());
-        verify(coordinator, times(2)).request(110L);
+        verifyNoInteractions(coordinator);
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(110L));
         stream.close();
         verify(newSubscription).close();
@@ -185,7 +185,7 @@ class LivePositionStreamSingleNodeGateTest {
         when(hub.subscribe(eq(account), any())).thenReturn(mock(AutoCloseable.class));
         stream.supervise();
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(96L));
-        verify(coordinator).request(96L);
+            verifyNoInteractions(coordinator);
         stream.close();
     }
 
@@ -210,7 +210,7 @@ class LivePositionStreamSingleNodeGateTest {
         stream.supervise();
         verify(first).close();
         verify(hub, times(2)).subscribe(eq(account), any());
-        verify(coordinator, times(2)).request(95L);
+            verifyNoInteractions(coordinator);
         stream.close();
         verify(replacement).close();
     }

@@ -66,12 +66,6 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
         return market(connection, symbol, interval, events, disconnected, backlogLimit);
     }
 
-    static void notifyMarketSocketClosed(String connectionId, int statusCode, String reason, Runnable disconnected, String symbol, String interval) {
-        log.warn("Binance SDK 行情 WebSocket 已关闭 connectionId={} symbol={} interval={} closeCode={} reason={}", connectionId, symbol, interval,
-            statusCode, reason);
-        disconnected.run();
-    }
-
     static WebSocketClientConfiguration marketConfiguration(String url, QuantProperties.Proxy proxy) {
         WebSocketClientConfiguration config = configuration(url, proxy);
         // MarketStreamHub rotates market connections before 24 hours and owns recovery/replay.
@@ -144,20 +138,27 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
         config.setUsePool(false);
         if (proxy != null && proxy.getHost() != null && !proxy.getHost().isBlank()) {
             if (proxy.getPort() == null || proxy.getPort() < 1 || proxy.getPort() > 65535) {
-                throw new IllegalArgumentException("Binance SDK WebSocket HTTP proxy port is invalid");
+                throw new IllegalArgumentException("Binance SDK WebSocket HTTP 代理端口无效");
             }
             config.setWebSocketProxy(new HttpProxy(proxy.getHost().trim(), proxy.getPort()));
         } else if (proxy != null && proxy.getPort() != null) {
-            throw new IllegalArgumentException("Binance SDK WebSocket HTTP proxy host is missing");
+            throw new IllegalArgumentException("Binance SDK WebSocket HTTP 代理主机缺失");
         }
         return config;
     }
 
     private static void stop(StreamConnectionInterface connection) {
+        stop(connection, true);
+    }
+
+    private static void stop(StreamConnectionInterface connection, boolean intentional) {
         try {
+            if (intentional && connection instanceof MarketStreamConnectionWrapper wrapper) {
+                wrapper.markIntentionalClose();
+            }
             connection.stop();
         } catch (Exception ex) {
-            log.debug("Binance SDK stream close: {}", ex.getClass().getSimpleName());
+            log.debug("Binance SDK 行情流关闭：{}", ex.getClass().getSimpleName());
         }
     }
 
@@ -182,7 +183,7 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
                     }
                     // Fail before parsing the next message; no stale decision may be made from an overloaded queue.
                     if (raw.size() >= backlogLimit) {
-                        log.error("Binance SDK stream backlog reached threshold {}, force reconnect and replay", backlogLimit);
+                        log.error("Binance SDK 行情流积压达到阈值 {}，强制重连并重放", backlogLimit);
                         fail();
                         return;
                     }
@@ -200,7 +201,7 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         } catch (RuntimeException ex) {
-            log.warn("Binance SDK Streams subscription stopped: {}", ex.getClass().getSimpleName());
+            log.warn("Binance SDK Streams 订阅已停止：{}", ex.getClass().getSimpleName());
             fail();
         }
     }
@@ -230,11 +231,11 @@ final class BinanceSdkStreamTransport implements AutoCloseable {
     private void fail() {
         if (closed.compareAndSet(false, true)) {
             connected.set(false);
-            stop(connection);
+            stop(connection, false);
             try {
                 disconnected.run();
             } catch (RuntimeException ex) {
-                log.warn("Binance Streams disconnected callback failed");
+                log.warn("Binance Streams 断开连接回调执行失败");
             }
         }
     }

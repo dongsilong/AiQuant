@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Server-authenticated three-person LIVE recovery case API.
+ * Server-authenticated three-person dispatch recovery case API.
  * Never accepts an actor ID from the request. Permissions are separate for
  * requester, independent reviewer and final executor.
  * IDs are JSON strings so browsers cannot round 64-bit Snowflake IDs.
@@ -22,6 +22,7 @@ import java.util.Map;
 public class LiveManualRecoveryController {
     private final LiveRecoveryCaseService cases;
     private final LiveManualRecoveryExecutionService executor;
+    private final TestnetOpenNotExecutedRecoveryService testnetOpenRecovery;
     private final LiveRecoveryAuditMapper audit;
 
     private static String value(Map<String, Object> row, String key) {
@@ -47,6 +48,16 @@ public class LiveManualRecoveryController {
     @SaCheckPermission("quant:dispatch:recovery:request")
     public R<CreatedCase> request(@RequestBody RequestCase body) {
         long id = cases.request(parseId(body.credentialId()), body.symbol(), body.dispatchKey(), actor(), body.evidenceSha256(), body.detailSha256());
+        return R.ok(new CreatedCase(Long.toString(id)));
+    }
+
+    /**
+     * 为历史 TESTNET OPEN/UNKNOWN 且无派发票据的执行记录申请独立恢复工单。
+     */
+    @PostMapping("/request-testnet-open-not-executed")
+    @SaCheckPermission("quant:dispatch:recovery:request")
+    public R<CreatedCase> requestTestnetOpenNotExecuted(@RequestBody RequestCase body) {
+        long id = cases.requestLegacyOpen(parseId(body.credentialId()), body.symbol(), body.dispatchKey(), actor(), body.evidenceSha256(), body.detailSha256());
         return R.ok(new CreatedCase(Long.toString(id)));
     }
 
@@ -77,6 +88,16 @@ public class LiveManualRecoveryController {
     @SaCheckPermission("quant:dispatch:recovery:execute")
     public R<Void> execute(@RequestBody Decision body) {
         executor.execute(parseId(body.caseId()), actor(), body.evidenceSha256(), body.detailSha256());
+        return R.ok();
+    }
+
+    /**
+     * 执行 TESTNET 开仓未执行的独立人工恢复流程。
+     */
+    @PostMapping("/execute-testnet-open-not-executed")
+    @SaCheckPermission("quant:dispatch:recovery:execute")
+    public R<Void> executeTestnetOpenNotExecuted(@RequestBody Decision body) {
+        testnetOpenRecovery.execute(parseId(body.caseId()), actor(), body.evidenceSha256(), body.detailSha256());
         return R.ok();
     }
 

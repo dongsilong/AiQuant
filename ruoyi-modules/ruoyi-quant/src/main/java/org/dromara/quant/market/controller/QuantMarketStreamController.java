@@ -33,6 +33,26 @@ public class QuantMarketStreamController {
      */
     private final MarketStreamHub hub;
 
+    private static void dispatchMarketEvent(SseEventDispatcher delivery, Object item) {
+        if (item instanceof ExchangeGateway.MarketEvent event) {
+            String coalesceKey = latestStateKey(event);
+            if (coalesceKey == null) delivery.offer("quant.market", event);
+            else delivery.offerLatest(coalesceKey, "quant.market", event);
+        } else {
+            delivery.offer("quant.market", item);
+        }
+    }
+
+    private static String latestStateKey(ExchangeGateway.MarketEvent item) {
+        if ("TRADE".equals(item.type()) || "MARK".equals(item.type())) {
+            return item.symbol() + ":" + item.interval() + ":" + item.type();
+        }
+        if ("KLINE".equals(item.type()) && !item.replay() && item.kline() != null) {
+            return item.symbol() + ":" + item.interval() + ":KLINE:" + item.kline().openTime();
+        }
+        return null;
+    }
+
     private static void addSubscription(List<AutoCloseable> subscriptions, AtomicBoolean closed, AutoCloseable subscription) {
         synchronized (subscriptions) {
             if (!closed.get()) {
@@ -69,21 +89,23 @@ public class QuantMarketStreamController {
         response.setHeader("X-Accel-Buffering", "no");
         SseEmitter emitter = new SseEmitter(0L);
         SseResponseReadyGate responseReady = new SseResponseReadyGate(request);
-        AtomicReference<AutoCloseable> subscription = new AtomicReference<>();
+        AtomicBoolean closed = new AtomicBoolean();
+        List<AutoCloseable> subscriptions = new ArrayList<>();
         AtomicReference<SseEventDispatcher> dispatcher = new AtomicReference<>();
         SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
         Runnable cleanup = () -> {
             responseReady.close();
             SseEventDispatcher activeDispatcher = dispatcher.getAndSet(null);
             if (activeDispatcher != null) activeDispatcher.close();
-            AutoCloseable active = subscription.getAndSet(null);
-            if (active != null) {
-                try {
-                    active.close();
-                } catch (Exception ignored) {
-                    // 客户端断开后释放订阅。
+            List<AutoCloseable> active;
+            synchronized (subscriptions) {
+                if (!closed.compareAndSet(false, true)) {
+                    return;
                 }
+                active = new ArrayList<>(subscriptions);
+                subscriptions.clear();
             }
+            closeSubscriptions(active);
         };
         emitter.onCompletion(cleanup);
         emitter.onTimeout(cleanup);
@@ -100,18 +122,18 @@ public class QuantMarketStreamController {
         });
         dispatcher.set(delivery);
         delivery.start();
-        try {
-            subscription.set(hub.subscribe(runMode, symbol, interval, event -> {
-                replayBuffer.publish(event, item -> delivery.offer("quant.market", item));
-            }, ignored -> { }));
-        } catch (RuntimeException ex) {
-            cleanup.run();
+        // 避免上游订阅初始化阻塞 Servlet 异步响应启动。
+        Thread.ofVirtual().name("quant-market-subscribe").start(() -> {
             try {
-                emitter.send(SseEmitter.event().name("quant.market").data(java.util.Map.of("type", "ERROR", "message", "行情订阅失败")));
-            } catch (IOException ignored) {
-                // SSE 已无法继续发送。
+                AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
+                    if (!closed.get()) replayBuffer.publish(event, item -> dispatchMarketEvent(delivery, item), false);
+                }, ignored -> { });
+                addSubscription(subscriptions, closed, subscription);
+            } catch (RuntimeException ex) {
+                cleanup.run();
+                delivery.offer("quant.market", java.util.Map.of("type", "ERROR", "message", "行情订阅失败"));
             }
-        }
+        });
         return emitter;
     }
 
@@ -161,23 +183,22 @@ public class QuantMarketStreamController {
         });
         dispatcher.set(delivery);
         delivery.start();
-        for (int index = 0; index < symbols.size() && !closed.get(); index++) {
-            String symbol = symbols.get(index).trim();
-            String interval = intervals.get(index).trim();
-            try {
-                SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
-                AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
-                    if (!closed.get()) replayBuffer.publish(event, item -> delivery.offer("quant.market", item));
-                }, ignored -> { });
-                addSubscription(subscriptions, closed, subscription);
-            } catch (RuntimeException ex) {
+        // 避免批量上游订阅初始化阻塞 Servlet 异步响应启动。
+        Thread.ofVirtual().name("quant-market-batch-subscribe").start(() -> {
+            for (int index = 0; index < symbols.size() && !closed.get(); index++) {
+                String symbol = symbols.get(index).trim();
+                String interval = intervals.get(index).trim();
                 try {
-                    emitter.send(SseEmitter.event().name("quant.market").data(java.util.Map.of("type", "ERROR", "symbol", symbol, "interval", interval, "message", "行情订阅失败")));
-                } catch (IOException | RuntimeException sendError) {
-                    cleanup.run();
+                    SseReplayKlineBuffer replayBuffer = new SseReplayKlineBuffer();
+                    AutoCloseable subscription = hub.subscribe(runMode, symbol, interval, event -> {
+                        if (!closed.get()) replayBuffer.publish(event, item -> dispatchMarketEvent(delivery, item), true);
+                    }, ignored -> { });
+                    addSubscription(subscriptions, closed, subscription);
+                } catch (RuntimeException ex) {
+                    delivery.offer("quant.market", java.util.Map.of("type", "ERROR", "symbol", symbol, "interval", interval, "message", "行情订阅失败"));
                 }
             }
-        }
+        });
         return emitter;
     }
 

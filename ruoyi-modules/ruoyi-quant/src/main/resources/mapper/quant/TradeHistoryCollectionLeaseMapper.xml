@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.dromara.quant.reconcile.mapper.TradeHistoryCollectionLeaseMapper">
+    <insert id="ensure" timeout="3"><![CDATA[INSERT IGNORE INTO quant_trade_history_collection_lease
+  (credential_id, symbol, owner_token, lease_epoch, lease_until)
+VALUES (#{credentialId}, #{symbol}, '', 0, NOW(6))]]></insert>
+    <update id="acquire" timeout="3"><![CDATA[UPDATE quant_trade_history_collection_lease
+SET lease_epoch=lease_epoch+1, owner_token=#{owner},
+    lease_until=DATE_ADD(NOW(6), INTERVAL #{seconds} SECOND)
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND lease_until<=NOW(6)]]></update>
+    <select id="currentEpoch" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT lease_epoch FROM quant_trade_history_collection_lease
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND owner_token=#{owner} AND lease_until>NOW(6)]]></select>
+    <update id="renew" timeout="3"><![CDATA[UPDATE quant_trade_history_collection_lease
+SET lease_until=DATE_ADD(NOW(6), INTERVAL #{seconds} SECOND)
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND owner_token=#{owner} AND lease_epoch=#{epoch} AND lease_until>NOW(6)]]></update>
+    <select id="lockOwned" resultType="java.lang.Long" timeout="3"><![CDATA[SELECT lease_epoch FROM quant_trade_history_collection_lease
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND owner_token=#{owner} AND lease_epoch=#{epoch} AND lease_until>NOW(6)
+FOR UPDATE]]></select>
+    <update id="release" timeout="3"><![CDATA[UPDATE quant_trade_history_collection_lease
+SET lease_until=NOW(6)
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND owner_token=#{owner} AND lease_epoch=#{epoch} AND lease_until>NOW(6)]]></update>
+</mapper>

@@ -171,7 +171,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     public ExecutionResult open(OpenPositionCommand command) {
         var prepared = new java.util.concurrent.atomic.AtomicReference<TradingPreparationService.Prepared>();
         int leverage = command.leverage() == null ? 1 : command.leverage();
-        return execute("OPEN", command.credentialId(), command.strategyId(), command.strategyInstanceId(), command.credential(), command.symbol(), command.idempotencyKey(),
+        return execute("OPEN", command.credentialId(), command.strategyId(), command.strategyInstanceId(), command.credentialRuntimeVersion(), command.credential(), command.symbol(), command.idempotencyKey(),
             command.runMode(), command.safety(), command.symbolRule(), () -> {
             if (sendsToExchange(command.runMode()) && preparationService.requireReady(command.credentialId(), command.symbol(), leverage, command.marginMode()) != prepared.get()) {
                 throw new org.dromara.quant.risk.OpenCapacityService.CapacityBlockedException("交易设置在执行准备期间变化，等待新的行情");
@@ -223,7 +223,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
         if (sendsToExchange(command.runMode()) && !("BOTH".equalsIgnoreCase(command.positionSide()) || "LONG".equalsIgnoreCase(command.positionSide()) && "SELL".equalsIgnoreCase(command.side()) || "SHORT".equalsIgnoreCase(command.positionSide()) && "BUY".equalsIgnoreCase(command.side()))) {
             throw new IllegalArgumentException("平仓方向不明确或与持仓方向不匹配，拒绝交易所请求");
         }
-        return execute("CLOSE", command.credentialId(), command.strategyId(), command.strategyInstanceId(), command.credential(), command.symbol(), command.idempotencyKey(),
+        return execute("CLOSE", command.credentialId(), command.strategyId(), command.strategyInstanceId(), command.credentialRuntimeVersion(), command.credential(), command.symbol(), command.idempotencyKey(),
             command.runMode(), command.safety(), command.symbolRule(), () -> {
         }, () -> {
             ExchangeGateway.SymbolRule rule = command.symbolRule();
@@ -321,14 +321,14 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
     /**
      * 执行统一交易流水：幂等、安全检查、标准化、交易所调用和账本落库。
      */
-    private ExecutionResult execute(String operationType, Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol,
+    private ExecutionResult execute(String operationType, Long credentialId, Long strategyId, Long strategyInstanceId, Long credentialRuntimeVersion, ExchangeGateway.Credential credential, String symbol,
                                     String idempotencyKey, String runMode, ExecutionSafetyContext safety, ExchangeGateway.SymbolRule rule, Runnable beforeExchangeAction,
                                     Supplier<ExchangeGateway.OrderRequest> requestSupplier, OpenPositionCommand openCommand) {
-        return execute(operationType, credentialId, strategyId, strategyInstanceId, credential, symbol, idempotencyKey, runMode, safety, rule, beforeExchangeAction, requestSupplier,
+        return execute(operationType, credentialId, strategyId, strategyInstanceId, credentialRuntimeVersion, credential, symbol, idempotencyKey, runMode, safety, rule, beforeExchangeAction, requestSupplier,
             openCommand, null);
     }
 
-    private ExecutionResult execute(String operationType, Long credentialId, Long strategyId, Long strategyInstanceId, ExchangeGateway.Credential credential, String symbol,
+    private ExecutionResult execute(String operationType, Long credentialId, Long strategyId, Long strategyInstanceId, Long credentialRuntimeVersion, ExchangeGateway.Credential credential, String symbol,
                                     String idempotencyKey, String runMode, ExecutionSafetyContext safety, ExchangeGateway.SymbolRule rule, Runnable beforeExchangeAction,
                                     Supplier<ExchangeGateway.OrderRequest> requestSupplier, OpenPositionCommand openCommand,
                                     Supplier<TradingPreparationService.Prepared> capacityPreparation) {
@@ -378,7 +378,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                 if (verifier == null) {
                     throw new IllegalStateException("LIVE 策略执行缺少租约验证器");
                 }
-                preparationEpoch = verifier.requireCurrentEpoch(strategyInstanceId, credentialId, symbol);
+                preparationEpoch = verifier.requireCurrentEpoch(strategyInstanceId, credentialId, symbol, credentialRuntimeVersion);
             }
             if ("LIVE".equalsIgnoreCase(runMode) && strategyInstanceId != null && openCommand != null) {
                 var verifier = liveUserStreamLease;
@@ -421,7 +421,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                 if (preparationEpoch != null) {
                     // Reject requests prepared before lease expiry/takeover/reacquisition.
                     // This guards the entire preparation window, not only final token ownership.
-                    long currentEpoch = runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol);
+                    long currentEpoch = runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol, credentialRuntimeVersion);
                     if (preparationEpoch.longValue() != currentEpoch) {
                         throw new IllegalStateException("LIVE 策略租约代次在下单准备期间变化，拒绝旧交易信号");
                     }
@@ -441,7 +441,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                     // request is provably NOT SENT and we can free our own guard.
                     if (preparationEpoch != null) {
                         try {
-                            if (runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol) != preparationEpoch.longValue()) {
+                            if (runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol, credentialRuntimeVersion) != preparationEpoch.longValue()) {
                                 throw new IllegalStateException("LIVE 订单调度等待期间租约代次变化，拒绝旧节点下单");
                             }
                         } catch (RuntimeException stale) {
@@ -471,7 +471,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
                 }
                 if ("LIVE".equalsIgnoreCase(runMode)) {
                     recheckLiveBeforeDispatch(operationType, credentialId, symbol, idempotencyKey, safety, rule, openNotional);
-                    if (preparationEpoch != null && runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol) != preparationEpoch.longValue()) {
+                    if (preparationEpoch != null && runtimeLease.requireCurrentEpoch(strategyInstanceId, credentialId, symbol, credentialRuntimeVersion) != preparationEpoch.longValue()) {
                         throw new IllegalStateException("LIVE 策略租约代次在最终派发前变化，拒绝旧节点下单");
                     }
                     if (accountLeaseEpoch != null) {
@@ -490,7 +490,7 @@ public class UnifiedTradeExecutionService implements TradeExecutionPort {
             try {
                 if ("LIVE".equalsIgnoreCase(runMode) && strategyId != null && strategyInstanceId != null) {
                     if (acceptanceJournal == null) {
-                        throw new IllegalStateException("Missing transactional strategy order provenance journal");
+                        throw new IllegalStateException("缺少事务性策略订单来源记录");
                     }
                     acceptanceJournal.persist(credentialId, strategyId, strategyInstanceId, runMode, operationType, request, exchangeResult,
                         openCommand == null ? null : openCommand.leverage() == null ? 1 : openCommand.leverage(),

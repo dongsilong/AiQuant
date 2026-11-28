@@ -1,97 +1,250 @@
 package org.dromara.quant.exchange.binance;
 
 import org.dromara.quant.exchange.ExchangeMarketPort;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 有界加权轮转队列；交易和持仓核验优先，余额校准及后台补偿保留固定执行份额。
+ * 基于请求权重的全局令牌桶，并在环境和请求类别之间公平调度。
  */
 final class RestRequestScheduler {
-    private final ArrayDeque<Object>[] queues;
-    private final int[] rotation = {0, 1, 0, 2, 0, 0, 1, 3};
-    private final long interval;
-    private long nextStart;
+    private static final Logger log = LoggerFactory.getLogger(RestRequestScheduler.class);
+    private static final double TOKEN_CAPACITY = 40D;
+    private static final long RESERVATION_WAIT_NANOS = TimeUnit.MILLISECONDS.toNanos(250L);
+    private static final long AGING_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(2L);
+    private final ArrayDeque<Ticket>[][] queues;
+    private final int[] rotation = {0, 1, 0, 2, 0, 0, 1, 3, 0, 4};
+    /** 每个权重单位补充所需时间；生产环境 50ms 即每秒最多补充 20 个权重单位。 */
+    private final long refillInterval;
+    private double availableTokens = TOKEN_CAPACITY;
+    private long lastRefill = System.nanoTime();
     private long blockedUntil;
-    /** A 418 without a trustworthy expiry requires operator intervention; never auto-expire this latch. */
     private boolean manualBlock;
     private int cursor;
+    private int environmentCursor;
+
     @SuppressWarnings("unchecked")
-    RestRequestScheduler(long intervalMillis) {
-        interval = TimeUnit.MILLISECONDS.toNanos(intervalMillis);
-        queues = new ArrayDeque[]{new ArrayDeque<>(), new ArrayDeque<>(), new ArrayDeque<>(), new ArrayDeque<>()};
+    RestRequestScheduler(long refillIntervalMillis) {
+        refillInterval = TimeUnit.MILLISECONDS.toNanos(refillIntervalMillis);
+        queues = new ArrayDeque[Kind.values().length][Environment.values().length];
+        for (int kind = 0; kind < queues.length; kind++) {
+            for (int environment = 0; environment < Environment.values().length; environment++) {
+                queues[kind][environment] = new ArrayDeque<>();
+            }
+        }
     }
 
     synchronized void acquire(Kind kind) {
+        acquire("fapi.binance.com", kind, 1);
+    }
+
+    synchronized void acquire(Kind kind, int requestWeight) {
+        acquire("fapi.binance.com", kind, requestWeight);
+    }
+
+    synchronized void acquire(String host, Kind kind, int requestWeight) {
+        if (requestWeight < 1 || requestWeight > TOKEN_CAPACITY) {
+            throw new IllegalArgumentException("Binance REST 请求权重超出调度器支持范围: " + requestWeight);
+        }
+        Environment environment = Environment.fromHost(host);
         long initialNow = System.nanoTime();
         if (manualBlock) {
-            throw deferred("MANUAL_BLOCK", kind, 0L, 0L);
+            throw deferred("MANUAL_BLOCK", kind, environment, 0L, 0L);
         }
         if (initialNow < blockedUntil) {
-            throw deferred("BLOCKED_UNTIL", kind, 0L, TimeUnit.NANOSECONDS.toMillis(blockedUntil - initialNow) + 1L);
+            throw deferred("BLOCKED_UNTIL", kind, environment, 0L, TimeUnit.NANOSECONDS.toMillis(blockedUntil - initialNow) + 1L);
         }
-        var queue = queues[kind.ordinal()];
-        if (queue.size() >= 16) {
-            throw deferred("QUEUE_FULL", kind, 0L, 2_000L);
+        if (queueSize(kind, environment) >= 16) {
+            throw deferred("QUEUE_FULL", kind, environment, 0L, 2_000L);
         }
-        Object ticket = new Object();
+        Ticket ticket = new Ticket(kind, environment, requestWeight, initialNow);
+        ArrayDeque<Ticket> queue = queues[kind.ordinal()][environment.ordinal()];
         queue.addLast(ticket);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(kind == Kind.TRADE ? 2 : 8);
         try {
-            for (; ; ) {
+            for (;;) {
                 if (Thread.currentThread().isInterrupted()) {
-                    throw deferred("INTERRUPTED", kind, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
+                    throw deferred("INTERRUPTED", kind, environment, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
                 }
                 if (manualBlock) {
-                    throw deferred("MANUAL_BLOCK", kind, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
+                    throw deferred("MANUAL_BLOCK", kind, environment, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
                 }
                 long now = System.nanoTime();
                 if (now < blockedUntil) {
-                    throw deferred("BLOCKED_UNTIL", kind, TimeUnit.NANOSECONDS.toMillis(now - initialNow), TimeUnit.NANOSECONDS.toMillis(blockedUntil - now) + 1L);
+                    throw deferred("BLOCKED_UNTIL", kind, environment, TimeUnit.NANOSECONDS.toMillis(now - initialNow), TimeUnit.NANOSECONDS.toMillis(blockedUntil - now) + 1L);
                 }
                 if (now >= deadline) {
-                    throw deferred("QUEUE_TIMEOUT", kind, TimeUnit.NANOSECONDS.toMillis(now - initialNow), 1_500L);
-                }
-                int selected = cursor;
-                for (int i = 0; i < rotation.length; i++) {
-                    selected = (cursor + i) % rotation.length;
-                    if (!queues[rotation[selected]].isEmpty()) {
-                        break;
+                    if (!queue.contains(ticket)) {
+                        log.error("Binance REST 调度器队列状态异常 reason=QUEUE_TIMEOUT kind={} environment={} requestWeight={} waitedMs={} queueSizes={}",
+                            kind, environment, requestWeight, TimeUnit.NANOSECONDS.toMillis(now - initialNow), java.util.Arrays.toString(queueSizes()));
                     }
+                    throw deferred("QUEUE_TIMEOUT", kind, environment, TimeUnit.NANOSECONDS.toMillis(now - initialNow), 1_500L);
                 }
-                if (rotation[selected] == kind.ordinal() && queue.peekFirst() == ticket && now >= nextStart) {
+                refillTokens(now);
+                Ticket selected = selectEligibleTicket(now);
+                if (selected != null && selected.kind() == kind && selected.environment() == environment && queue.peekFirst() == ticket) {
                     queue.removeFirst();
-                    nextStart = now + interval;
-                    cursor = (selected + 1) % rotation.length;
+                    availableTokens -= requestWeight;
+                    cursor = selected.rotationIndex() + 1;
+                    environmentCursor = (environment.ordinal() + 1) % Environment.values().length;
                     notifyAll();
                     return;
                 }
-                long delay = nextStart > now ? nextStart - now : TimeUnit.MILLISECONDS.toNanos(10);
+                long tokenDelay = nextEligibleTokenDelayNanos(now);
+                long fairnessDelay = TimeUnit.MILLISECONDS.toNanos(10);
+                long delay = tokenDelay == Long.MAX_VALUE ? fairnessDelay : Math.min(tokenDelay, fairnessDelay);
                 TimeUnit.NANOSECONDS.timedWait(this, Math.min(delay, deadline - now));
             }
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw deferred("INTERRUPTED", kind, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
+            throw deferred("INTERRUPTED", kind, environment, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initialNow), 0L);
         } finally {
             queue.remove(ticket);
             notifyAll();
         }
     }
 
-    private ExchangeMarketPort.RequestDeferredException deferred(String reason, Kind kind, long waitedMillis, long retryAfterMillis) {
-        int[] queueSizes = new int[queues.length];
-        for (int i = 0; i < queues.length; i++) {
-            queueSizes[i] = queues[i].size();
+    private void refillTokens(long now) {
+        long elapsed = now - lastRefill;
+        if (elapsed <= 0L) {
+            return;
         }
-        return new ExchangeMarketPort.RequestDeferredException(reason, kind.name(), queueSizes[kind.ordinal()],
-            queueSizes, waitedMillis, retryAfterMillis);
+        availableTokens = Math.min(TOKEN_CAPACITY, availableTokens + (double) elapsed / refillInterval);
+        lastRefill = now;
+    }
+
+    private Ticket selectEligibleTicket(long now) {
+        Ticket reservation = reservationTicket(now);
+        for (int i = 0; i < rotation.length; i++) {
+            int selected = (cursor + i) % rotation.length;
+            Kind kind = Kind.values()[rotation[selected]];
+            for (int offset = 0; offset < Environment.values().length; offset++) {
+                Environment environment = Environment.values()[(environmentCursor + offset) % Environment.values().length];
+                Ticket head = queues[kind.ordinal()][environment.ordinal()].peekFirst();
+                if (head == null || head.weight() > availableTokens) {
+                    continue;
+                }
+                if (reservedForAnother(head, reservation, now)) {
+                    continue;
+                }
+                return head.withRotationIndex(selected);
+            }
+        }
+        return null;
+    }
+
+    private boolean reservedForAnother(Ticket candidate, Ticket reservation, long now) {
+        return reservation != null && candidate != reservation
+            && effectivePriority(candidate, now) >= effectivePriority(reservation, now)
+            && availableTokens - candidate.weight() < reservation.weight();
+    }
+
+    private long nextEligibleTokenDelayNanos(long now) {
+        Ticket reservation = reservationTicket(now);
+        int minimumWeight = Integer.MAX_VALUE;
+        for (Kind kind : Kind.values()) {
+            for (Environment environment : Environment.values()) {
+                Ticket head = queues[kind.ordinal()][environment.ordinal()].peekFirst();
+                if (head == null || reservedForAnother(head, reservation, now)) {
+                    continue;
+                }
+                minimumWeight = Math.min(minimumWeight, head.weight());
+            }
+        }
+        if (minimumWeight == Integer.MAX_VALUE || minimumWeight <= availableTokens) {
+            return TimeUnit.MILLISECONDS.toNanos(10);
+        }
+        return Math.max(1L, (long) Math.ceil((minimumWeight - availableTokens) * refillInterval));
+    }
+
+    /** 关键请求立即预留；其他请求等待250ms后参与预留，并通过等待时长逐级提升优先级。 */
+    private Ticket reservationTicket(long now) {
+        Ticket reservation = null;
+        for (Kind kind : Kind.values()) {
+            for (Environment environment : Environment.values()) {
+                Ticket head = queues[kind.ordinal()][environment.ordinal()].peekFirst();
+                if (head == null) {
+                    continue;
+                }
+                boolean critical = priority(kind) <= priority(Kind.POSITION_VERIFY);
+                if (!critical && now - head.enqueuedAtNanos() < RESERVATION_WAIT_NANOS) {
+                    continue;
+                }
+                if (reservation == null || effectivePriority(head, now) < effectivePriority(reservation, now)
+                    || effectivePriority(head, now) == effectivePriority(reservation, now)
+                        && head.enqueuedAtNanos() < reservation.enqueuedAtNanos()) {
+                    reservation = head;
+                }
+            }
+        }
+        return reservation;
+    }
+
+    private static int effectivePriority(Ticket ticket, long now) {
+        long waited = Math.max(0L, now - ticket.enqueuedAtNanos());
+        int minimumPriority = ticket.kind() == Kind.BACKGROUND ? priority(Kind.BACKGROUND)
+            : ticket.kind() == Kind.PROTECTION_VERIFY ? 0 : 1;
+        int aging = (int) Math.min(priority(ticket.kind()) - minimumPriority, waited / AGING_INTERVAL_NANOS);
+        return priority(ticket.kind()) - aging;
+    }
+
+    private static int priority(Kind kind) {
+        return switch (kind) {
+            case PROTECTION_VERIFY -> 0;
+            case TRADE, POSITION_VERIFY -> 1;
+            case ACCOUNT -> 2;
+            case BACKGROUND -> 3;
+        };
+    }
+
+    private int queueSize(Kind kind, Environment environment) {
+        return queues[kind.ordinal()][environment.ordinal()].size();
+    }
+
+    private int[] queueSizes() {
+        int[] sizes = new int[queues.length];
+        for (Kind kind : Kind.values()) {
+            sizes[kind.ordinal()] = java.util.Arrays.stream(Environment.values()).mapToInt(environment -> queueSize(kind, environment)).sum();
+        }
+        return sizes;
+    }
+
+    private ExchangeMarketPort.RequestDeferredException deferred(String reason, Kind kind, Environment environment,
+                                                                    long waitedMillis, long retryAfterMillis) {
+        int[] sizes = queueSizes();
+        return new ExchangeMarketPort.RequestDeferredException(reason, kind.name(), queueSize(kind, environment),
+            sizes, waitedMillis, retryAfterMillis);
     }
 
     /**
-     * Permanently blocks REST requests for this process after an unbounded HTTP 418.
-     * Restarting the process is an explicit operator action, not an automatic expiry.
+     * 输出当前权重预算和各请求队列的积压情况，用于区分令牌耗尽与队列竞争。
      */
+    synchronized String diagnostics() {
+        long now = System.nanoTime();
+        StringBuilder state = new StringBuilder("availableTokens=")
+            .append(String.format(java.util.Locale.ROOT, "%.2f", availableTokens))
+            .append(", queues={");
+        boolean first = true;
+        for (Kind kind : Kind.values()) {
+            for (Environment environment : Environment.values()) {
+                ArrayDeque<Ticket> queue = queues[kind.ordinal()][environment.ordinal()];
+                if (!first) {
+                    state.append(", ");
+                }
+                first = false;
+                Ticket head = queue.peekFirst();
+                state.append(kind).append('_').append(environment).append('=').append(queue.size())
+                    .append("(oldestWaitMs=")
+                    .append(head == null ? 0L : TimeUnit.NANOSECONDS.toMillis(now - head.enqueuedAtNanos()))
+                    .append(')');
+            }
+        }
+        return state.append('}').toString();
+    }
+
     synchronized void blockUntilManualReset() {
         manualBlock = true;
         notifyAll();
@@ -107,8 +260,26 @@ final class RestRequestScheduler {
         notifyAll();
     }
 
-    /**
-     * REST 请求优先级：交易请求 > 持仓事实核验 > 账户余额校准 > 后台补偿查询。
-     */
-    enum Kind {TRADE, POSITION_VERIFY, ACCOUNT, BACKGROUND}
+    private record Ticket(Kind kind, Environment environment, int weight, long enqueuedAtNanos, int rotationIndex) {
+        private Ticket(Kind kind, Environment environment, int weight, long enqueuedAtNanos) {
+            this(kind, environment, weight, enqueuedAtNanos, -1);
+        }
+
+        private Ticket withRotationIndex(int index) {
+            return new Ticket(kind, environment, weight, enqueuedAtNanos, index);
+        }
+    }
+
+    private enum Environment {
+        LIVE, TESTNET;
+
+        private static Environment fromHost(String host) {
+            String normalized = host == null ? "" : host.toLowerCase(java.util.Locale.ROOT);
+            return normalized.contains("testnet") || normalized.startsWith("demo-")
+                ? TESTNET : LIVE;
+        }
+    }
+
+    /** 单一全局令牌桶按每秒20个IP权重单位补充、最多积累40个单位。 */
+    enum Kind {TRADE, PROTECTION_VERIFY, POSITION_VERIFY, ACCOUNT, BACKGROUND}
 }

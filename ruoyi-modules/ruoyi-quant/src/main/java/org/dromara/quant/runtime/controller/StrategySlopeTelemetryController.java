@@ -7,6 +7,7 @@ import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.runtime.StrategySlopeTelemetryHub;
+import org.dromara.quant.runtime.StrategySlopeMonitorService;
 import org.dromara.quant.strategy.domain.QuantStrategy;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.service.QuantStrategyService;
@@ -19,6 +20,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -29,6 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
 @RequestMapping("/quant/strategy")
 public class StrategySlopeTelemetryController {
     private final StrategySlopeTelemetryHub hub;
+    private final StrategySlopeMonitorService monitorService;
     private final QuantStrategyMapper strategyMapper;
     private final QuantCredentialMapper credentialMapper;
     private final QuantStrategyService strategyService;
@@ -38,7 +41,8 @@ public class StrategySlopeTelemetryController {
      */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping(value = "/slope/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(HttpServletResponse response, @RequestParam Long strategyId, @RequestParam Long credentialId) {
+    public SseEmitter stream(HttpServletResponse response, @RequestParam Long strategyId, @RequestParam Long credentialId,
+                             @RequestParam(required = false) String interval) {
         QuantStrategy strategy = strategyMapper.selectById(strategyId);
         strategyService.checkAccess(strategy);
         QuantCredential credential = credentialMapper.selectById(credentialId);
@@ -51,12 +55,22 @@ public class StrategySlopeTelemetryController {
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("X-Accel-Buffering", "no");
         SseEmitter emitter = new SseEmitter(0L);
-        AtomicReference<AutoCloseable> subscription = new AtomicReference<>();
+        AtomicReference<AutoCloseable> telemetrySubscription = new AtomicReference<>();
+        AtomicReference<AutoCloseable> monitorSubscription = new AtomicReference<>();
+        AtomicBoolean cleaned = new AtomicBoolean();
         Runnable cleanup = () -> {
-            AutoCloseable active = subscription.getAndSet(null);
-            if (active != null) {
+            cleaned.set(true);
+            AutoCloseable monitor = monitorSubscription.getAndSet(null);
+            if (monitor != null) {
                 try {
-                    active.close();
+                    monitor.close();
+                } catch (Exception ignored) {
+                }
+            }
+            AutoCloseable telemetry = telemetrySubscription.getAndSet(null);
+            if (telemetry != null) {
+                try {
+                    telemetry.close();
                 } catch (Exception ignored) {
                 }
             }
@@ -66,13 +80,20 @@ public class StrategySlopeTelemetryController {
         emitter.onError(error -> cleanup.run());
         try {
             emitter.send(SseEmitter.event().name("quant.strategy.slope").data(Map.of("type", "CONNECTED", "strategyId", strategyId, "credentialId", credentialId)));
-            subscription.set(hub.subscribe(strategyId, credentialId, event -> {
+            telemetrySubscription.set(hub.subscribe(strategyId, credentialId, event -> {
                 try {
                     emitter.send(SseEmitter.event().name("quant.strategy.slope").data(event));
                 } catch (IOException | RuntimeException ex) {
                     cleanup.run();
                 }
             }));
+            if (cleaned.get()) {
+                cleanup.run();
+            }
+            monitorSubscription.set(monitorService.subscribe(strategy, credential, interval));
+            if (cleaned.get()) {
+                cleanup.run();
+            }
         } catch (IOException | RuntimeException ex) {
             cleanup.run();
         }

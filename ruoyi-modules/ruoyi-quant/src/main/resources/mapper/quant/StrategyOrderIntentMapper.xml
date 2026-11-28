@@ -40,13 +40,13 @@ WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   )]]></insert>
     <update id="bindRecoveredOrder" timeout="3"><![CDATA[UPDATE quant_order
 SET strategy_id=#{strategyId},strategy_instance_id=#{instanceId},
-    position_side=#{positionSide},reduce_only=#{reduceOnly}
+    position_side=COALESCE(position_side,#{positionSide}),reduce_only=#{reduceOnly}
 WHERE id=#{localId} AND credential_id=#{credentialId}
   AND symbol=#{symbol} AND exchange_order_id=#{orderId}
   AND client_order_id=#{clientOrderId}
   AND (strategy_id IS NULL OR strategy_id=#{strategyId})
   AND (strategy_instance_id IS NULL OR strategy_instance_id=#{instanceId})
-  AND (position_side IS NULL OR position_side=#{positionSide})
+  AND (position_side IS NULL OR position_side=#{positionSide} OR position_side='BOTH')
   AND (reduce_only IS NULL OR reduce_only=#{reduceOnly})]]></update>
     <select id="countExactRecoveredBinding" resultType="int" timeout="3"><![CDATA[
 SELECT COUNT(*)
@@ -56,7 +56,7 @@ WHERE id=#{localId} AND credential_id=#{credentialId}
   AND client_order_id=#{clientOrderId}
   AND strategy_id=#{strategyId}
   AND strategy_instance_id=#{instanceId}
-  AND position_side=#{positionSide}
+  AND (position_side=#{positionSide} OR position_side='BOTH')
   AND reduce_only=#{reduceOnly}
 ]]></select>
     <select id="findCloseOrderIdsByCycle" resultType="java.lang.Long" timeout="3"><![CDATA[

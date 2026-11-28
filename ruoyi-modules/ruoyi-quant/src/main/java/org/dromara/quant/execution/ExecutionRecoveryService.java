@@ -7,6 +7,7 @@ import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.exchange.ExchangeHistoryCollector;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.execution.mapper.QuantExecutionRecordMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,7 +15,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -107,16 +110,76 @@ public class ExecutionRecoveryService {
                 ExchangeGateway.Credential c = new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(), credential.getSignatureType(),
                     credential.getRunMode());
                 ExchangeGateway.OrderSnapshot exact = null;
+                boolean exactLookupFailed = false;
                 try {
                     exact = gateway.queryOrder(c, record.getSymbol(), record.getExchangeOrderId(), record.getClientOrderId());
-                } catch (RuntimeException ignored) {
-                    // 精确订单不存在或交易所暂时不可用时，继续使用当前挂单兜底查询。
+                } catch (RuntimeException lookupFailure) {
+                    exactLookupFailed = true;
+                    log.warn("Binance 精确订单恢复查询失败，继续使用只读兜底查询 executionId={} credentialId={} symbol={} errorType={}",
+                        record.getId(), record.getCredentialId(), record.getSymbol(), lookupFailure.getClass().getSimpleName());
+                }
+                // 每 5 次恢复尝试补查一次历史订单。策略 OPEN 的未执行判定必须使用可证明分页完整的历史接口。
+                boolean historyAbsenceVerified = false;
+                if (exact == null && !exactLookupFailed && record.getCreatedAt() != null
+                    && record.getRecoveryAttempts() != null && record.getRecoveryAttempts() % 5 == 0
+                    && (record.getClientOrderId() != null || record.getExchangeOrderId() != null)) {
+                    Instant createdAt = record.getCreatedAt().toInstant(ZoneOffset.UTC);
+                    Instant historyFrom = createdAt.minus(Duration.ofMinutes(1));
+                    Instant exchangeNow = Instant.now().plusMillis(gateway.exchangeTimeOffsetMillis(credential.getRunMode()));
+                    boolean verifyOpenAbsence = "OPEN".equalsIgnoreCase(record.getOperationType())
+                        && record.getStrategyId() != null && record.getStrategyInstanceId() != null
+                        && record.getExchangeOrderId() == null
+                        && record.getClientOrderId() != null && !record.getClientOrderId().isBlank();
+                    Instant historyTo = verifyOpenAbsence ? exchangeNow : createdAt.plus(Duration.ofMinutes(15));
+                    if (historyTo.isAfter(exchangeNow)) {
+                        historyTo = exchangeNow;
+                    }
+                    // Binance may remove canceled/expired orders without fills after 3 days;
+                    // older absence cannot be proven from allOrders and must remain UNKNOWN.
+                    Instant historyRetentionStart = exchangeNow.minus(Duration.ofDays(3)).plus(Duration.ofMinutes(1));
+                    if (!historyFrom.isAfter(historyTo) && (!verifyOpenAbsence || !historyFrom.isBefore(historyRetentionStart))) {
+                        try {
+                            List<ExchangeGateway.OrderSnapshot> history;
+                            if (verifyOpenAbsence) {
+                                history = gateway.queryOrderHistoryComplete(c, record.getSymbol(),
+                                    new ExchangeGateway.TimeRange(historyFrom, historyTo), 1000L);
+                                if (history == null || history.stream().anyMatch(order -> order == null
+                                    || order.orderId() == null || order.orderId() <= 0
+                                    || order.symbol() == null || order.symbol().isBlank()
+                                    || order.clientOrderId() == null || order.clientOrderId().isBlank()
+                                    || order.createTime() == null)) {
+                                    throw new IllegalStateException("Binance 完整历史订单结果缺少身份字段，不能证明订单不存在");
+                                }
+                            } else {
+                                history = ExchangeHistoryCollector.collect(historyFrom, historyTo, range ->
+                                    gateway.queryOrderHistory(c, record.getSymbol(), range, 1000L));
+                            }
+                            List<ExchangeGateway.OrderSnapshot> matches = history.stream().filter(order ->
+                                record.getSymbol().equalsIgnoreCase(order.symbol())
+                                    && (record.getClientOrderId() == null || record.getClientOrderId().equals(order.clientOrderId()))
+                                    && (record.getExchangeOrderId() == null || record.getExchangeOrderId().equals(order.orderId()))
+                            ).toList();
+                            if (matches.size() > 1) {
+                                throw new IllegalStateException("Binance 历史订单恢复返回多个匹配订单，保持执行恢复阻断");
+                            }
+                            if (matches.size() == 1) {
+                                exact = matches.getFirst();
+                                log.info("已从 Binance 历史订单找到待恢复执行事实 executionId={} credentialId={} symbol={} orderId={} status={}",
+                                    record.getId(), record.getCredentialId(), record.getSymbol(), exact.orderId(), exact.status());
+                            } else if (verifyOpenAbsence) {
+                                historyAbsenceVerified = true;
+                            }
+                        } catch (RuntimeException historyFailure) {
+                            log.warn("Binance 历史订单恢复查询未能证明完整，继续保持未确认状态 executionId={} credentialId={} symbol={} errorType={}",
+                                record.getId(), record.getCredentialId(), record.getSymbol(), historyFailure.getClass().getSimpleName());
+                        }
+                    }
                 }
                 if (exact != null) {
                     if (exact.symbol() == null || !record.getSymbol().equalsIgnoreCase(exact.symbol()) || record.getExchangeOrderId() != null && !record.getExchangeOrderId().equals(exact.orderId()) || record.getClientOrderId() != null && !record.getClientOrderId().equals(exact.clientOrderId())) {
                         // Query by orderId or clientOrderId must not accept the other
                         // identity changing unexpectedly. Keep UNKNOWN, block dispatch.
-                        throw new IllegalStateException("Binance recovery returned conflicting order identity");
+                        throw new IllegalStateException("Binance 恢复结果中的订单标识存在冲突");
                     }
                     if ("CANCEL".equalsIgnoreCase(record.getOperationType()) && ("CANCELED".equalsIgnoreCase(exact.status()) || "EXPIRED".equalsIgnoreCase(exact.status()) ||
                         "FILLED".equalsIgnoreCase(exact.status()) || "REJECTED".equalsIgnoreCase(exact.status())) && (exact.executedQuantity() == null || exact.executedQuantity().signum() < 0 || exact.originalQuantity() == null || exact.originalQuantity().signum() <= 0 || exact.executedQuantity().compareTo(exact.originalQuantity()) > 0)) {
@@ -146,18 +209,55 @@ public class ExecutionRecoveryService {
                     releaseRecoveredTicket(credential, record, exact);
                     continue;
                 }
-                ExchangeGateway.OrderSnapshot matched = record.getClientOrderId() == null ? null :
-                    gateway.queryOrders(c, record.getSymbol()).stream().filter(o -> record.getClientOrderId().equals(o.clientOrderId()) && o.symbol() != null && record.getSymbol().equalsIgnoreCase(o.symbol()) && o.orderId() != null && (record.getExchangeOrderId() == null || record.getExchangeOrderId().equals(o.orderId()))).findFirst().orElse(null);
+                List<ExchangeGateway.OrderSnapshot> activeOrders = gateway.queryOrders(c, record.getSymbol());
+                if (activeOrders == null || activeOrders.stream().anyMatch(order -> order == null
+                    || order.orderId() == null || order.orderId() <= 0
+                    || order.symbol() == null || order.symbol().isBlank()
+                    || order.clientOrderId() == null || order.clientOrderId().isBlank())) {
+                    throw new IllegalStateException("Binance 活动订单结果缺少身份字段，不能证明目标订单不存在");
+                }
+                List<ExchangeGateway.OrderSnapshot> activeMatches = record.getClientOrderId() == null ? List.of() :
+                    activeOrders.stream().filter(order -> record.getClientOrderId().equals(order.clientOrderId())
+                        && record.getSymbol().equalsIgnoreCase(order.symbol())
+                        && (record.getExchangeOrderId() == null || record.getExchangeOrderId().equals(order.orderId()))).toList();
+                if (activeMatches.size() > 1) {
+                    throw new IllegalStateException("Binance 活动订单返回多个匹配订单，保持执行恢复阻断");
+                }
+                ExchangeGateway.OrderSnapshot matched = activeMatches.isEmpty() ? null : activeMatches.getFirst();
                 if (matched != null && !"CANCEL".equalsIgnoreCase(record.getOperationType())) {
                     if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && record.getStrategyInstanceId() != null) {
-                        throw new IllegalStateException("LIVE strategy ownership recovery requires an exact Binance query");
+                        throw new IllegalStateException("LIVE 策略所有权恢复必须执行精确的 Binance 查询");
                     }
                     // A fallback match must use actual exchange facts, not possibly stale local status.
                     orderLedgerService.syncSnapshot(record.getCredentialId(), matched);
                     recordService.markRecovered(record, matched.orderId(), matched.status());
                     releaseRecoveredTicket(credential, record, matched);
-                } else if (record.getCreatedAt() != null && Duration.between(record.getCreatedAt(), LocalDateTime.now()).getSeconds() >= 90) {
-                    recordService.markUnknown(record, "超过 90 秒仍无法确认交易所订单状态，保持 UNKNOWN 并等待后续对账");
+                } else if (record.getCreatedAt() != null
+                    && Duration.between(record.getCreatedAt(), LocalDateTime.now(ZoneOffset.UTC)).getSeconds() >= 90) {
+                    if (historyAbsenceVerified && "OPEN".equalsIgnoreCase(record.getOperationType())
+                        && record.getStrategyId() != null && record.getStrategyInstanceId() != null
+                        && record.getExchangeOrderId() == null && record.getClientOrderId() != null) {
+                        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+                        String absenceReason = "交易所精确查询、活动订单及完整历史均确认 OPEN 订单不存在";
+                        boolean finalized;
+                        if (recordService.hasVerifiedAbsenceMatured(record, now) && "LIVE".equalsIgnoreCase(credential.getRunMode())) {
+                            finalized = liveOrderDispatcher != null && liveOrderDispatcher.verifiedNotExecuted(
+                                record.getCredentialId(), record.getSymbol(), record.getIdempotencyKey(),
+                                record.getClientOrderId(), record.getStrategyInstanceId(),
+                                () -> recordService.recordVerifiedAbsence(record, absenceReason, now));
+                            if (!finalized) {
+                                throw new IllegalStateException("已核实 OPEN 订单不存在，但 LIVE 派发票据、账户交易对锁或执行状态无法原子终结");
+                            }
+                        } else {
+                            finalized = recordService.recordVerifiedAbsence(record, absenceReason, now);
+                        }
+                        if (finalized) {
+                            log.info("OPEN 执行已通过两次完整交易所核验确认未执行 executionId={} credentialId={} symbol={} clientOrderId={}",
+                                record.getId(), record.getCredentialId(), record.getSymbol(), record.getClientOrderId());
+                        }
+                    } else if (!recordService.hasVerifiedAbsencePending(record)) {
+                        recordService.markUnknown(record, "超过 90 秒仍无法确认交易所订单状态，保持 UNKNOWN 并等待后续对账");
+                    }
                 }
             } catch (RuntimeException ex) {
                 // 网络/交易所异常不能改写交易事实；记录继续保留在当前状态，下一轮继续查询。
@@ -231,7 +331,7 @@ public class ExecutionRecoveryService {
     private org.dromara.quant.order.domain.QuantOrder syncExchangeWithProvenance(QuantCredential credential, QuantExecutionRecord record, ExchangeGateway.OrderSnapshot snapshot) {
         if ("LIVE".equalsIgnoreCase(credential.getRunMode()) && record.getStrategyInstanceId() != null && record.getStrategyId() != null) {
             if (crashRecovery == null) {
-                throw new IllegalStateException("Missing LIVE strategy crash recovery journal");
+                throw new IllegalStateException("缺少 LIVE 策略崩溃恢复记录");
             }
             return crashRecovery.restore(record, snapshot);
         }

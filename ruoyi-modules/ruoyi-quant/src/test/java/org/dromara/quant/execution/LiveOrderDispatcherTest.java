@@ -44,6 +44,23 @@ class LiveOrderDispatcherTest {
               PRIMARY KEY(credential_id,symbol))
             """);
         jdbc.execute("""
+            CREATE TABLE quant_strategy (
+              id BIGINT PRIMARY KEY, default_leverage INT, default_margin_mode VARCHAR(12))
+            """);
+        jdbc.execute("""
+            CREATE TABLE quant_strategy_account (
+              strategy_id BIGINT NOT NULL, credential_id BIGINT NOT NULL, status VARCHAR(8))
+            """);
+        jdbc.execute("""
+            CREATE TABLE quant_strategy_symbol (
+              strategy_id BIGINT NOT NULL, symbol_id BIGINT NOT NULL, status VARCHAR(8),
+              leverage INT, margin_mode VARCHAR(12))
+            """);
+        jdbc.execute("""
+            CREATE TABLE quant_symbol (
+              id BIGINT PRIMARY KEY, symbol VARCHAR(32) NOT NULL)
+            """);
+        jdbc.execute("""
             CREATE TABLE quant_strategy_runtime_lease (
               instance_id BIGINT NOT NULL, credential_id BIGINT NOT NULL, symbol VARCHAR(32) NOT NULL,
               owner_token VARCHAR(80), lease_epoch BIGINT, lease_until TIMESTAMP,
@@ -60,11 +77,68 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
+    void explicitStrategyConfigurationChangeMigratesLiveIntentOnlyAfterVerifiedReadback() throws Exception {
+        var f = fixture();
+        var initial = f.first().beginConfigurationChange(1L, "BTCUSDT", "initial-5x", "ISOLATED", 5);
+        assertFalse(initial.intentMigration());
+        f.first().configurationApplied(initial.ticket());
+        f.jdbc().update("INSERT INTO quant_strategy (id, default_leverage, default_margin_mode) VALUES (7, 10, 'ISOLATED')");
+        f.jdbc().update("INSERT INTO quant_strategy_account (strategy_id, credential_id, status) VALUES (7, 1, '0')");
+        f.jdbc().update("INSERT INTO quant_symbol (id, symbol) VALUES (9, 'BTCUSDT')");
+        f.jdbc().update("INSERT INTO quant_strategy_symbol (strategy_id, symbol_id, status, leverage, margin_mode) VALUES (7, 9, '0', 10, 'ISOLATED')");
+
+        var changed = f.other().beginConfigurationChange(1L, "BTCUSDT", "change-to-10x", "ISOLATED", 10);
+        assertTrue(changed.intentMigration());
+        assertEquals(5, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+        f.other().configurationIntentApplied(changed);
+        assertEquals(10, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+        f.other().configurationApplied(changed.ticket());
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+    }
+
+    @Test
+    void unresolvedLiveIntentMigrationCanRecoverAfterExchangeVerification() throws Exception {
+        var f = fixture();
+        var initial = f.first().beginConfigurationChange(1L, "BTCUSDT", "initial-5x", "ISOLATED", 5);
+        f.first().configurationApplied(initial.ticket());
+        f.jdbc().update("INSERT INTO quant_strategy (id, default_leverage, default_margin_mode) VALUES (7, 10, 'ISOLATED')");
+        f.jdbc().update("INSERT INTO quant_strategy_account (strategy_id, credential_id, status) VALUES (7, 1, '0')");
+        f.jdbc().update("INSERT INTO quant_symbol (id, symbol) VALUES (9, 'BTCUSDT')");
+        f.jdbc().update("INSERT INTO quant_strategy_symbol (strategy_id, symbol_id, status, leverage, margin_mode) VALUES (7, 9, '0', 10, 'ISOLATED')");
+        var changed = f.other().beginConfigurationChange(1L, "BTCUSDT", "change-to-10x", "ISOLATED", 10);
+        f.other().unknown(changed.ticket());
+
+        assertTrue(f.first().recoveredConfigurationFromExchange(1L, "BTCUSDT", "change-to-10x",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
+        assertEquals(10, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+        assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "change-to-10x"));
+    }
+
+    @Test
+    void conflictingStrategyBindingsPreventLiveIntentMigration() throws Exception {
+        var f = fixture();
+        var initial = f.first().beginConfigurationChange(1L, "BTCUSDT", "initial-5x", "ISOLATED", 5);
+        f.first().configurationApplied(initial.ticket());
+        f.jdbc().update("INSERT INTO quant_strategy (id, default_leverage, default_margin_mode) VALUES (7, 5, 'ISOLATED')");
+        f.jdbc().update("INSERT INTO quant_strategy_account (strategy_id, credential_id, status) VALUES (7, 1, '0')");
+        f.jdbc().update("INSERT INTO quant_symbol (id, symbol) VALUES (9, 'BTCUSDT')");
+        f.jdbc().update("INSERT INTO quant_strategy_symbol (strategy_id, symbol_id, status, leverage, margin_mode) VALUES (7, 9, '0', 5, 'ISOLATED')");
+
+        var conflict = assertThrows(LiveOrderDispatcher.DispatchFailureException.class,
+            () -> f.other().beginConfigurationChange(1L, "BTCUSDT", "change-to-10x", "ISOLATED", 10));
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.SETTINGS_INTENT_MISMATCH, conflict.reason());
+        assertEquals(5, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+    }
+
+    @Test
     void configurationTicketSerializesBothBinanceSettingsChangesWithOtherNodes() throws Exception {
         var f = fixture();
         var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-run-1", "ISOLATED", 10);
         assertEquals("DISPATCHING", f.mapper().ticketStatus(1L, "config-run-1"));
-        assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null));
+        var occupied = assertThrows(LiveOrderDispatcher.DispatchBlockedException.class,
+            () -> f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null));
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.DISPATCH_SLOT_OCCUPIED, occupied.reason());
         f.first().configurationApplied(setup);
         assertEquals("CONFIG_APPLIED", f.mapper().ticketStatus(1L, "config-run-1"));
         var next = f.other().begin(1L, "BTCUSDT", "node2-order", "OPEN", "cid-order", null, null);
@@ -84,23 +158,14 @@ class LiveOrderDispatcherTest {
     }
 
     @Test
-    void configRecoveryRequiresDurableConfigAppliedStatusAndExactExchangeSettings() throws Exception {
+    void configRecoveryRequiresExactDurableTargetAndExchangeSettings() throws Exception {
         var f = fixture();
         var setup = f.first().beginConfiguration(1L, "BTCUSDT", "config-recovery", "ISOLATED", 10);
+        assertTrue(f.first().matchesConfigurationIntent(1L, "BTCUSDT", "ISOLATED", 10));
+        assertFalse(f.first().matchesConfigurationIntent(1L, "BTCUSDT", "CROSSED", 10));
         f.first().unknown(setup);
 
-        assertFalse(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-recovery",
-            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
-        assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "config-recovery"));
-        assertEquals("config-recovery", f.jdbc().queryForObject(
-            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
-
-        // Simulate a process crash after both Binance calls returned and CONFIG_APPLIED
-        // was committed, but before the separate guard-release transaction committed.
-        f.jdbc().update("""
-            UPDATE quant_order_dispatch_ticket SET dispatch_status='CONFIG_APPLIED'
-            WHERE credential_id=1 AND idempotency_key='config-recovery'
-            """);
+        // UNKNOWN is recoverable only against the exact immutable target persisted with the ticket.
         assertFalse(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-recovery",
             "SETTINGS:CROSSED:10", "CROSSED", 10));
         assertTrue(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-recovery",
@@ -108,6 +173,65 @@ class LiveOrderDispatcherTest {
         assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "config-recovery"));
         assertNull(f.jdbc().queryForObject(
             "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+
+        var dispatching = f.first().beginConfiguration(1L, "BTCUSDT", "config-dispatching", "ISOLATED", 10);
+        assertTrue(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-dispatching",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
+        assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "config-dispatching"));
+
+        f.first().beginConfiguration(1L, "BTCUSDT", "config-applied", "ISOLATED", 10);
+        f.jdbc().update("""
+            UPDATE quant_order_dispatch_ticket SET dispatch_status='CONFIG_APPLIED'
+            WHERE credential_id=1 AND idempotency_key='config-applied'
+            """);
+        assertTrue(f.other().recoveredConfigurationFromExchange(1L, "BTCUSDT", "config-applied",
+            "SETTINGS:ISOLATED:10", "ISOLATED", 10));
+        assertEquals("RECOVERED", f.mapper().ticketStatus(1L, "config-applied"));
+        assertNull(f.jdbc().queryForObject(
+            "SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+    }
+
+    @Test
+    void configurationDispatchClassifiesImmutableIntentConflictAndRollsBackClaim() throws Exception {
+        var f = fixture();
+        var approved = f.first().beginConfiguration(1L, "BTCUSDT", "approved-settings", "ISOLATED", 10);
+        f.first().configurationApplied(approved);
+
+        var conflict = assertThrows(LiveOrderDispatcher.DispatchFailureException.class,
+            () -> f.other().beginConfiguration(1L, "BTCUSDT", "conflicting-settings", "CROSSED", 10));
+
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.SETTINGS_INTENT_MISMATCH, conflict.reason());
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+        assertEquals(10, f.jdbc().queryForObject("SELECT leverage FROM quant_live_account_settings_intent WHERE credential_id=1 AND symbol='BTCUSDT'", Integer.class));
+    }
+
+    @Test
+    void configurationIntentMismatchReportsExistingAndRequestedSettings() throws Exception {
+        var f = fixture();
+        var approved = f.first().beginConfiguration(1L, "BTCUSDT", "approved-settings", "CROSSED", 20);
+        f.first().configurationApplied(approved);
+
+        var conflict = assertThrows(LiveOrderDispatcher.DispatchFailureException.class,
+            () -> f.other().beginConfiguration(1L, "BTCUSDT", "conflicting-settings", "ISOLATED", 10));
+
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.SETTINGS_INTENT_MISMATCH, conflict.reason());
+        assertTrue(conflict.diagnosticDetail().contains("existingMarginMode=CROSSED"));
+        assertTrue(conflict.diagnosticDetail().contains("existingLeverage=20"));
+        assertTrue(conflict.diagnosticDetail().contains("requestedMarginMode=ISOLATED"));
+        assertTrue(conflict.diagnosticDetail().contains("requestedLeverage=10"));
+    }
+
+    @Test
+    void configurationDispatchClassifiesTicketInsertFailureAndRollsBackClaim() throws Exception {
+        var f = fixture();
+        var first = f.first().beginConfiguration(1L, "BTCUSDT", "same-config-key", "ISOLATED", 10);
+        f.first().configurationApplied(first);
+
+        var failure = assertThrows(LiveOrderDispatcher.DispatchFailureException.class,
+            () -> f.other().beginConfiguration(1L, "BTCUSDT", "same-config-key", "ISOLATED", 10));
+
+        assertEquals(LiveOrderDispatcher.DispatchFailureReason.CONFIGURATION_PERSISTENCE_FAILURE, failure.reason());
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
     }
 
     @Test
@@ -181,6 +305,20 @@ class LiveOrderDispatcherTest {
         assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "uncertain"));
         assertThrows(IllegalStateException.class, () -> f.other().begin(1L, "BTCUSDT", "new-signal", "OPEN", "cid-new", null, null));
         assertEquals("uncertain", f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+    }
+
+    @Test
+    void supersedeOnlyExactUnknownProtectionCreateAndReleaseItsGuardAtomically() throws Exception {
+        var f = fixture();
+        var ticket = f.first().begin(1L, "BTCUSDT", "obsolete-protection", "PROTECT_CREATE", "QFTP_test", null, null);
+        f.first().unknown(ticket);
+
+        assertFalse(f.other().supersedeProtectionCreate(1L, "BTCUSDT", "obsolete-protection", "wrong-client"));
+        assertEquals("UNKNOWN", f.mapper().ticketStatus(1L, "obsolete-protection"));
+        assertTrue(f.other().supersedeProtectionCreate(1L, "BTCUSDT", "obsolete-protection", "QFTP_test"));
+        assertEquals("SUPERSEDED", f.mapper().ticketStatus(1L, "obsolete-protection"));
+        assertNull(f.jdbc().queryForObject("SELECT active_dispatch_key FROM quant_live_dispatch_guard WHERE credential_id=1 AND symbol='BTCUSDT'", String.class));
+        assertFalse(f.other().supersedeProtectionCreate(1L, "BTCUSDT", "obsolete-protection", "QFTP_test"));
     }
 
     @Test

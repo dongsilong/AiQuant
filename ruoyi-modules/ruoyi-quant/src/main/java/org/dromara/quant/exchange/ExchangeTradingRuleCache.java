@@ -29,6 +29,17 @@ public class ExchangeTradingRuleCache {
      * 获取环境隔离的交易规则；同一环境和交易对的并发首次请求会合并到一次 REST 查询。
      */
     public ExchangeGateway.SymbolRule get(String runMode, ExchangeGateway.Credential credential, String symbol) {
+        return get(runMode, credential, symbol, false);
+    }
+
+    /**
+     * 获取保护单交易规则；缓存未命中时使用保护校验优先级，缓存策略与普通查询共享。
+     */
+    public ExchangeGateway.SymbolRule getForProtection(String runMode, ExchangeGateway.Credential credential, String symbol) {
+        return get(runMode, credential, symbol, true);
+    }
+
+    private ExchangeGateway.SymbolRule get(String runMode, ExchangeGateway.Credential credential, String symbol, boolean protection) {
         if (credential == null || symbol == null || symbol.isBlank()) {
             throw new IllegalArgumentException("查询交易规则需要有效凭证和交易对");
         }
@@ -40,7 +51,9 @@ public class ExchangeTradingRuleCache {
             if (current != null && checkedAt - current.expiresAtNanos() < 0) {
                 return current;
             }
-            ExchangeGateway.SymbolRule rule = gateway.queryTradingRule(credential, normalizedSymbol);
+            ExchangeGateway.SymbolRule rule = protection
+                ? gateway.queryTradingRuleForProtection(credential, normalizedSymbol)
+                : gateway.queryTradingRule(credential, normalizedSymbol);
             if (rule == null) {
                 return null;
             }

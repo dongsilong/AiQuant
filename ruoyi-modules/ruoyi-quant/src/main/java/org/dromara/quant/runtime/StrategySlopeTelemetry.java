@@ -4,8 +4,77 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * 策略实际计算出的斜率快照，只用于实时展示和审计，不包含交易执行动作。
+ * 策略 Runtime 的交易决策斜率、展示斜率和 1 分钟均线快照。
  */
-public record StrategySlopeTelemetry(Long strategyId, Long instanceId, Long credentialId, String symbol, String interval, BigDecimal currentPrice, BigDecimal referenceOpenPrice,
-                                     BigDecimal slopePercent, BigDecimal degrees, BigDecimal entryThreshold, boolean entryApproved, Instant eventTime) {
+public record StrategySlopeTelemetry(
+    Long strategyId,
+    Long instanceId,
+    Long credentialId,
+    String symbol,
+    String interval,
+    BigDecimal currentPrice,
+    BigDecimal referenceOpenPrice,
+    BigDecimal slopePercent,
+    BigDecimal degrees,
+    BigDecimal entryThreshold,
+    boolean entryApproved,
+    Instant eventTime,
+    Instant receivedAt,
+    long sequence,
+    boolean slopeReady,
+    BigDecimal ma5,
+    BigDecimal ma7,
+    String maTrend,
+    boolean maReady,
+    String maBlockReason,
+    Instant maLastClosedKlineOpenTime,
+    Instant maEventTime,
+    Instant maReceivedAt,
+    long slopeFreshForMillis,
+    long maFreshForMillis,
+    Instant publishedAt,
+    BigDecimal displayCurrentPrice,
+    BigDecimal displayReferenceOpenPrice,
+    BigDecimal displaySlopePercent,
+    BigDecimal displayDegrees,
+    Instant displayEventTime,
+    Instant displayReceivedAt,
+    long displayFreshForMillis,
+    String displaySource,
+    String dataSource,
+    String slopeBlockReason
+) {
+    public StrategySlopeTelemetry(
+        Long strategyId, Long instanceId, Long credentialId, String symbol, String interval,
+        BigDecimal currentPrice, BigDecimal referenceOpenPrice, BigDecimal slopePercent, BigDecimal degrees,
+        BigDecimal entryThreshold, boolean entryApproved, Instant eventTime, Instant receivedAt, long sequence,
+        boolean slopeReady, BigDecimal ma5, BigDecimal ma7, String maTrend, boolean maReady, String maBlockReason,
+        Instant maLastClosedKlineOpenTime, Instant maEventTime, Instant maReceivedAt,
+        long slopeFreshForMillis, long maFreshForMillis, Instant publishedAt,
+        BigDecimal displayCurrentPrice, BigDecimal displayReferenceOpenPrice, BigDecimal displaySlopePercent,
+        BigDecimal displayDegrees, Instant displayEventTime, Instant displayReceivedAt,
+        long displayFreshForMillis, String displaySource
+    ) {
+        this(strategyId, instanceId, credentialId, symbol, interval, currentPrice, referenceOpenPrice, slopePercent, degrees,
+            entryThreshold, entryApproved, eventTime, receivedAt, sequence, slopeReady, ma5, ma7, maTrend, maReady, maBlockReason,
+            maLastClosedKlineOpenTime, maEventTime, maReceivedAt, slopeFreshForMillis, maFreshForMillis, publishedAt,
+            displayCurrentPrice, displayReferenceOpenPrice, displaySlopePercent, displayDegrees, displayEventTime, displayReceivedAt,
+            displayFreshForMillis, displaySource, instanceId == null ? "MONITOR" : "RUNTIME",
+            slopeReady ? null : "SLOPE_NOT_READY");
+    }
+
+    public StrategySlopeTelemetry(
+        Long strategyId, Long instanceId, Long credentialId, String symbol, String interval,
+        BigDecimal currentPrice, BigDecimal referenceOpenPrice, BigDecimal slopePercent, BigDecimal degrees,
+        BigDecimal entryThreshold, boolean entryApproved, Instant eventTime, Instant receivedAt, long sequence,
+        boolean slopeReady, BigDecimal ma5, BigDecimal ma7, String maTrend, boolean maReady, String maBlockReason,
+        Instant maLastClosedKlineOpenTime, Instant maEventTime, Instant maReceivedAt,
+        long slopeFreshForMillis, long maFreshForMillis, Instant publishedAt
+    ) {
+        this(strategyId, instanceId, credentialId, symbol, interval, currentPrice, referenceOpenPrice, slopePercent, degrees,
+            entryThreshold, entryApproved, eventTime, receivedAt, sequence, slopeReady, ma5, ma7, maTrend, maReady,
+            maBlockReason, maLastClosedKlineOpenTime, maEventTime, maReceivedAt, slopeFreshForMillis, maFreshForMillis,
+            publishedAt, currentPrice, referenceOpenPrice, slopePercent, degrees, eventTime, receivedAt, slopeFreshForMillis,
+            "TRADE_KLINE");
+    }
 }

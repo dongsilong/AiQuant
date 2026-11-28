@@ -15,12 +15,19 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.domain.bo.QuantCredentialBo;
 import org.dromara.quant.credential.domain.vo.QuantCredentialVo;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
+import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.runtime.StrategyRuntimeService;
 import org.dromara.quant.security.CredentialMasker;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.Collection;
 import java.util.List;
 
@@ -38,6 +45,10 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
      * 交易所统一网关。
      */
     private final ExchangeGateway exchangeGateway;
+    /** Runtime 生命周期协调。 */
+    private final StrategyRuntimeService runtimeService;
+    /** 量化接口统一时间配置。 */
+    private final QuantProperties quantProperties;
 
     static void validateSingleBoundUser(Long ownerUserId) {
         if (ownerUserId == null || ownerUserId <= 0) {
@@ -82,6 +93,8 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setUserId(LoginHelper.getUserId());
         }
         entity.setSecretKey(bo.getSecretKey());
+        entity.setEffectiveTime(LoginHelper.isSuperAdmin(LoginHelper.getUserId()) && "TESTNET".equalsIgnoreCase(entity.getRunMode())
+            ? toUtc(bo.getEffectiveTime()) : null);
         validateSingleBoundUser(entity.getUserId());
         applyDefaults(entity);
         validateCredential(entity);
@@ -104,6 +117,11 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         // Bound principal is immutable on ordinary edit. Ownership transfer
         // requires an explicitly authorized, audited workflow.
         entity.setUserId(bo.getUserId());
+        // 记录有效时间仅允许超级用户在 TESTNET 模式下设置；普通用户不能通过直接请求修改该字段。
+        entity.setEffectiveTime(LoginHelper.isSuperAdmin(LoginHelper.getUserId())
+            ? ("TESTNET".equalsIgnoreCase(bo.getRunMode() == null ? current.getRunMode() : bo.getRunMode())
+                ? toUtc(bo.getEffectiveTime()) : null)
+            : current.getEffectiveTime());
         entity.setStatus(current.getStatus());
         if (StringUtils.isBlank(entity.getRunMode())) {
             entity.setRunMode(current.getRunMode());
@@ -122,7 +140,10 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         validateSingleBoundUser(entity.getUserId());
         boolean modeChanged = !java.util.Objects.equals(current.getRunMode(), entity.getRunMode());
         boolean credentialChanged = StringUtils.isNotBlank(bo.getApiKey()) || StringUtils.isNotBlank(bo.getSecretKey());
-        if (modeChanged || credentialChanged || "PAPER".equalsIgnoreCase(entity.getRunMode())) {
+        boolean signatureChanged = !java.util.Objects.equals(current.getSignatureType(), entity.getSignatureType());
+        boolean ownerChanged = !java.util.Objects.equals(current.getUserId(), entity.getUserId());
+        boolean runtimeIdentityChanged = modeChanged || credentialChanged || signatureChanged || ownerChanged;
+        if (runtimeIdentityChanged || "PAPER".equalsIgnoreCase(entity.getRunMode())) {
             // PAPER 永不访问 private API；从 PAPER 切到 TESTNET/LIVE 时则必须重新验证真实凭证。
             validateCredential(entity);
         } else {
@@ -132,6 +153,12 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
             entity.setLastConnectTime(current.getLastConnectTime());
         }
         credentialMapper.updateById(entity);
+        if (runtimeIdentityChanged) {
+            if (credentialMapper.incrementRuntimeVersion(entity.getId()) != 1) {
+                throw new ServiceException("更新凭证 Runtime 版本失败");
+            }
+            afterCommit(() -> runtimeService.invalidateCredentialAcrossNodes(entity.getId()));
+        }
         return toVo(entity);
     }
 
@@ -142,13 +169,18 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
     @Transactional(rollbackFor = Exception.class)
     public Boolean deleteWithValidByIds(Collection<Long> ids) {
         ids.forEach(id -> validateOwner(credentialMapper.selectById(id)));
-        return credentialMapper.deleteByIds(ids) > 0;
+        boolean deleted = credentialMapper.deleteByIds(ids) > 0;
+        if (deleted) {
+            ids.forEach(id -> afterCommit(() -> runtimeService.invalidateCredentialAcrossNodes(id)));
+        }
+        return deleted;
     }
 
     /**
      * 修改启停状态。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void changeStatus(Long id, String status) {
         QuantCredential credential = credentialMapper.selectById(id);
         if (credential == null) {
@@ -161,26 +193,41 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         if ("0".equals(status) && !"NORMAL".equals(credential.getConnectionStatus()) && !"PAPER".equals(credential.getConnectionStatus())) {
             throw new ServiceException("凭证连接状态不是正常，无法启用");
         }
+        boolean statusChanged = !java.util.Objects.equals(credential.getStatus(), status);
         credential.setStatus(status);
         credentialMapper.updateById(credential);
+        if (statusChanged) {
+            if (credentialMapper.incrementRuntimeVersion(id) != 1) {
+                throw new ServiceException("更新凭证 Runtime 版本失败");
+            }
+            if ("1".equals(status)) {
+                afterCommit(() -> runtimeService.disableCredentialAcrossNodes(id));
+            } else {
+                afterCommit(() -> runtimeService.invalidateCredentialAcrossNodes(id));
+            }
+        }
     }
 
     /**
      * 验证交易所连通性。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class, noRollbackFor = ServiceException.class)
     public void testConnectivity(Long id) {
         QuantCredential credential = credentialMapper.selectById(id);
         if (credential == null) {
             throw new ServiceException("凭证不存在");
         }
         validateOwner(credential);
+        String previousConnectionStatus = credential.getConnectionStatus();
+        Boolean previousTradePermission = credential.getTradePermission();
         if ("PAPER".equalsIgnoreCase(credential.getRunMode())) {
             credential.setConnectionStatus("PAPER");
             credential.setTradePermission(true);
             credential.setWithdrawalDisabled(true);
             credential.setLastConnectTime(LocalDateTime.now());
             credentialMapper.updateById(credential);
+            incrementRuntimeVersionIfConnectivityChanged(id, previousConnectionStatus, previousTradePermission, credential);
             return;
         }
         ExchangeGateway.ConnectivityResult result = exchangeGateway.validateCredential(new ExchangeGateway.Credential(credential.getApiKey(), credential.getSecretKey(),
@@ -190,9 +237,34 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
         credential.setWithdrawalDisabled(result.withdrawalDisabled());
         credential.setLastConnectTime(LocalDateTime.now());
         credentialMapper.updateById(credential);
+        incrementRuntimeVersionIfConnectivityChanged(id, previousConnectionStatus, previousTradePermission, credential);
         if (!result.success()) {
             throw new ServiceException("凭证验证失败：" + result.message());
         }
+    }
+
+    private void incrementRuntimeVersionIfConnectivityChanged(Long id, String previousConnectionStatus, Boolean previousTradePermission,
+                                                               QuantCredential credential) {
+        if (!java.util.Objects.equals(previousConnectionStatus, credential.getConnectionStatus())
+            || !java.util.Objects.equals(previousTradePermission, credential.getTradePermission())) {
+            if (credentialMapper.incrementRuntimeVersion(id) != 1) {
+                throw new IllegalStateException("更新凭证 Runtime 版本失败");
+            }
+            afterCommit(() -> runtimeService.invalidateCredentialAcrossNodes(id));
+        }
+    }
+
+    private static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     private void applyDefaults(QuantCredential entity) {
@@ -233,7 +305,18 @@ public class QuantCredentialServiceImpl implements org.dromara.quant.credential.
     private QuantCredentialVo toVo(QuantCredential entity) {
         QuantCredentialVo vo = MapstructUtils.convert(entity, QuantCredentialVo.class);
         vo.setMaskedApiKey(CredentialMasker.maskApiKey(entity.getApiKey()));
+        vo.setEffectiveTime(toDisplay(entity.getEffectiveTime()));
         return vo;
+    }
+
+    private LocalDateTime toUtc(LocalDateTime displayTime) {
+        return displayTime == null ? null : displayTime.atZone(ZoneId.of(quantProperties.getTimeZone()))
+            .withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+    }
+
+    private String toDisplay(LocalDateTime utcTime) {
+        return utcTime == null ? null : DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(
+            utcTime.atZone(ZoneOffset.UTC).withZoneSameInstant(ZoneId.of(quantProperties.getTimeZone())));
     }
 
     private void applyUserScope(LambdaQueryWrapper<QuantCredential> wrapper) {

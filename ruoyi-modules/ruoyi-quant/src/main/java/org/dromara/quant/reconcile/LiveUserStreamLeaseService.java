@@ -44,7 +44,7 @@ public class LiveUserStreamLeaseService {
     public long requireCurrentEpoch(Long credentialId) {
         Long epoch = credentialId == null ? null : acquiredEpochs.get(credentialId);
         if (epoch == null) {
-            throw new IllegalStateException("LIVE user stream lease is not owned by this node");
+            throw new IllegalStateException("当前节点未持有 LIVE 用户数据流租约");
         }
         requireCurrentEpoch(credentialId, epoch);
         return epoch;
@@ -53,7 +53,7 @@ public class LiveUserStreamLeaseService {
     /** Require exact current ownership, failing closed on a missing or stale lease. */
     public void requireCurrentEpoch(Long credentialId, long epoch) {
         if (!owns(credentialId, epoch)) {
-            throw new IllegalStateException("LIVE user stream lease epoch is no longer owned by this node");
+            throw new IllegalStateException("当前节点已不再持有该 LIVE 用户数据流租约版本");
         }
     }
 
@@ -61,6 +61,11 @@ public class LiveUserStreamLeaseService {
     public void release(Long credentialId) {
         acquiredEpochs.remove(credentialId);
         mapper.release(credentialId, ownerToken);
+    }
+
+    /** Remaining lease time in milliseconds, calculated with the database clock. */
+    public Long remainingMillis(Long credentialId) {
+        return mapper.remainingMillis(credentialId);
     }
 
     /** Diagnostic lease state without exposing the process ownership token. */

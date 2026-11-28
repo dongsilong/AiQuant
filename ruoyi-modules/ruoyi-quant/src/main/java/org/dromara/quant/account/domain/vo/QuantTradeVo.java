@@ -1,26 +1,25 @@
 package org.dromara.quant.account.domain.vo;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import io.github.linpeilie.annotations.AutoMapper;
 import lombok.Data;
 import org.dromara.common.translation.annotation.Translation;
 import org.dromara.common.translation.constant.TransConstant;
 import org.dromara.quant.account.domain.QuantTrade;
+import org.dromara.quant.account.mapper.QuantTradeTimeMapper;
 
 import java.io.Serial;
 import java.io.Serializable;
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 
 /**
  * 成交记录展示对象。
  */
 @Data
-@AutoMapper(target = QuantTrade.class)
+@AutoMapper(target = QuantTrade.class, uses = {QuantTradeTimeMapper.class})
 public class QuantTradeVo implements Serializable {
 
     @Serial
@@ -28,12 +27,12 @@ public class QuantTradeVo implements Serializable {
     /**
      * 主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long id;
     /**
      * 交易凭证主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long credentialId;
     /**
      * 客户名称。
@@ -42,7 +41,7 @@ public class QuantTradeVo implements Serializable {
     /**
      * 用户主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long userId;
     /**
      * 用户名称。
@@ -78,30 +77,19 @@ public class QuantTradeVo implements Serializable {
      */
     private BigDecimal realizedPnl;
     /**
-     * 数据库中的成交时间（UTC）。
+     * 以 UTC 偏移量表示的成交时间，前端根据量化时区配置进行展示。
      */
-    @JsonIgnore
-    private LocalDateTime tradeTime;
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private OffsetDateTime tradeTime;
     /**
      * 交易所成交主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long exchangeTradeId;
     /**
      * 交易所订单主键。
      */
-    @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long exchangeOrderId;
 
-    /**
-     * 返回给前端的成交时间（北京时间）。
-     */
-    @JsonProperty("tradeTime")
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX")
-    public OffsetDateTime getTradeTimeBeijing() {
-        if (tradeTime == null) {
-            return null;
-        }
-        return tradeTime.atOffset(ZoneOffset.UTC).withOffsetSameInstant(ZoneOffset.ofHours(8));
-    }
 }

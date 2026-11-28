@@ -10,6 +10,66 @@ VALUES (#{credentialId}, #{symbol}, #{marginMode}, #{leverage}, UTC_TIMESTAMP())
     <select id="matchingSettingsIntent" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_live_account_settings_intent
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND margin_mode=#{marginMode} AND leverage=#{leverage}]]></select>
+    <select id="settingsIntent" resultType="map" timeout="3"><![CDATA[SELECT margin_mode AS marginMode, leverage
+FROM quant_live_account_settings_intent
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}]]></select>
+    <select id="conflictingStrategySettings" resultType="long" timeout="3"><![CDATA[SELECT COUNT(*)
+FROM quant_strategy_account a
+JOIN quant_strategy s ON s.id=a.strategy_id
+JOIN quant_strategy_symbol ss ON ss.strategy_id=s.id AND ss.status='0'
+JOIN quant_symbol q ON q.id=ss.symbol_id
+WHERE a.credential_id=#{credentialId} AND a.status='0' AND q.symbol=#{symbol}
+  AND (COALESCE(ss.leverage, s.default_leverage, 0) <> #{leverage}
+    OR COALESCE(UPPER(NULLIF(ss.margin_mode, '')), UPPER(s.default_margin_mode), '') <> #{marginMode})]]></select>
+    <update id="migrateSettingsIntent" timeout="3"><![CDATA[UPDATE quant_live_account_settings_intent
+SET margin_mode=#{marginMode}, leverage=#{leverage}
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND margin_mode=#{previousMarginMode} AND leverage=#{previousLeverage}
+  AND EXISTS (
+    SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key}
+  )
+  AND EXISTS (
+    SELECT 1 FROM quant_order_dispatch_ticket t
+    WHERE t.credential_id=#{credentialId} AND t.symbol=#{symbol}
+      AND t.idempotency_key=#{key} AND t.operation_type='CONFIG_SETTINGS'
+      AND t.client_order_id=CONCAT('SETTINGS:', #{marginMode}, ':', #{leverage})
+      AND t.dispatch_status='DISPATCHING'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM quant_strategy_account a
+    JOIN quant_strategy s ON s.id=a.strategy_id
+    JOIN quant_strategy_symbol ss ON ss.strategy_id=s.id AND ss.status='0'
+    JOIN quant_symbol q ON q.id=ss.symbol_id
+    WHERE a.credential_id=#{credentialId} AND a.status='0' AND q.symbol=#{symbol}
+      AND (COALESCE(ss.leverage, s.default_leverage, 0) <> #{leverage}
+        OR COALESCE(UPPER(NULLIF(ss.margin_mode, '')), UPPER(s.default_margin_mode), '') <> #{marginMode})
+  )]]></update>
+    <update id="recoverSettingsIntent" timeout="3"><![CDATA[UPDATE quant_live_account_settings_intent
+SET margin_mode=#{marginMode}, leverage=#{leverage}
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND EXISTS (
+    SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key}
+  )
+  AND EXISTS (
+    SELECT 1 FROM quant_order_dispatch_ticket t
+    WHERE t.credential_id=#{credentialId} AND t.symbol=#{symbol}
+      AND t.idempotency_key=#{key} AND t.operation_type='CONFIG_SETTINGS'
+      AND t.client_order_id=#{clientOrderId}
+      AND t.dispatch_status IN ('DISPATCHING','UNKNOWN','CONFIG_APPLIED')
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM quant_strategy_account a
+    JOIN quant_strategy s ON s.id=a.strategy_id
+    JOIN quant_strategy_symbol ss ON ss.strategy_id=s.id AND ss.status='0'
+    JOIN quant_symbol q ON q.id=ss.symbol_id
+    WHERE a.credential_id=#{credentialId} AND a.status='0' AND q.symbol=#{symbol}
+      AND (COALESCE(ss.leverage, s.default_leverage, 0) <> #{leverage}
+        OR COALESCE(UPPER(NULLIF(ss.margin_mode, '')), UPPER(s.default_margin_mode), '') <> #{marginMode})
+  )]]></update>
     <update id="claim" timeout="3"><![CDATA[UPDATE quant_live_dispatch_guard
 SET active_dispatch_key=#{key}, updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
@@ -59,7 +119,7 @@ SET dispatch_status='RECOVERED', updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
   AND symbol=#{symbol} AND client_order_id=#{clientOrderId}
   AND operation_type='CONFIG_SETTINGS' AND exchange_order_id IS NULL
-  AND dispatch_status='CONFIG_APPLIED'
+  AND dispatch_status IN ('DISPATCHING','UNKNOWN','CONFIG_APPLIED')
   AND EXISTS (
     SELECT 1 FROM quant_live_dispatch_guard g
     WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
@@ -70,6 +130,16 @@ WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
     WHERE i.credential_id=#{credentialId} AND i.symbol=#{symbol}
       AND i.margin_mode=#{marginMode} AND i.leverage=#{leverage}
   )]]></update>
+    <update id="supersedeProtectionCreate" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='SUPERSEDED', updated_at=UTC_TIMESTAMP()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol} AND idempotency_key=#{key}
+  AND client_order_id=#{clientOrderId} AND operation_type='PROTECT_CREATE'
+  AND dispatch_status='UNKNOWN' AND exchange_order_id IS NULL
+  AND EXISTS (
+    SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key}
+  )]]></update>
     <update id="notSent" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
 SET dispatch_status='FAILED_NOT_SENT', updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
@@ -78,6 +148,16 @@ WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
 SET dispatch_status='UNKNOWN', updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}
   AND dispatch_status='DISPATCHING']]></update>
+    <update id="markNotExecuted" timeout="3"><![CDATA[UPDATE quant_order_dispatch_ticket
+SET dispatch_status='VERIFIED_NOT_EXECUTED', updated_at=UTC_TIMESTAMP()
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND strategy_instance_id=#{instanceId}
+  AND operation_type='OPEN' AND exchange_order_id IS NULL
+  AND dispatch_status IN ('UNKNOWN','DISPATCHING')
+  AND EXISTS (SELECT 1 FROM quant_live_dispatch_guard g
+    WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
+      AND g.active_dispatch_key=#{key})]]></update>
     <update id="release" timeout="3"><![CDATA[UPDATE quant_live_dispatch_guard SET active_dispatch_key=NULL, updated_at=UTC_TIMESTAMP()
 WHERE credential_id=#{credentialId} AND symbol=#{symbol}
   AND active_dispatch_key=#{key}]]></update>
@@ -99,10 +179,20 @@ JOIN quant_order_dispatch_ticket t ON t.credential_id=g.credential_id
 WHERE g.credential_id=#{credentialId} AND g.symbol=#{symbol}
   AND t.client_order_id=#{clientOrderId} AND t.operation_type=#{operation}
   AND t.dispatch_status IN ('DISPATCHING','UNKNOWN')]]></select>
+    <select id="inactiveGuardCount" resultType="int" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_live_dispatch_guard
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND active_dispatch_key IS NULL]]></select>
+    <select id="ticketCount" resultType="int" timeout="3"><![CDATA[SELECT COUNT(*) FROM quant_order_dispatch_ticket
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND idempotency_key=#{key}]]></select>
+    <select id="lockGuardState" resultType="map" timeout="3"><![CDATA[SELECT IF(active_dispatch_key IS NULL, 1, 0) AS inactive
+FROM quant_live_dispatch_guard
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+FOR UPDATE]]></select>
     <select id="activeDispatch" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credentialId, g.symbol AS symbol,
        g.active_dispatch_key AS dispatchKey, t.operation_type AS operationType,
        t.client_order_id AS clientOrderId, t.dispatch_status AS dispatchStatus,
-       t.exchange_order_id AS exchangeOrderId
+       t.exchange_order_id AS exchangeOrderId, t.strategy_instance_id AS strategyInstanceId
 FROM quant_live_dispatch_guard g
 LEFT JOIN quant_order_dispatch_ticket t
   ON t.credential_id=g.credential_id AND t.idempotency_key=g.active_dispatch_key
@@ -140,8 +230,14 @@ ORDER BY g.updated_at ASC
 LIMIT 100]]></select>
     <select id="ticketStatus" resultType="java.lang.String" timeout="3"><![CDATA[SELECT dispatch_status FROM quant_order_dispatch_ticket
 WHERE credential_id=#{credentialId} AND idempotency_key=#{key}]]></select>
+    <select id="notExecutedTicketStatus" resultType="java.lang.String" timeout="3"><![CDATA[SELECT dispatch_status FROM quant_order_dispatch_ticket
+WHERE credential_id=#{credentialId} AND symbol=#{symbol}
+  AND idempotency_key=#{key} AND client_order_id=#{clientOrderId}
+  AND strategy_instance_id=#{instanceId} AND operation_type='OPEN'
+LIMIT 1]]></select>
     <select id="unresolvedDispatches" resultType="map" timeout="3"><![CDATA[SELECT g.credential_id AS credential_id, g.symbol AS symbol,
-       g.active_dispatch_key AS dispatch_key, g.updated_at AS blocked_at,
+       g.active_dispatch_key AS dispatch_key,
+       DATE_FORMAT(g.updated_at, '%Y-%m-%dT%H:%i:%sZ') AS blocked_at,
        t.operation_type AS operation_type, t.client_order_id AS client_order_id,
        t.dispatch_status AS dispatch_status, t.exchange_order_id AS exchange_order_id,
        t.strategy_instance_id AS strategy_instance_id,

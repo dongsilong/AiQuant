@@ -22,19 +22,28 @@ import java.time.Instant;
  * @param highestPriceSinceEntry   开仓后最高实时价
  * @param lowestPriceSinceEntry    开仓后最低实时价
  * @param firstTakeProfitTriggered 首次分批止盈是否已完成
+ * @param highestStep              当前已达到的最高阶梯
+ * @param markPrice                最新标记价格，仅用于 MARK_PRICE 保护判断
  */
 public record StrategyContext(String symbol, String direction, BigDecimal entryPrice, BigDecimal currentPrice, BigDecimal referencePrice, BigDecimal previousKlineOpenPrice,
                               Instant klineOpenTime, boolean klineClosed, Instant eventTime, BigDecimal quantity, BigDecimal initialPositionQuantity, BigDecimal initialMargin,
-                              Integer leverage, BigDecimal highestPriceSinceEntry, BigDecimal lowestPriceSinceEntry, boolean firstTakeProfitTriggered, int highestStep) {
+                              Integer leverage, BigDecimal highestPriceSinceEntry, BigDecimal lowestPriceSinceEntry, boolean firstTakeProfitTriggered, int highestStep, BigDecimal markPrice) {
 
     /**
      * 兼容原完整构造器。
      */
     public StrategyContext(String symbol, String direction, BigDecimal entryPrice, BigDecimal currentPrice, BigDecimal referencePrice, BigDecimal previousKlineOpenPrice,
                            Instant klineOpenTime, boolean klineClosed, Instant eventTime, BigDecimal quantity, BigDecimal initialPositionQuantity, BigDecimal initialMargin,
+                           Integer leverage, BigDecimal highestPriceSinceEntry, BigDecimal lowestPriceSinceEntry, boolean firstTakeProfitTriggered, int highestStep) {
+        this(symbol, direction, entryPrice, currentPrice, referencePrice, previousKlineOpenPrice, klineOpenTime, klineClosed, eventTime, quantity, initialPositionQuantity,
+            initialMargin, leverage, highestPriceSinceEntry, lowestPriceSinceEntry, firstTakeProfitTriggered, highestStep, null);
+    }
+
+    public StrategyContext(String symbol, String direction, BigDecimal entryPrice, BigDecimal currentPrice, BigDecimal referencePrice, BigDecimal previousKlineOpenPrice,
+                           Instant klineOpenTime, boolean klineClosed, Instant eventTime, BigDecimal quantity, BigDecimal initialPositionQuantity, BigDecimal initialMargin,
                            Integer leverage, BigDecimal highestPriceSinceEntry, BigDecimal lowestPriceSinceEntry, boolean firstTakeProfitTriggered) {
         this(symbol, direction, entryPrice, currentPrice, referencePrice, previousKlineOpenPrice, klineOpenTime, klineClosed, eventTime, quantity, initialPositionQuantity,
-            initialMargin, leverage, highestPriceSinceEntry, lowestPriceSinceEntry, firstTakeProfitTriggered, 0);
+            initialMargin, leverage, highestPriceSinceEntry, lowestPriceSinceEntry, firstTakeProfitTriggered, 0, null);
     }
 
     /**
@@ -42,6 +51,6 @@ public record StrategyContext(String symbol, String direction, BigDecimal entryP
      */
     public StrategyContext(String symbol, String direction, BigDecimal entryPrice, BigDecimal currentPrice, BigDecimal referencePrice, Instant klineOpenTime, boolean klineClosed
         , Instant eventTime, BigDecimal quantity, BigDecimal initialMargin) {
-        this(symbol, direction, entryPrice, currentPrice, referencePrice, null, klineOpenTime, klineClosed, eventTime, quantity, quantity, initialMargin, 1, null, null, false);
+        this(symbol, direction, entryPrice, currentPrice, referencePrice, null, klineOpenTime, klineClosed, eventTime, quantity, quantity, initialMargin, 1, null, null, false, 0, null);
     }
 }

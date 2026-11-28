@@ -44,6 +44,18 @@ class AccountPositionCacheTest {
     }
 
     @Test
+    void balanceOnlyAccountUpdateDoesNotInvalidatePositionSnapshot() throws Exception {
+        var cache = ready();
+        var event = new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.ofEpochMilli(20),
+            "{\"e\":\"ACCOUNT_UPDATE\",\"E\":20,\"T\":20,\"a\":{\"m\":\"FUNDING_FEE\",\"B\":[{\"a\":\"USDT\",\"wb\":\"1000\",\"cw\":\"900\",\"bc\":\"0\"}]}}");
+
+        cache.onEvent(1L, event);
+
+        assertTrue(cache.requirePositions(1L).isEmpty());
+        verify(gateway, times(1)).queryPositions(credential, null);
+    }
+
+    @Test
     void incrementalUpdatesPreserveOtherSymbolsAndZeroRemovesOnlyItsPosition() throws Exception {
         var cache = ready();
         cache.onEvent(1L, update("BTCUSDT", "BOTH", "-1", 10));

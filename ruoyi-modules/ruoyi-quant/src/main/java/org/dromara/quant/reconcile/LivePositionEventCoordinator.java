@@ -53,11 +53,14 @@ public class LivePositionEventCoordinator {
         String type = event.eventType();
         if ("DISCONNECTED".equalsIgnoreCase(type) || "listenKeyExpired".equalsIgnoreCase(type)) {
             if (freshness != null) {
-                freshness.invalidate(credentialId, "STREAM_DISCONNECTED");
+                freshness.privateStreamDisconnected(credentialId, "STREAM_DISCONNECTED");
             }
             return;
         }
         if ("CONNECTED".equalsIgnoreCase(type)) {
+            if (freshness != null) {
+                freshness.privateStreamConnected(credentialId);
+            }
             protectionRecoveryPending.add(new ProtectionRecoveryRequest(credentialId, null));
             queueRefresh(credentialId);
             return;
@@ -198,7 +201,7 @@ public class LivePositionEventCoordinator {
                 long backoffMillis = Math.min(60000L, 2000L << Math.min(count - 1, 5));
                 retryNotBefore.put(id, System.currentTimeMillis() + backoffMillis);
                 pending.add(id);
-                log.warn("LIVE event-triggered position refresh failed credentialId={} retryInMs={}", id, backoffMillis, ex);
+                log.warn("实时事件触发的仓位刷新失败 credentialId={} retryInMs={}", id, backoffMillis, ex);
             }
         }
     }

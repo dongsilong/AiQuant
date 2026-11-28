@@ -188,8 +188,11 @@ class LivePositionEventCoordinatorTest {
         coordinator.onUserDataEvent(73L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent("DISCONNECTED", java.time.Instant.now(), null));
         org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(73L));
         coordinator.onUserDataEvent(73L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent("CONNECTED", java.time.Instant.now(), null));
+        org.junit.jupiter.api.Assertions.assertFalse(freshness.fresh(73L), "reconnection still requires a new full REST snapshot");
         coordinator.drain();
         verify(reconciliation).refreshPositionsOnly(account);
+        org.junit.jupiter.api.Assertions.assertTrue(freshness.verifiedIfUnchanged(73L, freshness.generation(73L)));
+        org.junit.jupiter.api.Assertions.assertTrue(freshness.fresh(73L));
     }
 
     @Test
@@ -233,7 +236,7 @@ class LivePositionEventCoordinatorTest {
         coordinator.onUserDataEvent(89L, new org.dromara.quant.exchange.ExchangeGateway.UserDataEvent("CONNECTED", java.time.Instant.now(), null));
         coordinator.drain();
 
-        org.junit.jupiter.api.Assertions.assertEquals(0L, freshness.generation(89L));
+        org.junit.jupiter.api.Assertions.assertEquals(1L, freshness.generation(89L));
         verify(protection).recoverUnresolvedProtectionDispatches(89L, null);
     }
 

@@ -19,8 +19,8 @@ import org.dromara.quant.strategy.mapper.QuantStrategyAccountMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategySymbolMapper;
 import org.dromara.quant.strategy.mapper.QuantStrategyUserMapper;
+import org.dromara.quant.strategy.mapper.QuantDictionaryMapper;
 import org.dromara.quant.util.QuantJsonMapper;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,7 +51,7 @@ public class QuantStrategyService {
     private final QuantCredentialMapper credentialMapper;
     private final QuantSymbolMapper quantSymbolMapper;
     private final QuantStrategyUserMapper userMapper;
-    private final JdbcTemplate jdbcTemplate;
+    private final QuantDictionaryMapper dictionaryMapper;
 
     private static boolean validRate(java.math.BigDecimal value, boolean strictLessThanOne) {
         return value != null && value.signum() > 0 && (!strictLessThanOne ? value.compareTo(java.math.BigDecimal.ONE) <= 0 : value.compareTo(java.math.BigDecimal.ONE) < 0);
@@ -73,8 +73,7 @@ public class QuantStrategyService {
         if (interval == null || interval.isBlank()) {
             return false;
         }
-        Integer count = jdbcTemplate.queryForObject("SELECT COUNT(1) FROM sys_dict_data WHERE dict_type=? AND dict_value=?", Integer.class, "quant_kline_period", interval);
-        return count != null && count > 0;
+        return dictionaryMapper.countKlinePeriod(interval) > 0;
     }
 
     /**
@@ -170,6 +169,29 @@ public class QuantStrategyService {
     }
 
     /**
+     * 启动单个实例；策略整体必须先处于启用状态。
+     */
+    public boolean startInstance(Long strategyId, Long instanceId) {
+        QuantStrategy strategy = require(strategyId);
+        checkAccess(strategy);
+        if (!"1".equals(strategy.getStatus())) {
+            throw new ServiceException("策略尚未开启，不能启动策略实例");
+        }
+        instanceService.startInstance(strategyId, instanceId);
+        return true;
+    }
+
+    /**
+     * 停止单个实例，不改变策略整体启用状态。
+     */
+    public boolean stopInstance(Long strategyId, Long instanceId) {
+        QuantStrategy strategy = require(strategyId);
+        checkAccess(strategy);
+        instanceService.stopInstance(strategyId, instanceId);
+        return true;
+    }
+
+    /**
      * 执行与启动接口相同的服务端配置预检。
      */
     public StrategyPreflightResult preflight(Long id) {
@@ -213,7 +235,18 @@ public class QuantStrategyService {
                 errors.add("策略账户不存在或无权访问: " + binding.getCredentialId());
                 continue;
             }
-            accounts.add(java.util.Map.of("credentialId", credential.getId(), "accountName", credential.getAccountName()));
+            String accountName = credential.getAccountName() == null || credential.getAccountName().isBlank()
+                ? String.valueOf(credential.getId()) : credential.getAccountName();
+            if (!"0".equals(credential.getStatus())) {
+                errors.add("策略账户【" + accountName + "】已禁用，请先启用账户");
+            }
+            String runMode = credential.getRunMode();
+            String expectedConnectionStatus = "PAPER".equalsIgnoreCase(runMode) ? "PAPER" : "NORMAL";
+            if (!expectedConnectionStatus.equalsIgnoreCase(
+                credential.getConnectionStatus() == null ? "" : credential.getConnectionStatus())) {
+                errors.add("策略账户【" + accountName + "】凭证连接状态异常或尚未验证，请先验证交易凭证");
+            }
+            accounts.add(java.util.Map.of("credentialId", credential.getId(), "accountName", accountName));
         }
         if (accounts.isEmpty()) {
             errors.add("至少配置一个策略账户");

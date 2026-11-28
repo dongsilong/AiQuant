@@ -12,6 +12,8 @@ import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -119,6 +121,77 @@ class UserDataStreamHubTest {
     }
 
     @Test
+    void rawSessionDoesNotPublishConnectedUntilTransportConfirmsHandshake() throws Exception {
+        var gateway = mock(ExchangeGateway.class);
+        var execution = mock(TradeExecutionApplicationService.class);
+        var credential = new QuantCredential();
+        credential.setId(75L);
+        credential.setRunMode("TESTNET");
+        var exchange = new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET");
+        when(execution.toCredential(credential)).thenReturn(exchange);
+        var receiver = new AtomicReference<Consumer<ExchangeGateway.UserDataEvent>>();
+        var connected = new java.util.concurrent.atomic.AtomicBoolean(false);
+        when(gateway.subscribeUserData(eq(exchange), any())).thenAnswer(invocation -> {
+            receiver.set(invocation.getArgument(1));
+            return new ExchangeGateway.UserDataStreamSession("test", Instant.now(), () -> {
+            }, () -> {
+            }, connected::get);
+        });
+        var connectedEvent = new java.util.concurrent.CountDownLatch(1);
+        var hub = new UserDataStreamHub(gateway, execution, mock(AccountPositionCache.class),
+            mock(AccountBalanceCache.class), mock(org.dromara.quant.execution.TradingPreparationService.class));
+        try {
+            hub.subscribe(credential, event -> {
+                if ("CONNECTED".equals(event.eventType())) {
+                    connectedEvent.countDown();
+                }
+            });
+
+            assertFalse(connectedEvent.await(100, java.util.concurrent.TimeUnit.MILLISECONDS),
+                "listenKey/session allocation must not be treated as a completed WebSocket handshake");
+            connected.set(true);
+            receiver.get().accept(new ExchangeGateway.UserDataEvent("CONNECTED", Instant.now(), null));
+
+            assertTrue(connectedEvent.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        } finally {
+            hub.destroy();
+        }
+    }
+
+    @Test
+    void transientListenKeyNetworkFailureSchedulesExponentialRetry() {
+        var gateway = mock(ExchangeGateway.class);
+        var execution = mock(TradeExecutionApplicationService.class);
+        var credential = new QuantCredential();
+        credential.setId(76L);
+        credential.setRunMode("LIVE");
+        var exchange = new ExchangeGateway.Credential("test", "test", "HMAC", "LIVE");
+        when(execution.toCredential(credential)).thenReturn(exchange);
+        when(gateway.subscribeUserData(eq(exchange), any())).thenThrow(
+            new org.dromara.quant.exchange.ExchangeTradingPort.ExchangeRequestException(
+                "START_USER_DATA_STREAM", 0, null, "network failure", "com.binance.connector.client.common.ApiException", "java.io.EOFException"));
+        var hub = new UserDataStreamHub(gateway, execution, mock(AccountPositionCache.class),
+            mock(AccountBalanceCache.class), mock(org.dromara.quant.execution.TradingPreparationService.class));
+        var lease = mock(org.dromara.quant.reconcile.LiveUserStreamLeaseService.class);
+        when(lease.owns(76L, 1L)).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(hub, "streamLease", lease);
+        try {
+            hub.registerLeaseOwner(76L, 1L);
+            hub.subscribe(credential, ignored -> {
+            });
+
+            var streams = (java.util.Map<Long, ?>) org.springframework.test.util.ReflectionTestUtils.getField(hub, "streams");
+            Object stream = streams.get(76L);
+            assertNotNull(org.springframework.test.util.ReflectionTestUtils.getField(stream, "startRetryTask"));
+            assertEquals(1, org.springframework.test.util.ReflectionTestUtils.getField(stream, "startFailureCount"));
+            hub.healthCheck();
+            verify(gateway, times(1)).subscribeUserData(eq(exchange), any());
+        } finally {
+            hub.destroy();
+        }
+    }
+
+    @Test
     void testnetOrderFillEventReachesStrategyListenerAndAccountCaches() throws Exception {
         var gateway = mock(ExchangeGateway.class);
         var execution = mock(TradeExecutionApplicationService.class);
@@ -138,8 +211,10 @@ class UserDataStreamHubTest {
             }, () -> true);
         });
         var tradeNotifications = mock(org.dromara.quant.notification.QuantTradeNotificationService.class);
+        var decisionLogs = mock(org.dromara.quant.decision.TradeDecisionLogService.class);
         var hub = new UserDataStreamHub(gateway, execution, positionCache, balanceCache, preparation);
         org.springframework.test.util.ReflectionTestUtils.setField(hub, "tradeNotifications", tradeNotifications);
+        org.springframework.test.util.ReflectionTestUtils.setField(hub, "decisionLogs", decisionLogs);
         var forwarded = new java.util.concurrent.CountDownLatch(1);
         try {
             var subscription = hub.subscribe(credential, event -> {
@@ -149,10 +224,12 @@ class UserDataStreamHubTest {
             });
             var fill = new ExchangeGateway.UserDataEvent("ORDER_TRADE_UPDATE", Instant.now(), "{\"e\":\"ORDER_TRADE_UPDATE\",\"o\":{\"X\":\"FILLED\"}}");
             receiver.get().accept(fill);
-            verify(positionCache).onEvent(72L, fill);
-            verify(balanceCache).onEvent(72L, fill);
-            verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, fill);
-            verify(preparation).onEvent(72L, fill);
+            verify(decisionLogs).privateEvent(72L, fill);
+            var eventOrder = inOrder(tradeNotifications, positionCache, balanceCache, preparation);
+            eventOrder.verify(tradeNotifications).captureCloseSnapshotFromUserDataEvent(72L, exchange, fill);
+            eventOrder.verify(positionCache).onEvent(72L, fill);
+            eventOrder.verify(balanceCache).onEvent(72L, fill);
+            eventOrder.verify(preparation).onEvent(72L, fill);
             var accountUpdate = new ExchangeGateway.UserDataEvent("ACCOUNT_UPDATE", Instant.now(),
                 "{\"e\":\"ACCOUNT_UPDATE\",\"a\":{\"m\":\"ORDER\"}}");
             receiver.get().accept(accountUpdate);
@@ -199,6 +276,34 @@ class UserDataStreamHubTest {
             verify(cache, never()).remove(1L);
             second.close();
             verify(cache).remove(1L);
+        } finally {
+            hub.destroy();
+        }
+    }
+
+    @Test
+    void testnetHealthCheckRecoversRecentCloseSnapshots() {
+        var gateway = mock(ExchangeGateway.class);
+        var execution = mock(TradeExecutionApplicationService.class);
+        var credential = new QuantCredential();
+        credential.setId(74L);
+        credential.setRunMode("TESTNET");
+        var exchange = new ExchangeGateway.Credential("test", "test", "HMAC", "TESTNET");
+        var session = mock(ExchangeGateway.UserDataStreamSession.class);
+        when(execution.toCredential(credential)).thenReturn(exchange);
+        when(gateway.subscribeUserData(eq(exchange), any())).thenReturn(session);
+        when(session.isConnected()).thenReturn(true);
+        var tradeNotifications = mock(org.dromara.quant.notification.QuantTradeNotificationService.class);
+        var hub = new UserDataStreamHub(gateway, execution, mock(AccountPositionCache.class),
+            mock(AccountBalanceCache.class), mock(org.dromara.quant.execution.TradingPreparationService.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(hub, "tradeNotifications", tradeNotifications);
+        try {
+            hub.subscribe(credential, ignored -> {
+            });
+
+            hub.healthCheck();
+
+            verify(tradeNotifications).recoverRecentCloseSnapshots(74L, exchange);
         } finally {
             hub.destroy();
         }

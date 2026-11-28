@@ -64,6 +64,79 @@ public class LiveOrderDispatcher {
     }
 
     /**
+     * 为策略明确变更后的 LIVE 配置建立独占票据。旧意图只在交易所读回确认后迁移。
+     */
+    public ConfigurationReservation beginConfigurationChange(Long credentialId, String symbol, String key, String marginMode, int leverage) {
+        if (!java.util.Set.of("ISOLATED", "CROSSED").contains(marginMode) || leverage < 1 || leverage > 125) {
+            throw new IllegalArgumentException("LIVE Binance 配置范围或保证金模式无效");
+        }
+        if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank() || key == null || key.isBlank()) {
+            throw new IllegalArgumentException("LIVE 配置派发缺少账户、交易对或幂等标识");
+        }
+        String normalized = symbol.toUpperCase(Locale.ROOT);
+        try {
+            return transaction.execute(status -> {
+                mapper.ensureGuard(credentialId, normalized);
+                if (mapper.claim(credentialId, normalized, key) != 1) {
+                    boolean occupied = mapper.activeDispatch(credentialId, normalized) != null;
+                    throw new DispatchBlockedException(occupied ? DispatchFailureReason.DISPATCH_SLOT_OCCUPIED : DispatchFailureReason.DISPATCH_GUARD_CLAIM_FAILED,
+                        occupied ? "同账户交易对存在未完成交易所操作，配置未发送" : "LIVE 配置派发槽未能取得，配置未发送");
+                }
+                java.util.Map<String, Object> intent = mapper.settingsIntent(credentialId, normalized);
+                if (intent == null || intent.isEmpty()) {
+                    mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
+                    intent = mapper.settingsIntent(credentialId, normalized);
+                }
+                String previousMode = stringValue(intent, "marginMode");
+                Long previousLeverageValue = value(intent, "leverage");
+                if (previousMode == null || previousLeverageValue == null) {
+                    throw new DispatchFailureException(DispatchFailureReason.CONFIGURATION_PERSISTENCE_FAILURE, "LIVE 配置意图记录不完整，拒绝修改交易所");
+                }
+                int previousLeverage = Math.toIntExact(previousLeverageValue);
+                long conflicts = mapper.conflictingStrategySettings(credentialId, normalized, marginMode, leverage);
+                if (conflicts > 0) {
+                    String detail = "conflictingStrategySettings=" + conflicts + ", requestedMarginMode=" + marginMode + ", requestedLeverage=" + leverage;
+                    throw new DispatchFailureException(DispatchFailureReason.SETTINGS_INTENT_MISMATCH,
+                        "同账户交易对存在其他策略配置冲突，拒绝迁移实盘配置意图", detail);
+                }
+                boolean migration = !marginMode.equals(previousMode) || leverage != previousLeverage;
+                if (mapper.insertTicket(credentialId, normalized, key, "CONFIG_SETTINGS", "SETTINGS:" + marginMode + ":" + leverage, null, null) != 1) {
+                    throw new DispatchFailureException(DispatchFailureReason.DISPATCH_TICKET_INSERT_FAILED, "LIVE 配置派发票据落库失败");
+                }
+                return new ConfigurationReservation(new Ticket(credentialId, normalized, key), previousMode, previousLeverage,
+                    marginMode, leverage, migration);
+            });
+        } catch (DispatchBlockedException blocked) {
+            ApplicationEventPublisher publisher = eventPublisher;
+            if (publisher != null) {
+                publisher.publishEvent(new DispatchBlockedEvent(credentialId, normalized, "CONFIG_SETTINGS"));
+            }
+            throw blocked;
+        } catch (DispatchFailureException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw new DispatchFailureException(DispatchFailureReason.CONFIGURATION_PERSISTENCE_FAILURE,
+                "LIVE 配置派发持久化失败，拒绝修改交易所", failure);
+        }
+    }
+
+    /**
+     * 交易所配置读回确认后，才使用旧值条件更新 LIVE 配置意图。
+     */
+    public void configurationIntentApplied(ConfigurationReservation reservation) {
+        if (reservation == null || !reservation.intentMigration()) {
+            return;
+        }
+        Ticket ticket = reservation.ticket();
+        transaction.executeWithoutResult(status -> {
+            if (mapper.migrateSettingsIntent(ticket.credentialId(), ticket.symbol(), ticket.key(), reservation.previousMarginMode(),
+                reservation.previousLeverage(), reservation.targetMarginMode(), reservation.targetLeverage()) != 1) {
+                throw new IllegalStateException("Binance 配置已核实，但 LIVE 配置意图迁移条件不匹配，保持派发阻断");
+            }
+        });
+    }
+
+    /**
      * Proof-carrying LIVE strategy reservation. This commits immutable
      * OPEN/CLOSE and logical LONG/SHORT provenance with the dispatch ticket.
      */
@@ -81,7 +154,7 @@ public class LiveOrderDispatcher {
         if (strategyId == null || strategyId <= 0 || instanceId == null || instanceId <= 0 || epoch == null || epoch <= 0 || normalizedOperation == null || normalizedPositionSide == null || normalizedExchangeSide == null ||
             !java.util.Set.of("OPEN", "CLOSE").contains(normalizedOperation) ||
             !java.util.Set.of("LONG", "SHORT").contains(normalizedPositionSide) || !java.util.Set.of("BUY", "SELL").contains(normalizedExchangeSide) || !directionMatches) {
-            throw new IllegalArgumentException("Unproven strategy order intent cannot be dispatched");
+            throw new IllegalArgumentException("未经验证的策略订单意图不能发送");
         }
         return reserve(credentialId, symbol, key, normalizedOperation, clientOrderId, instanceId, epoch, null, null, strategyId, normalizedPositionSide, normalizedExchangeSide);
     }
@@ -108,22 +181,29 @@ public class LiveOrderDispatcher {
                 int claimed = instanceId == null ? mapper.claim(credentialId, normalized, key) : mapper.claimWithLease(credentialId, normalized, key, instanceId, epoch);
                 if (claimed != 1) {
                     boolean slotOccupied = mapper.activeDispatch(credentialId, normalized) != null;
-                    String reason = slotOccupied ? "同账户交易对存在未完成交易所操作，订单未发送"
-                        : "策略租约已过期或转移，订单未发送";
-                    throw new DispatchBlockedException(reason);
+                    if (slotOccupied) {
+                        throw new DispatchBlockedException(DispatchFailureReason.DISPATCH_SLOT_OCCUPIED, "同账户交易对存在未完成交易所操作，订单未发送");
+                    }
+                    throw new DispatchBlockedException(DispatchFailureReason.DISPATCH_GUARD_CLAIM_FAILED, "LIVE 交易对派发槽未能取得，订单未发送");
                 }
                 if (marginMode != null) {
                     mapper.ensureSettingsIntent(credentialId, normalized, marginMode, leverage);
-                    if (mapper.matchingSettingsIntent(credentialId, normalized, marginMode, leverage) != 1L) {
-                        throw new IllegalStateException("同账户交易对存在冲突的保证金/杠杆配置契约，拒绝更改交易所");
+                    java.util.Map<String, Object> existingIntent = mapper.settingsIntent(credentialId, normalized);
+                    String existingMarginMode = stringValue(existingIntent, "marginMode");
+                    Long existingLeverage = value(existingIntent, "leverage");
+                    if (!marginMode.equals(existingMarginMode) || !Objects.equals(existingLeverage, leverage == null ? null : leverage.longValue())) {
+                        String detail = "existingMarginMode=" + existingMarginMode + ", existingLeverage=" + existingLeverage
+                            + ", requestedMarginMode=" + marginMode + ", requestedLeverage=" + leverage;
+                        throw new DispatchFailureException(DispatchFailureReason.SETTINGS_INTENT_MISMATCH,
+                            "同账户交易对存在冲突的保证金/杠杆配置契约，拒绝更改交易所", detail);
                     }
                 }
                 if (mapper.insertTicket(credentialId, normalized, key, operation, clientOrderId, instanceId, epoch) != 1) {
-                    throw new IllegalStateException("LIVE dispatch 发送票据落库失败");
+                    throw new DispatchFailureException(DispatchFailureReason.DISPATCH_TICKET_INSERT_FAILED, "LIVE dispatch 发送票据落库失败");
                 }
                 if (strategyId != null && mapper.insertPreDispatchIntent(credentialId, normalized, key, clientOrderId, strategyId, instanceId, operation, positionSide, exchangeSide,
                     epoch) != 1) {
-                    throw new IllegalStateException("LIVE pre-send strategy intent is not durable");
+                    throw new IllegalStateException("LIVE 发送前的策略意图尚未持久化");
                 }
                 return new Ticket(credentialId, normalized, key);
             });
@@ -134,6 +214,15 @@ public class LiveOrderDispatcher {
                 publisher.publishEvent(new DispatchBlockedEvent(credentialId, normalized, operation));
             }
             throw blocked;
+        } catch (DispatchFailureException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            if (marginMode != null) {
+                // Keep database/mapper details out of logs and callers; expose only a stable diagnostic code.
+                throw new DispatchFailureException(DispatchFailureReason.CONFIGURATION_PERSISTENCE_FAILURE,
+                    "LIVE 配置派发持久化失败，拒绝修改交易所", failure);
+            }
+            throw failure;
         }
     }
 
@@ -158,7 +247,7 @@ public class LiveOrderDispatcher {
      */
     public void configurationApplied(Ticket ticket) {
         if (ticket == null) {
-            throw new IllegalArgumentException("Missing configuration dispatch ticket");
+            throw new IllegalArgumentException("缺少配置变更发送票据");
         }
         // Persist the confirmed exchange outcome in its own transaction before releasing
         // the guard. If the process crashes between these commits, CONFIG_APPLIED is durable
@@ -176,9 +265,24 @@ public class LiveOrderDispatcher {
     }
 
     /**
-     * Recover a CONFIG_SETTINGS ticket only after an independent exchange query
-     * proves that both persisted desired settings are already active. The exact
-     * durable intent, synthetic ticket identity and active guard must all match.
+     * Check the immutable account-symbol configuration intent before issuing any
+     * recovery write to Binance. A ticket alone is not authorization to change settings.
+     */
+    public boolean matchesConfigurationIntent(Long credentialId, String symbol, String marginMode, int leverage) {
+        String normalizedSymbol = symbol == null ? null : symbol.toUpperCase(Locale.ROOT);
+        String normalizedMode = marginMode == null ? null : marginMode.toUpperCase(Locale.ROOT);
+        if (credentialId == null || credentialId <= 0 || normalizedSymbol == null || normalizedSymbol.isBlank()
+            || normalizedMode == null || !java.util.Set.of("ISOLATED", "CROSSED").contains(normalizedMode)
+            || leverage < 1 || leverage > 125) {
+            return false;
+        }
+        return mapper.matchingSettingsIntent(credentialId, normalizedSymbol, normalizedMode, leverage) == 1L;
+    }
+
+    /**
+     * Complete a CONFIG_SETTINGS ticket only after the caller has reconciled and
+     * independently verified both persisted desired settings. The exact durable
+     * intent, synthetic ticket identity and active guard must all match.
      */
     public boolean recoveredConfigurationFromExchange(Long credentialId, String symbol, String key, String clientOrderId, String marginMode, int leverage) {
         String normalizedSymbol = symbol == null ? null : symbol.toUpperCase(Locale.ROOT);
@@ -187,14 +291,42 @@ public class LiveOrderDispatcher {
             || key == null || key.isBlank() || normalizedMode == null
             || !java.util.Set.of("ISOLATED", "CROSSED").contains(normalizedMode) || leverage < 1 || leverage > 125
             || !("SETTINGS:" + normalizedMode + ":" + leverage).equals(clientOrderId)) {
-            throw new IllegalArgumentException("Cannot recover configuration dispatch without exact desired-settings identity");
+            throw new IllegalArgumentException("缺少精确的目标配置标识，无法恢复配置变更发送");
         }
         return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (mapper.matchingSettingsIntent(credentialId, normalizedSymbol, normalizedMode, leverage) != 1L) {
+                if (mapper.conflictingStrategySettings(credentialId, normalizedSymbol, normalizedMode, leverage) > 0
+                    || mapper.recoverSettingsIntent(credentialId, normalizedSymbol, key, clientOrderId, normalizedMode, leverage) != 1) {
+                    return false;
+                }
+            }
             if (mapper.recoverConfiguration(credentialId, normalizedSymbol, key, clientOrderId, normalizedMode, leverage) != 1) {
                 return false;
             }
             if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
-                throw new IllegalStateException("Verified configuration fact but durable dispatch guard mismatch");
+                throw new IllegalStateException("配置事实已验证，但持久化发送保护条件不匹配");
+            }
+            return true;
+        }));
+    }
+
+    /**
+     * Release an obsolete protection-create ticket only after the protection service
+     * has independently verified the local cycle and exchange account are flat and idle.
+     * This records business obsolescence, not a claim that Binance rejected or canceled it.
+     */
+    public boolean supersedeProtectionCreate(Long credentialId, String symbol, String key, String clientOrderId) {
+        if (credentialId == null || credentialId <= 0 || symbol == null || symbol.isBlank()
+            || key == null || key.isBlank() || clientOrderId == null || clientOrderId.isBlank()) {
+            throw new IllegalArgumentException("缺少精确标识，无法替代保护单票据");
+        }
+        String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            if (mapper.supersedeProtectionCreate(credentialId, normalizedSymbol, key, clientOrderId) != 1) {
+                return false;
+            }
+            if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                throw new IllegalStateException("保护单票据已被替代，但持久化发送保护条件不匹配");
             }
             return true;
         }));
@@ -212,6 +344,50 @@ public class LiveOrderDispatcher {
     }
 
     /**
+     * 仅在两次完整交易所核验均确认 OPEN 不存在后，终结对应 LIVE 票据。
+     * 没有对应票据且账户交易对锁也未被该幂等键占用时，视为无需释放；
+     * 孤立锁、身份不匹配或其他状态均保持阻断。
+     */
+    public boolean verifiedNotExecuted(Long credentialId, String symbol, String key, String clientOrderId, Long instanceId,
+                                        java.util.function.BooleanSupplier finalizeExecution) {
+        if (credentialId == null || symbol == null || symbol.isBlank() || key == null || key.isBlank()
+            || clientOrderId == null || clientOrderId.isBlank() || instanceId == null || finalizeExecution == null) {
+            throw new IllegalArgumentException("缺少精确的策略标识，无法核验 LIVE 发送票据");
+        }
+        String normalizedSymbol = symbol.toUpperCase(Locale.ROOT);
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            int updated = mapper.markNotExecuted(credentialId, normalizedSymbol, key, clientOrderId, instanceId);
+            if (updated == 1) {
+                if (mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                    throw new IllegalStateException("已核实 OPEN 未执行，但 LIVE 账户交易对锁未能安全释放");
+                }
+            } else {
+                String ticketStatus = mapper.notExecutedTicketStatus(credentialId, normalizedSymbol, key, clientOrderId, instanceId);
+                if ("VERIFIED_NOT_EXECUTED".equalsIgnoreCase(ticketStatus)) {
+                    java.util.Map<String, Object> active = mapper.activeDispatch(credentialId, normalizedSymbol);
+                    if (active != null && key.equals(stringValue(active, "dispatchKey"))
+                        && mapper.release(credentialId, normalizedSymbol, key) != 1) {
+                        throw new IllegalStateException("已终结 OPEN 未执行票据，但残留账户交易对锁无法释放");
+                    }
+                } else {
+                    if (ticketStatus != null) {
+                        return false;
+                    }
+                    java.util.Map<String, Object> active = mapper.activeDispatch(credentialId, normalizedSymbol);
+                    if (active != null && key.equals(stringValue(active, "dispatchKey"))) {
+                        return false;
+                    }
+                }
+            }
+            if (!finalizeExecution.getAsBoolean()) {
+                status.setRollbackOnly();
+                return false;
+            }
+            return true;
+        }));
+    }
+
+    /**
      * Called ONLY after querying the exact Binance order and durably reconciling
      * the local order ledger. Legacy (pre-migration) orders have no ticket.
      * Never release on an absent/ambiguous exchange response.
@@ -220,14 +396,14 @@ public class LiveOrderDispatcher {
      */
     public boolean recoveredFromExchange(Long credentialId, String symbol, String key, String clientOrderId, Long exchangeOrderId) {
         if (credentialId == null || symbol == null || symbol.isBlank() || key == null || key.isBlank() || clientOrderId == null || clientOrderId.isBlank() || exchangeOrderId == null || exchangeOrderId <= 0) {
-            throw new IllegalArgumentException("Cannot reconcile a LIVE ticket without exact exchange identity");
+            throw new IllegalArgumentException("缺少精确的交易所标识，无法对账 LIVE 票据");
         }
         return Boolean.TRUE.equals(transaction.execute(status -> {
             if (mapper.recoverVerified(credentialId, symbol.toUpperCase(Locale.ROOT), key, clientOrderId, exchangeOrderId) != 1) {
                 return false;
             }
             if (mapper.release(credentialId, symbol.toUpperCase(Locale.ROOT), key) != 1) {
-                throw new IllegalStateException("Recovered exchange fact but durable dispatch guard mismatch");
+                throw new IllegalStateException("交易所事实已恢复，但持久化发送保护条件不匹配");
             }
             return true;
         }));
@@ -239,7 +415,7 @@ public class LiveOrderDispatcher {
      */
     public String activeProtectionTicket(Long credentialId, String symbol, String clientAlgoId, String operation) {
         if (credentialId == null || symbol == null || symbol.isBlank() || clientAlgoId == null || clientAlgoId.isBlank() || !java.util.Set.of("PROTECT_CREATE", "PROTECT_CANCEL").contains(operation)) {
-            throw new IllegalArgumentException("Cannot inspect protection dispatch without exact identity");
+            throw new IllegalArgumentException("缺少精确标识，无法检查保护单发送状态");
         }
         return mapper.activeProtectionTicket(credentialId, symbol.toUpperCase(Locale.ROOT), clientAlgoId, operation);
     }
@@ -249,7 +425,7 @@ public class LiveOrderDispatcher {
      */
     public ActiveDispatch activeDispatch(Long credentialId, String symbol) {
         if (credentialId == null || symbol == null || symbol.isBlank()) {
-            throw new IllegalArgumentException("Cannot inspect a dispatch slot without account and symbol");
+            throw new IllegalArgumentException("缺少账户和交易对，无法检查发送槽位");
         }
         return toActiveDispatch(mapper.activeDispatch(credentialId, symbol.toUpperCase(Locale.ROOT)));
     }
@@ -259,7 +435,7 @@ public class LiveOrderDispatcher {
      */
     public java.util.List<ActiveDispatch> activeProtectionCancels(Long credentialId, String symbol) {
         if (credentialId == null || credentialId <= 0) {
-            throw new IllegalArgumentException("Cannot inspect protection dispatches without account identity");
+            throw new IllegalArgumentException("缺少账户标识，无法检查保护单发送记录");
         }
         return mapper.activeProtectionCancels(credentialId, symbol == null ? null : symbol.toUpperCase(Locale.ROOT)).stream()
             .map(LiveOrderDispatcher::toActiveDispatch).filter(Objects::nonNull).toList();
@@ -268,7 +444,7 @@ public class LiveOrderDispatcher {
     /** List unresolved protection create and cancel tickets for connection recovery. */
     public java.util.List<ActiveDispatch> activeProtectionDispatches(Long credentialId, String symbol) {
         if (credentialId == null || credentialId <= 0) {
-            throw new IllegalArgumentException("Cannot inspect protection dispatches without account identity");
+            throw new IllegalArgumentException("缺少账户标识，无法检查保护单发送记录");
         }
         return mapper.activeProtectionDispatches(credentialId, symbol == null ? null : symbol.toUpperCase(Locale.ROOT)).stream()
             .map(LiveOrderDispatcher::toActiveDispatch).filter(Objects::nonNull).toList();
@@ -308,7 +484,7 @@ public class LiveOrderDispatcher {
      */
     public boolean recoverVerifiedProtection(Long credentialId, String symbol, String clientAlgoId, String operation, Long algoOrderId) {
         if (algoOrderId == null || algoOrderId <= 0) {
-            throw new IllegalArgumentException("Missing verified algo order ID");
+            throw new IllegalArgumentException("缺少已验证的算法订单 ID");
         }
         String key = activeProtectionTicket(credentialId, symbol, clientAlgoId, operation);
         return key != null && recoveredFromExchange(credentialId, symbol, key, clientAlgoId, algoOrderId);
@@ -341,6 +517,10 @@ public class LiveOrderDispatcher {
     public record Ticket(Long credentialId, String symbol, String key) {
     }
 
+    public record ConfigurationReservation(Ticket ticket, String previousMarginMode, Integer previousLeverage,
+                                           String targetMarginMode, int targetLeverage, boolean intentMigration) {
+    }
+
     /** 当前账户交易对门禁占用的不可变票据事实。 */
     public record ActiveDispatch(Long credentialId, String symbol, String dispatchKey, String operationType, String clientOrderId, String dispatchStatus,
                                  Long exchangeOrderId) {
@@ -349,9 +529,53 @@ public class LiveOrderDispatcher {
     /**
      * 派发槽或策略租约校验在任何交易所请求发送前失败。
      */
-    public static final class DispatchBlockedException extends IllegalStateException {
+    public enum DispatchFailureReason {
+        DISPATCH_SLOT_OCCUPIED,
+        DISPATCH_GUARD_CLAIM_FAILED,
+        SETTINGS_INTENT_MISMATCH,
+        DISPATCH_TICKET_INSERT_FAILED,
+        CONFIGURATION_PERSISTENCE_FAILURE
+    }
+
+    /** A safe, stable diagnostic classification; never includes database or request details. */
+    public static class DispatchFailureException extends IllegalStateException {
+        private final DispatchFailureReason reason;
+        private final String diagnosticDetail;
+
+        public DispatchFailureException(DispatchFailureReason reason, String message) {
+            this(reason, message, null, null);
+        }
+
+        public DispatchFailureException(DispatchFailureReason reason, String message, String diagnosticDetail) {
+            this(reason, message, diagnosticDetail, null);
+        }
+
+        public DispatchFailureException(DispatchFailureReason reason, String message, Throwable cause) {
+            this(reason, message, null, cause);
+        }
+
+        private DispatchFailureException(DispatchFailureReason reason, String message, String diagnosticDetail, Throwable cause) {
+            super(message, cause);
+            this.reason = Objects.requireNonNull(reason);
+            this.diagnosticDetail = diagnosticDetail;
+        }
+
+        public DispatchFailureReason reason() {
+            return reason;
+        }
+
+        public String diagnosticDetail() {
+            return diagnosticDetail;
+        }
+    }
+
+    public static final class DispatchBlockedException extends DispatchFailureException {
         public DispatchBlockedException(String message) {
-            super(message);
+            this(DispatchFailureReason.DISPATCH_GUARD_CLAIM_FAILED, message);
+        }
+
+        public DispatchBlockedException(DispatchFailureReason reason, String message) {
+            super(reason, message);
         }
     }
 }

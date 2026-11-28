@@ -8,12 +8,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.quant.config.BeijingTime;
+import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.market.UserDataStreamHub;
 import org.dromara.quant.runtime.StrategyPositionPerformanceHub;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -44,6 +46,7 @@ public class QuantAccountStreamController {
     private final UserDataStreamHub userDataStreamHub;
     private final StrategyPositionPerformanceHub performanceHub;
     private final QuantCredentialMapper credentialMapper;
+    private final QuantProperties quantProperties;
     private final ExchangeGateway gateway;
     private final TradeExecutionApplicationService executionService;
     private final ScheduledExecutorService heartbeatScheduler = Executors.newScheduledThreadPool(1, runnable -> {
@@ -57,10 +60,18 @@ public class QuantAccountStreamController {
      */
     @SaCheckPermission("quant:terminal:list")
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(HttpServletRequest request, HttpServletResponse response, @RequestParam Long credentialId) {
+    public SseEmitter stream(HttpServletRequest request, HttpServletResponse response, @RequestParam Long credentialId) throws IOException {
         QuantCredential credential = credentialMapper.selectById(credentialId);
         if (!accessible(credential)) {
             throw new IllegalArgumentException("无权访问交易账户");
+        }
+        if ("LIVE".equalsIgnoreCase(credential.getRunMode())
+            && !userDataStreamHub.hasLiveStreamOwnership(credentialId)) {
+            response.setStatus(HttpStatus.CONFLICT.value());
+            response.setHeader("X-Quant-Stream-State", "LEASE_NOT_OWNED");
+            log.debug("账户 SSE 等待本节点持有 LIVE 私有流租约 credentialId={}", credentialId);
+            response.flushBuffer();
+            return null;
         }
         response.setContentType(MediaType.TEXT_EVENT_STREAM_VALUE);
         response.setCharacterEncoding("UTF-8");
@@ -97,14 +108,8 @@ public class QuantAccountStreamController {
             dispatcher.set(writer);
             writer.start();
             heartbeat.set(heartbeatScheduler.scheduleAtFixedRate(() -> {
-                try {
-                    emitter.send(SseEmitter.event().comment("keepalive"));
-                } catch (IOException | RuntimeException ex) {
-                    cleanup.run();
-                }
+                if (!closed.get()) writer.offerComment("heartbeat", "keepalive");
             }, 15, 15, TimeUnit.SECONDS));
-            accountSubscription.set(userDataStreamHub.subscribe(credential,
-                event -> send(payload -> writer.offer("quant.account", payload), credential, event)));
             performanceSubscription.set(performanceHub.subscribe(credentialId, event -> {
                 if (!closed.get()) {
                     String key = "position-performance:" + event.instanceId() + ":" + event.positionCycleKey();
@@ -112,7 +117,26 @@ public class QuantAccountStreamController {
                         "type", "POSITION_MAX_RETURN", "credentialId", credentialId.toString(), "performance", event));
                 }
             }));
-            send(payload -> writer.offer("quant.account", payload), credential, new ExchangeGateway.UserDataEvent("SNAPSHOT", Instant.now(), null));
+            // 建立交易所私有流和初始账户快照可能触发阻塞式网络请求，不能占用
+            // Servlet 请求线程，否则异步响应尚未启动，SSE writer 会一直等待 responseReady。
+            Thread.ofVirtual().name("quant-account-stream-init").start(() -> {
+                try {
+                    if (closed.get()) return;
+                    AutoCloseable subscription = userDataStreamHub.subscribe(credential,
+                        event -> send(payload -> writer.offer("quant.account", payload), credential, event));
+                    accountSubscription.set(subscription);
+                    if (closed.get()) {
+                        closeSubscription(accountSubscription.getAndSet(null));
+                        return;
+                    }
+                    send(payload -> writer.offer("quant.account", payload), credential,
+                        new ExchangeGateway.UserDataEvent("SNAPSHOT", Instant.now(), null));
+                } catch (RuntimeException ex) {
+                    log.warn("账户 SSE 初始化失败 credentialId={}", credentialId, ex);
+                    cleanup.run();
+                    emitter.complete();
+                }
+            });
             if (closed.get()) {
                 closeSubscription(accountSubscription.getAndSet(null));
                 closeSubscription(performanceSubscription.getAndSet(null));
@@ -139,34 +163,15 @@ public class QuantAccountStreamController {
         Map<String, Object> payload = new HashMap<>();
         payload.put("type", event.eventType());
         payload.put("credentialId", credential.getId().toString());
-        payload.put("eventTime", BeijingTime.format(event.eventTime() == null ? Instant.now() : event.eventTime()));
+        payload.put("eventTime", BeijingTime.format(event.eventTime() == null ? Instant.now() : event.eventTime(), java.time.ZoneId.of(quantProperties.getTimeZone())));
         if ("SNAPSHOT".equals(event.eventType())) {
-            ExchangeGateway.Credential exchangeCredential = executionService.toCredential(credential);
-            boolean accountAvailable = false;
-            boolean positionsAvailable = false;
-            boolean ordersAvailable = false;
-            try {
-                payload.put("account", gateway.queryAccount(exchangeCredential));
-                accountAvailable = true;
-            } catch (RuntimeException ex) {
-                log.warn("账户 SSE 初始资金快照失败 credentialId={} error={}", credential.getId(), ex.getMessage());
-            }
-            try {
-                payload.put("positions", gateway.queryPositions(exchangeCredential, null));
-                positionsAvailable = true;
-            } catch (RuntimeException ex) {
-                log.warn("账户 SSE 初始持仓快照失败 credentialId={} error={}", credential.getId(), ex.getMessage());
-            }
-            try {
-                payload.put("orders", gateway.queryOrders(exchangeCredential, null));
-                ordersAvailable = true;
-            } catch (RuntimeException ex) {
-                log.warn("账户 SSE 初始委托快照失败 credentialId={} error={}", credential.getId(), ex.getMessage());
-            }
-            payload.put("accountSnapshotAvailable", accountAvailable);
-            payload.put("positionsSnapshotAvailable", positionsAvailable);
-            payload.put("ordersSnapshotAvailable", ordersAvailable);
-            payload.put("snapshotAvailable", positionsAvailable);
+            // 账户资金、当前持仓和委托均由终端按需通过 REST 加载，避免 SSE 初始快照重复消耗交易所请求权重。
+            payload.put("positionsSnapshotSkipped", true);
+            payload.put("accountSnapshotAvailable", false);
+            payload.put("positionsSnapshotAvailable", false);
+            payload.put("ordersSnapshotSkipped", true);
+            payload.put("ordersSnapshotAvailable", false);
+            payload.put("snapshotAvailable", false);
         } else if ("ACCOUNT_UPDATE".equals(event.eventType()) || "ORDER_TRADE_UPDATE".equals(event.eventType()) || "ALGO_UPDATE".equals(event.eventType())) {
             // 实时事件直接转发原始用户数据，不再为每条事件查询三次 REST。
             payload.put("snapshotAvailable", true);

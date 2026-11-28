@@ -144,7 +144,7 @@ public class StrictBinanceTradeCollector {
                 throw new IllegalStateException("Exchange fill outside requested historical interval or has invalid identity");
             }
             // Do not discard a history row merely because money/side/quantity fields are incomplete.
-            // The LIVE raw-fill journal retains those UNKNOWN facts for review; it must never coerce
+            // The raw-fill journal retains those UNKNOWN facts for review; it must never coerce
             // them to zero. Pagination completeness and allocation completeness are separate gates.
             var prior = unique.putIfAbsent(trade.tradeId(), trade);
             if (prior != null && !prior.equals(trade)) {

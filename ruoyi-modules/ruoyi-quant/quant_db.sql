@@ -69,6 +69,7 @@ CREATE TABLE `quant_credential`
     `secret_key`          varchar(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT 'Secret Key；PAPER 可为空',
     `signature_type`      varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '签名类型；PAPER 可为空',
     `run_mode`            varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci  NOT NULL DEFAULT 'PAPER' COMMENT '运行模式',
+    `effective_time`      datetime(3) NULL DEFAULT NULL COMMENT '记录查询有效时间（UTC）',
     `status`              char(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci      NOT NULL DEFAULT '0' COMMENT '状态',
     `connection_status`   varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci  NOT NULL DEFAULT 'UNKNOWN' COMMENT '连接状态',
     `trade_permission`    char(1) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '交易权限',
@@ -147,9 +148,11 @@ CREATE TABLE `quant_order`
     `idempotency_key`      varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL COMMENT '幂等键',
     `created_at`           datetime                                                      NOT NULL COMMENT '创建时间',
     `updated_at`           datetime                                                      NOT NULL COMMENT '更新时间',
+    `exchange_created_at`  datetime(3) NULL DEFAULT NULL COMMENT '交易所订单创建时间（UTC）',
     PRIMARY KEY (`id`) USING BTREE,
     UNIQUE INDEX `uk_quant_order_idempotency`(`credential_id` ASC, `idempotency_key` ASC) USING BTREE,
-    UNIQUE INDEX `uk_quant_order_client`(`credential_id` ASC, `client_order_id` ASC) USING BTREE,
+    UNIQUE INDEX `uk_quant_order_exchange`(`credential_id` ASC, `symbol` ASC, `exchange_order_id` ASC) USING BTREE,
+    INDEX `idx_quant_order_client`(`credential_id` ASC, `symbol` ASC, `client_order_id` ASC) USING BTREE,
     INDEX                  `idx_quant_order_strategy_instance`(`strategy_instance_id` ASC, `created_at` ASC) USING BTREE
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_general_ci COMMENT = '量化订单表' ROW_FORMAT = Dynamic;
 
@@ -193,6 +196,7 @@ CREATE TABLE `quant_protection_order`
     `created_at_epoch_ms` bigint NULL DEFAULT NULL COMMENT '本地保护意图创建时间(epoch毫秒)，历史未知保持NULL',
     `protection_type`   varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci  NOT NULL COMMENT '保护单类型',
     `order_type`        varchar(30) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '条件单类型',
+    `working_type`      varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL COMMENT '条件单触发价格类型：MARK_PRICE/CONTRACT_PRICE',
     `quantity`          decimal(32, 16) NULL DEFAULT NULL COMMENT '条件单数量',
     `stop_price`        decimal(32, 16)                                               NOT NULL COMMENT '触发价格',
     `status`            varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci  NOT NULL COMMENT '状态',
@@ -513,6 +517,26 @@ CREATE TABLE `quant_strategy_position_state`
     KEY                               `idx_quant_strategy_position_state_position` (`position_id`),
     KEY                               `idx_quant_strategy_state_recovery` (`status`,`recovery_required`,`unsafe_recovery`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='策略持仓运行状态事实表';
+
+CREATE TABLE IF NOT EXISTS `quant_trade_ledger_recovery` (
+    `credential_id` bigint NOT NULL COMMENT '量化凭证ID',
+    `status` varchar(16) NOT NULL DEFAULT 'READY' COMMENT '恢复状态：READY/RUNNING/COMPLETED',
+    `lease_until` datetime(3) NOT NULL COMMENT '恢复任务租约到期时间',
+    `updated_at` datetime(3) NOT NULL COMMENT '状态更新时间',
+    PRIMARY KEY (`credential_id`),
+    KEY `idx_quant_trade_ledger_recovery_lease` (`status`, `lease_until`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='量化成交账本订单驱动恢复状态';
+
+
+CREATE TABLE IF NOT EXISTS `quant_trade_history_collection_lease` (
+    `credential_id` bigint NOT NULL COMMENT '量化凭证ID',
+    `symbol` varchar(32) NOT NULL COMMENT '交易对',
+    `owner_token` varchar(36) NOT NULL DEFAULT '' COMMENT '当前采集节点持有者令牌',
+    `lease_epoch` bigint NOT NULL DEFAULT 0 COMMENT '租约隔离代次',
+    `lease_until` datetime(6) NOT NULL COMMENT '租约到期时间，使用数据库时钟',
+    PRIMARY KEY (`credential_id`, `symbol`),
+    KEY `idx_quant_trade_history_collection_lease_until` (`lease_until`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='量化账户交易对成交历史采集租约';
 
 SET
 FOREIGN_KEY_CHECKS = 1;

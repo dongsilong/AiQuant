@@ -25,6 +25,17 @@ class LiveRecoveryCaseServiceTest {
     }
 
     @Test
+    void legacyOpenRequestAndAuditMustSucceedTogether() {
+        String hash = "a".repeat(64);
+        String detail = "b".repeat(64);
+        when(cases.requestLegacyOpen(123L, 20L, "BTCUSDT", "legacy-key", 2L, hash)).thenReturn(1);
+        when(audit.append(anyLong(), eq(123L), eq(2L), eq("REQUEST_LEGACY_TESTNET_OPEN"), eq(hash), eq(detail))).thenReturn(1);
+        org.junit.jupiter.api.Assertions.assertTrue(service.requestLegacyOpen(20L, "BTCUSDT", "legacy-key", 2L, hash, detail) > 0);
+        verify(cases).requestLegacyOpen(anyLong(), eq(20L), eq("BTCUSDT"), eq("legacy-key"), eq(2L), eq(hash));
+        verify(manager).commit(transactionStatus);
+    }
+
+    @Test
     void approvalAndAuditMustSucceedTogether() {
         String hash = "a".repeat(64);
         String detail = "b".repeat(64);

@@ -31,6 +31,14 @@ public class StrategyRuntimeScheduler {
     }
 
     /**
+     * Redis Pub/Sub 断连期间可能丢失通知；数据库版本轮询提供跨节点失效兜底。
+     */
+    @Scheduled(fixedDelay = 1000, initialDelay = 1000)
+    public void refreshCredentialVersions() {
+        runtime.refreshActiveRuntimeCredentialVersions();
+    }
+
+    /**
      * 定期刷新运行策略依赖的持仓事实。
      */
     @Scheduled(fixedDelayString = "#{@quantProperties.reconcile.intervalSeconds * 1000}", initialDelay = 15000)

@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -29,8 +30,10 @@ public class TradingPreparationService {
     private final LiveTradingGate liveGate;
     private final AccountPositionCache positions;
     private final AccountBalanceCache balances;
+    private static final long POSITION_MODE_CACHE_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
     private final Map<String, State> states = new ConcurrentHashMap<>();
     private final Map<String, Object> locks = new ConcurrentHashMap<>();
+    private final Map<Long, PositionModeCache> positionModes = new ConcurrentHashMap<>();
     private volatile LiveOrderDispatcher liveOrderDispatcher;
 
     private static String normalizeMode(String mode) {
@@ -45,6 +48,76 @@ public class TradingPreparationService {
 
     private static String key(Long id, String symbol) {
         return id + ":" + symbol.toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private ExchangeGateway.PositionMode queryPositionMode(Long id, ExchangeGateway.Credential credential) {
+        PositionModeCache cache = positionModes.compute(id, (ignored, current) ->
+            current == null || !current.credential.equals(credential) ? new PositionModeCache(credential) : current);
+        CompletableFuture<ExchangeGateway.PositionMode> future;
+        boolean owner = false;
+        synchronized (cache) {
+            if (cache.mode != null && System.nanoTime() - cache.checkedAt < POSITION_MODE_CACHE_TTL_NANOS) {
+                return cache.mode;
+            }
+            future = cache.loading;
+            if (future == null) {
+                future = new CompletableFuture<>();
+                cache.loading = future;
+                owner = true;
+            }
+        }
+        if (owner) {
+            try {
+                ExchangeGateway.PositionMode mode = Objects.requireNonNull(gateway.queryPositionMode(credential), "Binance position mode is missing");
+                synchronized (cache) {
+                    cache.mode = mode;
+                    cache.checkedAt = System.nanoTime();
+                }
+                future.complete(mode);
+                return mode;
+            } catch (RuntimeException | Error failure) {
+                future.completeExceptionally(failure);
+                throw failure;
+            } finally {
+                synchronized (cache) {
+                    if (cache.loading == future) {
+                        cache.loading = null;
+                    }
+                }
+            }
+        }
+        try {
+            return future.join();
+        } catch (java.util.concurrent.CompletionException failure) {
+            if (failure.getCause() instanceof RuntimeException runtimeFailure) {
+                throw runtimeFailure;
+            }
+            if (failure.getCause() instanceof Error error) {
+                throw error;
+            }
+            throw failure;
+        }
+    }
+
+    static long retryDelayMillis(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof org.dromara.quant.exchange.ExchangeMarketPort.RequestDeferredException deferred
+                && deferred.retryAfterMillis() > 0L) {
+                return Math.max(5_000L, deferred.retryAfterMillis());
+            }
+            if (current instanceof org.dromara.quant.exchange.ExchangeMarketPort.RateLimitException rateLimited) {
+                return Math.max(5_000L, rateLimited.retryAfterMillis());
+            }
+        }
+        return 5_000L;
+    }
+
+    private static void updateLoadingStage(State state, String stage) {
+        synchronized (state) {
+            if (state.loading != null) {
+                state.loadingStage = stage;
+            }
+        }
     }
 
     /**
@@ -76,7 +149,7 @@ public class TradingPreparationService {
         String normalizedMode = normalizeMode(marginMode);
         State state = states.get(key(id, symbol));
         if (state == null) {
-            throw new OpenCapacityService.CapacityBlockedException("交易设置尚未初始化，等待后台首次校准: symbol=" + symbol);
+            throw new OpenCapacityService.CapacityBlockedException("交易设置尚未初始化，等待后台首次校准: symbol=" + symbol + ", preparation={state=MISSING}");
         }
         if (state != null) {
             synchronized (state) {
@@ -89,7 +162,24 @@ public class TradingPreparationService {
                 }
             }
         }
-        String ex = "交易设置未准备好或已变化，等待后台校准及新的行情: symbol=" + symbol + ", leverage=" + leverage + ", marginMode=" + normalizedMode;
+        String detail;
+        synchronized (state) {
+            detail = "configured=" + state.configured
+                + ", loading=" + (state.loading != null)
+                + ", loadingStage=" + state.loadingStage
+                + ", loadingElapsedMillis=" + (state.loading == null ? 0L : TimeUnit.NANOSECONDS.toMillis(Math.max(0L,
+                    System.nanoTime() - state.loadingStartedAtNanos)))
+                + ", lastAttemptAt=" + state.lastAttemptAt
+                + ", lastSuccessAt=" + state.lastSuccessAt
+                + ", lastFailureAt=" + state.lastFailureAt
+                + ", lastFailureStage=" + state.lastFailureStage
+                + ", lastFailureType=" + state.lastFailureType
+                + ", lastFailureReasonCode=" + state.lastFailureReasonCode
+                + ", lastFailureDetail=" + state.lastFailureDetail
+                + ", retryRemainingMillis=" + TimeUnit.NANOSECONDS.toMillis(Math.max(0L, state.retryAt - System.nanoTime()));
+        }
+        String ex = "交易设置未准备好或已变化，等待后台校准及新的行情: symbol=" + symbol + ", leverage=" + leverage
+            + ", marginMode=" + normalizedMode + ", preparation={" + detail + "}";
         throw new OpenCapacityService.CapacityBlockedException(ex);
     }
 
@@ -104,26 +194,47 @@ public class TradingPreparationService {
             long revision = state.revision;
             var future = new CompletableFuture<Void>();
             state.loading = future;
+            state.loadingStage = "SCHEDULED";
+            state.loadingStartedAtNanos = System.nanoTime();
             Thread.ofVirtual().name("quant-trading-preparation").start(() -> {
                 long started = System.nanoTime();
+                String stage = "ACCOUNT_FACTS";
+                updateLoadingStage(state, stage);
+                synchronized (state) {
+                    state.lastAttemptAt = Instant.now();
+                }
                 try {
+                    stage = "SYMBOL_CONFIGURATION_LOCK";
+                    updateLoadingStage(state, stage);
                     // 同账户同交易对的旧/新配置任务串行，网络等待不占用行情线程或数据库事务。
                     synchronized (locks.computeIfAbsent(key, ignored -> new Object())) {
                         if (states.get(key) != state) {
                             return;
                         }
+                        stage = "BALANCE_SNAPSHOT";
+                        updateLoadingStage(state, stage);
                         balances.requireSnapshot(state.id);
+                        stage = "POSITION_SNAPSHOT";
+                        updateLoadingStage(state, stage);
                         var active = positions.requirePositions(state.id);
-                        var mode = gateway.queryPositionMode(state.credential);
+                        stage = "POSITION_MODE";
+                        updateLoadingStage(state, stage);
+                        var mode = queryPositionMode(state.id, state.credential);
+                        stage = "TRADING_RULE";
+                        updateLoadingStage(state, stage);
                         var rule = gateway.queryTradingRule(state.credential, state.symbol);
                         if (mode == null || rule == null || rule.minNotional() == null || rule.minNotional().signum() <= 0 || state.leverage <= 0) {
                             throw new IllegalStateException("交易准备缺少有效模式、规则或杠杆");
                         }
                         if (!state.configured) {
+                            stage = "INITIAL_CONFIGURATION_CHECK";
+                            updateLoadingStage(state, stage);
                             if (active.stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
                                 throw new IllegalStateException("已有持仓，禁止后台修改保证金模式或杠杆");
                             }
                             if ("LIVE".equalsIgnoreCase(state.credential.runMode())) {
+                                stage = "LIVE_SAFETY_GATE";
+                                updateLoadingStage(state, stage);
                                 var safety = state.safety;
                                 if (safety == null) {
                                     throw new LiveTradingGate.LiveTradingBlockedException();
@@ -143,6 +254,7 @@ public class TradingPreparationService {
                                 throw new IllegalStateException("准备期间出现持仓，禁止修改交易设置");
                             }
                             LiveOrderDispatcher.Ticket configTicket = null;
+                            LiveOrderDispatcher.ConfigurationReservation configReservation = null;
                             LiveOrderDispatcher dispatcher = null;
                             try {
                                 if ("LIVE".equalsIgnoreCase(state.credential.runMode())) {
@@ -150,12 +262,11 @@ public class TradingPreparationService {
                                     if (dispatcher == null) {
                                         throw new IllegalStateException("LIVE 账户配置缺少跨节点调度器，拒绝直接修改 Binance");
                                     }
-                                    // Hold ONE durable account+symbol slot across BOTH Binance writes.
-                                    // An order or another node's preparation cannot enter between them.
                                     String dispatchKey = "CFG:" + java.util.UUID.randomUUID();
-                                    configTicket = dispatcher.beginConfiguration(state.id, state.symbol, dispatchKey, state.marginMode, state.leverage);
-                                    // Another node may have acquired/released the slot while we waited.
-                                    // Revalidate local revision and fresh position facts AFTER claim.
+                                    stage = "LIVE_CONFIGURATION_DISPATCH";
+                                    updateLoadingStage(state, stage);
+                                    configReservation = dispatcher.beginConfigurationChange(state.id, state.symbol, dispatchKey, state.marginMode, state.leverage);
+                                    configTicket = configReservation.ticket();
                                     synchronized (state) {
                                         if (states.get(key) != state || revision != state.revision) {
                                             throw new IllegalStateException("配置等待调度锁期间发生版本变化，拒绝旧配置写入");
@@ -165,29 +276,94 @@ public class TradingPreparationService {
                                     if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
                                         throw new IllegalStateException("取得配置锁后出现持仓，禁止修改保证金或杠杆");
                                     }
-                                }
-                                gateway.setMarginType(state.credential, state.symbol, state.marginMode);
-                                synchronized (state) {
-                                    if (states.get(key) != state || revision != state.revision) {
-                                        throw new IllegalStateException("保证金设置后配置版本变化，拒绝继续修改杠杆");
+                                    stage = "QUERY_LIVE_CONFIGURATION";
+                                    updateLoadingStage(state, stage);
+                                    var current = gateway.querySymbolTradingSettings(state.credential, state.symbol);
+                                    if (current == null || !state.symbol.equalsIgnoreCase(current.symbol())
+                                        || current.marginMode() == null || current.leverage() < 1) {
+                                        throw new IllegalStateException("无法取得 Binance 当前交易对配置，保留调度阻断");
                                     }
-                                }
-                                balances.requireSnapshot(state.id);
-                                if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
-                                    throw new IllegalStateException("准备期间出现持仓，禁止修改杠杆");
-                                }
-                                gateway.setLeverage(state.credential, state.symbol, state.leverage);
-                                if (configTicket != null) {
-                                    // A setter HTTP success is not independent proof of
-                                    // actual Binance leverage/margin, especially after
-                                    // retries or ambiguous exchanges. Read fresh facts
-                                    // under the same persistent cross-node dispatch slot.
+                                    synchronized (state) {
+                                        if (states.get(key) != state || revision != state.revision) {
+                                            throw new IllegalStateException("查询 Binance 配置期间发生版本变化，拒绝旧配置写入");
+                                        }
+                                    }
+                                    balances.requireSnapshot(state.id);
+                                    if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
+                                        throw new IllegalStateException("查询 Binance 配置后出现持仓，禁止修改保证金或杠杆");
+                                    }
+                                    if (!state.marginMode.equalsIgnoreCase(current.marginMode())) {
+                                        stage = "SET_MARGIN_TYPE";
+                                        updateLoadingStage(state, stage);
+                                        gateway.setMarginType(state.credential, state.symbol, state.marginMode);
+                                    }
+                                    synchronized (state) {
+                                        if (states.get(key) != state || revision != state.revision) {
+                                            throw new IllegalStateException("保证金设置后配置版本变化，拒绝继续修改杠杆");
+                                        }
+                                    }
+                                    balances.requireSnapshot(state.id);
+                                    if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
+                                        throw new IllegalStateException("准备期间出现持仓，禁止修改杠杆");
+                                    }
+                                    if (current.leverage() != state.leverage) {
+                                        stage = "SET_LEVERAGE";
+                                        updateLoadingStage(state, stage);
+                                        gateway.setLeverage(state.credential, state.symbol, state.leverage);
+                                    }
+                                    stage = "VERIFY_LIVE_CONFIGURATION";
+                                    updateLoadingStage(state, stage);
                                     var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
-                                    if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol()) || !state.marginMode.equals(verified.marginMode()) || state.leverage != verified.leverage()) {
+                                    if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol())
+                                        || !state.marginMode.equalsIgnoreCase(verified.marginMode()) || state.leverage != verified.leverage()) {
                                         throw new IllegalStateException("Binance 实际保证金或杠杆与目标配置不一致，保留调度阻断");
                                     }
+                                    dispatcher.configurationIntentApplied(configReservation);
                                     dispatcher.configurationApplied(configTicket);
                                     configTicket = null;
+                                } else {
+                                    stage = "QUERY_TESTNET_CONFIGURATION";
+                                    updateLoadingStage(state, stage);
+                                    var current = gateway.querySymbolTradingSettings(state.credential, state.symbol);
+                                    if (current == null || !state.symbol.equalsIgnoreCase(current.symbol())
+                                        || current.marginMode() == null || current.leverage() < 1) {
+                                        throw new IllegalStateException("无法取得 TESTNET 当前交易对配置");
+                                    }
+                                    synchronized (state) {
+                                        if (states.get(key) != state || revision != state.revision) {
+                                            throw new IllegalStateException("查询 TESTNET 配置期间发生版本变化，拒绝旧配置写入");
+                                        }
+                                    }
+                                    balances.requireSnapshot(state.id);
+                                    if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
+                                        throw new IllegalStateException("查询 TESTNET 配置后出现持仓，禁止修改保证金或杠杆");
+                                    }
+                                    if (!state.marginMode.equalsIgnoreCase(current.marginMode())) {
+                                        stage = "SET_MARGIN_TYPE";
+                                        updateLoadingStage(state, stage);
+                                        gateway.setMarginType(state.credential, state.symbol, state.marginMode);
+                                    }
+                                    synchronized (state) {
+                                        if (states.get(key) != state || revision != state.revision) {
+                                            throw new IllegalStateException("保证金设置后配置版本变化，拒绝继续修改杠杆");
+                                        }
+                                    }
+                                    balances.requireSnapshot(state.id);
+                                    if (positions.requirePositions(state.id).stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
+                                        throw new IllegalStateException("准备期间出现持仓，禁止修改杠杆");
+                                    }
+                                    if (current.leverage() != state.leverage) {
+                                        stage = "SET_LEVERAGE";
+                                        updateLoadingStage(state, stage);
+                                        gateway.setLeverage(state.credential, state.symbol, state.leverage);
+                                    }
+                                    stage = "VERIFY_TESTNET_CONFIGURATION";
+                                    updateLoadingStage(state, stage);
+                                    var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
+                                    if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol())
+                                        || !state.marginMode.equalsIgnoreCase(verified.marginMode()) || state.leverage != verified.leverage()) {
+                                        throw new IllegalStateException("TESTNET 实际保证金或杠杆与目标配置不一致");
+                                    }
                                 }
                             } catch (RuntimeException ex) {
                                 if (configTicket != null) {
@@ -205,6 +381,8 @@ public class TradingPreparationService {
                         // A previously configured account can drift out of band.
                         // Verify exchange facts before renewing the entry token.
                         if (state.configured && "LIVE".equalsIgnoreCase(state.credential.runMode())) {
+                            stage = "VERIFY_CONFIG_DRIFT";
+                            updateLoadingStage(state, stage);
                             var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
                             if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol()) || !state.marginMode.equals(verified.marginMode()) || state.leverage != verified.leverage()) {
                                 throw new IllegalStateException("Binance 账户配置漂移或无法核实，拒绝续期交易准备令牌");
@@ -212,29 +390,64 @@ public class TradingPreparationService {
                         }
                         synchronized (state) {
                             if (states.get(key) == state && revision == state.revision) {
+                                stage = "FINAL_BALANCE_SNAPSHOT";
+                                updateLoadingStage(state, stage);
                                 balances.requireSnapshot(state.id);
                                 state.configured = true;
                                 state.liveFailures = null;
                                 state.checkedAt = System.nanoTime();
                                 state.prepared = new Prepared(mode, rule, state.checkedAt + TimeUnit.SECONDS.toNanos(60));
+                                state.lastSuccessAt = Instant.now();
+                                state.lastFailureAt = null;
+                                state.lastFailureStage = null;
+                                state.lastFailureType = null;
+                                state.lastFailureReasonCode = null;
+                                state.lastFailureDetail = null;
                             }
                         }
                     }
                     log.debug("交易后台准备 credentialId={} symbol={} elapsedMillis={}", state.id, state.symbol, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
                 } catch (Exception ex) {
+                    long retryDelayMillis = retryDelayMillis(ex);
+                    Throwable rootCause = ex;
+                    while (rootCause.getCause() != null && rootCause.getCause() != rootCause) {
+                        rootCause = rootCause.getCause();
+                    }
+                    String failureType = ex.getClass().getSimpleName();
+                    String rootFailureType = rootCause.getClass().getSimpleName();
+                    String failureSummary = failureType.equals(rootFailureType) ? failureType : failureType + "/" + rootFailureType;
+                    String failureReasonCode = ex instanceof LiveOrderDispatcher.DispatchFailureException dispatchFailure
+                        ? dispatchFailure.reason().name() : null;
+                    String failureDetail = ex instanceof LiveOrderDispatcher.DispatchFailureException dispatchFailure
+                        ? dispatchFailure.diagnosticDetail() : null;
+                    boolean shouldLogFailure;
                     synchronized (state) {
                         state.prepared = null;
                         if (states.get(key) == state && revision == state.revision) {
                             state.liveFailures = ex instanceof LiveTradingGate.LiveTradingBlockedException blocked ? blocked.getFailures() : null;
+                            state.lastFailureAt = Instant.now();
+                            state.lastFailureStage = stage;
+                            state.lastFailureType = failureSummary;
+                            state.lastFailureReasonCode = failureReasonCode;
+                            state.lastFailureDetail = failureDetail;
                         }
-                        state.retryAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                        state.retryAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(retryDelayMillis);
+                        shouldLogFailure = System.nanoTime() >= state.nextFailureLogAt;
+                        if (shouldLogFailure) {
+                            state.nextFailureLogAt = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                        }
                     }
-                    log.debug("交易后台准备未就绪 credentialId={} symbol={} elapsedMillis={} reason={}", state.id, state.symbol,
-                        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), ex.getClass().getSimpleName());
+                    if (shouldLogFailure) {
+                        log.warn("交易后台准备未就绪 credentialId={} symbol={} stage={} failureType={} failureReasonCode={} failureDetail={} configured={} revision={} elapsedMillis={} retryDelayMillis={}",
+                            state.id, state.symbol, stage, failureSummary, failureReasonCode, failureDetail, state.configured, revision,
+                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), retryDelayMillis);
+                    }
                 } finally {
                     synchronized (state) {
                         if (state.loading == future) {
                             state.loading = null;
+                            state.loadingStage = null;
+                            state.loadingStartedAtNanos = 0L;
                         }
                     }
                     future.complete(null);
@@ -248,6 +461,7 @@ public class TradingPreparationService {
      * 使账户准备状态失效，要求后续决策重新核验。
      */
     public void invalidate(Long id) {
+        positionModes.remove(id);
         states.values().stream().filter(state -> state.id.equals(id)).forEach(state -> {
             synchronized (state) {
                 state.prepared = null;
@@ -301,6 +515,7 @@ public class TradingPreparationService {
         try {
             var json = QuantJsonMapper.readMap(event.rawJson());
             if ("ACCOUNT_CONFIG_UPDATE".equals(event.eventType())) {
+                positionModes.remove(id);
                 if (json.get("ac") instanceof Map<?, ?> config && config.get("l") instanceof Number leverage) {
                     String symbol = Objects.toString(config.get("s"), "");
                     if (symbol.isBlank()) {
@@ -357,6 +572,17 @@ public class TradingPreparationService {
     public record Prepared(ExchangeGateway.PositionMode positionMode, ExchangeGateway.SymbolRule rule, long expiresAtNanos) {
     }
 
+    private static final class PositionModeCache {
+        private final ExchangeGateway.Credential credential;
+        private ExchangeGateway.PositionMode mode;
+        private long checkedAt;
+        private CompletableFuture<ExchangeGateway.PositionMode> loading;
+
+        private PositionModeCache(ExchangeGateway.Credential credential) {
+            this.credential = credential;
+        }
+    }
+
     private static final class State {
         private final Long id;
         private final ExchangeGateway.Credential credential;
@@ -370,7 +596,17 @@ public class TradingPreparationService {
         private long revision;
         private long checkedAt;
         private long retryAt;
+        private Instant lastAttemptAt;
+        private Instant lastSuccessAt;
+        private Instant lastFailureAt;
+        private String lastFailureStage;
+        private String lastFailureType;
+        private String lastFailureReasonCode;
+        private String lastFailureDetail;
+        private long nextFailureLogAt;
         private CompletableFuture<Void> loading;
+        private String loadingStage;
+        private long loadingStartedAtNanos;
 
         private State(Long id, ExchangeGateway.Credential credential, String symbol, int leverage, String marginMode, ExecutionSafetyContext safety) {
             this.id = id;

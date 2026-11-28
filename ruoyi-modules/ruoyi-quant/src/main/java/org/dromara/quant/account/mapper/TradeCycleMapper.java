@@ -42,6 +42,7 @@ public interface TradeCycleMapper {
 
     List<Map<String, Object>> selectCycles(@Param("ids") List<Long> ids, @Param("symbol") String symbol,
                                            @Param("from") LocalDateTime from, @Param("to") LocalDateTime to,
+                                           @Param("sortField") String sortField, @Param("sortOrder") String sortOrder,
                                            @Param("offset") long offset, @Param("pageSize") int pageSize);
 
     int countIncompleteScopes(@Param("ids") List<Long> ids, @Param("symbol") String symbol);

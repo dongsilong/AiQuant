@@ -12,6 +12,7 @@ import java.io.Serial;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 
+
 /**
  * 凭证脱敏视图，永远不返回 Secret。
  */
@@ -53,6 +54,8 @@ public class QuantCredentialVo implements Serializable {
      * 运行模式：PAPER、TESTNET 或 LIVE。
      */
     private String runMode;
+    /** 记录查询有效时间（北京时间）。 */
+    private String effectiveTime;
     /**
      * 当前状态。
      */
