@@ -112,6 +112,14 @@ public class TradingPreparationService {
         return 5_000L;
     }
 
+    private static void updateLoadingStage(State state, String stage) {
+        synchronized (state) {
+            if (state.loading != null) {
+                state.loadingStage = stage;
+            }
+        }
+    }
+
     /**
      * 注入 LIVE 订单派发器，用于串行化账户交易配置请求。
      */
@@ -158,6 +166,9 @@ public class TradingPreparationService {
         synchronized (state) {
             detail = "configured=" + state.configured
                 + ", loading=" + (state.loading != null)
+                + ", loadingStage=" + state.loadingStage
+                + ", loadingElapsedMillis=" + (state.loading == null ? 0L : TimeUnit.NANOSECONDS.toMillis(Math.max(0L,
+                    System.nanoTime() - state.loadingStartedAtNanos)))
                 + ", lastAttemptAt=" + state.lastAttemptAt
                 + ", lastSuccessAt=" + state.lastSuccessAt
                 + ", lastFailureAt=" + state.lastFailureAt
@@ -183,9 +194,12 @@ public class TradingPreparationService {
             long revision = state.revision;
             var future = new CompletableFuture<Void>();
             state.loading = future;
+            state.loadingStage = "SCHEDULED";
+            state.loadingStartedAtNanos = System.nanoTime();
             Thread.ofVirtual().name("quant-trading-preparation").start(() -> {
                 long started = System.nanoTime();
                 String stage = "ACCOUNT_FACTS";
+                updateLoadingStage(state, stage);
                 synchronized (state) {
                     state.lastAttemptAt = Instant.now();
                 }
@@ -196,23 +210,29 @@ public class TradingPreparationService {
                             return;
                         }
                         stage = "BALANCE_SNAPSHOT";
+                        updateLoadingStage(state, stage);
                         balances.requireSnapshot(state.id);
                         stage = "POSITION_SNAPSHOT";
+                        updateLoadingStage(state, stage);
                         var active = positions.requirePositions(state.id);
                         stage = "POSITION_MODE";
+                        updateLoadingStage(state, stage);
                         var mode = queryPositionMode(state.id, state.credential);
                         stage = "TRADING_RULE";
+                        updateLoadingStage(state, stage);
                         var rule = gateway.queryTradingRule(state.credential, state.symbol);
                         if (mode == null || rule == null || rule.minNotional() == null || rule.minNotional().signum() <= 0 || state.leverage <= 0) {
                             throw new IllegalStateException("交易准备缺少有效模式、规则或杠杆");
                         }
                         if (!state.configured) {
                             stage = "INITIAL_CONFIGURATION_CHECK";
+                            updateLoadingStage(state, stage);
                             if (active.stream().anyMatch(position -> state.symbol.equalsIgnoreCase(position.symbol()) && position.quantity().signum() != 0)) {
                                 throw new IllegalStateException("已有持仓，禁止后台修改保证金模式或杠杆");
                             }
                             if ("LIVE".equalsIgnoreCase(state.credential.runMode())) {
                                 stage = "LIVE_SAFETY_GATE";
+                                updateLoadingStage(state, stage);
                                 var safety = state.safety;
                                 if (safety == null) {
                                     throw new LiveTradingGate.LiveTradingBlockedException();
@@ -242,6 +262,7 @@ public class TradingPreparationService {
                                     }
                                     String dispatchKey = "CFG:" + java.util.UUID.randomUUID();
                                     stage = "LIVE_CONFIGURATION_DISPATCH";
+                                    updateLoadingStage(state, stage);
                                     configReservation = dispatcher.beginConfigurationChange(state.id, state.symbol, dispatchKey, state.marginMode, state.leverage);
                                     configTicket = configReservation.ticket();
                                     synchronized (state) {
@@ -254,6 +275,7 @@ public class TradingPreparationService {
                                         throw new IllegalStateException("取得配置锁后出现持仓，禁止修改保证金或杠杆");
                                     }
                                     stage = "QUERY_LIVE_CONFIGURATION";
+                                    updateLoadingStage(state, stage);
                                     var current = gateway.querySymbolTradingSettings(state.credential, state.symbol);
                                     if (current == null || !state.symbol.equalsIgnoreCase(current.symbol())
                                         || current.marginMode() == null || current.leverage() < 1) {
@@ -270,6 +292,7 @@ public class TradingPreparationService {
                                     }
                                     if (!state.marginMode.equalsIgnoreCase(current.marginMode())) {
                                         stage = "SET_MARGIN_TYPE";
+                                        updateLoadingStage(state, stage);
                                         gateway.setMarginType(state.credential, state.symbol, state.marginMode);
                                     }
                                     synchronized (state) {
@@ -283,9 +306,11 @@ public class TradingPreparationService {
                                     }
                                     if (current.leverage() != state.leverage) {
                                         stage = "SET_LEVERAGE";
+                                        updateLoadingStage(state, stage);
                                         gateway.setLeverage(state.credential, state.symbol, state.leverage);
                                     }
                                     stage = "VERIFY_LIVE_CONFIGURATION";
+                                    updateLoadingStage(state, stage);
                                     var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
                                     if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol())
                                         || !state.marginMode.equalsIgnoreCase(verified.marginMode()) || state.leverage != verified.leverage()) {
@@ -296,6 +321,7 @@ public class TradingPreparationService {
                                     configTicket = null;
                                 } else {
                                     stage = "QUERY_TESTNET_CONFIGURATION";
+                                    updateLoadingStage(state, stage);
                                     var current = gateway.querySymbolTradingSettings(state.credential, state.symbol);
                                     if (current == null || !state.symbol.equalsIgnoreCase(current.symbol())
                                         || current.marginMode() == null || current.leverage() < 1) {
@@ -312,6 +338,7 @@ public class TradingPreparationService {
                                     }
                                     if (!state.marginMode.equalsIgnoreCase(current.marginMode())) {
                                         stage = "SET_MARGIN_TYPE";
+                                        updateLoadingStage(state, stage);
                                         gateway.setMarginType(state.credential, state.symbol, state.marginMode);
                                     }
                                     synchronized (state) {
@@ -325,9 +352,11 @@ public class TradingPreparationService {
                                     }
                                     if (current.leverage() != state.leverage) {
                                         stage = "SET_LEVERAGE";
+                                        updateLoadingStage(state, stage);
                                         gateway.setLeverage(state.credential, state.symbol, state.leverage);
                                     }
                                     stage = "VERIFY_TESTNET_CONFIGURATION";
+                                    updateLoadingStage(state, stage);
                                     var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
                                     if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol())
                                         || !state.marginMode.equalsIgnoreCase(verified.marginMode()) || state.leverage != verified.leverage()) {
@@ -351,6 +380,7 @@ public class TradingPreparationService {
                         // Verify exchange facts before renewing the entry token.
                         if (state.configured && "LIVE".equalsIgnoreCase(state.credential.runMode())) {
                             stage = "VERIFY_CONFIG_DRIFT";
+                            updateLoadingStage(state, stage);
                             var verified = gateway.querySymbolTradingSettings(state.credential, state.symbol);
                             if (verified == null || !state.symbol.equalsIgnoreCase(verified.symbol()) || !state.marginMode.equals(verified.marginMode()) || state.leverage != verified.leverage()) {
                                 throw new IllegalStateException("Binance 账户配置漂移或无法核实，拒绝续期交易准备令牌");
@@ -359,6 +389,7 @@ public class TradingPreparationService {
                         synchronized (state) {
                             if (states.get(key) == state && revision == state.revision) {
                                 stage = "FINAL_BALANCE_SNAPSHOT";
+                                updateLoadingStage(state, stage);
                                 balances.requireSnapshot(state.id);
                                 state.configured = true;
                                 state.liveFailures = null;
@@ -413,6 +444,8 @@ public class TradingPreparationService {
                     synchronized (state) {
                         if (state.loading == future) {
                             state.loading = null;
+                            state.loadingStage = null;
+                            state.loadingStartedAtNanos = 0L;
                         }
                     }
                     future.complete(null);
@@ -570,6 +603,8 @@ public class TradingPreparationService {
         private String lastFailureDetail;
         private long nextFailureLogAt;
         private CompletableFuture<Void> loading;
+        private String loadingStage;
+        private long loadingStartedAtNanos;
 
         private State(Long id, ExchangeGateway.Credential credential, String symbol, int leverage, String marginMode, ExecutionSafetyContext safety) {
             this.id = id;

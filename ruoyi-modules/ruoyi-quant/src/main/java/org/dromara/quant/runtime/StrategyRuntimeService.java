@@ -1707,11 +1707,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
 
     /** Runtime订阅者消费事件后的低频诊断；不参与行情状态或开仓门禁判定。 */
     private void logEntryMaMarketEventDiagnostic(ActiveRuntime runtime, ExchangeGateway.MarketEvent event, EntryMaSnapshot snapshot) {
-        String reason = !snapshot.historyReady() ? "HISTORY_NOT_READY"
-            : !snapshot.streamReady() ? "STREAM_NOT_READY"
-            : snapshot.ma5() == null || snapshot.ma7() == null ? "INSUFFICIENT_CLOSED_KLINES"
-            : snapshot.eventTime() == null ? "EVENT_TIME_MISSING"
-            : snapshot.receivedAt() == null ? "RECEIVED_AT_MISSING" : "READY";
+        String reason = entryMaMarketBlockReason(runtime, snapshot);
+        if (reason == null) {
+            reason = "READY";
+        }
         boolean readinessEventAccepted = !event.replay() && event.eventTime() != null && event.receivedAt() != null
             && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type())
                 || "CONNECTED".equalsIgnoreCase(event.type()));
@@ -1827,7 +1826,8 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         return "1分钟均线行情不可用，禁止开仓；原因=" + blockReason
             + "；historyReady=" + snapshot.historyReady()
             + "；streamReady=" + snapshot.streamReady()
-            + "；maReady=" + snapshot.ready()
+            + "；maReady=" + (snapshot.ma5() != null && snapshot.ma7() != null && snapshot.closedKlines() >= 7)
+            + "；streamEventReady=" + snapshot.ready()
             + "；closedKlines=" + snapshot.closedKlines() + "/7"
             + "；lastClosedKlineOpenTime=" + snapshot.lastClosedKlineOpenTime()
             + "；eventTime=" + snapshot.eventTime()

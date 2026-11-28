@@ -343,6 +343,10 @@ class TradingPreparationServiceTest {
         assertTrue(started.await(1, TimeUnit.SECONDS));
         assertTimeoutPreemptively(java.time.Duration.ofMillis(200), () -> assertThrows(OpenCapacityService.CapacityBlockedException.class, () -> service.requireReady(1L,
             "BTCUSDT", 10, "ISOLATED")));
+        var blocked = assertThrows(OpenCapacityService.CapacityBlockedException.class,
+            () -> service.requireReady(1L, "BTCUSDT", 10, "ISOLATED"));
+        assertTrue(blocked.getMessage().contains("loadingStage=POSITION_MODE"));
+        assertTrue(blocked.getMessage().contains("loadingElapsedMillis="));
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
             var stopped = executor.submit(() -> service.release(1L, "BTCUSDT"));
             var states = (java.util.Map<?, ?>) org.springframework.test.util.ReflectionTestUtils.getField(service, "states");

@@ -516,6 +516,67 @@ class MarketStreamHubIsolationTest {
         }
     }
 
+    @Test
+    void freshMarkAtExpiredKlineBoundaryClosesDecisionGateImmediately() throws Exception {
+        ExchangeGateway gateway = mock(ExchangeGateway.class);
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        Instant localNow = Instant.now();
+        Instant currentOpen = localNow.truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
+        Instant previousOpen = currentOpen.minusSeconds(60);
+        var history = java.util.List.of(
+            new ExchangeGateway.Kline(previousOpen.minusSeconds(60), previousOpen.minusMillis(1), BigDecimal.ONE, BigDecimal.ONE,
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, true),
+            new ExchangeGateway.Kline(previousOpen, currentOpen.minusMillis(1), BigDecimal.ONE, BigDecimal.ONE,
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, true),
+            new ExchangeGateway.Kline(currentOpen, currentOpen.plusSeconds(60).minusMillis(1), BigDecimal.ONE, BigDecimal.ONE,
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, false));
+        when(gateway.queryKlines("BTCUSDT", "1m", 8)).thenReturn(history);
+        var exchangeOffsetMillis = new java.util.concurrent.atomic.AtomicLong();
+        when(gateway.exchangeTimeOffsetMillis("LIVE")).thenAnswer(invocation -> exchangeOffsetMillis.get());
+        var callback = new java.util.concurrent.atomic.AtomicReference<Consumer<ExchangeGateway.MarketEvent>>();
+        when(gateway.subscribeMarket(eq("BTCUSDT"), eq("1m"), any())).thenAnswer(invocation -> {
+            callback.set(invocation.getArgument(2));
+            return mock(ExchangeGateway.MarketStreamSession.class);
+        });
+        var initialReady = new CountDownLatch(1);
+        var initiallyConnected = new CountDownLatch(1);
+        var gateClosed = new CountDownLatch(1);
+        var connectedOnce = new java.util.concurrent.atomic.AtomicBoolean();
+        MarketStreamHub hub = new MarketStreamHub(gateway, scheduler, new QuantProperties());
+        try {
+            hub.subscribe("LIVE", "BTCUSDT", "1m", event -> {
+                if ("KLINE_READY".equals(event.type())) {
+                    initialReady.countDown();
+                }
+            }, healthy -> {
+                if (healthy) {
+                    if (connectedOnce.compareAndSet(false, true)) {
+                        initiallyConnected.countDown();
+                    }
+                } else if (connectedOnce.get()) {
+                    gateClosed.countDown();
+                }
+            });
+            org.junit.jupiter.api.Assertions.assertTrue(initialReady.await(3, TimeUnit.SECONDS),
+                "initial KLINE history was not restored");
+            callback.get().accept(new ExchangeGateway.MarketEvent("MARK", "BTCUSDT", "1m", BigDecimal.ONE, null,
+                localNow, null, Instant.now(), false));
+            org.junit.jupiter.api.Assertions.assertTrue(initiallyConnected.await(2, TimeUnit.SECONDS),
+                "initial market health was not established");
+
+            Instant nextPeriodMarkTime = currentOpen.plusSeconds(60).plusMillis(500L);
+            exchangeOffsetMillis.set(java.time.Duration.between(localNow, nextPeriodMarkTime).toMillis());
+            callback.get().accept(new ExchangeGateway.MarketEvent("MARK", "BTCUSDT", "1m", BigDecimal.ONE, null,
+                nextPeriodMarkTime, null, Instant.now(), false));
+
+            org.junit.jupiter.api.Assertions.assertTrue(gateClosed.await(2, TimeUnit.SECONDS),
+                "a fresh MARK must close the gate immediately when the current KLINE has expired");
+        } finally {
+            hub.close();
+            scheduler.shutdownNow();
+        }
+    }
+
     private java.util.List<ExchangeGateway.Kline> history(String interval) {
         long seconds = interval.equals("15m") ? 900 : 60;
         var open = Instant.ofEpochSecond(Instant.now().getEpochSecond() / seconds * seconds);

@@ -979,6 +979,18 @@ public class MarketStreamHub {
                 event = new ExchangeGateway.MarketEvent(event.type(), event.symbol(), event.interval(), event.price(), event.kline(), processingEventTime, event.sequenceId(),
                     receivedAt, event.replay() || !fresh);
                 lastEventTime.put(event.type(), processingEventTime);
+                if ("MARK".equals(event.type()) && fresh && !currentKlineValid(exchangeNow)) {
+                    // MARK仍新鲜但当前周期K线已失效时，不能继续向订阅者刷新行情就绪状态。
+                    // 与TRADE边界保护保持一致：相邻周期等待KLINE，跨过多个周期则立即REST补偿。
+                    Instant expectedNextOpen = lastKlineOpen == null ? null : nextOpen(lastKlineOpen);
+                    Instant expectedNextPeriodOpen = expectedNextOpen == null ? null : nextOpen(expectedNextOpen);
+                    if (expectedNextOpen != null && isEventTimeWithinKlinePeriod(exchangeNow, expectedNextOpen, expectedNextPeriodOpen)) {
+                        scheduleBoundaryRecovery(expectedNextOpen);
+                    } else {
+                        beginRecovery("新鲜MARK到达时当前K线已过期，REST校验当前状态", null);
+                    }
+                    return;
+                }
                 if (event.sequenceId() != null && "TRADE".equals(event.type())) {
                     if (lastTradeId != null && event.sequenceId() <= lastTradeId) {
                         return;
