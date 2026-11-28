@@ -4,6 +4,8 @@ import lombok.RequiredArgsConstructor;
 import org.dromara.quant.execution.ExecutionResult;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.TradingPreparationService;
+import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService;
 import org.dromara.quant.runtime.DualHedgePositionCycleKey;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
 import org.springframework.stereotype.Service;
@@ -27,22 +29,32 @@ public class StrategyHedgeRoundExecutionService {
     private final StrategyHedgeRoundService roundService;
     private final TradeExecutionApplicationService executionService;
     private final TradingPreparationService preparationService;
+    private final StrategyRuntimeLeaseService leaseService;
 
     public DispatchResult dispatchOpening(QuantStrategyHedgeRound round, BigDecimal referencePrice,
                                           Instant eventTime, Long credentialRuntimeVersion) {
         requireDispatchable(round, referencePrice, eventTime);
 
-        TradingPreparationService.Prepared prepared;
+        QuantCredential credential;
         try {
-            prepared = preparationService.requireReady(round.getCredentialId(), round.getSymbol(),
-                round.getLeverage(), MARGIN_MODE);
+            credential = executionService.requireCredential(round.getCredentialId());
         } catch (RuntimeException ex) {
             abortBeforeDispatch(round);
-            return new DispatchResult("ABORTED", "交易准备未就绪，未发送双开订单");
+            return new DispatchResult("ABORTED", "交易凭证不可用，未发送双开订单");
         }
-        if (prepared == null || prepared.positionMode() == null || !prepared.positionMode().hedgeMode()) {
-            abortBeforeDispatch(round);
-            return new DispatchResult("ABORTED", "账户未处于 HEDGE 双向持仓模式");
+        if (!"PAPER".equalsIgnoreCase(credential.getRunMode())) {
+            TradingPreparationService.Prepared prepared;
+            try {
+                prepared = preparationService.requireReady(round.getCredentialId(), round.getSymbol(),
+                    round.getLeverage(), MARGIN_MODE);
+            } catch (RuntimeException ex) {
+                abortBeforeDispatch(round);
+                return new DispatchResult("ABORTED", "交易准备未就绪，未发送双开订单");
+            }
+            if (prepared == null || prepared.positionMode() == null || !prepared.positionMode().hedgeMode()) {
+                abortBeforeDispatch(round);
+                return new DispatchResult("ABORTED", "账户未处于 HEDGE 双向持仓模式");
+            }
         }
 
         BigDecimal quantity = round.getTargetNotionalPerLeg().divide(referencePrice, QUANTITY_SCALE, RoundingMode.DOWN);
@@ -78,6 +90,21 @@ public class StrategyHedgeRoundExecutionService {
     private DispatchResult dispatchLeg(QuantStrategyHedgeRound round, String leg, String side, BigDecimal quantity,
                                        BigDecimal referencePrice, Instant eventTime, Long credentialRuntimeVersion) {
         String key = "LONG".equals(leg) ? round.getLongIdempotencyKey() : round.getShortIdempotencyKey();
+        try {
+            leaseService.requireCurrentOwner(round.getInstanceId(), round.getCredentialId(),
+                round.getSymbol(), credentialRuntimeVersion);
+        } catch (RuntimeException ex) {
+            markLeg(round, leg, StrategyHedgeRoundService.LEG_FAILED, null);
+            if ("LONG".equals(leg)) {
+                round.setStatus(StrategyHedgeRoundService.STATUS_ABORTED);
+                round.setShortLegStatus(StrategyHedgeRoundService.LEG_FAILED);
+            } else {
+                round.setStatus(StrategyHedgeRoundService.STATUS_DEGRADED);
+            }
+            roundService.save(round);
+            return new DispatchResult(round.getStatus(), "策略运行租约失效，已阻止后续订单派发");
+        }
+
         ExecutionResult result;
         try {
             result = executionService.openByRuntime(round.getCredentialId(), round.getStrategyId(),

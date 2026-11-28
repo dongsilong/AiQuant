@@ -4,7 +4,10 @@ import org.dromara.quant.exchange.ExchangeGateway;
 import org.dromara.quant.execution.ExecutionResult;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.TradingPreparationService;
+import org.dromara.quant.credential.domain.QuantCredential;
+import org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -20,8 +23,18 @@ class StrategyHedgeRoundExecutionServiceTest {
     private final StrategyHedgeRoundService roundService = mock(StrategyHedgeRoundService.class);
     private final TradeExecutionApplicationService executionService = mock(TradeExecutionApplicationService.class);
     private final TradingPreparationService preparationService = mock(TradingPreparationService.class);
+    private final StrategyRuntimeLeaseService leaseService = mock(StrategyRuntimeLeaseService.class);
     private final StrategyHedgeRoundExecutionService service =
-        new StrategyHedgeRoundExecutionService(roundService, executionService, preparationService);
+        new StrategyHedgeRoundExecutionService(roundService, executionService, preparationService, leaseService);
+
+    @BeforeEach
+    void prepareCredentialAndLease() {
+        QuantCredential credential = new QuantCredential();
+        credential.setId(3L);
+        credential.setRunMode("TESTNET");
+        when(executionService.requireCredential(3L)).thenReturn(credential);
+        doNothing().when(leaseService).requireCurrentOwner(2L, 3L, "BTCUSDT", 1L);
+    }
 
     @Test
     void dispatchesLongThenShortWithIndependentKeys() {

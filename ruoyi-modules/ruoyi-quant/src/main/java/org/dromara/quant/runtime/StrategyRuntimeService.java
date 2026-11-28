@@ -560,6 +560,7 @@ public class StrategyRuntimeService {
                 if (strategy != null && DualHedgeSlopeSignalEvaluator.CODE.equals(strategy.getPluginCode())) {
                     stopInactiveRuntime(instance.getId());
                     if (Boolean.TRUE.equals(dualHedgeRuntimeService.ensureRuntimeIfApplicable(instance, strategy))) {
+                        prepareDualHedgeTrading(instance, strategy);
                         activeIds.add(instance.getId());
                     }
                 } else {
@@ -590,6 +591,32 @@ public class StrategyRuntimeService {
             return false;
         });
         recoverClosedProtectionCleanup();
+    }
+
+    /**
+     * 在双开 Runtime 持有运行租约期间提前准备逐仓、杠杆和交易规则，避免信号产生后才开始异步准备。
+     */
+    private void prepareDualHedgeTrading(QuantStrategyInstance instance, QuantStrategy strategy) {
+        try {
+            QuantCredential credential = credentialMapper.selectById(instance.getCredentialId());
+            if (credential == null || "PAPER".equalsIgnoreCase(credential.getRunMode())) {
+                return;
+            }
+            QuantStrategySymbol binding = strategySymbolMapper.selectById(instance.getStrategySymbolId());
+            if (binding == null || binding.getSymbolId() == null
+                || binding.getMarginMode() != null && !"ISOLATED".equalsIgnoreCase(binding.getMarginMode())) {
+                return;
+            }
+            QuantSymbol symbol = symbolMapper.selectById(binding.getSymbolId());
+            Integer leverage = binding.getLeverage() == null ? strategy.getDefaultLeverage() : binding.getLeverage();
+            if (symbol == null || symbol.getSymbol() == null || leverage == null || leverage <= 0) {
+                return;
+            }
+            executionService.prepareOpenForRuntime(credential.getId(), symbol.getSymbol(), leverage, "ISOLATED");
+        } catch (RuntimeException ex) {
+            log.warn("双开策略交易设置预热未完成，后续信号将继续等待准备结果 instanceId={} credentialId={}",
+                instance.getId(), instance.getCredentialId(), ex);
+        }
     }
 
     /**

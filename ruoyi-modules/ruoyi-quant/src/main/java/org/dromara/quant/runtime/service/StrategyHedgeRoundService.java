@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -78,6 +79,60 @@ public class StrategyHedgeRoundService {
             return mapper.insert(round) == 1;
         } catch (DuplicateKeyException ex) {
             return false;
+        }
+    }
+
+    /**
+     * 查询等待自动派发的信号。轮次数量受策略实例数约束，按创建时间优先处理。
+     */
+    public List<QuantStrategyHedgeRound> findSignalReady() {
+        return mapper.selectList(new LambdaQueryWrapper<QuantStrategyHedgeRound>()
+            .eq(QuantStrategyHedgeRound::getStatus, STATUS_SIGNAL_READY)
+            .orderByAsc(QuantStrategyHedgeRound::getCreatedAt)
+            .last("LIMIT 100"));
+    }
+
+    /**
+     * 使用乐观锁竞争信号接管权，只有一个节点能将 SIGNAL_READY 推进为 OPENING。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean tryBeginOpening(QuantStrategyHedgeRound round) {
+        if (round == null || !STATUS_SIGNAL_READY.equals(round.getStatus())
+            || !LEG_NOT_STARTED.equals(round.getLongLegStatus())
+            || !LEG_NOT_STARTED.equals(round.getShortLegStatus())) {
+            return false;
+        }
+        round.setStatus(STATUS_OPENING);
+        try {
+            save(round);
+            return true;
+        } catch (IllegalStateException ex) {
+            if (ex.getMessage() != null && ex.getMessage().startsWith("双开轮次状态版本冲突")) {
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    /**
+     * 结束尚未发送任何订单的无效信号，避免失效信号永久占用实例/交易对。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean abortSignalReady(QuantStrategyHedgeRound round) {
+        if (round == null || !STATUS_SIGNAL_READY.equals(round.getStatus())) {
+            return false;
+        }
+        round.setStatus(STATUS_ABORTED);
+        round.setLongLegStatus(LEG_FAILED);
+        round.setShortLegStatus(LEG_FAILED);
+        try {
+            save(round);
+            return true;
+        } catch (IllegalStateException ex) {
+            if (ex.getMessage() != null && ex.getMessage().startsWith("双开轮次状态版本冲突")) {
+                return false;
+            }
+            throw ex;
         }
     }
 
