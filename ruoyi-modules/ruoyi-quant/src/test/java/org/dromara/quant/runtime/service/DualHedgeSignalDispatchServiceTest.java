@@ -4,6 +4,8 @@ import org.dromara.quant.config.QuantProperties;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.exchange.ExchangeGateway;
+import org.dromara.quant.market.domain.QuantSymbol;
+import org.dromara.quant.market.mapper.QuantSymbolMapper;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.TradingPreparationService;
 import org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService;
@@ -38,10 +40,11 @@ class DualHedgeSignalDispatchServiceTest {
     private final QuantStrategyMapper strategyMapper = mock(QuantStrategyMapper.class);
     private final QuantStrategySymbolMapper strategySymbolMapper = mock(QuantStrategySymbolMapper.class);
     private final QuantCredentialMapper credentialMapper = mock(QuantCredentialMapper.class);
+    private final QuantSymbolMapper symbolMapper = mock(QuantSymbolMapper.class);
     private final QuantProperties properties = new QuantProperties();
     private final DualHedgeSignalDispatchService service = new DualHedgeSignalDispatchService(
         roundService, executionService, tradeExecutionService, preparationService, leaseService,
-        instanceMapper, strategyMapper, strategySymbolMapper, credentialMapper, properties);
+        instanceMapper, strategyMapper, strategySymbolMapper, credentialMapper, symbolMapper, properties);
 
     @Test
     void waitsForTradingPreparationBeforeClaimingTheSignal() {
@@ -125,8 +128,15 @@ class DualHedgeSignalDispatchServiceTest {
         binding.setRuntimeEnabled(true);
         binding.setIntervalCode("15m");
         binding.setLeverage(10);
+        binding.setSymbolId(5L);
         binding.setMarginMode("ISOLATED");
         when(strategySymbolMapper.selectById(4L)).thenReturn(binding);
+
+        QuantSymbol symbol = new QuantSymbol();
+        symbol.setId(5L);
+        symbol.setSymbol("BTCUSDT");
+        symbol.setStatus("0");
+        when(symbolMapper.selectById(5L)).thenReturn(symbol);
 
         QuantCredential credential = new QuantCredential();
         credential.setId(3L);

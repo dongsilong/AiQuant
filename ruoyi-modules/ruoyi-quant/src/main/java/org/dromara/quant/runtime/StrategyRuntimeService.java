@@ -603,8 +603,10 @@ public class StrategyRuntimeService {
                 return;
             }
             QuantStrategySymbol binding = strategySymbolMapper.selectById(instance.getStrategySymbolId());
+            String marginMode = binding == null || binding.getMarginMode() == null
+                ? strategy.getDefaultMarginMode() : binding.getMarginMode();
             if (binding == null || binding.getSymbolId() == null
-                || binding.getMarginMode() != null && !"ISOLATED".equalsIgnoreCase(binding.getMarginMode())) {
+                || marginMode != null && !"ISOLATED".equalsIgnoreCase(marginMode)) {
                 return;
             }
             QuantSymbol symbol = symbolMapper.selectById(binding.getSymbolId());

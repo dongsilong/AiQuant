@@ -7,6 +7,8 @@ import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
 import org.dromara.quant.execution.TradingPreparationService;
+import org.dromara.quant.market.domain.QuantSymbol;
+import org.dromara.quant.market.mapper.QuantSymbolMapper;
 import org.dromara.quant.runtime.coordination.StrategyRuntimeLeaseService;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
 import org.dromara.quant.strategy.DualHedgeSlopeSignalEvaluator;
@@ -43,6 +45,7 @@ public class DualHedgeSignalDispatchService {
     private final QuantStrategyMapper strategyMapper;
     private final QuantStrategySymbolMapper strategySymbolMapper;
     private final QuantCredentialMapper credentialMapper;
+    private final QuantSymbolMapper symbolMapper;
     private final QuantProperties properties;
 
     /**
@@ -80,6 +83,7 @@ public class DualHedgeSignalDispatchService {
         QuantStrategyInstance instance = instanceMapper.selectById(round.getInstanceId());
         QuantStrategy strategy = strategyMapper.selectById(round.getStrategyId());
         QuantStrategySymbol binding = instance == null ? null : strategySymbolMapper.selectById(instance.getStrategySymbolId());
+        QuantSymbol symbol = binding == null ? null : symbolMapper.selectById(binding.getSymbolId());
         QuantCredential credential = credentialMapper.selectById(round.getCredentialId());
         if (instance == null || !"RUNNING".equals(instance.getStatus())
             || !round.getInstanceId().equals(instance.getId())
@@ -90,12 +94,22 @@ public class DualHedgeSignalDispatchService {
             || binding == null || !round.getStrategyId().equals(binding.getStrategyId())
             || !"0".equals(binding.getStatus()) || Boolean.FALSE.equals(binding.getRuntimeEnabled())
             || !"15m".equalsIgnoreCase(binding.getIntervalCode())
-            || binding.getMarginMode() != null && !MARGIN_MODE.equalsIgnoreCase(binding.getMarginMode())
+            || symbol == null || !"0".equals(symbol.getStatus()) || symbol.getSymbol() == null
+            || !round.getSymbol().equalsIgnoreCase(symbol.getSymbol())
             || credential == null || !"0".equals(credential.getStatus())
             || credential.getCredentialRuntimeVersion() == null) {
             roundService.abortSignalReady(round);
             log.warn("双开信号对应的实例、账户或交易对配置已失效，取消未派发信号 hedgeRoundKey={} instanceId={} credentialId={}",
                 round.getHedgeRoundKey(), round.getInstanceId(), round.getCredentialId());
+            return;
+        }
+
+        String configuredMarginMode = binding.getMarginMode() == null
+            ? strategy.getDefaultMarginMode() : binding.getMarginMode();
+        if (configuredMarginMode != null && !MARGIN_MODE.equalsIgnoreCase(configuredMarginMode)) {
+            roundService.abortSignalReady(round);
+            log.warn("双开策略要求逐仓模式，配置不一致，取消未派发信号 hedgeRoundKey={} configuredMarginMode={}",
+                round.getHedgeRoundKey(), configuredMarginMode);
             return;
         }
 
