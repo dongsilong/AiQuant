@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.dromara.quant.credential.domain.QuantCredential;
 import org.dromara.quant.credential.mapper.QuantCredentialMapper;
 import org.dromara.quant.execution.TradeExecutionApplicationService;
+import org.dromara.quant.market.MarketStreamHub;
 import org.dromara.quant.position.domain.QuantPosition;
 import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.protection.ProtectionOrderService;
@@ -44,6 +45,7 @@ public class DualHedgeProtectionLifecycleService {
     private final QuantCredentialMapper credentialMapper;
     private final TradeExecutionApplicationService executionService;
     private final ProtectionOrderService protectionOrderService;
+    private final MarketStreamHub marketStreamHub;
 
     private final ConcurrentHashMap<String, Long> protectionCheckAt = new ConcurrentHashMap<>();
 
@@ -135,8 +137,23 @@ public class DualHedgeProtectionLifecycleService {
                 FIRST_TAKE_PROFIT_QUANTITY_RATE, ProtectionSignal.QuantityBase.INITIAL,
                 firstTakeProfitPrice, "双开策略 +5% 首次止盈，平初始仓位 50%"));
         }
-        desired.add(new ProtectionSignal("STEP_TP", "STOP_MARKET", BigDecimal.ONE,
-            ProtectionSignal.QuantityBase.CURRENT, breakEvenPrice, "双开策略未达到阶梯目标前的回本保护", 0));
+        boolean breakEvenArmed = Boolean.TRUE.equals(state.getTrailingArmed());
+        if (!breakEvenArmed) {
+            MarketStreamHub.ProtectionPriceSnapshot price = marketStreamHub.protectionPriceAt(
+                credential.getRunMode(), position.getSymbol(), Instant.now());
+            BigDecimal markPrice = price == null ? null : price.markPrice();
+            breakEvenArmed = markPrice != null && markPrice.signum() > 0
+                && ("LONG".equalsIgnoreCase(state.getDirection())
+                    ? markPrice.compareTo(state.getEntryPrice()) > 0
+                    : markPrice.compareTo(state.getEntryPrice()) < 0);
+            if (breakEvenArmed) {
+                state.setTrailingArmed(true);
+            }
+        }
+        if (breakEvenArmed) {
+            desired.add(new ProtectionSignal("STEP_TP", "STOP_MARKET", BigDecimal.ONE,
+                ProtectionSignal.QuantityBase.CURRENT, breakEvenPrice, "双开策略未达到阶梯目标前的回本保护", 0));
+        }
 
         protectionOrderService.syncStrategyProtections(position.getCredentialId(), position,
             state.getInitialPositionQty(), desired, null,

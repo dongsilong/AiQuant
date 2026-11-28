@@ -27,9 +27,10 @@ class DualHedgeProtectionLifecycleServiceTest {
     private final org.dromara.quant.execution.TradeExecutionApplicationService executionService =
         mock(org.dromara.quant.execution.TradeExecutionApplicationService.class);
     private final ProtectionOrderService protectionService = mock(ProtectionOrderService.class);
+    private final org.dromara.quant.market.MarketStreamHub marketStreamHub = mock(org.dromara.quant.market.MarketStreamHub.class);
 
     private final DualHedgeProtectionLifecycleService service = new DualHedgeProtectionLifecycleService(
-        roundService, recoveryService, stateService, positionMapper, credentialMapper, executionService, protectionService);
+        roundService, recoveryService, stateService, positionMapper, credentialMapper, executionService, protectionService, marketStreamHub);
 
     @Test
     void installsHardStopFivePercentPartialTakeProfitAndBreakEvenStopPerLeg() {
@@ -39,6 +40,9 @@ class DualHedgeProtectionLifecycleServiceTest {
         credential.setId(3L);
         credential.setRunMode("TESTNET");
         when(executionService.requireCredential(3L)).thenReturn(credential);
+        when(marketStreamHub.protectionPriceAt(eq("TESTNET"), eq("BTCUSDT"), any()))
+            .thenReturn(new org.dromara.quant.market.MarketStreamHub.ProtectionPriceSnapshot(
+                new BigDecimal("100.1"), java.time.Instant.now(), null, null));
         when(protectionService.ensureMarginHardStop(eq(3L), any(QuantPosition.class),
             eq(new BigDecimal("0.03")), eq(true))).thenReturn(new org.dromara.quant.protection.domain.QuantProtectionOrder());
 
