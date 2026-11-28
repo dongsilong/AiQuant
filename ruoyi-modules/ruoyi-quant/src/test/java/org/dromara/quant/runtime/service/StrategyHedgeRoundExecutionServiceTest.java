@@ -111,7 +111,7 @@ class StrategyHedgeRoundExecutionServiceTest {
         assertEquals(StrategyHedgeRoundService.LEG_FAILED, round.getLongLegStatus());
         assertEquals(StrategyHedgeRoundService.LEG_FAILED, round.getShortLegStatus());
         verify(executionService).requireCredential(3L);
-        verify(executionService, never()).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(executionService, never()).openByRuntime(any(), any(), any(), any(), any(), any(), any(), any(), anyInt(), any(), any(), any(), any(), any());
     }
 
     private static QuantStrategyHedgeRound round() {
