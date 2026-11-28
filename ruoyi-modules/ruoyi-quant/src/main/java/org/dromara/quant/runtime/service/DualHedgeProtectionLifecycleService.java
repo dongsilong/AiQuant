@@ -78,7 +78,8 @@ public class DualHedgeProtectionLifecycleService {
                 continue;
             }
             String checkKey = state.getPositionCycleKey() + ":" + position.getQuantity().stripTrailingZeros().toPlainString()
-                + ":" + Boolean.TRUE.equals(state.getFirstTakeProfitTriggered());
+                + ":" + Boolean.TRUE.equals(state.getFirstTakeProfitTriggered())
+                + ":" + (state.getHighestStep() == null ? 0 : state.getHighestStep());
             long now = System.currentTimeMillis();
             Long checkedAt = protectionCheckAt.get(checkKey);
             if (Boolean.TRUE.equals(state.getExchangeProtectionReady())

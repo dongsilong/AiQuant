@@ -383,8 +383,12 @@ public class DualHedgeLocalProtectionService {
                 restoreAfterExplicitFailure(state, runtime);
                 return;
             }
-            if (!Set.of("CONFIRMED", "RECOVERED").contains(
-                java.util.Objects.toString(execution.getExecutionStatus(), "").toUpperCase(java.util.Locale.ROOT))) {
+            if (!"CLOSE".equalsIgnoreCase(execution.getOperationType())
+                || !runtime.symbol.equalsIgnoreCase(execution.getSymbol())
+                || !runtime.instance.getId().equals(execution.getStrategyInstanceId())
+                || !runtime.instance.getStrategyId().equals(execution.getStrategyId())
+                || !Set.of("PENDING", "UNKNOWN", "CONFIRMED", "RECOVERED").contains(
+                    java.util.Objects.toString(execution.getExecutionStatus(), "").toUpperCase(java.util.Locale.ROOT))) {
                 return;
             }
             Long orderId = execution.getExchangeOrderId();
@@ -409,13 +413,26 @@ public class DualHedgeLocalProtectionService {
             if ("NEW".equalsIgnoreCase(order.status()) || "PARTIALLY_FILLED".equalsIgnoreCase(order.status())) {
                 return;
             }
+            if (Set.of("CANCELED", "EXPIRED", "REJECTED").contains(
+                java.util.Objects.toString(order.status(), "").toUpperCase(java.util.Locale.ROOT))
+                && order.executedQuantity().signum() == 0) {
+                restoreAfterExplicitFailure(state, runtime);
+                return;
+            }
             if (!"FILLED".equalsIgnoreCase(order.status())
-                || order.executedQuantity().compareTo(state.getPendingTargetQuantity()) != 0) {
+                || order.executedQuantity().compareTo(state.getPendingTargetQuantity()) != 0
+                || order.originalQuantity() == null
+                || order.originalQuantity().compareTo(state.getPendingTargetQuantity()) != 0) {
                 state.setRecoveryRequired(true);
                 state.setUnsafeRecovery(true);
                 stateService.save(state);
                 return;
             }
+            if ("PENDING".equalsIgnoreCase(execution.getExecutionStatus())
+                || "UNKNOWN".equalsIgnoreCase(execution.getExecutionStatus())) {
+                executionRecordService.markRecovered(execution, order.orderId(), order.status());
+            }
+            positionSnapshots.remove(runtime.credential.getId() + ":" + runtime.credential.getRunMode());
             List<ExchangeGateway.PositionSnapshot> snapshots =
                 positionSnapshotQuery.query(runtime.credential.getId(), executionService.toCredential(runtime.credential));
             BigDecimal expectedRemaining = state.getPositionQty().subtract(order.executedQuantity()).max(ZERO);
