@@ -5,22 +5,67 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-/**
- * 按策略和账户分发交易决策斜率、展示斜率及均线结果的进程内 SSE 事件中心。
- */
 @Component
 public class StrategySlopeTelemetryHub {
     private final Map<Key, Map<String, StrategySlopeTelemetry>> latest = new ConcurrentHashMap<>();
+    private final Map<Key, Map<String, Long>> activeRuntimeInstances = new ConcurrentHashMap<>();
     private final Map<Key, CopyOnWriteArrayList<Consumer<StrategySlopeTelemetry>>> listeners = new ConcurrentHashMap<>();
 
     /**
-     * 订阅指定策略和账户的遥测；回放最新快照时同步扣除已消耗的有效时长。
+     * 标记 Runtime 对该策略/账户/交易对/周期的遥测所有权，并清除此前的只读监控值。
      */
+    public void registerRuntime(Long strategyId, Long credentialId, String symbol, String interval, Long instanceId) {
+        if (strategyId == null || credentialId == null || symbol == null || interval == null || instanceId == null) {
+            return;
+        }
+        Key key = new Key(strategyId, credentialId);
+        String snapshotKey = snapshotKey(symbol, interval);
+        Map<String, Long> runtimes = activeRuntimeInstances.computeIfAbsent(key, ignored -> new ConcurrentHashMap<>());
+        Long previousInstanceId = runtimes.put(snapshotKey, instanceId);
+        if (Objects.equals(previousInstanceId, instanceId)) {
+            return;
+        }
+        Map<String, StrategySlopeTelemetry> bySymbol = latest.computeIfAbsent(key, ignored -> new ConcurrentHashMap<>());
+        StrategySlopeTelemetry previous = bySymbol.get(snapshotKey);
+        StrategySlopeTelemetry waiting = placeholder(strategyId, credentialId, symbol, interval, instanceId,
+            previous == null ? null : previous.entryThreshold(),
+            previous == null ? 1L : previous.sequence() + 1L, "RUNTIME", "WAITING_FOR_RUNTIME_EVENT", Instant.now());
+        bySymbol.put(snapshotKey, waiting);
+        notifyListeners(key, waiting);
+    }
+
+    /**
+     * 释放 Runtime 遥测所有权；旧实例关闭时不能清除新实例的通道。
+     */
+    public void unregisterRuntime(Long strategyId, Long credentialId, String symbol, String interval, Long instanceId) {
+        if (strategyId == null || credentialId == null || symbol == null || interval == null || instanceId == null) {
+            return;
+        }
+        Key key = new Key(strategyId, credentialId);
+        String snapshotKey = snapshotKey(symbol, interval);
+        Map<String, Long> runtimes = activeRuntimeInstances.get(key);
+        if (runtimes == null || !runtimes.remove(snapshotKey, instanceId)) {
+            return;
+        }
+        if (runtimes.isEmpty()) {
+            activeRuntimeInstances.remove(key, runtimes);
+        }
+        Map<String, StrategySlopeTelemetry> bySymbol = latest.computeIfAbsent(key, ignored -> new ConcurrentHashMap<>());
+        StrategySlopeTelemetry previous = bySymbol.get(snapshotKey);
+        if (previous != null && "RUNTIME".equals(source(previous)) && Objects.equals(previous.instanceId(), instanceId)) {
+            StrategySlopeTelemetry waiting = placeholder(strategyId, credentialId, symbol, interval, null,
+                previous.entryThreshold(), previous.sequence() + 1L, "MONITOR", "MONITOR_WAITING_FOR_EVENT", Instant.now());
+            bySymbol.put(snapshotKey, waiting);
+            notifyListeners(key, waiting);
+        }
+    }
+
     public AutoCloseable subscribe(Long strategyId, Long credentialId, Consumer<StrategySlopeTelemetry> listener) {
         Key key = new Key(strategyId, credentialId);
         listeners.computeIfAbsent(key, ignored -> new CopyOnWriteArrayList<>()).add(listener);
@@ -38,28 +83,55 @@ public class StrategySlopeTelemetryHub {
     }
 
     /**
-     * 向匹配的订阅者广播一条斜率遥测；拒绝同一 Runtime 的乱序旧快照。
+     * Runtime 遥测优先于只读 Monitor；仅在 Runtime 生命周期结束后允许 Monitor 接管。
      */
     public void publish(StrategySlopeTelemetry telemetry) {
         Key key = new Key(telemetry.strategyId(), telemetry.credentialId());
+        String snapshotKey = snapshotKey(telemetry.symbol(), telemetry.interval());
+        String dataSource = source(telemetry);
+        Map<String, Long> runtimes = activeRuntimeInstances.get(key);
+        if ("RUNTIME".equals(dataSource)) {
+            if (telemetry.instanceId() == null) {
+                return;
+            }
+            if (runtimes == null) {
+                runtimes = activeRuntimeInstances.computeIfAbsent(key, ignored -> new ConcurrentHashMap<>());
+            }
+            Long owner = runtimes.putIfAbsent(snapshotKey, telemetry.instanceId());
+            if (owner != null && !Objects.equals(owner, telemetry.instanceId())) {
+                return;
+            }
+        } else if (runtimes != null && runtimes.containsKey(snapshotKey)) {
+            return;
+        }
+
         Map<String, StrategySlopeTelemetry> bySymbol = latest.computeIfAbsent(key, ignored -> new ConcurrentHashMap<>());
         AtomicBoolean accepted = new AtomicBoolean();
-        String snapshotKey = telemetry.symbol() + "|" + telemetry.interval();
         bySymbol.compute(snapshotKey, (ignored, previous) -> {
-            if (previous != null && previous.instanceId() != null && telemetry.instanceId() == null
-                && (hasFreshSlope(previous, Instant.now()) || hasFreshDisplaySlope(previous, Instant.now()))) {
+            Map<String, Long> currentRuntimes = activeRuntimeInstances.get(key);
+            if ("MONITOR".equals(dataSource) && currentRuntimes != null && currentRuntimes.containsKey(snapshotKey)) {
                 return previous;
             }
-            if (previous != null && java.util.Objects.equals(previous.instanceId(), telemetry.instanceId())
-                && previous.sequence() >= telemetry.sequence()) {
+            if ("RUNTIME".equals(dataSource) && currentRuntimes != null
+                && !Objects.equals(currentRuntimes.get(snapshotKey), telemetry.instanceId())) {
+                return previous;
+            }
+            boolean waitingPlaceholder = previous != null && previous.slopeBlockReason() != null
+                && (previous.slopeBlockReason().endsWith("WAITING_FOR_EVENT")
+                || "WAITING_FOR_MARKET".equals(previous.slopeBlockReason()));
+            if (!waitingPlaceholder && previous != null && Objects.equals(previous.instanceId(), telemetry.instanceId())
+                && Objects.equals(source(previous), dataSource) && previous.sequence() >= telemetry.sequence()) {
                 return previous;
             }
             accepted.set(true);
             return telemetry;
         });
-        if (!accepted.get()) {
-            return;
+        if (accepted.get()) {
+            notifyListeners(key, telemetry);
         }
+    }
+
+    private void notifyListeners(Key key, StrategySlopeTelemetry telemetry) {
         for (Consumer<StrategySlopeTelemetry> listener : listeners.getOrDefault(key, new CopyOnWriteArrayList<>())) {
             try {
                 listener.accept(telemetry);
@@ -69,20 +141,26 @@ public class StrategySlopeTelemetryHub {
         }
     }
 
-    private static boolean hasFreshSlope(StrategySlopeTelemetry snapshot, Instant now) {
-        if (!snapshot.slopeReady() || snapshot.publishedAt() == null) {
-            return false;
+    private static String source(StrategySlopeTelemetry telemetry) {
+        if ("RUNTIME".equalsIgnoreCase(telemetry.dataSource()) || "MONITOR".equalsIgnoreCase(telemetry.dataSource())) {
+            return telemetry.dataSource().toUpperCase(java.util.Locale.ROOT);
         }
-        long elapsedMillis = Math.max(0L, Duration.between(snapshot.publishedAt(), now).toMillis());
-        return snapshot.slopeFreshForMillis() > elapsedMillis;
+        return telemetry.instanceId() == null ? "MONITOR" : "RUNTIME";
     }
 
-    private static boolean hasFreshDisplaySlope(StrategySlopeTelemetry snapshot, Instant now) {
-        if (snapshot.displayFreshForMillis() <= 0 || snapshot.displayReceivedAt() == null || snapshot.publishedAt() == null) {
-            return false;
-        }
-        long elapsedMillis = Math.max(0L, Duration.between(snapshot.publishedAt(), now).toMillis());
-        return snapshot.displayFreshForMillis() > elapsedMillis;
+    private static String snapshotKey(String symbol, String interval) {
+        return symbol.toUpperCase(java.util.Locale.ROOT) + "|" + interval;
+    }
+
+    private static StrategySlopeTelemetry placeholder(Long strategyId, Long credentialId, String symbol, String interval,
+                                                       Long instanceId, java.math.BigDecimal threshold, long sequence,
+                                                       String source, String reason, Instant now) {
+        return new StrategySlopeTelemetry(
+            strategyId, instanceId, credentialId, symbol, interval,
+            null, null, null, null, threshold, false, null, null, sequence, false,
+            null, null, null, false, "WAITING_FOR_MARKET", null, null, null,
+            0L, 0L, now, null, null, null, null, null, null, 0L, null, source, reason
+        );
     }
 
     private static StrategySlopeTelemetry forReplay(StrategySlopeTelemetry snapshot, Instant now) {
@@ -93,6 +171,8 @@ public class StrategySlopeTelemetryHub {
         long displayFreshForMillis = Math.max(0L, snapshot.displayFreshForMillis() - elapsedMillis);
         boolean slopeReady = snapshot.slopeReady() && slopeFreshForMillis > 0;
         boolean maReady = snapshot.maReady() && maFreshForMillis > 0;
+        String slopeBlockReason = slopeReady ? snapshot.slopeBlockReason()
+            : snapshot.slopeBlockReason() == null ? "STALE_EVENT" : snapshot.slopeBlockReason();
         return new StrategySlopeTelemetry(
             snapshot.strategyId(), snapshot.instanceId(), snapshot.credentialId(), snapshot.symbol(), snapshot.interval(),
             slopeReady ? snapshot.currentPrice() : null,
@@ -123,7 +203,9 @@ public class StrategySlopeTelemetryHub {
             snapshot.displayEventTime(),
             snapshot.displayReceivedAt(),
             Math.max(0L, snapshot.displayFreshForMillis() - elapsedMillis),
-            snapshot.displaySource()
+            snapshot.displaySource(),
+            source(snapshot),
+            slopeBlockReason
         );
     }
 

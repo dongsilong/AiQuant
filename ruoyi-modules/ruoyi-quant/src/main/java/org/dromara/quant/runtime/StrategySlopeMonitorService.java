@@ -139,6 +139,7 @@ public class StrategySlopeMonitorService {
                     : strategy.getDefaultLeverage() == null || strategy.getDefaultLeverage() <= 0 ? 1 : strategy.getDefaultLeverage();
                 Monitor monitor = new Monitor(strategy.getId(), credential.getId(), credential.getRunMode(),
                     symbol.getSymbol(), interval, leverage, params);
+                publish(monitor);
                 try {
                     monitor.subscriptions.add(marketStreamHub.subscribe(
                         credential.getRunMode(), symbol.getSymbol(), interval, event -> {
@@ -167,6 +168,8 @@ public class StrategySlopeMonitorService {
                     }
                     session.monitors.add(monitor);
                 } catch (RuntimeException ex) {
+                    monitor.slopeBlockReason = "SUBSCRIPTION_FAILED";
+                    publish(monitor);
                     monitor.close();
                     throw ex;
                 }
@@ -199,6 +202,20 @@ public class StrategySlopeMonitorService {
         long slopeFreshForMillis = input == null ? 0L : remainingFreshnessMillis(
             input.context().eventTime(), input.receivedAt(), now, exchangeNow, maxAgeMillis);
         boolean slopeReady = evaluation != null && slopeFreshForMillis > 0;
+        String slopeBlockReason = slopeReady ? null : monitor.slopeBlockReason;
+        if (!slopeReady && (slopeBlockReason == null || slopeBlockReason.isBlank())) {
+            if (input == null) {
+                slopeBlockReason = "WAITING_FOR_MARKET";
+            } else if (input.context().currentPrice() == null || input.context().currentPrice().signum() <= 0) {
+                slopeBlockReason = "CURRENT_PRICE_MISSING";
+            } else if (input.context().previousKlineOpenPrice() == null || input.context().previousKlineOpenPrice().signum() <= 0) {
+                slopeBlockReason = "REFERENCE_KLINE_MISSING";
+            } else if (evaluation == null) {
+                slopeBlockReason = "SLOPE_INPUT_INVALID";
+            } else {
+                slopeBlockReason = "STALE_EVENT";
+            }
+        }
         // MARK 暂时失效时，回退到仍然新鲜的 TRADE/KLINE 输入；两者都过期则继续显示无效。
         if (!displayReady && slopeReady) {
             displayInput = input;
@@ -282,7 +299,9 @@ public class StrategySlopeMonitorService {
             displayInput == null ? null : displayInput.context().eventTime(),
             displayInput == null ? null : displayInput.receivedAt(),
             displayFreshForMillis,
-            displayInput == null ? null : displayInput.source()
+            displayInput == null ? null : displayInput.source(),
+            "MONITOR",
+            slopeBlockReason
         ));
     }
 
@@ -342,6 +361,7 @@ public class StrategySlopeMonitorService {
         private Instant latestTradeEventAt;
         private SlopeInput latestSlopeInput;
         private SlopeInput latestDisplaySlopeInput;
+        private volatile String slopeBlockReason = "WAITING_FOR_MARKET";
         private volatile long nextErrorLogAt;
         private long nextSlopeCompareLogAt;
         private long nextMaDiagnosticLogAt;
@@ -378,11 +398,15 @@ public class StrategySlopeMonitorService {
                 latestTradeEventAt = null;
                 latestSlopeInput = null;
                 latestDisplaySlopeInput = null;
+                slopeBlockReason = "CONNECTING".equals(event.type()) ? "STREAM_CONNECTING"
+                    : "DISCONNECTED".equals(event.type()) ? "STREAM_DISCONNECTED" : "STREAM_ERROR";
                 publish(Monitor.this);
                 return;
             }
-            if ("1m".equalsIgnoreCase(interval) && ("KLINE_READY".equals(event.type())
-                || "CONNECTED".equals(event.type()))) {
+            if ("KLINE_READY".equals(event.type()) || "CONNECTED".equals(event.type())) {
+                if (latestSlopeInput == null) {
+                    slopeBlockReason = "WAITING_FOR_MARKET";
+                }
                 publish(Monitor.this);
                 return;
             }
@@ -396,10 +420,19 @@ public class StrategySlopeMonitorService {
             if (!MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), now, exchangeNow, maxAgeMillis)
                 || (markEvent && !MarketEventFreshness.isFresh(market.lastKlineEventAt, market.lastKlineReceivedAt,
                     now, exchangeNow, maxAgeMillis))) {
+                slopeBlockReason = "STALE_EVENT";
+                publish(Monitor.this);
                 return;
             }
             BigDecimal price = markEvent ? event.price() : currentPrice(now, maxAgeMillis);
-            if (price == null || price.signum() <= 0 || market.previousKlineOpenPrice() == null) {
+            if (price == null || price.signum() <= 0) {
+                slopeBlockReason = "CURRENT_PRICE_MISSING";
+                publish(Monitor.this);
+                return;
+            }
+            if (market.previousKlineOpenPrice() == null || market.previousKlineOpenPrice().signum() <= 0) {
+                slopeBlockReason = "REFERENCE_KLINE_MISSING";
+                publish(Monitor.this);
                 return;
             }
             StrategyContext context = new StrategyContext(
@@ -412,6 +445,7 @@ public class StrategySlopeMonitorService {
             if (!markEvent) {
                 latestSlopeInput = input;
             }
+            slopeBlockReason = null;
             publish(Monitor.this);
         }
 
@@ -472,6 +506,8 @@ public class StrategySlopeMonitorService {
                 log.warn("实时斜率只读监控事件处理失败 strategyId={} credentialId={} symbol={} interval={}",
                     strategyId, credentialId, symbol, interval, ex);
             }
+            slopeBlockReason = "MONITOR_EVENT_ERROR";
+            publish(this);
         }
 
         private BigDecimal currentPrice(Instant now, long maxAgeMillis) {

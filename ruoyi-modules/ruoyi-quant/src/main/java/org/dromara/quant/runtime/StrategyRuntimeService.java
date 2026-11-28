@@ -1500,6 +1500,10 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         try {
             synchronized (runtime) {
                 activeRuntimes.put(instance.getId(), runtime);
+                if (runtime.plugin instanceof KlineSlopeRateStrategy) {
+                    slopeTelemetryHub.registerRuntime(runtime.strategy.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
+                        runtime.strategySymbol.getIntervalCode(), runtime.instance.getId());
+                }
                 if (runtime.position != null) {
                     ensureHardStop(runtime);
                 }
@@ -3254,6 +3258,22 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         long slopeFreshForMillis = remainingEventFreshnessMillis(
             context == null ? null : context.eventTime(), receivedAt, now, exchangeNow, maxEventAgeMillis);
         boolean slopeReady = evaluation != null && slopeFreshForMillis > 0;
+        String slopeBlockReason = null;
+        if (!slopeReady) {
+            if (context == null) {
+                slopeBlockReason = "DECISION_CONTEXT_MISSING";
+            } else if (context.currentPrice() == null || context.currentPrice().signum() <= 0) {
+                slopeBlockReason = "CURRENT_PRICE_MISSING";
+            } else if (context.previousKlineOpenPrice() == null || context.previousKlineOpenPrice().signum() <= 0) {
+                slopeBlockReason = "REFERENCE_KLINE_MISSING";
+            } else if (evaluation == null) {
+                slopeBlockReason = "SLOPE_INPUT_INVALID";
+            } else if (context.eventTime() == null || receivedAt == null) {
+                slopeBlockReason = "EVENT_TIME_MISSING";
+            } else {
+                slopeBlockReason = "STALE_EVENT";
+            }
+        }
 
         String maBlockReason = runtime.entryMaEnabled
             ? entryMaMarketBlockReason(runtime, maSnapshot)
@@ -3337,7 +3357,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             display == null ? null : display.eventTime(),
             displayReceivedAt,
             displayFreshForMillis,
-            effectiveDisplayContext == null || display == null ? null : effectiveDisplayContext.source()
+            effectiveDisplayContext == null || display == null ? null : effectiveDisplayContext.source(),
+            "RUNTIME",
+            slopeBlockReason
         ));
     }
 
@@ -6380,6 +6402,10 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         java.util.concurrent.Future<?> exitTask;
         synchronized (runtime) {
             runtime.closed = true;
+            if (runtime.plugin instanceof KlineSlopeRateStrategy) {
+                slopeTelemetryHub.unregisterRuntime(runtime.strategy.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
+                    runtime.strategySymbol.getIntervalCode(), runtime.instance.getId());
+            }
             protectionTask = runtime.protectionTask;
             exitTask = runtime.exitTask;
             if (runtime.subscription != null) {
