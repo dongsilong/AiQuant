@@ -1588,8 +1588,11 @@ public class ProtectionOrderService {
         try {
             actual = readProtectionSnapshot(credential, local);
         } catch (org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException absent) {
-            definitelyAbsent = true;
-            if (allowResubmit && ("PENDING".equals(local.getStatus()) || "UNKNOWN".equals(local.getStatus()) || "REJECTED".equals(local.getStatus()))) {
+            // 已取得交易所订单 ID，说明创建请求已被交易所受理；历史索引暂时查空不能证明订单不存在。
+            // 此时必须等待后续精确核查，禁止把同一意图再次提交到交易所。
+            boolean exchangeOrderAccepted = local.getExchangeOrderId() != null && local.getExchangeOrderId() > 0;
+            definitelyAbsent = !exchangeOrderAccepted;
+            if (definitelyAbsent && allowResubmit && ("PENDING".equals(local.getStatus()) || "UNKNOWN".equals(local.getStatus()) || "REJECTED".equals(local.getStatus()))) {
                 if (!"PAPER".equalsIgnoreCase(credential.runMode())
                     && requireLiveDispatcher().activeProtectionTicket(credentialId, local.getSymbol(), local.getClientOrderId(), "PROTECT_CREATE") != null) {
                     throw new IllegalStateException("原保护创建票据仍未决，等待该票据精确对账后再评估重挂");
