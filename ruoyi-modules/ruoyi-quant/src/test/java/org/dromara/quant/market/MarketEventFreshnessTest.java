@@ -1,5 +1,6 @@
 package org.dromara.quant.market;
 
+import org.dromara.quant.exchange.ExchangeGateway;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -9,6 +10,19 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MarketEventFreshnessTest {
+    @Test
+    void staleLiveEventRemainsDistinctFromReplayAndSurvivesMaEnrichment() {
+        ExchangeGateway.MarketEvent event = new ExchangeGateway.MarketEvent(
+            "MARK", "BTCUSDT", "1m", null, null, Instant.parse("2026-11-28T06:55:00Z"),
+            null, Instant.parse("2026-11-28T06:55:00Z"), false
+        ).withStale(true);
+
+        ExchangeGateway.MarketEvent enriched = event.withOneMinuteMa(null, null, null, false);
+
+        assertTrue(enriched.stale());
+        assertFalse(enriched.replay());
+    }
+
     @Test
     void acceptsRecentExchangeEventWhenLocalClockIsThreeSecondsAhead() {
         Instant localNow = Instant.parse("2026-10-17T07:21:33Z");

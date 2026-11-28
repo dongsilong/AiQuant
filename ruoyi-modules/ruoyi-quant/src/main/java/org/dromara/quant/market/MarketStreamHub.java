@@ -110,7 +110,7 @@ public class MarketStreamHub {
     }
 
     private void recordProtectionPriceSample(String runMode, String symbol, ExchangeGateway.MarketEvent event) {
-        if (event == null || event.replay() || event.eventTime() == null || event.price() == null) {
+        if (event == null || event.replay() || event.stale() || event.eventTime() == null || event.price() == null) {
             return;
         }
         if (!"MARK".equals(event.type()) && !"TRADE".equals(event.type())) {
@@ -303,6 +303,7 @@ public class MarketStreamHub {
         private long nextClockSkewWarningAt;
         private long nextClockSyncWarningAt;
         private long nextQueueLagWarningAt;
+        private long nextStaleEventLogAt;
         /**
          * MARK freshness measured at event consumption, not at the watchdog sample.
          */
@@ -939,10 +940,20 @@ public class MarketStreamHub {
                 }
                 lastReceived.put(event.type(), receivedAt);
                 long maxEventAgeMillis = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
-                boolean fresh = MarketEventFreshness.isFresh(processingEventTime, receivedAt, now, exchangeNow, maxEventAgeMillis);
+                String freshnessFailure = MarketEventFreshness.rejectionReason(
+                    processingEventTime, receivedAt, now, exchangeNow, maxEventAgeMillis);
+                boolean fresh = freshnessFailure == null;
                 if ("MARK".equals(event.type())) {
                     lastMarkProcessingLagMs = java.time.Duration.between(processingEventTime, exchangeNow).toMillis();
                     lastMarkFreshAtProcessing = fresh;
+                }
+                if (!fresh && !event.replay() && System.currentTimeMillis() >= nextStaleEventLogAt) {
+                    nextStaleEventLogAt = System.currentTimeMillis() + 10_000L;
+                    log.warn("行情入口发现过期实时行情，保留实时事件来源并交由订阅者拒绝 mode={} symbol={} interval={} type={} reason={} eventAgeMillis={} localReceiveAgeMillis={} networkLagMs={} queueLagMs={} ingressQueueWaitMs={} recoveryBufferWaitMs={} maxEventAgeMillis={}",
+                        key.runMode(), key.symbol(), key.interval(), event.type(), freshnessFailure,
+                        Math.max(0L, java.time.Duration.between(processingEventTime, exchangeNow).toMillis()),
+                        Math.max(0L, java.time.Duration.between(receivedAt, now).toMillis()), networkLag, queueLag,
+                        ingressQueueWaitMs, recoveryBufferWaitMs, maxEventAgeMillis);
                 }
                 Instant previous = lastEventTime.get(event.type());
                 if (previous != null && processingEventTime.isBefore(previous)) {
@@ -977,7 +988,7 @@ public class MarketStreamHub {
                     }
                 }
                 event = new ExchangeGateway.MarketEvent(event.type(), event.symbol(), event.interval(), event.price(), event.kline(), processingEventTime, event.sequenceId(),
-                    receivedAt, event.replay() || !fresh);
+                    receivedAt, event.replay()).withStale(event.stale() || !fresh);
                 lastEventTime.put(event.type(), processingEventTime);
                 if ("MARK".equals(event.type()) && fresh && !currentKlineValid(exchangeNow)) {
                     // MARK仍新鲜但当前周期K线已失效时，不能继续向订阅者刷新行情就绪状态。
@@ -1037,8 +1048,8 @@ public class MarketStreamHub {
                     lastTradeId = event.sequenceId();
                 }
                 recordProtectionPriceSample(key.runMode(), key.symbol(), event);
-                if (!connected && currentKlineValid(exchangeNow) && lastEventTime.get("MARK") != null && !lastEventTime.get("MARK").isBefore(exchangeNow.minusMillis(Math.max(1,
-                    properties.getMarket().getMaxEventAgeMillis())))) {
+                if (!connected && currentKlineValid(exchangeNow) && lastMarkFreshAtProcessing && lastEventTime.get("MARK") != null
+                    && !lastEventTime.get("MARK").isBefore(exchangeNow.minusMillis(Math.max(1, properties.getMarket().getMaxEventAgeMillis())))) {
                     connected = true;
                     log.info("行情已就绪: symbol={}, interval={}, klineOpen={}, networkLagMs={}, queueLagMs={}", key.symbol(), key.interval(), lastKlineOpen, networkLag, queueLag);
                     publish(status("CONNECTED", lastEventTime.get("MARK"), lastReceived.get("MARK")));

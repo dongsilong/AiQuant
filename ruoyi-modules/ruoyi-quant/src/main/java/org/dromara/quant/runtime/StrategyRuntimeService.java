@@ -1679,6 +1679,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
     /** 只更新 1 分钟均线行情，不驱动策略开平仓。 */
     private void onEntryMaMarketEvent(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
         if (runtime == null || event == null || runtime.closed || !runtime.entryMaEnabled) return;
+        if (marketEventFreshnessFailure(runtime, event) != null) {
+            return;
+        }
         if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
             EntryMaSnapshot previous = runtime.entryMa.snapshot();
             runtime.entryMa.markUnready();
@@ -1868,110 +1871,132 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             return;
         }
         long runtimeLockRequestedNanos = System.nanoTime();
-        synchronized (runtime) {
-            long runtimeLockAcquiredNanos = System.nanoTime();
-            if (runtime.closed) {
-                return;
-            }
-            if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
-                || "ERROR".equals(event.type()) || "CONNECTED".equals(event.type())) {
-                runtime.marketStreamStatus = event.type();
-            }
-            if (!ensureEventLease(runtime)) {
-                // 租约失效继续阻断策略事件，只发布状态，不更新交易决策输入。
-                publishSlopeUnavailable(runtime, "RUNTIME_LEASE_NOT_READY", event.eventTime(), event.receivedAt());
-                return;
-            }
-            if ("CONNECTING".equals(event.type())) {
-                // 包括K线换周期后的REST校验；WS仍可能保持连接，不能报告为断线。
-                // 必须保留交易门控，直到MarketStreamHub重新确认行情就绪。
-                runtime.marketHealthy = false;
-                runtime.latestTradePrice = null;
-                runtime.latestTradeEventAt = null;
-                runtime.latestMarkPrice = null;
-                publishSlopeUnavailable(runtime, slopeBlockReasonForStreamStatus(event.type()), event.eventTime(), event.receivedAt());
-                return;
-            }
-            if ("DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
-                log.warn("策略行情流断开 instanceId={} symbol={} status={}", runtime.instance.getId(), runtime.symbol.getSymbol(), event.type());
-                runtime.marketHealthy = false;
-                runtime.latestTradePrice = null;
-                runtime.latestTradeEventAt = null;
-                runtime.latestMarkPrice = null;
-                publishSlopeUnavailable(runtime, slopeBlockReasonForStreamStatus(event.type()), event.eventTime(), event.receivedAt());
-                return;
-            }
-            if ("CONNECTED".equals(event.type())) {
-                runtime.marketHealthy = true;
-                // CONNECTED 只证明流已恢复；仍需等待首条通过新鲜度门禁的实时 TRADE/KLINE。
-                publishSlopeUnavailable(runtime, slopeBlockReasonForStreamStatus(event.type()), event.eventTime(), event.receivedAt());
-                return;
-            }
-            // CONNECTED may have reached this runtime while its strategy lease was temporarily
-            // fenced. Once the hub reports ready, the next fresh live data event is also a safe
-            // recovery signal; otherwise this runtime could remain marketHealthy=false forever.
-            if (shouldRestoreMarketHealth(runtime.marketStreamReady, event.replay(), event.type())) {
-                if (!runtime.marketHealthy) {
-                    log.info("策略行情健康门控随实时行情恢复 instanceId={} mode={} symbol={} eventType={}",
-                        runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type());
+        long runtimeLockAcquiredNanos = -1L;
+        try {
+            synchronized (runtime) {
+                runtimeLockAcquiredNanos = System.nanoTime();
+                if (runtime.closed) {
+                    return;
                 }
-                runtime.marketHealthy = true;
-            }
-            if (event.kline() != null) {
-                runtime.updateKline(event.kline());
-                runtime.market.lastKlineEventAt = event.eventTime();
-                runtime.market.lastKlineReceivedAt = event.receivedAt();
-                runtime.lastEvaluatedKlineOpenTime = event.kline().openTime();
-            }
-            if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
-                runtime.latestMarkPrice = event.price();
-                if (runtime.marketHealthy && runtime.marketStreamReady && runtime.plugin instanceof KlineSlopeRateStrategy) {
-                    // MARK 仅刷新面板展示快照；决策斜率仍保留最近一次 TRADE/KLINE 输入。
-                    SlopeContextSnapshot displaySnapshot = new SlopeContextSnapshot(
-                        buildContext(runtime, event.price(), event), event.receivedAt(), "MARK", "MARK");
-                    synchronized (runtime.slopeTelemetryLock) {
-                        publishSlopeTelemetry(runtime, runtime.latestSlopeContext, runtime.entryMa.snapshot(), displaySnapshot);
+                String lockFreshnessFailure = marketEventFreshnessFailure(runtime, event);
+                if (lockFreshnessFailure != null) {
+                    reportExpiredMarketEvent(runtime, event, lockFreshnessFailure, "RUNTIME_LOCK", callbackStartedNanos,
+                        runtimeLockRequestedNanos, runtimeLockAcquiredNanos);
+                    return;
+                }
+                if ("CONNECTING".equals(event.type()) || "DISCONNECTED".equals(event.type())
+                    || "ERROR".equals(event.type()) || "CONNECTED".equals(event.type())) {
+                    runtime.marketStreamStatus = event.type();
+                }
+                if (!ensureEventLease(runtime)) {
+                    // 租约失效继续阻断策略事件，只发布状态，不更新交易决策输入。
+                    publishSlopeUnavailable(runtime, "RUNTIME_LEASE_NOT_READY", event.eventTime(), event.receivedAt());
+                    return;
+                }
+                if ("CONNECTING".equals(event.type())) {
+                    // 包括K线换周期后的REST校验；WS仍可能保持连接，不能报告为断线。
+                    // 必须保留交易门控，直到MarketStreamHub重新确认行情就绪。
+                    runtime.marketHealthy = false;
+                    runtime.latestTradePrice = null;
+                    runtime.latestTradeEventAt = null;
+                    runtime.latestMarkPrice = null;
+                    publishSlopeUnavailable(runtime, slopeBlockReasonForStreamStatus(event.type()), event.eventTime(), event.receivedAt());
+                    return;
+                }
+                if ("DISCONNECTED".equals(event.type()) || "ERROR".equals(event.type())) {
+                    log.warn("策略行情流断开 instanceId={} symbol={} status={}", runtime.instance.getId(), runtime.symbol.getSymbol(), event.type());
+                    runtime.marketHealthy = false;
+                    runtime.latestTradePrice = null;
+                    runtime.latestTradeEventAt = null;
+                    runtime.latestMarkPrice = null;
+                    publishSlopeUnavailable(runtime, slopeBlockReasonForStreamStatus(event.type()), event.eventTime(), event.receivedAt());
+                    return;
+                }
+                if ("CONNECTED".equals(event.type())) {
+                    runtime.marketHealthy = true;
+                    // CONNECTED 只证明流已恢复；仍需等待首条通过新鲜度门禁的实时 TRADE/KLINE。
+                    publishSlopeUnavailable(runtime, slopeBlockReasonForStreamStatus(event.type()), event.eventTime(), event.receivedAt());
+                    return;
+                }
+                // CONNECTED may have reached this runtime while its strategy lease was temporarily
+                // fenced. Once the hub reports ready, the next fresh live data event is also a safe
+                // recovery signal; otherwise this runtime could remain marketHealthy=false forever.
+                if (shouldRestoreMarketHealth(runtime.marketStreamReady, event.replay(), event.type())) {
+                    if (!runtime.marketHealthy) {
+                        log.info("策略行情健康门控随实时行情恢复 instanceId={} mode={} symbol={} eventType={}",
+                            runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), event.type());
+                    }
+                    runtime.marketHealthy = true;
+                }
+                if (event.kline() != null) {
+                    runtime.updateKline(event.kline());
+                    runtime.market.lastKlineEventAt = event.eventTime();
+                    runtime.market.lastKlineReceivedAt = event.receivedAt();
+                    runtime.lastEvaluatedKlineOpenTime = event.kline().openTime();
+                }
+                if (!event.replay() && "MARK".equalsIgnoreCase(event.type()) && event.price() != null && event.price().signum() > 0) {
+                    runtime.latestMarkPrice = event.price();
+                    if (runtime.marketHealthy && runtime.marketStreamReady && runtime.plugin instanceof KlineSlopeRateStrategy) {
+                        // MARK 仅刷新面板展示快照；决策斜率仍保留最近一次 TRADE/KLINE 输入。
+                        SlopeContextSnapshot displaySnapshot = new SlopeContextSnapshot(
+                            buildContext(runtime, event.price(), event), event.receivedAt(), "MARK", "MARK");
+                        synchronized (runtime.slopeTelemetryLock) {
+                            publishSlopeTelemetry(runtime, runtime.latestSlopeContext, runtime.entryMa.snapshot(), displaySnapshot);
+                        }
+                    }
+                    if (runtime.position != null && !runtime.exitCoordinating.get()) {
+                        updateRuntimeMaximumReturnRate(runtime, event.price());
                     }
                 }
-                if (runtime.position != null && !runtime.exitCoordinating.get()) {
-                    updateRuntimeMaximumReturnRate(runtime, event.price());
-                }
-            }
-            if (event.replay()) {
-                // 成交补偿仅恢复开仓后的峰值，不产生回溯下单。
-                Instant localEventTime = event.eventTime() == null ? null : event.eventTime().minusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
-                if (!runtime.exitCoordinating.get() && event.price() != null && runtime.state != null && runtime.state.getOpenedAt() != null && localEventTime != null &&
-                    !localEventTime.isBefore(runtime.state.getOpenedAt().atZone(java.time.ZoneId.systemDefault()).toInstant())) {
-                    updateRuntimeExtrema(runtime, event.price());
-                }
-                publishSlopeUnavailable(runtime, "REPLAY_EVENT", event.eventTime(), event.receivedAt());
-                return;
-            }
-            if (event.price() != null && "TRADE".equals(event.type())) {
-                runtime.latestTradePrice = event.price();
-                runtime.latestTradeEventAt = event.eventTime();
-                if (runtime.position != null && !runtime.exitCoordinating.get()) {
-                    int previousHighestStep = runtime.state == null || runtime.state.getHighestStep() == null ? 0 : runtime.state.getHighestStep();
-                    if (!updateRuntimeExtrema(runtime, event.price())) {
-                        return;
+                if (event.replay()) {
+                    // 成交补偿仅恢复开仓后的峰值，不产生回溯下单。
+                    Instant localEventTime = event.eventTime() == null ? null : event.eventTime().minusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
+                    if (!runtime.exitCoordinating.get() && event.price() != null && runtime.state != null && runtime.state.getOpenedAt() != null && localEventTime != null &&
+                        !localEventTime.isBefore(runtime.state.getOpenedAt().atZone(java.time.ZoneId.systemDefault()).toInstant())) {
+                        updateRuntimeExtrema(runtime, event.price());
                     }
-                    int currentHighestStep = runtime.state == null || runtime.state.getHighestStep() == null ? 0 : runtime.state.getHighestStep();
-                    if (runtime.plugin instanceof KlineSlopeRateStrategy && currentHighestStep > previousHighestStep) {
-                        syncPluginProtections(runtime, buildContext(runtime, event.price(), event));
+                    publishSlopeUnavailable(runtime, "REPLAY_EVENT", event.eventTime(), event.receivedAt());
+                    return;
+                }
+                if (event.price() != null && "TRADE".equals(event.type())) {
+                    runtime.latestTradePrice = event.price();
+                    runtime.latestTradeEventAt = event.eventTime();
+                    if (runtime.position != null && !runtime.exitCoordinating.get()) {
+                        int previousHighestStep = runtime.state == null || runtime.state.getHighestStep() == null ? 0 : runtime.state.getHighestStep();
+                        if (!updateRuntimeExtrema(runtime, event.price())) {
+                            return;
+                        }
+                        int currentHighestStep = runtime.state == null || runtime.state.getHighestStep() == null ? 0 : runtime.state.getHighestStep();
+                        if (runtime.plugin instanceof KlineSlopeRateStrategy && currentHighestStep > previousHighestStep) {
+                            syncPluginProtections(runtime, buildContext(runtime, event.price(), event));
+                        }
+                    }
+                    if (runtime.exitCoordinating.get()) {
+                        runtime.exitWindowHigh = runtime.exitWindowHigh == null ? event.price() : runtime.exitWindowHigh.max(event.price());
+                        runtime.exitWindowLow = runtime.exitWindowLow == null ? event.price() : runtime.exitWindowLow.min(event.price());
                     }
                 }
-                if (runtime.exitCoordinating.get()) {
-                    runtime.exitWindowHigh = runtime.exitWindowHigh == null ? event.price() : runtime.exitWindowHigh.max(event.price());
-                    runtime.exitWindowLow = runtime.exitWindowLow == null ? event.price() : runtime.exitWindowLow.min(event.price());
+                if (event.price() != null || event.kline() != null) {
+                    if (runtime.position != null && !runtime.exitCoordinating.get() && "PAPER".equalsIgnoreCase(runtime.credential.getRunMode()) && event.price() != null) {
+                        paperTradingService.updateMarkPrice(runtime.position, event.price());
+                    }
+                    runtime.latestDecisionMarketEvent = event;
+                    runtime.latestMaBlockedEntryEvent = null;
+                    evaluate(runtime, event, callbackStartedNanos, runtimeLockRequestedNanos, runtimeLockAcquiredNanos);
                 }
             }
-            if (event.price() != null || event.kline() != null) {
-                if (runtime.position != null && !runtime.exitCoordinating.get() && "PAPER".equalsIgnoreCase(runtime.credential.getRunMode()) && event.price() != null) {
-                    paperTradingService.updateMarkPrice(runtime.position, event.price());
+        } finally {
+            long callbackElapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - callbackStartedNanos);
+            if (runtimeLockAcquiredNanos >= 0 && callbackElapsedMillis >= 1_000L) {
+                long now = System.currentTimeMillis();
+                if (now >= runtime.nextSlowMarketCallbackLogAt) {
+                    runtime.nextSlowMarketCallbackLogAt = now + 10_000L;
+                    log.warn("策略Runtime行情消费者耗时拆分 instanceId={} mode={} symbol={} interval={} eventType={} replay={} stale={} callbackElapsedMs={} runtimeLockWaitMs={} runtimeLockProcessingMs={}",
+                        runtime.instance.getId(), runtime.credential.getRunMode(), runtime.symbol.getSymbol(), runtime.strategySymbol.getIntervalCode(),
+                        event.type(), event.replay(), event.stale(), callbackElapsedMillis,
+                        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(runtimeLockAcquiredNanos - runtimeLockRequestedNanos),
+                        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - runtimeLockAcquiredNanos));
                 }
-                runtime.latestDecisionMarketEvent = event;
-                runtime.latestMaBlockedEntryEvent = null;
-                evaluate(runtime, event, callbackStartedNanos, runtimeLockRequestedNanos, runtimeLockAcquiredNanos);
             }
         }
     }
@@ -2056,7 +2081,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         String freshnessFailure = org.dromara.quant.market.MarketEventFreshness.rejectionReason(event.eventTime(), event.receivedAt(), decisionAt, exchangeNow, maxEventAgeMillis);
         if (freshnessFailure != null) {
-            if (!event.replay()) {
+            if (!event.replay() && shouldInvalidateSlopeForExpiredEvent(event.type())) {
                 publishSlopeUnavailable(runtime, freshnessFailure, event.eventTime(), event.receivedAt());
             }
             reportExpiredMarketEvent(runtime, event, freshnessFailure, "EVALUATE", callbackStartedNanos, runtimeLockRequestedNanos, runtimeLockAcquiredNanos);
@@ -2266,10 +2291,17 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         return false;
     }
 
+    static boolean isStaleLiveMarketEvent(ExchangeGateway.MarketEvent event) {
+        return event != null && !event.replay() && event.stale();
+    }
+
     private String marketEventFreshnessFailure(ActiveRuntime runtime, ExchangeGateway.MarketEvent event) {
         String type = event.type();
         if (event.replay() || !("TRADE".equalsIgnoreCase(type) || "MARK".equalsIgnoreCase(type) || "KLINE".equalsIgnoreCase(type))) {
             return null;
+        }
+        if (isStaleLiveMarketEvent(event)) {
+            return "UPSTREAM_EVENT_STALE";
         }
         long offsetMillis = gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode());
         Instant localNow = Instant.now();
@@ -6985,6 +7017,7 @@ positionMapper.selectList(new LambdaQueryWrapper<QuantPosition>().eq(QuantPositi
         private long nextSlopeCompareLogAt;
         private long nextMarketUnreadyLogAt;
         private volatile long nextExpiredMarketLogAt;
+        private volatile long nextSlowMarketCallbackLogAt;
         private long marketUnreadySinceAt;
         private long nextRestProtectionPollAt;
         private volatile long nextRestProtectionPriceLogAt;

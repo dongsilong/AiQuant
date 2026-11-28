@@ -21,6 +21,21 @@ class StrategyMarketHealthRecoveryTest {
     }
 
     @Test
+    void staleLiveEventsAreRejectedWithoutTreatingThemAsReplay() {
+        org.dromara.quant.exchange.ExchangeGateway.MarketEvent staleLive = new org.dromara.quant.exchange.ExchangeGateway.MarketEvent(
+            "MARK", "BTCUSDT", "1m", null, null, java.time.Instant.parse("2026-11-28T06:55:00Z"),
+            null, java.time.Instant.parse("2026-11-28T06:55:00Z"), false
+        ).withStale(true);
+        org.dromara.quant.exchange.ExchangeGateway.MarketEvent staleReplay = new org.dromara.quant.exchange.ExchangeGateway.MarketEvent(
+            "MARK", "BTCUSDT", "1m", null, null, java.time.Instant.parse("2026-11-28T06:55:00Z"),
+            null, java.time.Instant.parse("2026-11-28T06:55:00Z"), true
+        ).withStale(true);
+
+        assertTrue(StrategyRuntimeService.isStaleLiveMarketEvent(staleLive));
+        assertFalse(StrategyRuntimeService.isStaleLiveMarketEvent(staleReplay));
+    }
+
+    @Test
     void mapsStreamStatusEventsToSlopeTelemetryReasons() {
         assertEquals("STREAM_CONNECTING_OR_RECOVERING", StrategyRuntimeService.slopeBlockReasonForStreamStatus("CONNECTING"));
         assertEquals("STREAM_DISCONNECTED", StrategyRuntimeService.slopeBlockReasonForStreamStatus("DISCONNECTED"));

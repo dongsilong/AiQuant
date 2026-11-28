@@ -411,6 +411,11 @@ public class StrategySlopeMonitorService {
                 return;
             }
             boolean markEvent = "MARK".equalsIgnoreCase(event.type());
+            if (event.stale()) {
+                slopeBlockReason = "STALE_EVENT";
+                publish(Monitor.this);
+                return;
+            }
             if (event.replay() || (!markEvent && !"TRADE".equalsIgnoreCase(event.type()) && !"KLINE".equalsIgnoreCase(event.type()))) {
                 return;
             }
@@ -454,8 +459,16 @@ public class StrategySlopeMonitorService {
         }
 
         private synchronized void onMaMarketEvent(ExchangeGateway.MarketEvent event, boolean publishTelemetry) {
-            if (closed || event == null) {
+            if (closed || event == null || (!event.replay() && event.stale())) {
                 return;
+            }
+            if (!event.replay() && ("KLINE".equalsIgnoreCase(event.type()) || "MARK".equalsIgnoreCase(event.type()))) {
+                Instant now = Instant.now();
+                Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runMode));
+                if (!MarketEventFreshness.isFresh(event.eventTime(), event.receivedAt(), now, exchangeNow,
+                    Math.max(1, properties.getMarket().getMaxEventAgeMillis()))) {
+                    return;
+                }
             }
             if (event.kline() != null) {
                 ma.market.updateKline(event.kline());
