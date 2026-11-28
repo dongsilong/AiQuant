@@ -19,6 +19,32 @@ class StrategyHedgeRoundServiceTest {
     private final StrategyHedgeRoundService service = new StrategyHedgeRoundService(mapper);
 
     @Test
+    void closesRoundOnlyAfterBothHedgeLegsAreConfirmedClosed() {
+        QuantStrategyHedgeRound round = round();
+        round.setId(11L);
+        round.setVersion(0);
+        round.setHedgeRoundKey("round-1");
+        round.setStatus(StrategyHedgeRoundService.STATUS_OPEN);
+        round.setLongLegStatus(StrategyHedgeRoundService.LEG_OPEN);
+        round.setShortLegStatus(StrategyHedgeRoundService.LEG_OPEN);
+        when(mapper.selectOne(any())).thenReturn(round);
+        when(mapper.updateById(any(QuantStrategyHedgeRound.class))).thenReturn(1);
+
+        service.markLegClosed("round-1", "LONG");
+
+        assertEquals(StrategyHedgeRoundService.LEG_CLOSED, round.getLongLegStatus());
+        assertEquals(StrategyHedgeRoundService.LEG_OPEN, round.getShortLegStatus());
+        assertEquals(StrategyHedgeRoundService.STATUS_CLOSING, round.getStatus());
+
+        service.markLegClosed("round-1", "SHORT");
+
+        assertEquals(StrategyHedgeRoundService.LEG_CLOSED, round.getLongLegStatus());
+        assertEquals(StrategyHedgeRoundService.LEG_CLOSED, round.getShortLegStatus());
+        assertEquals(StrategyHedgeRoundService.STATUS_CLOSED, round.getStatus());
+        verify(mapper, times(2)).updateById(round);
+    }
+
+    @Test
     void claimCreatesOneRoundWithIndependentLegStates() {
         when(mapper.insert(any(QuantStrategyHedgeRound.class))).thenReturn(1);
         QuantStrategyHedgeRound round = round();
