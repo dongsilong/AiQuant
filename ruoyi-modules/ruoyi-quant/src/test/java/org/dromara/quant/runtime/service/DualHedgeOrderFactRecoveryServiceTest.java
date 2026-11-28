@@ -8,6 +8,8 @@ import org.dromara.quant.execution.ExecutionRecordService;
 import org.dromara.quant.execution.OrderLedgerService;
 import org.dromara.quant.execution.domain.QuantExecutionRecord;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.dromara.quant.position.domain.QuantPosition;
+import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -29,10 +31,11 @@ class DualHedgeOrderFactRecoveryServiceTest {
     private final OrderLedgerService orderLedgerService = mock(OrderLedgerService.class);
     private final ExchangeGateway gateway = mock(ExchangeGateway.class);
     private final AccountPositionSnapshotQuery positionSnapshotQuery = mock(AccountPositionSnapshotQuery.class);
+    private final QuantPositionMapper positionMapper = mock(QuantPositionMapper.class);
     private final StrategyPositionStateService positionStateService = mock(StrategyPositionStateService.class);
     private final DualHedgeOrderFactRecoveryService service = new DualHedgeOrderFactRecoveryService(
         roundService, executionRecordService, orderMapper, tradeMapper, orderLedgerService, gateway,
-        positionSnapshotQuery, positionStateService);
+        positionSnapshotQuery, positionMapper, positionStateService);
     private final ExchangeGateway.Credential credential =
         new ExchangeGateway.Credential("api", "secret", "HMAC", "TESTNET");
 
@@ -74,6 +77,7 @@ class DualHedgeOrderFactRecoveryServiceTest {
         when(orderMapper.mergeExchangeFactIfMonotonic(any())).thenReturn(1);
         when(positionStateService.findByInstanceAndLeg(2L, "LONG")).thenReturn(null);
         when(positionStateService.findByInstanceAndLeg(2L, "SHORT")).thenReturn(null);
+        when(positionMapper.selectOne(any(Wrapper.class))).thenReturn(localPosition(201L, "LONG"), localPosition(202L, "SHORT"));
 
         var result = service.inspect(round, credential);
 
@@ -100,6 +104,8 @@ class DualHedgeOrderFactRecoveryServiceTest {
                 .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getPositionCycleKey).toList());
         assertEquals(List.of(true, true), recoveredStates.getAllValues().stream()
             .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getUnsafeRecovery).toList());
+        assertEquals(List.of(201L, 202L), recoveredStates.getAllValues().stream()
+            .map(org.dromara.quant.runtime.domain.QuantStrategyPositionState::getPositionId).toList());
     }
 
     @Test
@@ -235,6 +241,17 @@ class DualHedgeOrderFactRecoveryServiceTest {
         return new ExchangeGateway.OrderSnapshot("BTCUSDT", id, clientId, side, "MARKET", "FILLED",
             BigDecimal.ZERO, new BigDecimal("2"), new BigDecimal("2"), Instant.now(),
             new BigDecimal("100"), positionSide, false, Instant.now(), false);
+    }
+
+    private static QuantPosition localPosition(Long id, String side) {
+        QuantPosition position = new QuantPosition();
+        position.setId(id);
+        position.setCredentialId(3L);
+        position.setSymbol("BTCUSDT");
+        position.setPositionSide(side);
+        position.setQuantity(new BigDecimal("2"));
+        position.setEntryPrice(new BigDecimal("100"));
+        return position;
     }
 
     private static ExchangeGateway.PositionSnapshot position(String side, String quantity) {

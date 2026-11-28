@@ -136,6 +136,16 @@ public class StrategyHedgeRoundService {
         }
     }
 
+    /**
+     * 返回仍需要核实开仓订单和持仓事实的轮次。
+     */
+    public java.util.List<QuantStrategyHedgeRound> findPendingRecoveryRounds() {
+        return mapper.selectList(new LambdaQueryWrapper<QuantStrategyHedgeRound>()
+            .in(QuantStrategyHedgeRound::getStatus, STATUS_OPENING, STATUS_DEGRADED)
+            .orderByAsc(QuantStrategyHedgeRound::getUpdatedAt)
+            .last("LIMIT 100"));
+    }
+
     public QuantStrategyHedgeRound findByRoundKey(String hedgeRoundKey) {
         if (hedgeRoundKey == null || hedgeRoundKey.isBlank()) {
             return null;

@@ -133,6 +133,9 @@ public class StrategyPositionStateService {
             if (state.getUnsafeRecovery() == null) {
                 state.setUnsafeRecovery(false);
             }
+            if (state.getExchangeProtectionReady() == null) {
+                state.setExchangeProtectionReady(false);
+            }
             if (state.getId() == null) {
                 QuantStrategyPositionState existing = findByInstanceAndLeg(state.getInstanceId(), state.getLegKey());
                 if (existing == null) {

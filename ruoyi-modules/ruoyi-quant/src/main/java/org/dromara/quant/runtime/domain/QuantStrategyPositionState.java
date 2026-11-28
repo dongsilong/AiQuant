@@ -173,6 +173,8 @@ public class QuantStrategyPositionState {
      * 恢复状态是否不安全；为 true 时禁止继续自动交易。
      */
     private Boolean unsafeRecovery;
+    /** 双开腿的 Binance 硬止损、首次止盈和回本保护均已确认生效。 */
+    private Boolean exchangeProtectionReady;
     /**
      * 待确认订单连续未查询到的确认次数。
      */

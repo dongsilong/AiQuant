@@ -11,6 +11,8 @@ import org.dromara.quant.account.domain.QuantTrade;
 import org.dromara.quant.account.mapper.QuantTradeMapper;
 import org.dromara.quant.order.domain.QuantOrder;
 import org.dromara.quant.order.mapper.QuantOrderMapper;
+import org.dromara.quant.position.domain.QuantPosition;
+import org.dromara.quant.position.mapper.QuantPositionMapper;
 import org.dromara.quant.runtime.DualHedgePositionCycleKey;
 import org.dromara.quant.runtime.domain.QuantStrategyHedgeRound;
 import org.dromara.quant.runtime.domain.QuantStrategyPositionState;
@@ -36,6 +38,7 @@ public class DualHedgeOrderFactRecoveryService {
     private final OrderLedgerService orderLedgerService;
     private final ExchangeGateway gateway;
     private final AccountPositionSnapshotQuery positionSnapshotQuery;
+    private final QuantPositionMapper positionMapper;
     private final StrategyPositionStateService positionStateService;
 
     /**
@@ -187,12 +190,30 @@ public class DualHedgeOrderFactRecoveryService {
             throw new IllegalStateException("双开腿已核实为 OPEN，但开仓价格/数量快照不完整，拒绝生成策略持仓状态");
         }
         QuantStrategyPositionState state = positionStateService.findByInstanceAndLeg(round.getInstanceId(), leg);
+        QuantPosition localPosition = positionMapper.selectOne(new LambdaQueryWrapper<QuantPosition>()
+            .eq(QuantPosition::getCredentialId, round.getCredentialId())
+            .eq(QuantPosition::getSymbol, round.getSymbol())
+            .eq(QuantPosition::getPositionSide, leg)
+            .gt(QuantPosition::getQuantity, BigDecimal.ZERO)
+            .last("LIMIT 1"));
+        if (localPosition == null || localPosition.getId() == null
+            || localPosition.getQuantity() == null
+            || localPosition.getQuantity().compareTo(position.quantity().abs()) != 0
+            || localPosition.getEntryPrice() == null
+            || localPosition.getEntryPrice().compareTo(position.entryPrice()) != 0) {
+            throw new IllegalStateException("双开腿缺少与交易所快照匹配的本地持仓账本，等待持仓同步后再创建保护");
+        }
+        if (state != null && state.getPositionId() != null
+            && !state.getPositionId().equals(localPosition.getId())) {
+            throw new IllegalStateException("双开腿策略状态关联的本地持仓 ID 已变化，拒绝跨持仓周期认领");
+        }
         if (state == null) {
             state = new QuantStrategyPositionState();
             state.setInstanceId(round.getInstanceId());
             state.setLegKey(leg);
             state.setPositionCycleKey(DualHedgePositionCycleKey.of(round.getHedgeRoundKey(), leg));
             state.setHedgeRoundKey(round.getHedgeRoundKey());
+            state.setPositionId(localPosition.getId());
             state.setDirection(leg);
             state.setEntryPrice(position.entryPrice());
             state.setPositionQty(position.quantity().abs());
@@ -205,6 +226,7 @@ public class DualHedgeOrderFactRecoveryService {
             state.setStrategyParamsSnapshot(round.getStrategyParamsSnapshot());
             state.setTrailingArmed(false);
             state.setTrailingStopRoi(null);
+            state.setExchangeProtectionReady(false);
             state.setOpenedAt(LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
         } else {
             if (!round.getHedgeRoundKey().equals(state.getHedgeRoundKey())
@@ -215,6 +237,7 @@ public class DualHedgeOrderFactRecoveryService {
                     + round.getHedgeRoundKey() + ", leg=" + leg);
             }
             state.setStatus("OPEN");
+            state.setPositionId(localPosition.getId());
             state.setDirection(leg);
             state.setPositionQty(position.quantity().abs());
             if (state.getInitialPositionQty() == null) state.setInitialPositionQty(order.executedQuantity());
@@ -228,6 +251,7 @@ public class DualHedgeOrderFactRecoveryService {
             if (state.getRealizedPnl() == null) state.setRealizedPnl(BigDecimal.ZERO);
             if (state.getStrategyParamsSnapshot() == null) state.setStrategyParamsSnapshot(round.getStrategyParamsSnapshot());
             if (state.getTrailingArmed() == null) state.setTrailingArmed(false);
+            if (state.getExchangeProtectionReady() == null) state.setExchangeProtectionReady(false);
             if (state.getOpenedAt() == null) state.setOpenedAt(
                 LocalDateTime.ofInstant(order.createTime(), ZoneId.of("Asia/Shanghai")));
         }
