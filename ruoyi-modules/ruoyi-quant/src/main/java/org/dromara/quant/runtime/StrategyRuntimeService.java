@@ -1985,8 +1985,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         if (!runtime.marketHealthy || !runtime.marketStreamReady || event.replay()) {
             String marketBlockReason = marketDecisionBlockReason(runtime, event);
-            // 行情未满足策略决策门禁时不发布决策快照，避免终端把未参与策略判断的数据显示为有效输入。
+            // 只发布阻断原因，不携带价格/角度，避免把未通过行情门禁的数据展示成决策输入。
             if (!event.replay()) {
+                publishSlopeUnavailable(runtime, marketBlockReason, event.eventTime(), event.receivedAt());
                 logUnavailableEntry(runtime, event, marketBlockReason,
                     "行情尚未就绪，暂停策略决策；阻断原因=" + marketBlockReason
                         + "；streamStatus=" + runtime.marketStreamStatus
@@ -2025,6 +2026,9 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         String freshnessFailure = org.dromara.quant.market.MarketEventFreshness.rejectionReason(event.eventTime(), event.receivedAt(), decisionAt, exchangeNow, maxEventAgeMillis);
         if (freshnessFailure != null) {
+            if (!event.replay()) {
+                publishSlopeUnavailable(runtime, freshnessFailure, event.eventTime(), event.receivedAt());
+            }
             reportExpiredMarketEvent(runtime, event, freshnessFailure, "EVALUATE", callbackStartedNanos, runtimeLockRequestedNanos, runtimeLockAcquiredNanos);
             return;
         }
@@ -2034,6 +2038,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         }
         BigDecimal price = event.price() != null ? event.price() : runtime.currentPrice();
         if (price == null || price.signum() <= 0) {
+            publishSlopeUnavailable(runtime, "CURRENT_PRICE_MISSING", event.eventTime(), event.receivedAt());
             return;
         }
         if (runtime.position != null && !runtime.exitCoordinating.get()) {
@@ -2042,6 +2047,7 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
         }
         if (runtime.stateRefreshRequired) {
+            publishSlopeUnavailable(runtime, "STRATEGY_STATE_REFRESH_REQUIRED", event.eventTime(), event.receivedAt());
             return;
         }
         StrategyContext context = buildContext(runtime, price, event);
@@ -3360,6 +3366,44 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             effectiveDisplayContext == null || display == null ? null : effectiveDisplayContext.source(),
             "RUNTIME",
             slopeBlockReason
+        ));
+    }
+
+    /**
+     * Runtime 早退时发布仅含状态的遥测，确保实时斜率面板能显示真实门禁原因。
+     * 该快照不携带价格/角度，不进入策略计算或交易流程。
+     */
+    private void publishSlopeUnavailable(ActiveRuntime runtime, String reason, Instant eventTime, Instant receivedAt) {
+        if (!(runtime.plugin instanceof KlineSlopeRateStrategy)) {
+            return;
+        }
+        EntryMaSnapshot maSnapshot = runtime.entryMa.snapshot();
+        Instant now = Instant.now();
+        Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
+        long maxEventAgeMillis = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
+        String maBlockReason = runtime.entryMaEnabled
+            ? entryMaMarketBlockReason(runtime, maSnapshot)
+            : "FILTER_DISABLED";
+        long maFreshForMillis = maBlockReason == null
+            ? remainingEventFreshnessMillis(maSnapshot.eventTime(), maSnapshot.receivedAt(), now, exchangeNow, maxEventAgeMillis)
+            : 0L;
+        if (maBlockReason == null && maFreshForMillis <= 0) {
+            maBlockReason = "STALE_EVENT";
+        }
+        boolean maReady = maBlockReason == null;
+        BigDecimal ma5 = maReady ? maSnapshot.ma5() : null;
+        BigDecimal ma7 = maReady ? maSnapshot.ma7() : null;
+        slopeTelemetryHub.publish(new StrategySlopeTelemetry(
+            runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
+            runtime.strategySymbol.getIntervalCode(),
+            null, null, null, null, null, false, eventTime, receivedAt,
+            runtime.slopeTelemetrySequence.incrementAndGet(), false,
+            ma5, ma7, maReady ? org.dromara.quant.market.OneMinuteMovingAverage.trend(ma5, ma7) : null,
+            maReady, maReady ? null : maBlockReason,
+            maSnapshot.lastClosedKlineOpenTime(), maSnapshot.eventTime(), maSnapshot.receivedAt(),
+            0L, maFreshForMillis, now,
+            null, null, null, null, null, null, 0L, null,
+            "RUNTIME", reason == null ? "MARKET_UNREADY" : reason
         ));
     }
 
