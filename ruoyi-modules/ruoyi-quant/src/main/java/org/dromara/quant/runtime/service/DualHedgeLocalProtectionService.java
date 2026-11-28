@@ -117,11 +117,16 @@ public class DualHedgeLocalProtectionService {
     }
 
     private LocalRuntime ensureRuntime(QuantStrategyPositionState state) {
+        String key = state.getPositionCycleKey();
+        LocalRuntime current = runtimes.get(key);
         QuantPosition position = positionMapper.selectById(state.getPositionId());
         QuantStrategyInstance instance = instanceMapper.selectById(state.getInstanceId());
         if (position == null || instance == null || instance.getCredentialId() == null
             || !state.getPositionId().equals(position.getId())
             || state.getDirection() == null || !state.getDirection().equalsIgnoreCase(position.getPositionSide())) {
+            if (current != null && runtimes.remove(key, current)) {
+                closeSubscription(current);
+            }
             return null;
         }
         QuantCredential credential = credentialMapper.selectById(position.getCredentialId());
@@ -129,10 +134,11 @@ public class DualHedgeLocalProtectionService {
             || credential.getCredentialRuntimeVersion() == null
             || !instance.getCredentialId().equals(credential.getId())
             || "PAPER".equalsIgnoreCase(credential.getRunMode())) {
+            if (current != null && runtimes.remove(key, current)) {
+                closeSubscription(current);
+            }
             return null;
         }
-        String key = state.getPositionCycleKey();
-        LocalRuntime current = runtimes.get(key);
         StrategyRuntimeLeaseService.LeaseSnapshot lease =
             leaseService.acquireOrRenewSnapshot(instance.getId(), credential.getId(), position.getSymbol(),
                 credential.getCredentialRuntimeVersion());
