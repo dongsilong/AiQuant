@@ -90,7 +90,7 @@ public class DualHedgeRuntimeService {
             || !"1".equals(strategy.getStatus()) || !"0".equals(strategySymbol.getStatus())
             || Boolean.FALSE.equals(strategySymbol.getRuntimeEnabled()) || !"0".equals(credential.getStatus())
             || !"15m".equalsIgnoreCase(strategySymbol.getIntervalCode())
-            || ("PAPER".equalsIgnoreCase(credential.getRunMode()) && !properties.getPaper().isEnabled())) {
+            || "PAPER".equalsIgnoreCase(credential.getRunMode())) {
             stopInstance(instance.getId());
             return false;
         }

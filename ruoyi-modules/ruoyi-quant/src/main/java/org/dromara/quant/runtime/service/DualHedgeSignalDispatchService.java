@@ -97,6 +97,7 @@ public class DualHedgeSignalDispatchService {
             || symbol == null || !"0".equals(symbol.getStatus()) || symbol.getSymbol() == null
             || !round.getSymbol().equalsIgnoreCase(symbol.getSymbol())
             || credential == null || !"0".equals(credential.getStatus())
+            || "PAPER".equalsIgnoreCase(credential.getRunMode())
             || credential.getCredentialRuntimeVersion() == null) {
             roundService.abortSignalReady(round);
             log.warn("双开信号对应的实例、账户或交易对配置已失效，取消未派发信号 hedgeRoundKey={} instanceId={} credentialId={}",

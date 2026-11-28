@@ -105,7 +105,21 @@ class DualHedgeSignalDispatchServiceTest {
         verifyNoInteractions(tradeExecutionService, preparationService, executionService);
     }
 
-    private void configureAccount(QuantStrategyHedgeRound round) {
+    @Test
+    void rejectsPaperAccountBecauseDualHedgeProtectionIsNotSupportedForPaper() {
+        QuantStrategyHedgeRound round = round();
+        QuantCredential credential = configureAccount(round);
+        credential.setRunMode("PAPER");
+
+        service.dispatchSignal(round);
+
+        verify(roundService).abortSignalReady(round);
+        verify(tradeExecutionService, never()).prepareOpenForRuntime(any(), any(), anyInt(), any());
+        verify(preparationService, never()).requireReady(any(), any(), anyInt(), any());
+        verify(executionService, never()).dispatchOpening(any(), any(), any(), any());
+    }
+
+    private QuantCredential configureAccount(QuantStrategyHedgeRound round) {
         QuantStrategyInstance instance = new QuantStrategyInstance();
         instance.setId(2L);
         instance.setStrategyId(1L);
@@ -145,6 +159,7 @@ class DualHedgeSignalDispatchServiceTest {
         credential.setCredentialRuntimeVersion(7L);
         when(credentialMapper.selectById(3L)).thenReturn(credential);
         doNothing().when(leaseService).requireCurrentOwner(2L, 3L, "BTCUSDT", 7L);
+        return credential;
     }
 
     private static QuantStrategyHedgeRound round() {
