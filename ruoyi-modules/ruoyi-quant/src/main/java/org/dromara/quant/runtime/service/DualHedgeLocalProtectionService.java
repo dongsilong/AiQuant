@@ -73,6 +73,7 @@ public class DualHedgeLocalProtectionService {
     private final Map<String, LocalRuntime> runtimes = new ConcurrentHashMap<>();
     private final Map<String, ReentrantLock> cycleLocks = new ConcurrentHashMap<>();
     private final Map<String, SnapshotCacheEntry> positionSnapshots = new ConcurrentHashMap<>();
+    private final Map<String, Long> firstProfitCheckAt = new ConcurrentHashMap<>();
     private final ExecutorService exitExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     /**
@@ -242,6 +243,11 @@ public class DualHedgeLocalProtectionService {
 
     private void refreshFirstTakeProfitFacts(QuantStrategyPositionState state, LocalRuntime runtime,
                                              QuantPosition position) {
+        Long lastChecked = firstProfitCheckAt.get(state.getPositionCycleKey());
+        long now = System.currentTimeMillis();
+        if (state.getFirstTakeProfitTargetQty() != null && lastChecked != null && now - lastChecked < 2000L) {
+            return;
+        }
         ExchangeGateway.Credential credential = executionService.toCredential(runtime.credential);
         ExchangeGateway.SymbolRule rule = tradingRuleCache.getForProtection(
             runtime.credential.getRunMode(), credential, position.getSymbol());
@@ -259,6 +265,7 @@ public class DualHedgeLocalProtectionService {
             runtime.credential.getId(), withProtectionCycle(position, state));
         PositionProtectionState.confirmExchangeFirstProfit(state, exchangeExecuted);
         stateService.save(state);
+        firstProfitCheckAt.put(state.getPositionCycleKey(), now);
     }
 
     private void executeLocalExit(LocalRuntime runtime, QuantStrategyPositionState state,
@@ -403,6 +410,8 @@ public class DualHedgeLocalProtectionService {
                 || !state.getDirection().equalsIgnoreCase(order.positionSide())
                 || !expectedSide.equalsIgnoreCase(order.side())
                 || orderId != null && !orderId.equals(order.orderId())
+                || clientOrderId != null && order.clientOrderId() != null
+                    && !clientOrderId.equals(order.clientOrderId())
                 || order.executedQuantity() == null
                 || order.executedQuantity().compareTo(state.getPendingTargetQuantity()) > 0) {
                 state.setRecoveryRequired(true);
@@ -416,6 +425,10 @@ public class DualHedgeLocalProtectionService {
             if (Set.of("CANCELED", "EXPIRED", "REJECTED").contains(
                 java.util.Objects.toString(order.status(), "").toUpperCase(java.util.Locale.ROOT))
                 && order.executedQuantity().signum() == 0) {
+                if ("PENDING".equalsIgnoreCase(execution.getExecutionStatus())
+                    || "UNKNOWN".equalsIgnoreCase(execution.getExecutionStatus())) {
+                    executionRecordService.markRecovered(execution, order.orderId(), order.status());
+                }
                 restoreAfterExplicitFailure(state, runtime);
                 return;
             }
@@ -497,7 +510,7 @@ public class DualHedgeLocalProtectionService {
 
     private void reconcileExchangePositionChange(QuantStrategyPositionState state, LocalRuntime runtime) {
         QuantPosition position = positionMapper.selectById(state.getPositionId());
-        if (!matchesPosition(state, position)) {
+        if (!matchesPositionIdentity(state, position)) {
             return;
         }
         List<ExchangeGateway.PositionSnapshot> snapshots =
@@ -621,8 +634,16 @@ public class DualHedgeLocalProtectionService {
         return isDualLeg(state) && "OPEN".equalsIgnoreCase(state.getStatus());
     }
 
-    private static boolean matchesPosition(QuantStrategyPositionState state, QuantPosition position) {
+    private static boolean matchesPositionIdentity(QuantStrategyPositionState state, QuantPosition position) {
         return position != null && state.getPositionId().equals(position.getId())
+            && state.getDirection() != null && state.getDirection().equalsIgnoreCase(position.getPositionSide())
+            && state.getEntryPrice() != null && position.getEntryPrice() != null
+            && state.getEntryPrice().compareTo(position.getEntryPrice()) == 0;
+    }
+
+    private static boolean matchesPosition(QuantStrategyPositionState state, QuantPosition position) {
+        return matchesPositionIdentity(state, position)
+            && state.getPositionId().equals(position.getId())
             && state.getDirection() != null && state.getDirection().equalsIgnoreCase(position.getPositionSide())
             && state.getPositionQty() != null && position.getQuantity() != null
             && state.getPositionQty().compareTo(position.getQuantity()) == 0
