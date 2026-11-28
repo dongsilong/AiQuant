@@ -110,6 +110,8 @@ public class DualHedgeLocalProtectionService {
         runtimes.forEach((key, runtime) -> {
             if (!desired.containsKey(key) && runtimes.remove(key, runtime)) {
                 closeSubscription(runtime);
+                firstProfitCheckAt.remove(key);
+                cycleLocks.remove(key);
             }
         });
     }
@@ -295,6 +297,7 @@ public class DualHedgeLocalProtectionService {
                 : protectionOrderService.quiesceCycleProtections(runtime.credential.getId(), scopedPosition);
             if (!protectionsReady) {
                 latest.setRecoveryRequired(true);
+                latest.setUnsafeRecovery(true);
                 stateService.save(latest);
                 return;
             }
@@ -466,8 +469,8 @@ public class DualHedgeLocalProtectionService {
             updatePositionFromSnapshot(position, snapshots, actualRemaining);
             positionMapper.updateById(position);
             if (actualRemaining.signum() == 0) {
-                stateService.markClosed(state);
                 roundService.markLegClosed(state.getHedgeRoundKey(), state.getLegKey());
+                stateService.markClosed(state);
                 return;
             }
             confirmPartialExit(state, actualRemaining, order.executedQuantity());
@@ -530,8 +533,8 @@ public class DualHedgeLocalProtectionService {
             position.setQuantity(ZERO);
             position.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
             positionMapper.updateById(position);
-            stateService.markClosed(state);
             roundService.markLegClosed(state.getHedgeRoundKey(), state.getLegKey());
+            stateService.markClosed(state);
             return;
         }
         if (actual.compareTo(state.getPositionQty()) < 0) {

@@ -97,10 +97,10 @@ public class DualHedgeProtectionLifecycleService {
                 protectionCheckAt.put(checkKey, now);
             } catch (RuntimeException ex) {
                 protectionCheckAt.remove(checkKey);
-                if (Boolean.TRUE.equals(state.getExchangeProtectionReady())) {
-                    state.setExchangeProtectionReady(false);
-                    positionStateService.save(state);
-                }
+                state.setExchangeProtectionReady(false);
+                state.setRecoveryRequired(true);
+                state.setUnsafeRecovery(true);
+                positionStateService.save(state);
                 log.error("双开腿交易所保护尚未全部确认，保留本地恢复阻断 instanceId={} leg={} positionId={} symbol={} errorType={}",
                     state.getInstanceId(), state.getLegKey(), state.getPositionId(), position.getSymbol(),
                     ex.getClass().getSimpleName());
