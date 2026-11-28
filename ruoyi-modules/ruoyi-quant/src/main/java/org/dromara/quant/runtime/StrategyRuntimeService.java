@@ -3407,16 +3407,25 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
         String unavailableReason = reason == null ? "MARKET_UNREADY" : reason;
         EntryMaSnapshot maSnapshot = runtime.entryMa.snapshot();
         Instant now = Instant.now();
-        Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
         long maxEventAgeMillis = Math.max(1, properties.getMarket().getMaxEventAgeMillis());
-        String maBlockReason = runtime.entryMaEnabled
-            ? entryMaMarketBlockReason(runtime, maSnapshot)
-            : "FILTER_DISABLED";
-        long maFreshForMillis = maBlockReason == null
-            ? remainingEventFreshnessMillis(maSnapshot.eventTime(), maSnapshot.receivedAt(), now, exchangeNow, maxEventAgeMillis)
-            : 0L;
-        if (maBlockReason == null && maFreshForMillis <= 0) {
-            maBlockReason = "STALE_EVENT";
+        String maBlockReason = runtime.entryMaEnabled ? "CLOCK_TIME_MISSING" : "FILTER_DISABLED";
+        long maFreshForMillis = 0L;
+        if (runtime.entryMaEnabled) {
+            try {
+                Instant exchangeNow = now.plusMillis(gateway.exchangeTimeOffsetMillis(runtime.credential.getRunMode()));
+                maBlockReason = entryMaMarketBlockReason(runtime, maSnapshot);
+                if (maBlockReason == null) {
+                    maFreshForMillis = remainingEventFreshnessMillis(
+                        maSnapshot.eventTime(), maSnapshot.receivedAt(), now, exchangeNow, maxEventAgeMillis);
+                    if (maFreshForMillis <= 0) {
+                        maBlockReason = "STALE_EVENT";
+                    }
+                }
+            } catch (RuntimeException ex) {
+                // 斜率诊断不得因交易所时钟不可用而中断行情消费者；交易门禁仍由原决策路径独立执行。
+                maBlockReason = "CLOCK_TIME_MISSING";
+                maFreshForMillis = 0L;
+            }
         }
         boolean maReady = maBlockReason == null;
         BigDecimal ma5 = maReady ? maSnapshot.ma5() : null;
@@ -3427,16 +3436,16 @@ List.of() : pendingIdentity(runtime.state)) || runtime.position != expectedPosit
             }
             runtime.lastSlopeUnavailableReason = unavailableReason;
             slopeTelemetryHub.publish(new StrategySlopeTelemetry(
-            runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
-            runtime.strategySymbol.getIntervalCode(),
-            null, null, null, null, null, false, eventTime, receivedAt,
-            runtime.slopeTelemetrySequence.incrementAndGet(), false,
-            ma5, ma7, maReady ? org.dromara.quant.market.OneMinuteMovingAverage.trend(ma5, ma7) : null,
-            maReady, maReady ? null : maBlockReason,
-            maSnapshot.lastClosedKlineOpenTime(), maSnapshot.eventTime(), maSnapshot.receivedAt(),
-            0L, maFreshForMillis, now,
-            null, null, null, null, null, null, 0L, null,
-            "RUNTIME", unavailableReason
+                runtime.strategy.getId(), runtime.instance.getId(), runtime.credential.getId(), runtime.symbol.getSymbol(),
+                runtime.strategySymbol.getIntervalCode(),
+                null, null, null, null, null, false, eventTime, receivedAt,
+                runtime.slopeTelemetrySequence.incrementAndGet(), false,
+                ma5, ma7, maReady ? org.dromara.quant.market.OneMinuteMovingAverage.trend(ma5, ma7) : null,
+                maReady, maReady ? null : maBlockReason,
+                maSnapshot.lastClosedKlineOpenTime(), maSnapshot.eventTime(), maSnapshot.receivedAt(),
+                0L, maFreshForMillis, now,
+                null, null, null, null, null, null, 0L, null,
+                "RUNTIME", unavailableReason
             ));
         }
     }
