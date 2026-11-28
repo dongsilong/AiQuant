@@ -192,6 +192,9 @@ public class DualHedgeLocalProtectionService {
     }
 
     private void evaluateLeg(LocalRuntime runtime, BigDecimal markPrice, Instant eventTime) {
+        if (runtime.closed) {
+            return;
+        }
         leaseService.requireCurrentOwner(runtime.instance.getId(), runtime.credential.getId(),
             runtime.symbol, runtime.credential.getCredentialRuntimeVersion());
         QuantStrategyPositionState state = stateService.findByInstanceAndLeg(
