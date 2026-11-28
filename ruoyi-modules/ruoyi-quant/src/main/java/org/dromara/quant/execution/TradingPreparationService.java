@@ -204,6 +204,8 @@ public class TradingPreparationService {
                     state.lastAttemptAt = Instant.now();
                 }
                 try {
+                    stage = "SYMBOL_CONFIGURATION_LOCK";
+                    updateLoadingStage(state, stage);
                     // 同账户同交易对的旧/新配置任务串行，网络等待不占用行情线程或数据库事务。
                     synchronized (locks.computeIfAbsent(key, ignored -> new Object())) {
                         if (states.get(key) != state) {
