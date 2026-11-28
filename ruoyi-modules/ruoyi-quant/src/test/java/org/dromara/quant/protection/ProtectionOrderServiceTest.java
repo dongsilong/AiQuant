@@ -387,6 +387,23 @@ class ProtectionOrderServiceTest {
     }
 
     @Test
+    void acceptedOrderIdWithTemporarilyMissingHistoryRemainsPendingWithoutResubmission() {
+        QuantProtectionOrder local = order();
+        local.setStatus("UNKNOWN");
+        local.setExchangeOrderId(55L);
+        when(mapper.selectOne(any())).thenReturn(local);
+        when(gateway.queryProtectionOrder(any(), eq(55L), any(), any(), any()))
+            .thenThrow(new org.dromara.quant.exchange.ExchangeTradingPort.ProtectionOrderAbsentException());
+
+        assertThrows(ProtectionOrderService.ProtectionConfirmationPendingException.class,
+            () -> service.ensureMarginHardStop(1L, position, new BigDecimal("0.1"), true));
+
+        assertEquals("UNKNOWN", local.getStatus());
+        assertEquals(55L, local.getExchangeOrderId());
+        verify(gateway, never()).placeProtectionOrder(any());
+    }
+
+    @Test
     void explicitlyAbsentIntentRetriesThePersistedClientId() {
         QuantProtectionOrder local = order();
         local.setStatus("UNKNOWN");
